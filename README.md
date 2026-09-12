@@ -35,7 +35,7 @@ python3 tools/plant.py --readiness        # the build order: ready, blocked, and
 python3 tools/plant.py --frame            # one telemetry frame in the declared shape
 python3 tools/plant.py --state            # one state.json: the mirror and the capability snapshot
 python3 tools/plant.py --crew             # who is at which station, and which phases cannot say
-python3 tools/plant.py --blackout         # the second clock: revs, silence and contact per phase
+python3 tools/plant.py --blackout         # the second clock, and the LM's opposite situation
 python3 tools/plant.py --state --closed-gate reserve_floor_water_cooling_enable
 python3 tools/generate_help.py            # HELP.md, from the command registries
 
@@ -1117,6 +1117,39 @@ orbit throughout the phase**, which is the CSM and only the CSM: the LM is in or
 near the sub-Earth point has the Earth fixed in its sky. Its blackouts are a function of where it
 landed, which nothing declares — so the owed datum is a landing longitude, and one datum closes
 both that gap and the one `apollo_diode.md:1206` already records.
+
+## The site decides one thing, and it inverts the vehicle
+
+`landing_note` recorded that the site was unparameterised and that `apollo_diode.md:1206` wants one
+this vehicle's own — *"avoid matching all historical labels closely enough to permit that
+shortcut"*, which is a constraint on the site as much as on the faults, because a fleet that
+recognises Tranquillity Base has been handed the answer. It is declared now: **12.4°N, 47.5°E**,
+`basis: chosen`, with the reason in the file. The corpus carries no coordinates for any site, flown
+or otherwise, so the *choice* cannot be checked against anything — but the geometry it produces can,
+and that is what `check_landing_site` re-derives.
+
+**What the site decides is whether the LM can be heard at all while it is on the surface.** The
+Earth sits near the sub-Earth point, so its elevation from a site is 90° minus the angular distance
+to that point: 41.3° here. Above the horizon the link is there for the whole stay and below it there
+is no link at any time, and **there is no interesting in-between at this timescale** — libration
+moves the sub-Earth point at 0.075°/h at its fastest, so across the 21.5-hour surface phase the
+elevation changes by at most **1.6°**. The LM is in contact throughout or never, and which one is a
+property of where it landed rather than a time series.
+
+That closes round 34's caveat exactly, and the answer is the opposite of the orbital case. **The
+vehicle's comms invert between its halves:** in orbit the CSM is silent 46.5 minutes in every 117.8
+— 39 % of the time, 23.5 h across the five orbital phases — and on the surface the LM is not silent
+at all. So during `descent` and `surface` a fleet hears the LM and not the CSM, and the two trade
+places at the orbit's cadence during `lunar_orbit`. That is not a modelling artefact; it is what a
+100 km orbit and a near-side site do, and it is why the LM-as-lifeboat decision is affordable at
+all — **the half of the vehicle the crew would move into is the half that can always be talked to.**
+
+The check refuses four ways, each verified by breaking the file: an elevation that disagrees with
+the geometry, a site that puts the Earth below the horizon (a far-side site would fly the surface
+phase in silence *by design rather than by fault*), a declared variation the libration rate
+contradicts, and — the one worth having — a site whose *mean* link is fine but whose libration
+envelope dips below the horizon. At 0°N 85°E the Earth stands 5° up and libration takes it 2.9°
+below; a site like that is a surface mission whose comms plan depends on the month.
 
 ## Authoring convention: no flow mappings
 

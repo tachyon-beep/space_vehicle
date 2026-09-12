@@ -2746,6 +2746,106 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
     )
 
 
+def check_landing_site(doc: dict[str, Any], report: Report) -> None:
+    """Re-derive where the Earth is in the LM's sky, because that is what the site decides.
+
+    The site's coordinates are `chosen` — `apollo_diode.md:1206` asks that the scenario not match a
+    historical site closely enough for a fleet to take the shortcut, and the corpus carries no
+    coordinates for any site, flown or otherwise, so there is nothing to check the choice against.
+    What *is* checkable is the geometry the choice produces, and it is the only thing the site
+    decides that nothing else does: whether the LM can be heard at all while it is on the surface.
+
+    The Earth sits near the sub-Earth point, so its elevation from a site at (lat, lon) is 90
+    degrees minus the angular distance between them. Above the horizon the link is there for the
+    whole stay and below it there is no link at any time, and there is no interesting in-between at
+    this timescale — which is the second thing this checks, because a variation large enough to set
+    and rise inside one surface phase would mean the premise was wrong.
+    """
+    site = doc.get("landing_site")
+    if not isinstance(site, dict):
+        report.refuse("mission.yaml:landing_site", "is missing or is not a mapping")
+        return
+    where = "mission.yaml:landing_site"
+    for name in ("latitude_deg", "longitude_deg"):
+        value = site.get(name)
+        if not isinstance(value, (int, float)):
+            report.refuse(where, f"declares {name} as {value!r}")
+            return
+    lat, lon = float(site["latitude_deg"]), float(site["longitude_deg"])
+    if abs(lat) > 90 or abs(lon) > 180:
+        report.refuse(where, f"declares ({lat}, {lon}), which is not a point on a sphere")
+    sub = site.get("sub_earth") or {}
+    libration = site.get("libration") or {}
+    for name, block in (("sub_earth", sub), ("libration", libration)):
+        if not isinstance(block, dict):
+            report.refuse(where, f"declares {name} as {block!r}, not a mapping")
+            return
+    sub_lat = float(sub.get("latitude_deg", 0.0))
+    sub_lon = float(sub.get("longitude_deg", 0.0))
+    amplitude = libration.get("amplitude_deg")
+    period_days = libration.get("period_days")
+    if not isinstance(amplitude, (int, float)) or not isinstance(period_days, (int, float)):
+        report.refuse(where, "declares no libration amplitude and period")
+        return
+
+    def elevation(site_lat: float, site_lon: float, e_lat: float, e_lon: float) -> float:
+        cos_d = math.sin(math.radians(site_lat)) * math.sin(math.radians(e_lat)) + math.cos(
+            math.radians(site_lat)
+        ) * math.cos(math.radians(e_lat)) * math.cos(math.radians(site_lon - e_lon))
+        return 90.0 - math.degrees(math.acos(max(-1.0, min(1.0, cos_d))))
+
+    declared = site.get("earth_elevation_deg")
+    if not isinstance(declared, (int, float)):
+        report.refuse(where, "declares no earth_elevation_deg")
+        return
+    computed = elevation(lat, lon, sub_lat, sub_lon)
+    if abs(computed - float(declared)) > abs(float(declared)) * 0.01 + 1e-9:
+        report.refuse(
+            where,
+            f"declares earth_elevation_deg as {declared:g} and the geometry gives {computed:.4g} "
+            f"from ({lat}, {lon}) to the sub-Earth point ({sub_lat}, {sub_lon})",
+        )
+    if computed <= 0.0:
+        report.refuse(
+            where,
+            f"puts the Earth below the horizon ({computed:.1f} deg of elevation). A far-side site "
+            "has no link at any time, so the surface phase would be flown in silence by design "
+            "rather than by fault",
+        )
+    # The fastest the sub-Earth point moves, in degrees per hour, from an amplitude and a period.
+    rate = 2.0 * math.pi * float(amplitude) / (float(period_days) * 24.0)
+    surface = next(
+        (p for p in doc.get("phases") or [] if p.get("id") == "surface"),
+        None,
+    )
+    hours = float((surface or {}).get("duration_h") or 0.0)
+    variation = rate * hours
+    declared_variation = site.get("elevation_variation_over_surface_deg")
+    if isinstance(declared_variation, (int, float)) and variation > max(
+        float(declared_variation) * 1.01, float(declared_variation) + 1e-9
+    ):
+        report.refuse(
+            where,
+            f"declares the elevation to move {declared_variation:g} deg over the surface phase, and "
+            f"libration at {rate:.4f} deg/h over {hours:g} h moves it {variation:.2f}. If it moved "
+            "enough to set and rise inside one phase the LM's contact would be intermittent, which "
+            "is a different mission",
+        )
+    # And the sub-Earth point must not wander far enough to change the answer.
+    worst = min(
+        elevation(lat, lon, sub_lat + d_lat, sub_lon + d_lon)
+        for d_lat in (-float(amplitude), 0.0, float(amplitude))
+        for d_lon in (-float(amplitude), 0.0, float(amplitude))
+    )
+    if worst <= 0.0:
+        report.refuse(
+            where,
+            f"has the Earth {computed:.1f} deg up at the mean sub-Earth point and {worst:.1f} deg "
+            f"at the edge of a {amplitude:g} deg libration envelope. A site whose link appears and "
+            "disappears with libration is a surface mission whose comms plan depends on the month",
+        )
+
+
 def check_blackout(doc: dict[str, Any], report: Report) -> None:
     """Re-derive the lunar comms blackout from its own inputs, the way the trajectory is re-derived.
 
@@ -3385,6 +3485,7 @@ def main(argv: list[str] | None = None) -> int:
             check_mission(mission, vehicle, report)
             check_scenario_postures(mission, report)
             check_blackout(mission, report)
+            check_landing_site(mission, report)
             if channels is not None:
                 check_mission_bindings(channels, mission, registry, report, vehicle)
                 check_crew_bindings(

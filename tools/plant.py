@@ -460,10 +460,13 @@ def blackout_budget(root: Path) -> list[dict[str, Any]]:
     **What this computes and what it must not be read as.** The figure is the blackout for a vehicle
     in a 100 km circular lunar orbit for the whole phase, which is the CSM and only the CSM. The LM
     is in orbit briefly during `descent` and `ascent_rendezvous` and is *on the surface* for most of
-    `surface`, and a vehicle on the surface near the sub-Earth point has the Earth fixed in its sky
-    — so its blackouts are a function of landing longitude, which this file does not declare. That
-    is the half still owed, and stating it here is what keeps this number from being read as the
-    whole mission's.
+    `surface`, and its situation there is not a smaller version of this one — it is the opposite.
+    `mission.yaml#landing_site` now declares the site, and the Earth stands 41 degrees up from it;
+    libration moves the sub-Earth point 0.075 deg/h at its fastest, so across the 21.5-hour surface
+    phase the elevation changes by at most 1.6 degrees and the LM never loses the link.
+
+    So the vehicle's comms situation *inverts* between its two halves, and `surface_contact` below
+    reports the half this function's own arithmetic cannot reach.
     """
     mission = load_yaml(root / "mission.yaml")
     block = mission.get("comms_blackout") or {}
@@ -495,6 +498,33 @@ def blackout_budget(root: Path) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def surface_contact(root: Path) -> dict[str, Any]:
+    """The LM's link from the surface, which is a property of the site rather than of the orbit.
+
+    This is the other half of the second clock and it is not a scaled-down copy of it. In orbit a
+    vehicle loses the Earth once per 117.8-minute revolution; on the surface it either has the
+    Earth in view for the whole stay or never, and which one is decided by the landing site the
+    mission chose. `mission.yaml#landing_site` puts the Earth 41 degrees up, so the answer here is
+    "always" — and the interesting part is that this makes the LM the *only* part of the vehicle
+    with a continuous link during the phases when the crew would be in it.
+    """
+    mission = load_yaml(root / "mission.yaml")
+    site = mission.get("landing_site") or {}
+    elevation = site.get("earth_elevation_deg")
+    variation = site.get("elevation_variation_over_surface_deg")
+    surface = next((p for p in mission.get("phases") or [] if p.get("id") == "surface"), None)
+    if not isinstance(elevation, (int, float)):
+        return {}
+    return {
+        "latitude_deg": site.get("latitude_deg"),
+        "longitude_deg": site.get("longitude_deg"),
+        "earth_elevation_deg": float(elevation),
+        "variation_over_surface_deg": float(variation or 0.0),
+        "surface_hours": float((surface or {}).get("duration_h") or 0.0),
+        "continuous": float(elevation) - float(variation or 0.0) > 0.0,
+    }
 
 
 def crew_placement(root: Path) -> list[dict[str, Any]]:
@@ -859,6 +889,25 @@ def main(argv: list[str] | None = None) -> int:
             f"  total: {total_blackout / 60:.1f} h silent, {total_contact / 60:.1f} h in contact "
             f"across {len(rows)} phase(s)"
         )
+        surface = surface_contact(root)
+        if surface:
+            verdict = (
+                "never loses the link"
+                if surface["continuous"]
+                else "loses the link for part of every stay"
+            )
+            print()
+            print(
+                f"  and the LM on the surface at "
+                f"({surface['latitude_deg']}, {surface['longitude_deg']}) sees the Earth "
+                f"{surface['earth_elevation_deg']:.1f} deg up, moving "
+                f"{surface['variation_over_surface_deg']:.2f} deg across the "
+                f"{surface['surface_hours']:.1f} h stay — so it {verdict}."
+            )
+            print(
+                "  the vehicle's comms invert between its halves: the CSM is silent 39 % of the "
+                "time and the LM, while the crew are in it, is not silent at all."
+            )
         return 0
 
     if args.crew:

@@ -849,18 +849,60 @@ initial_state:
       constraint set for that design, and it is not a state vector.
   landing_site: UNCONFIGURED
   entry_corridor: UNCONFIGURED
-landing_note: >-
-    the objectives name a surface mission and an EVA; the site, its selenographic coordinates
-    and the entry corridor are not parameterised. `apollo_diode.md:1206` argues against
-    choosing a site whose history is recognisable, so the site should be this vehicle's own
-    and its coordinates chosen deliberately rather than inherited.
+# --------------------------------------------------------------------------------------
+# The landing site, and the one thing it decides that nothing else does.
+#
+# **What the site sets is whether the LM can be heard at all while it is on the surface.** The
+# Earth sits near the sub-Earth point — selenographic (0, 0), wandering within the libration
+# envelope — so from a site at (lat, lon) the Earth's elevation is 90 deg minus the angular
+# distance to that point. Above the horizon, the link is there for the whole stay; below it,
+# there is no link at any time. There is no in-between at this timescale: libration moves the
+# sub-Earth point at 0.075 deg/h at its fastest, so across the 21.5 h `surface` phase the
+# elevation changes by **at most 1.6 deg**. The LM is therefore either in contact throughout or
+# in contact never, and that is a property of where it landed rather than a time series.
+#
+# **The choice is `chosen` and the corpus cannot check it.** `apollo_diode.md:1206` asks that the
+# scenario "avoid matching all historical labels closely enough to permit that shortcut", which
+# is a constraint on the *site* as much as on the faults — a fleet that recognises Tranquillity
+# Base has been handed the answer. But the corpus carries no coordinates for any site, flown or
+# otherwise, so there is nothing to check a choice against and the reason is a reason.
+# --------------------------------------------------------------------------------------
+landing_site:
+  latitude_deg: 12.4
+  longitude_deg: 47.5
+  # The mean sub-Earth point and the envelope it wanders in. Both are geometry rather than
+  # mission design: the Moon's rotation is synchronous, and libration is what moves the point.
+  sub_earth: {latitude_deg: 0.0, longitude_deg: 0.0}
+  libration: {amplitude_deg: 7.9, period_days: 27.55}
+  # Derived from the four fields above, and re-derived by `check_landing_site`.
+  earth_elevation_deg: 41.3
+  elevation_variation_over_surface_deg: 1.61
+  provenance:
+    basis: chosen
+    reason: >-
+      a near-side site with the Earth well clear of the horizon — 41 degrees of elevation, so the
+      surface link is continuous and the pointing is a real constraint rather than a formality —
+      and one that no Apollo mission flew near: the six flown sites span 23.4 W to 30.8 E, and
+      47.5 E at 12.4 N is 17 degrees from the nearest of them. The corpus gives no coordinates to
+      check that against, which is why it is written as a reason and a check re-derives only the
+      geometry. What the choice buys the experiment is the asymmetry in the next paragraph.
+    note: >-
+      **the consequence worth stating, because it inverts the vehicle's comms situation between
+      its two halves.** In lunar orbit the CSM is silent for 46.5 minutes in every 117.8 — 39 % of
+      the time, 23.5 h across the five orbital phases. On the surface the LM is not silent at all:
+      it has the Earth in view continuously, and it is the *only* part of the vehicle that does.
+      So during `descent` and `surface` a fleet hears the LM and not the CSM, and during
+      `lunar_orbit` and `ascent_rendezvous` the two trade places at the orbit's cadence. That is
+      not a modelling artefact; it is what a 100 km orbit and a near-side landing site do, and it
+      is the reason the LM-as-lifeboat decision is affordable at all — the half of the vehicle the
+      crew would move into is the half that can always be talked to.
 open_debts:
 
   - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
-  - "A landing longitude, which is what the LM's own blackout depends on. `plant.py --blackout` now computes the mission's second clock — 23.5 h of the 60 h across the five lunar phases are silent, 46.5 min in every 117.8 — but that figure is for a vehicle in a 100 km circular **lunar orbit** throughout the phase, which is the CSM and only the CSM. The LM is in orbit briefly during `descent` and `ascent_rendezvous` and is on the surface for most of `surface`, and a vehicle on the surface near the sub-Earth point has the Earth fixed in its sky: its blackouts are a function of where it landed, which nothing in this file declares. The landing site is owed for a different reason too (`apollo_diode.md:1206` argues against a site whose history is recognisable), so one datum closes both."
+  - "**The sequence of blackouts, not their count.** `plant.py --blackout` gives the number: 23.5 h silent across the five orbital phases, 46.5 min in every 117.8, and the LM's surface link is continuous because the site declares it so. What is still unbudgeted is *which* manoeuvres land in the dark. A phase with 12 occultations and a phase with 20 are different experiments, and the alignment of the first blackout against the phase's start is a free parameter of the arrival geometry — it depends on where in the orbit the vehicle was at LOI, which depends on the transfer plane, which depends on the same lunar ephemeris the three owed orbital elements need. One datum closes three debts, and this is the third of them."
 
   - "**Three of six orbital elements are still owed** — the ascending node, the argument of perigee and the true anomaly at cutoff — plus the free-return constraint on them. Four are determined: a = 254,545 km, e = 0.974216, i = 32.521 deg and 10,949.8 m/s at cutoff. What the three need is one datum rather than a design: a lunar ephemeris at 2026-09-12T02:13:45Z + 73 h. A transfer plane that misses the Moon by a degree at arrival misses it by 6,700 km, so the node is not a free parameter and it is not guessable. `check_trajectory` re-derives the four and refuses a disagreement."
-  - "The landing site and the entry corridor, for a different reason: `apollo_diode.md:1206` argues against a site whose history is recognisable, so both should be *chosen* rather than inherited. They are not blocked on a datum, they are blocked on a decision — and the decision is John's."
+  - "**The entry corridor**: the last of the landing-site decisions. The site itself is declared (`landing_site`, chosen at 12.4 N 47.5 E against `apollo_diode.md:1206`), and `check_landing_site` re-derives the geometry it produces — but the corridor a descending LM must fly to reach it is a different quantity and is not parameterised. It sets the downrange distance from powered-descent initiation to touchdown, which is what `descent`'s 2.5 h is actually spent on, and nothing here says how far out the vehicle starts."
   - "The two lunar-orbit phases assume the CSM stays in a circular orbit while the LM descends; whether the CSM performs a plane change during the surface phase is a real mission-design decision and is not made here."
   - "The lunar occultation comms blackout is **modelled** and no longer a debt: see `comms_blackout` above, which derives the duration from geometry and reproduces Apollo's operational figure. What is still owed is the per-phase *sequence* of blackouts — how many contact periods each phase contains, and which of them fall during an activity that cannot be paused. A phase with 37 occultations in it and a phase with 20 are different experiments, and nobody has budgeted which manoeuvres land in the dark."
   - "`transition_evidence` for `standby -> prepare` is four channels where `mission_diode.md:380-383` names six terms: the two missing ones are `health.overall` and `health.confidence`. **Resolved against the vehicle rather than left open** — `domains/avionics/` landed and `apollo_diode.md:184-186` answers the question directly: \"it is therefore historically faithful to give your agents heterogeneous observations rather than a synthesized single health score.\" So the aggregate is refused on three grounds and not one: apollo declines it, `design.md` §8 refuses to publish diagnoses (a scalar health is one), and it is not derivable from the published channels without a weighting nobody could disagree with — `rcs.control_authority_margin` and `power.load_margin_w` are margins on one subsystem each. The four channels above are the substitute, and they are what the guard actually needs."
