@@ -72,6 +72,10 @@ power:
     rate_hz: 10
     priority: P2
     range: [27.0, 30.5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<26.5 for 0.5 s", "fall >1 V/s"]
     event_class: alarm
     provenance:
@@ -84,6 +88,10 @@ power:
     rate_hz: 10
     priority: P2
     range: [27.0, 30.5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<26.5 for 0.5 s", "fall >1 V/s"]
     event_class: alarm
     provenance:
@@ -96,6 +104,10 @@ power:
     rate_hz: 5
     priority: P2
     range: [10, 120]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["> configured bus capacity", "step >20 A"]
     event_class: alarm
     provenance:
@@ -108,6 +120,10 @@ power:
     rate_hz: 2
     priority: P3
     range: [0, 80]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["unexpected zero", "overload"]
     event_class: alarm
     provenance:
@@ -120,6 +136,10 @@ power:
     rate_hz: 0.2
     priority: P4
     range: [40, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<30", "<15", "predicted depletion <2 h"]
     inputs: [power.bus_a_current_a, power.battery_temp_c]
     event_class: alarm
@@ -133,6 +153,10 @@ power:
     rate_hz: 1
     priority: P3
     range: [10, 40]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">45", "rise >2 degC/min"]
     event_class: alarm
     provenance:
@@ -157,6 +181,7 @@ power:
     rate_hz: 1
     priority: P3
     range: [250, null]
+    range_kind: scale
     events: ["<100", "negative"]
     inputs: [power.dc_bus_a_v, power.bus_a_current_a]
     event_class: alarm
@@ -189,6 +214,7 @@ power:
     rate_hz: 5
     priority: P3
     range: [0, null]
+    range_kind: scale
     events: ["> 110 % of rating", "> 200 % hard short"]
     event_class: alarm
     provenance:
@@ -217,6 +243,10 @@ eclss:
     rate_hz: 2
     priority: P3
     range: [4.8, 5.2]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<4.5 caution", "<3.5 emergency", "fast leak"]
     event_class: alarm
     provenance:
@@ -230,6 +260,10 @@ eclss:
     rate_hz: 0.2
     priority: P4
     range: [21.1, 23.9]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<10", ">30", "rapid trend"]
     event_class: realised_by
     event_thresholds: [csm_cabin_low, csm_cabin_high]
@@ -243,6 +277,10 @@ eclss:
     rate_hz: 0.5
     priority: P3
     range: [0, 5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">7.6 caution"]
     event_class: alarm
     provenance:
@@ -256,6 +294,10 @@ eclss:
     rate_hz: 0.1
     priority: P4
     range: [0, 3]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">3 sustained"]
     inputs: [eclss.co2_pp_mmhg]
     event_class: alarm
@@ -269,6 +311,10 @@ eclss:
     rate_hz: 0.5
     priority: P3
     range: [248, 269]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<200 hypoxia", ">300 fire risk"]
     event_class: alarm
     provenance:
@@ -302,6 +348,10 @@ eclss:
     rate_hz: 0.5
     priority: P3
     range: [750, 950]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["low pressure", "fall >5 psi/min"]
     event_class: alarm
     provenance:
@@ -315,6 +365,10 @@ eclss:
     rate_hz: 2
     priority: P3
     range: [4.8, 5.2]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<4.5 caution", "<3.5 emergency", "fast leak"]
     event_class: alarm
     provenance:
@@ -331,6 +385,10 @@ eclss:
     rate_hz: 0.5
     priority: P3
     range: [0, 5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">7.6 caution"]
     event_class: alarm
     provenance:
@@ -347,6 +405,10 @@ eclss:
     priority: P3
     inputs: [eclss.lm_cabin_pressure_psia]
     range: [248, 269]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<200 hypoxia", ">300 fire risk"]
     event_class: alarm
     provenance:
@@ -359,6 +421,10 @@ eclss:
     rate_hz: 1
     priority: P3
     range: [27, 33]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<20"]
     event_class: alarm
     provenance:
@@ -371,6 +437,10 @@ eclss:
     rate_hz: 0.1
     priority: P4
     range: [20, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<20", "predicted breakthrough <1 h"]
     inputs: [eclss.co2_pp_mmhg]
     event_class: alarm
@@ -385,6 +455,7 @@ eclss:
     rate_hz: 0.2
     priority: P4
     range: [0, null]
+    range_kind: scale
     events: ["sustained above configured threshold"]
     inputs: [eclss.cabin_pressure_psia, eclss.o2_supply_pressure_psi]
     event_class: alarm
@@ -421,6 +492,10 @@ thermal:
     rate_hz: 2
     priority: P3
     range: [2.8, 7.2]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">10", "<1"]
     event_class: alarm
     provenance:
@@ -434,6 +509,10 @@ thermal:
     rate_hz: 2
     priority: P3
     range: [5, 15]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">20"]
     event_class: alarm
     provenance:
@@ -446,6 +525,10 @@ thermal:
     rate_hz: 2
     priority: P3
     range: [1.3, 1.7]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<0.8", "zero flow"]
     event_class: alarm
     provenance:
@@ -481,6 +564,10 @@ thermal:
     rate_hz: 2
     priority: P3
     range: [0, 8]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["current with no flow"]
     event_class: realised_by
     event_thresholds: [pump_no_flow]
@@ -495,6 +582,10 @@ thermal:
     rate_hz: 1
     priority: P3
     range: [10, 45]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">50"]
     event_class: alarm
     provenance:
@@ -507,6 +598,10 @@ thermal:
     rate_hz: 1
     priority: P3
     range: [10, 55]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">60", "fast rise"]
     event_class: alarm
     provenance:
@@ -544,7 +639,10 @@ thermal:
     precision: 0.1
     rate_hz: 1
     priority: P3
-    range: [5, 40]
+    range: [null, null]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
     events: ["> configured limit"]
     event_class: alarm
     provenance:
@@ -557,6 +655,10 @@ thermal:
     rate_hz: 1
     priority: P3
     range: [0, 30]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["> 20"]
     event_class: realised_by
     event_thresholds: [coolant_return_high]
@@ -570,6 +672,10 @@ thermal:
     rate_hz: 1
     priority: P3
     range: [15, 30]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["> 35"]
     event_class: alarm
     provenance:
@@ -582,6 +688,10 @@ thermal:
     rate_hz: 0.2
     priority: P4
     range: [0, 2345]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["saturated at rated capacity"]
     inputs: [thermal.coolant_supply_c, res.water_cooling_kg]
     event_class: realised_by
@@ -596,6 +706,10 @@ thermal:
     rate_hz: 1
     priority: P3
     range: [0, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: scale
     events: ["duty above zero with the zone above its limit"]
     event_class: alarm
     provenance:
@@ -608,6 +722,10 @@ thermal:
     rate_hz: 2
     priority: P3
     range: [0, 12000]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["commanded on and speed zero", "speed falling with constant command"]
     event_class: realised_by
     event_thresholds: [flow_low, pump_no_flow]
@@ -639,6 +757,10 @@ gnc:
     rate_hz: 10
     priority: P2
     range: [-0.5, 0.5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["outside current mode limits"]
     event_class: alarm
     provenance:
@@ -704,6 +826,10 @@ gnc:
     rate_hz: 1
     priority: P3
     range: [0, 0.2]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">0.5"]
     event_class: alarm
     provenance:
@@ -717,6 +843,10 @@ gnc:
     rate_hz: 5
     priority: P3
     range: [0, 15000]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["invalid", "dropout", "disagreement"]
     event_class: alarm
     provenance:
@@ -896,6 +1026,10 @@ propulsion:
     rate_hz: 10
     priority: P2
     range: [0, 105]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: scale
     events: ["<90 after ignition", "decay"]
     event_class: alarm
     provenance:
@@ -909,6 +1043,10 @@ propulsion:
     rate_hz: 10
     priority: P2
     range: [0, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["command/state mismatch"]
     event_class: realised_by
     event_thresholds: [thrust_discrepancy]
@@ -922,6 +1060,10 @@ propulsion:
     rate_hz: 10
     priority: P2
     range: [0, 105]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["discrepancy >5%"]
     inputs: [prop.chamber_pressure_pct, structure.accel_xyz_g]
     event_class: alarm
@@ -936,6 +1078,10 @@ propulsion:
     rate_hz: 5
     priority: P3
     range: [95, 105]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<90"]
     event_class: alarm
     provenance:
@@ -961,6 +1107,10 @@ propulsion:
     rate_hz: 0.5
     priority: P4
     range: [0, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: scale
     events: ["20", "10", "5"]
     event_class: alarm
     provenance:
@@ -973,6 +1123,7 @@ propulsion:
     rate_hz: 10
     priority: P2
     range: [0, null]
+    range_kind: scale
     events: ["burn cutoff target reached", "divergence from target"]
     inputs: [structure.accel_xyz_g, prop.thrust_pct_estimated]
     event_class: realised_by
@@ -988,6 +1139,10 @@ propulsion:
     rate_hz: 0.2
     priority: P3
     range: [0, 50]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["> 40 of the 50 qualified restarts"]
     event_class: alarm
     provenance:
@@ -1000,6 +1155,10 @@ propulsion:
     rate_hz: 10
     priority: P2
     range: [10, 60]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["commanded into the 65-92.5 % non-operating region"]
     event_class: alarm
     provenance:
@@ -1053,6 +1212,10 @@ rcs:
     rate_hz: 2
     priority: P3
     range: [95, 105]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<90"]
     event_class: alarm
     provenance:
@@ -1091,6 +1254,10 @@ rcs:
     rate_hz: 0.5
     priority: P4
     range: [0, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: scale
     events: ["25", "10"]
     event_class: alarm
     provenance:
@@ -1103,6 +1270,7 @@ rcs:
     rate_hz: 1
     priority: P3
     range: [0, null]
+    range_kind: scale
     events: ["excessive use rate"]
     event_class: alarm
     provenance:
@@ -1330,6 +1498,10 @@ comms:
     rate_hz: 5
     priority: P2
     range: [0, 2]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">2 warning", "scan limit"]
     inputs: ["gnc.attitude_q[0..3]", gnc.position_xyz_km]
     event_class: alarm
@@ -1343,6 +1515,10 @@ comms:
     rate_hz: 2
     priority: P2
     range: [8, 30]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["<8 degraded", "<3 loss"]
     inputs: [comm.hga_pointing_error_deg, comm.tx_power_w]
     event_class: alarm
@@ -1357,6 +1533,10 @@ comms:
     on_event: true
     priority: P3
     range: [1600, 51200]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["mode change"]
     event_class: notification
     provenance:
@@ -1370,6 +1550,10 @@ comms:
     rate_hz: 1
     priority: P3
     range: [0, 0.5]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: [">2"]
     event_class: alarm
     provenance:
@@ -1394,6 +1578,10 @@ comms:
     rate_hz: 1
     priority: P3
     range: [0, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["low output", "high draw"]
     event_class: alarm
     provenance:
@@ -1471,6 +1659,7 @@ avionics:
     rate_hz: 2
     priority: P3
     range: [20, null]
+    range_kind: scale
     events: ["<10"]
     event_class: alarm
     provenance:
@@ -1529,6 +1718,13 @@ avionics:
     rate_hz: 1
     priority: P3
     range: [0, 0]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    #
+    # A scale, not a band: an error *count* has no acceptable operating region to be inside of, and
+    # the alarm is `>0` on a span whose floor is zero. A band needs width and this one has none.
+    range_kind: scale
     events: [">0"]
     event_class: alarm
     provenance:
@@ -1566,6 +1762,7 @@ avionics:
     rate_hz: 1
     priority: P2
     range: [0, null]
+    range_kind: scale
     events: ["older than 2x the slowest rate in the active profile"]
     inputs: [avionics.telemetry_frame_sync]
     event_class: alarm
@@ -1579,6 +1776,7 @@ avionics:
     rate_hz: 1
     priority: P2
     range: [0, null]
+    range_kind: scale
     events: ["any"]
     event_class: alarm
     provenance:
@@ -1895,6 +2093,7 @@ structure:
     rate_hz: 0.2
     priority: P4
     range: [0, null]
+    range_kind: scale
     events: ["rising leak"]
     event_class: realised_by
     event_thresholds: [leak_rate_rising]
@@ -1908,6 +2107,10 @@ structure:
     rate_hz: 10
     priority: P2
     range: [-0.001, 0.001]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
     events: ["uncommanded impulse"]
     event_class: alarm
     provenance:
@@ -2325,11 +2528,18 @@ crew_positions:
       observation — which is the coverage that no channel on this vehicle provides.
 
 open_debts:
-  - "**`range` carries two meanings and nothing says which.** On a physical channel it is the *acceptable operating band* and every event fires outside it — `power.dc_bus_a_v` ranges 27.0-30.5 with an event at <26.5, `power.battery_temp_c` ranges 10-40 with an event at >45, `power.battery_soc_pct` ranges 40-100 with events at <30 and <15. On a reserve channel it is the *full scale* and the events fire inside it — `rcs.propellant_remaining_pct` ranges 0-100 with a reserve at <25. Both are right and the two are indistinguishable from the data, so a linter rule of the form \"an alarm must lie outside its channel's range\" would refuse 34 legitimate thresholds and could not be written at all. What would separate them is a field saying which reading applies — `range_kind: band | scale` — and until one exists the `range` field is documentation that no check can use. Two smaller gaps in the same field: `[True, True]` is the convention for a boolean channel (\"true is normal\") and `[null, null]` means unbounded, and both are conventions rather than declarations."
-  - "Two of the four thresholds on a *boolean* channel declare no `point_units`: `frame_sync_loss` and `carrier_lock_loss` assert numerically (below 1) against a channel whose unit is `bool`, while `imu_power_loss` and `pyro_continuity_loss` explain the mapping (\"boolean: is the platform powered\", \"continuity, true until fired\"). The explanation is the convention; two of four follow it and nothing requires it."
-
+  - "**`range_kind` is declared and the check it enables is written; what remains is the judgement
+    inside it.** 57 channels carry the field — 43 `band`, 14 `scale` — and the values were assigned
+    by evidence rather than by taste: a range with an alarm strictly inside it cannot be a band, so
+    it is a scale. What that rule cannot see is a channel whose range is a band *and wrong*, and
+    one was found that way. `thermal.zone_[id]_t_c` declared `[5, 40]` while four of its thresholds
+    asserted inside it and `lm_descent_freeze` asserted below minus five — because the channel is a
+    six-zone template and no single band describes six zones: the cabins live at 10-30 and the
+    descent stage freezes below zero. A template channel's per-instance bands are its thresholds'
+    business, and the range is unbounded now to say so. The judgement still owed is the 57
+    assignments themselves: they are derived, they are right as far as the evidence reaches, and a
+    reader who disagrees with one is disagreeing with a derivation rather than with an author."
   - "A channel template's instantiations are inferred rather than declared. `ChannelIndex` compiles `thermal.zone_[id]_t_c` to a regex whose wildcard is unbounded, so `thermal.zone_1_true_t_c` resolves to it — the wildcard absorbs `1_true` and the literal `_t_c` then matches. The same over-permissiveness makes `power.lcl_1_old_state` resolve to `power.lcl_[n]_state`, which means every \"is this a registered channel?\" check in the linter is weaker than it reads. Bounding the wildcard is not the fix and cannot be: `res.recon_[resource]_kg` has to match `water_cooling`, so a placeholder may contain underscores, and then `[id]` matching `1_true` is indistinguishable from `[id]` matching `csm_cabin`. What would fix it is each registry entry naming the values its placeholders take — which turns a template from a pattern into an enumeration, and is a decision about the registry's shape rather than a patch. Found by a `not_published` entry that was correctly withheld and wrongly reported as registered."
-
   - "Precision and rate for every channel marked chosen or derived must be confirmed against the plant once it exists; apollo's values are adopted verbatim and need no confirmation."
   - "No channel yet carries the crew's own speech; whether dialogue is a channel at all is D-07 and is John's call."
   - "gnc.position_xyz_km and gnc.velocity_xyz_m_s are published at 2 Hz with 0.01 km precision, but the initial state they start from is not set: mission.yaml owes a parking-orbit or post-TLI position and velocity in EARTH_J2000, and a perilune for the descent phase."

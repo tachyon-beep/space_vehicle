@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 222 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 221 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 146 channels, 119 states over 42 nodes, 140 thresholds, 58
-verbs and 118 classified events across the eleven directories, with 222 declared debts and every
+verbs and 118 classified events across the eleven directories, with 221 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **222** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **221** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1214,8 +1214,24 @@ reserve channel it is the **full scale** and the events fire **inside** it —
 correct. Both readings are right, the two are indistinguishable from the data, and a rule of the form
 "an alarm must lie outside its channel's range" would refuse 34 legitimate thresholds. So the honest
 output is not a check but a debt: `range_kind: band | scale`, and until it exists `range` is
-documentation no check can use. Two smaller conventions sit in the same field — `[True, True]` for a
-boolean channel and `[null, null]` for unbounded — and both are conventions rather than declarations.
+documentation no check can use.
+
+**So the field was added, and the check was written.** `range_kind: band | scale` is declared on all
+57 channels with a numeric range — 43 bands, 14 scales — and it was assigned by evidence rather than
+by taste: a range with an alarm strictly inside it *cannot* be a band, so it is a scale. The check
+now refuses an alarm strictly inside a declared band, with two exemptions that are the threshold
+saying it measures something else — a `point_units` differing from the channel's own unit covers the
+six rate thresholds that watch a level channel with a per-minute limit, and `gated_by` covers a
+threshold the schema forced onto a channel it is not about.
+
+**And the rule's blind spot found a real defect.** It cannot see a channel whose range is a band *and
+wrong* — but looking for one turned up `thermal.zone_[id]_t_c`, which declared `[5, 40]` while four
+of its own thresholds asserted inside it and `lm_descent_freeze` asserted below −5. It is a six-zone
+template, and **no single band describes six zones**: the cabins live at 10–30 and 10–32, and a
+descent stage left in shadow is legitimately colder than the floor. The range is unbounded now, and
+the per-zone bands are the thresholds' business, which is where an instance-specific limit belongs.
+Two smaller conventions sit in the same field — `[True, True]` for a boolean channel and
+`[null, null]` for unbounded — and both are conventions rather than declarations.
 
 The general shape, which is why it is written up rather than fixed: **a field with two legitimate
 readings cannot be checked, and the way to tell is to write the check and watch it refuse things that

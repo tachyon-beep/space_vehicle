@@ -191,6 +191,10 @@ thresholds:
     latched: true
     interlock: true
     severity: ADVISORY
+    # A *difference* between two buses, expressed against one of them because the profile schema
+    # keys on a single channel — so the `point_units` say what is actually being compared, which is
+    # the field the band check reads to know that this is not a level threshold on bus A.
+    point_units: "V of difference between the two buses, not a level on either"
     provenance:
       basis: chosen
       reason: "electrical_diode.md:880 requires |dV| <= 1.0 V before the tie closes. Modelled here as a threshold on the difference between buses; expressed against bus A because the profile schema keys on a single channel, and the linter's job is to check the hysteresis, not the arithmetic"

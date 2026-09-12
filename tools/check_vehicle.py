@@ -1271,6 +1271,60 @@ def walk_unset(node: Any, trail: str = "") -> list[str]:
     return found
 
 
+def check_range_kinds(registry: dict[str, dict[str, Any]], report: Report) -> None:
+    """A channel's alarms have to be able to fire, and `range` alone cannot say whether they can.
+
+    The field carries **two meanings** and the numbers do not distinguish them. On a physical
+    channel it is an acceptable operating *band* and every alarm fires outside it — cabin pressure
+    ranges 4.8-5.2 psia with events at <4.5 and <3.5. On a reserve channel it is the quantity's
+    full *scale* and the alarms fire inside it — `rcs.propellant_remaining_pct` ranges 0-100 with a
+    reserve at <25, which is inside a full span and correct. A rule of the form "an alarm must lie
+    outside its channel's range" would therefore refuse 34 legitimate thresholds, which is how the
+    ambiguity was found: the check was written, it refused things that were right, and the missing
+    piece turned out to be the field rather than the thresholds.
+
+    `range_kind` is that field, and what it buys is this check. For a `band`, an alarm strictly
+    inside it fires during normal operation — a cabin that alarms "low" at a pressure its own
+    registry calls normal. For a `scale` there is nothing to check, and saying so is the point: the
+    reserve ladders in this vehicle are correct *because* their channels are scales, which was an
+    implicit argument until it was a declared field.
+    """
+    for cid, row in sorted(registry.items()):
+        rng = row.get("range")
+        if not isinstance(rng, list) or len(rng) != 2:
+            continue
+        if all(v is None for v in rng):
+            continue
+        if all(isinstance(v, bool) for v in rng):
+            continue  # `[true, true]` is the boolean convention: true is the normal value
+        if any(v is None for v in rng):
+            # A band needs both ends, so a half-bounded range is a scale by construction — and the
+            # declaration has to say so, because `[0, null]` is exactly the shape a reader would
+            # otherwise take for a band whose ceiling nobody wrote down.
+            if row.get("range_kind") != "scale":
+                report.refuse(
+                    f"channels.yaml:{cid}",
+                    f"declares the half-bounded range {rng} and range_kind "
+                    f"{row.get('range_kind')!r}. A range with one end is a scale rather than a "
+                    "band, and it has to say so: `[0, null]` is otherwise indistinguishable from a "
+                    "band whose ceiling nobody wrote down",
+                )
+            continue
+        if not all(isinstance(v, (int, float)) for v in rng):
+            report.refuse(f"channels.yaml:{cid}", f"declares the range {rng}, which is not a pair")
+            continue
+        kind = row.get("range_kind")
+        if kind not in {"band", "scale"}:
+            report.refuse(
+                f"channels.yaml:{cid}",
+                f"declares the numeric range {rng} and range_kind {kind!r}. Whether a range is an "
+                "acceptable band or a full scale cannot be read from the numbers, and every alarm "
+                "on the channel is judged against the answer",
+            )
+        elif kind == "band" and rng[0] >= rng[1]:
+            report.refuse(f"channels.yaml:{cid}", f"declares a band {rng} with no width")
+
+
 def check_domain(
     path: Path,
     node_ids: set[str],
@@ -1808,6 +1862,47 @@ def check_domain(
                 f"{sorted(SEVERITIES)} (§6). A severity outside it is an alert that lights at no "
                 "level a crew is trained to read",
             )
+        # A band is an acceptable operating region, so an alarm strictly inside it fires during
+        # normal operation — a cabin that alarms "low" at a pressure its own registry calls normal.
+        # The comparison needs `range_kind` to exist at all, which is why this check could not be
+        # written until that field did: `range` alone carries two meanings and the numbers do not
+        # distinguish them.
+        #
+        # Two exemptions, and both are the threshold *saying* it measures something else. A
+        # `point_units` that differs from the channel's own unit covers the rate thresholds — six
+        # of them watch a level channel with a per-minute limit — and `gated_by` covers a threshold
+        # the schema forced onto a channel it is not really about. Without one of the two, an alarm
+        # inside its own band has nothing to explain it.
+        point_row = index.row(str(point)) if point else None
+        if isinstance(point_row, dict) and point_row.get("range_kind") == "band":
+            band = point_row.get("range")
+            assert_v = threshold.get("assert")
+            comparator_here = threshold.get("comparator")
+            numeric_band = (
+                isinstance(band, list)
+                and len(band) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in band)
+            )
+            explained = bool(threshold.get("point_units")) or bool(threshold.get("gated_by"))
+            if (
+                numeric_band
+                and isinstance(assert_v, (int, float))
+                and not isinstance(assert_v, bool)
+                and not explained
+            ):
+                low, high = band
+                inside = (comparator_here == "above" and assert_v < high) or (
+                    comparator_here == "below" and assert_v > low
+                )
+                if inside:
+                    report.refuse(
+                        twhere,
+                        f"asserts {comparator_here} {assert_v} on {point!r}, whose declared band is "
+                        f"{band} and whose `range_kind` is `band` — so this alarm fires while the "
+                        "channel is inside the region its own registry calls acceptable. Either the "
+                        "band is wrong or the threshold measures something other than the channel's "
+                        "own quantity, in which case `point_units` says so",
+                    )
         comparator = threshold.get("comparator")
         if comparator not in {"above", "below"}:
             report.refuse(twhere, f"comparator {comparator!r} is neither 'above' nor 'below'")
@@ -3739,6 +3834,7 @@ def main(argv: list[str] | None = None) -> int:
             withheld=withheld_channels(root),
         )
         schedule = derive_schedule(coupling, report)
+    check_range_kinds(registry, report)
     check_domains(root, registry, coupling, channels, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
