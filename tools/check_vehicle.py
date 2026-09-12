@@ -3209,6 +3209,69 @@ def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                 )
 
 
+def check_objectives(
+    doc: dict[str, Any], registry: dict[str, dict[str, Any]], report: Report
+) -> None:
+    """What counts as success has to be evaluable, or the challenge has no score.
+
+    The `term` field is prose and should be — it is what a person reads. What it could not do is say
+    *who* settles the objective or *from what*, so nothing could score a run: four of the nine terms
+    name a channel inside a sentence, `thermal_margin` ("worst zone margin, all phases") named none
+    at all, and the three outcome objectives are sentences no machine can read. A challenge whose
+    definition of success is prose is a strange thing for a challenge to have.
+
+    Three checks, and the second is the one with teeth. Every objective declares `evaluated_by`, and
+    a `vehicle` objective names at least one channel — because a judgement the vehicle is supposed
+    to settle from its own record, naming no channel, is a judgement nobody can make. And **every
+    channel an objective names must be one the vehicle is willing to publish**: an objective scored
+    on a `not_published` truth is one the record cannot settle at all, which is the §7 boundary
+    arriving in the scoring rather than in the telemetry.
+    """
+    objectives = doc.get("objectives") or []
+    if not objectives:
+        report.refuse("mission.yaml:objectives", "declares no objectives, so nothing is scored")
+        return
+    index = ChannelIndex(registry)
+    withheld = withheld_channels(Path(__file__).resolve().parent.parent)
+    for objective in objectives:
+        where = f"mission.yaml:objectives.{objective.get('id')}"
+        if not objective.get("term"):
+            report.refuse(where, "states no term, so nobody can read what it wants")
+        evaluator = objective.get("evaluated_by")
+        if evaluator not in {"vehicle", "far_side", "external"}:
+            report.refuse(
+                where,
+                f"declares evaluated_by {evaluator!r}. A term is a sentence; who settles it is a "
+                "different question and the one that makes it scoreable — `vehicle` when the record "
+                "settles it, `far_side` when the operator does, `external` when neither can",
+            )
+            continue
+        channels = objective.get("channels") or []
+        if evaluator == "vehicle" and not channels:
+            report.refuse(
+                where,
+                "is settled by the vehicle and names no channel, so its verdict comes from nowhere "
+                "the record contains",
+            )
+        for cid in channels:
+            if cid not in index:
+                report.refuse(where, f"names {cid!r}, which is not a registered channel")
+            elif str(cid) in withheld:
+                report.refuse(
+                    where,
+                    f"is scored on {cid!r}, which the domain declares `not_published`. An objective "
+                    "the vehicle withholds the evidence for is one the record cannot settle — the "
+                    "§7 boundary arriving in the scoring rather than in the telemetry",
+                )
+        if objective.get("kind") == "margin" and not objective.get("sense"):
+            report.refuse(
+                where,
+                "is a margin and declares no `sense`. A margin's direction is not implied by its "
+                "name: a propellant reserve wants to be high and a zone margin wants to be far from "
+                "its limit, and the two are judged differently",
+            )
+
+
 def check_landing_site(doc: dict[str, Any], report: Report) -> None:
     """Re-derive where the Earth is in the LM's sky, because that is what the site decides.
 
@@ -3962,6 +4025,8 @@ def main(argv: list[str] | None = None) -> int:
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
         check_landing_site(mission, report)
+        if channels is not None:
+            check_objectives(mission, registry, report)
         if channels is not None:
             check_mission_bindings(channels, mission, registry, report, vehicle)
             check_crew_bindings(

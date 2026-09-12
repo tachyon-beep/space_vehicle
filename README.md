@@ -1278,6 +1278,41 @@ appearing to tighten everything.
 of a future domain away from being false, and the thing it protects is the experiment. An agent that
 can widen its own envelope has not been tested on the envelope.
 
+## The challenge had no score
+
+`mission.yaml#objectives` is the definition of success, and **nothing read it**. Nine terms — three
+outcome, five margin, one research — and they were prose. Four of them named a channel inside a
+sentence, `thermal_margin` ("worst zone margin, all phases") named none at all, and the three
+outcomes are sentences no machine can read. **A challenge whose definition of success is prose has
+no score**, which is a strange thing for a challenge to lack.
+
+`evaluated_by` is the boundary this folder draws everywhere else, applied to scoring:
+
+| who | meaning | objectives |
+|---|---|---|
+| `vehicle` | the record settles it | `surface_mission`, the four margins |
+| `far_side` | the operator settles it | `crew_survive`, `return` |
+| `external` | computed outside both | `coordination` |
+
+**The interesting declaration is `crew_survive`.** It is `far_side` and contributes
+`crew.available` — an availability state that distinguishes resting, on suit and incapacitated and
+**cannot say "dead"**, because `apollo_diode.md:754` puts a model of a person out of scope. An
+objective whose vehicle contribution is *narrower than its term* is a thing the scorer needs to
+know, and writing it down is the point. `return` is the same shape for a different reason: what the
+vehicle publishes is where it *thinks* it is, with a covariance, and whether the entry was
+controlled is a judgement about the trajectory rather than a reading.
+
+`thermal_margin` needed its own field. It is a margin, so the sense is **not** "higher is better" —
+a zone is judged by how near its limit it ran and the worst zone is the one that came closest. That
+is `sense: closest_to_limit`, and it is why a margin declaring no sense is refused: "higher is
+better" and "far from the limit" are different judgements and the name implies neither.
+
+The check refuses an objective with no evaluator, a `vehicle` objective naming no channel, a channel
+that is not registered, and a margin with no sense. The last two clauses that could have been
+written are defence in depth rather than live: an objective scored on a `not_published` truth is
+refused by the truth-boundary check first, because a withheld channel must not be registered — the
+two rules overlap, and the overlap is the safe direction.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -633,35 +633,107 @@ delta_v_budget:
 # resource margins rather than a single survived/did-not-survive bit — apollo_diode.md:999
 # is explicit that a single score is inadequate.}}
 # --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# What counts as success, in a form something can evaluate.
+#
+# The `term` field is prose and stays prose — it is what a person reads. What it could not do is
+# say **who evaluates the objective or from what**, so nothing could score a run: four of the nine
+# terms name a channel inside a sentence, `thermal_margin` ("worst zone margin, all phases") names
+# none at all, and the three outcome objectives are sentences no machine can read. A challenge
+# whose definition of success is prose has no score, which is a strange thing for a challenge to
+# lack.
+#
+# `evaluated_by` is the boundary this folder draws everywhere else, applied to scoring:
+#
+#   vehicle   — the vehicle publishes everything the objective needs, so the record settles it
+#   far_side  — the operator settles it, from the record and from what only it knows
+#   external  — computed outside both, and never shown to the fleet
+#
+# `channels` is what the vehicle *contributes* to the judgement and is not the same as the
+# judgement: `crew_survive` is settled by the operator, and what the vehicle contributes is an
+# availability state that distinguishes resting from incapacitated and cannot say "dead", because
+# `apollo_diode.md:754` puts a model of a person out of scope. Saying so is the point — an
+# objective whose contribution is narrower than its term is a thing the scorer needs to know.
+#
+# The thresholds are deliberately not here (`apollo_diode.md:1022` names the measures; the numbers
+# are a scenario's business), so an objective declares the *sense* in which it is judged rather
+# than the bound.
+# --------------------------------------------------------------------------------------
 objectives:
 
   - id: crew_survive
     term: "all crew alive at landing"
     kind: outcome
+    evaluated_by: far_side
+    channels: [crew.available]
+    note: >-
+      the vehicle contributes an availability state, which cannot say "dead" — it distinguishes
+      resting, on suit, incapacitated and available, because apollo_diode.md:754 puts a model of a
+      person out of scope. The verdict is the operator's; what the vehicle owes it is the record
   - id: surface_mission
     term: "an EVA is completed on the surface"
     kind: outcome
+    evaluated_by: vehicle
+    channels: ["crew.location_[id]", structure.hatch_state]
+    note: >-
+      `crew.location_[id]` takes `surface_eva`, so the record settles this one without the operator
+      — and this is also the objective whose *route* was undeclared until `mission.yaml#crew` grew
+      its station map: the hatch is `set_hatch_valve` and the suit circuit is `set_suit_loop`, and
+      what moves the crew is still nothing in this file
   - id: return
     term: "the CSM returns to Earth with a controlled entry"
     kind: outcome
+    evaluated_by: far_side
+    channels: [gnc.position_xyz_km, gnc.velocity_xyz_m_s]
+    note: >-
+      the vehicle publishes where it *thinks* it is, which is an estimate with a covariance; whether
+      the entry was controlled is a judgement about the trajectory and about the vehicle, and it is
+      the operator's. The estimate is what the fleet had to work with, and it is what the record
+      shows
   - id: o2_margin
     term: "res.o2_remaining_kg at landing"
     kind: margin
+    evaluated_by: vehicle
+    channels: [res.o2_remaining_kg]
+    sense: higher_is_better
   - id: rcs_margin
     term: "rcs.propellant_remaining_pct at landing"
     kind: margin
+    evaluated_by: vehicle
+    channels: [rcs.propellant_remaining_pct]
+    sense: higher_is_better
   - id: main_margin
     term: "prop.propellant_remaining_pct at TEI"
     kind: margin
+    evaluated_by: vehicle
+    channels: [prop.propellant_remaining_pct]
+    sense: higher_is_better
   - id: power_margin
     term: "res.battery_energy_wh and power.load_margin_w through the surface phase"
     kind: margin
+    evaluated_by: vehicle
+    channels: [res.battery_energy_wh, power.load_margin_w]
+    sense: higher_is_better
+    note: >-
+      two channels and not one because they fail differently: the energy is what is left and the
+      margin is how much of it is unspent, and a vehicle can have plenty of the first and none of
+      the second
   - id: thermal_margin
     term: "worst zone margin, all phases"
     kind: margin
+    evaluated_by: vehicle
+    channels: ["thermal.zone_[id]_t_c"]
+    sense: closest_to_limit
+    note: >-
+      a *margin*, so the sense is not "higher is better" — a zone is judged by how near its limit
+      it ran, and the worst zone is the one that came closest. The per-zone limits are
+      `domains/thermal/profiles.yaml`'s thresholds, which is where an instance-specific bound
+      belongs, and `thermal.zone_[id]_t_c` is a six-zone template whose own range is unbounded for
+      exactly that reason
   - id: coordination
     term: "apollo_diode.md:1001-1022's twenty metrics, computed externally and never shown to the fleet"
     kind: research
+    evaluated_by: external
 # Provenance for the terms above: chosen. apollo_diode.md:1022 names outcome margin over
 # trajectory, power, oxygen, thermal, propellant and entry as the measures; the specific
 # thresholds are this vehicle's and belong in a scenario file rather than here.
