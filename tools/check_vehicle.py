@@ -665,6 +665,9 @@ def load(path: Path, report: Report) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         report.refuse(path.name, "is not a mapping")
         return None
+    # Semantic rather than structural, and here rather than in the per-file checks because every
+    # document passes through this one call site. See `check_answered_debts`.
+    check_answered_debts(path.name, data, report)
     return data
 
 
@@ -1453,6 +1456,45 @@ def check_crew(
             "channels.yaml:crew.location_[id]",
             f"offers position {extra!r}, which channels.yaml:crew_positions does not describe",
         )
+
+
+def check_answered_debts(name: str, doc: Any, report: Report) -> None:
+    """A debt that has been paid and is still on the books is worse than no debt.
+
+    `mission.yaml` carried `initial_state.landing_site: UNCONFIGURED` for as long as it carried the
+    real thing. When the site was chosen it was declared as a **top-level** `landing_site` block —
+    with the derivation, the sub-Earth geometry and a `check_landing_site` that re-derives it — and
+    the placeholder twenty lines above went on reporting the site as undecided, in the same file,
+    while counting as one of the vehicle's declared debts.
+
+    The reason that matters more than the count is the one this folder keeps rediscovering: a note
+    that has outlived its answer tells the next reader to stop looking. A reader who opens
+    `initial_state` first concludes the landing site is owed, and the site is what decides whether
+    the LM can be heard from the surface at all.
+
+    The rule is narrow on purpose — the *leaf* name of an unset value, against the **top-level**
+    names of the same document — because that is the shape of an answered debt rather than a
+    coincidence: a top-level declaration is the file saying "this is decided", and a nested
+    `UNCONFIGURED` of the same name is the file still saying it is not.
+    """
+    if not isinstance(doc, dict):
+        return
+    decided = {
+        str(key)
+        for key, value in doc.items()
+        if value is not None and value != "UNCONFIGURED" and not isinstance(value, str)
+    }
+    for trail in walk_unset(doc):
+        if "." not in trail:
+            continue
+        leaf = trail.split(".")[-1].split("[")[0]
+        if leaf in decided:
+            report.refuse(
+                f"{name}:{trail}",
+                f"is UNCONFIGURED while the top-level `{leaf}` in this same file is declared. A "
+                "debt that has been answered and left standing tells the next reader to stop "
+                "looking, which is worse than never having recorded it",
+            )
 
 
 def walk_unset(node: Any, trail: str = "") -> list[str]:
@@ -4635,6 +4677,26 @@ def main(argv: list[str] | None = None) -> int:
     coupling = load(root / "coupling.yaml", report)
     vehicle = load(root / "vehicle.yaml", report)
     mission = load(root / "mission.yaml", report)
+    # The domain files are walked for unset values by `check_domain` and the coupling graph by
+    # `check_coupling`'s edge walk, so between them every `UNCONFIGURED` scalar in the vehicle was
+    # counted — except the ones in the two files nothing walks. **Eleven were being counted by
+    # nothing at all**, and the folder's headline number is the debt count, so the omission was
+    # invisible by construction: `mission.yaml`'s initial position, velocity and state-vector basis
+    # and `vehicle.yaml`'s three minimum impulse bits, the LM sublimator's rejection and water
+    # consumption, and its radiators' unset values. Two of those are named in a prose
+    # `open_debts` entry somewhere else, which is how they stayed plausible.
+    #
+    # So the walk is over every top-level document. `coupling.yaml` is deliberately absent: all
+    # thirty of its unset scalars are edge sensitivity fields, and the edge walk already reports
+    # them against the edge they belong to, which is a more useful place to read them.
+    for name, doc in (
+        ("mission.yaml", mission),
+        ("vehicle.yaml", vehicle),
+        ("channels.yaml", channels),
+        ("presentation.yaml", presentation),
+    ):
+        for trail in walk_unset(doc):
+            report.debt(f"{name}.{trail}", "is UNCONFIGURED")
 
     registry: dict[str, dict[str, Any]] = {}
     if channels is not None:

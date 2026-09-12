@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 226 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 237 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,18 +173,25 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 226 declared debts and every
+verbs and 128 classified events across the eleven directories, with 237 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **226** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **237** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **184** the plant
+charging efficiency). The **183** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
-differ by exactly the obligations that are not yet a field anywhere. Counting the graph's seven
+differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
+left-hand number was itself incomplete: the domain files were walked for unset values by
+`check_domain` and the coupling graph by its edge walk, so every literal `UNCONFIGURED` was counted
+*except the eleven in the two files nothing walks*. `mission.yaml`'s initial position, velocity and
+state-vector basis, and `vehicle.yaml`'s three minimum impulse bits, the LM sublimator's rejection
+and water consumption and its radiators — two of them named in a prose `open_debts` entry
+somewhere else, which is how they stayed plausible. The headline number is the debt count, so the
+omission was invisible by construction. Counting the graph's seven
 took them from being read by nobody to being refusals under `--strict`, which is where a debt that
 is only displayed stops being a debt.
 
@@ -1517,6 +1524,35 @@ check it by hand.**
 same treatment with the eight durations added in the open. The `computation` evaluator that had
 lived inline in the coupling check is now a shared `rederive()`, because this is the same defect
 `E-RAD-WATER` produced — a value whose arithmetic exists only in prose beside it.
+
+## The debt count was missing eleven of its own debts
+
+The folder's headline number is the debt count, which makes an omission in it invisible by
+construction. Every domain file was walked for unset values by `check_domain` and the coupling graph
+by its edge walk, so every literal `UNCONFIGURED` scalar was counted — **except the eleven in the two
+files nothing walks**:
+
+- `mission.yaml`'s initial position, velocity and state-vector basis
+- `vehicle.yaml`'s three minimum impulse bits, the LM sublimator's rejection and water consumption,
+  and its radiators' unset values
+
+Two of them are named in a prose `open_debts` entry *somewhere else*, which is exactly how they
+stayed plausible: a reader who searches for the minimum impulse bit finds a paragraph about it and
+concludes it is on the books. It was not.
+
+The walk is now over every top-level document — `coupling.yaml` deliberately absent, because all
+thirty of its unset scalars are edge sensitivity fields that the edge walk already reports against
+the edge they belong to, which is a more useful place to read them. **226 became 237.**
+
+Chasing it turned up the other half of the same idea. `mission.yaml` carried
+`initial_state.landing_site: UNCONFIGURED` for as long as it carried the real thing: when the site
+was chosen it was declared as a **top-level** `landing_site` block, with the derivation and a
+`check_landing_site` that re-derives the geometry, and the placeholder twenty lines above went on
+reporting the site as undecided, in the same file. A debt that has been answered and left standing
+is worse than no debt, because it tells the next reader to stop looking — and the site is what
+decides whether the LM can be heard from the surface at all. `check_answered_debts` refuses that
+shape: a nested `UNCONFIGURED` whose leaf name is a *configured top-level* declaration of the same
+document.
 
 ## Authoring convention: no flow mappings
 

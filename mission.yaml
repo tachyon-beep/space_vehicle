@@ -922,7 +922,12 @@ initial_state:
       that place the vehicle inside the Moon's sphere of influence at the right arrival time,
       with a free-return property the fleet can spend. The published geometry above is the
       constraint set for that design, and it is not a state vector.
-  landing_site: UNCONFIGURED
+  # `landing_site` used to be here as well, a second `UNCONFIGURED` beside this one, and it
+  # outlived its own answer: the site was chosen and declared as a top-level `landing_site` block
+  # below, with its derivation and a linter check, while this placeholder went on reporting the
+  # site as undecided — twenty lines above it, in the same file. A debt that has been paid and is
+  # still on the books is worse than no debt, because it tells the next reader to stop looking.
+  # `entry_corridor` is the genuine one and is named in `open_debts`.
   entry_corridor: UNCONFIGURED
 # --------------------------------------------------------------------------------------
 # The landing site, and the one thing it decides that nothing else does.
