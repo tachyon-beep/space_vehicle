@@ -143,6 +143,31 @@ FAULT_RESPONSES = {"service", "advisory"}
 # Keys that carry prose wherever they appear. Needed where a *string* has to be told from a
 # malformed mapping: `vehicle.yaml#electrical.batteries` holds three groups and one `note`, and the
 # note is documentation rather than a group somebody flattened.
+# The sections of `vehicle.yaml` the linter or a tool reads by name, each with its reader. The
+# list exists because the file's thermal block spent its life with its header empty and its three
+# subsections as top-level keys — see `check_vehicle_sections`, which is the check this list
+# enables: a key that is not here and not in `PROSE_SECTIONS` is refused.
+VEHICLE_SECTIONS = {
+    "configurations",  # the mass closure, and the configuration names mission.yaml refers to
+    "propulsion",  # `check_propulsion` and the delta-v budget
+    "consumables",  # the loads the mission starts with, and the leak and metabolic rates
+    "thermal",  # `check_thermal_bindings`, against domains/thermal/components.yaml
+    "comms",  # `check_blackout` and the link budget
+    "electrical",  # `check_electrical_bindings`, against domains/power/components.yaml
+    "open_debts",  # counted and printed, like every other open_debts in the folder
+}
+# Declarations addressed to a reader rather than to a tool. Naming them is the point: an unread
+# section is either a decision or an oversight, and this set is where the decision is recorded.
+PROSE_SECTIONS = {
+    "schema_version",
+    "source",
+    "vocabulary",
+    "conventions",
+    "frames",
+    "environment",
+    "landing_site",
+}
+
 DOC_KEYS = {"note", "notes", "provenance", "why", "source", "reason", "ref", "relation"}
 
 # `02-canonical-vocabulary.md` §6's ladder, which V-04 fixes: four annunciated levels and one
@@ -2507,8 +2532,57 @@ def check_domains(
         )
 
 
+def check_vehicle_sections(doc: dict[str, Any], report: Report) -> None:
+    """Every top-level section of `vehicle.yaml` is one something reads, and none is empty.
+
+    This check exists because of how the thermal block failed, and the failure is worth stating in
+    full because it is silent in two directions at once. `vehicle.yaml` had
+
+        thermal:
+
+        loops:
+          - id: primary
+          ...
+
+    — the section header with nothing under it, and its three subsections one indent level out, as
+    top-level keys. YAML reads that as `thermal: null` plus three orphan keys, so every reader that
+    asked for `vehicle["thermal"]["loops"]` got `None` and the section the file declared was in fact
+    empty. Nothing had ever asked, so nothing had ever failed: the loops, the radiators and the
+    zones were complete, plausible and **read by no tool at all**, and the audit that went looking
+    for unread sections found the symptom without the cause.
+
+    So the two rules are the two halves of that shape. A key the linter has never heard of is either
+    a new section nobody has wired up or a block that lost its parent; and a section declared and
+    left empty is the second half of the same accident, which is why it is refused rather than
+    skipped. `PROSE_SECTIONS` is the honest part: `conventions`, `frames`, `vocabulary` and `source`
+    are declarations for a human reader, naming them makes being unread a stated decision rather
+    than an oversight, and refusing an unknown key is what stops that list from quietly growing.
+    """
+    where = "vehicle.yaml"
+    for key in doc:
+        if key in VEHICLE_SECTIONS or key in PROSE_SECTIONS:
+            continue
+        report.refuse(
+            where,
+            f"declares a top-level section {key!r} that nothing reads. Either it is a new section "
+            "and the reader is missing, or a block has lost the section it belongs to — a header "
+            "with nothing under it and its children one level out reads as an empty section plus "
+            "orphan keys, and every reader of the section then silently gets `None`",
+        )
+    for key in sorted(VEHICLE_SECTIONS):
+        if key not in doc:
+            report.refuse(where, f"has no {key!r} section")
+        elif doc[key] is None:
+            report.refuse(
+                where,
+                f"declares {key!r} and leaves it empty. A section header with nothing under it is "
+                "how its children end up as top-level keys, where nothing will look for them",
+            )
+
+
 def check_vehicle(doc: dict[str, Any], report: Report) -> None:
     """Mass closure, and the configuration names the mission refers to."""
+    check_vehicle_sections(doc, report)
     for cfg in doc.get("configurations") or []:
         where = f"vehicle.yaml:configuration {cfg.get('id')}"
         if "mass_kg" not in cfg:
@@ -3252,6 +3326,113 @@ def check_power_inventory(root: Path, report: Report) -> None:
                 f"declares the ascent stage at {asc} Wh and the ascent cells carry "
                 f"{energy.get('battery_lm_ascent')} Wh",
             )
+
+
+def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The thermal machine is declared twice, and the two declarations disagreed.
+
+    `vehicle.yaml#thermal` is the vehicle-level view — loops, radiators, zones, which is what its
+    own header says it carries — and `domains/thermal/components.yaml` is the domain's: the same
+    hardware with the states that integrate it. Both had been written, both were complete, and
+    **nothing joined them**, so `vehicle.yaml:thermal` was read by no tool at all.
+
+    Writing the join found the disagreement immediately, and it is the kind that survives review
+    because both halves look right on their own. `vehicle.yaml` called its second loop `secondary`
+    and gave it the **LM's** fluid ("65 % water / 35 % inhibited ethylene glycol"), the LM's flow
+    band (1.5-1.9 L/min) and the LM's temperatures — while the domain has three loops, one of them
+    `loop_lm` carrying exactly that fluid and exactly that band, and a `loop_secondary` that is the
+    CSM's second loop with different, `chosen` figures. So the vehicle-level file named the LM's
+    coolant loop "secondary" and did not mention the CSM's second loop at all. A reader taking
+    `vehicle.yaml` for the loop list would size the wrong vehicle.
+
+    The join is by `id`, because unlike the electrical inventory the two files already agree on
+    their names — which is the evidence that they were always meant to be one declaration.
+    """
+    thermal = (vehicle or {}).get("thermal") or {}
+    domain = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    if not thermal or not domain:
+        report.debt(
+            "vehicle.yaml#thermal",
+            "either the vehicle's thermal section or the thermal domain is absent, so the two "
+            "views of the cooling machine cannot be compared",
+        )
+        return
+
+    declared = {str(loop.get("id")): loop for loop in thermal.get("loops") or []}
+    built = {
+        str(c.get("id")): c
+        for c in domain.get("components") or []
+        if isinstance(c, dict) and c.get("class") == "loop"
+    }
+    where = "vehicle.yaml#thermal.loops"
+    for missing in sorted(set(built) - set(declared)):
+        report.refuse(
+            where,
+            f"omits {missing!r}, which domains/thermal/components.yaml declares as a loop. The "
+            "vehicle-level file is the loop list a reader reaches for first",
+        )
+    for extra in sorted(set(declared) - set(built)):
+        report.refuse(
+            where,
+            f"declares {extra!r}, which no component of class `loop` in the thermal domain has",
+        )
+    for loop_id in sorted(set(declared) & set(built)):
+        one, two = declared[loop_id], built[loop_id]
+        for field in ("fluid", "flow_l_min", "vehicle"):
+            if field in one and field in two and one[field] != two[field]:
+                report.refuse(
+                    f"{where}.{loop_id}",
+                    f"gives {field} as {one[field]!r} and the thermal domain gives {two[field]!r}. "
+                    "One machine, two files: a loop re-rated in one and not the other is a vehicle "
+                    "whose cooling was sized against a loop nobody flies",
+                )
+        volume = one.get("loop_volume_l", one.get("volume_l"))
+        if volume is not None and two.get("volume_l") is not None and volume != two["volume_l"]:
+            report.refuse(
+                f"{where}.{loop_id}",
+                f"gives a volume of {volume!r} L and the thermal domain gives {two['volume_l']!r}",
+            )
+
+    # The radiators. `vehicle.yaml` gives a per-panel rejection and a panel count; the domain
+    # derives an effective area and a total from them. The product is the one quantity both state,
+    # so it is the one worth holding.
+    radiators = {str(r.get("id")): r for r in thermal.get("radiators") or []}
+    model = (domain.get("radiator_model") or {}).get("csm") or {}
+    panel = radiators.get("csm_radiator") or {}
+    if panel and model:
+        per_panel = panel.get("rejection_w_per_panel")
+        panels = panel.get("panels")
+        total = model.get("rejection_w")
+        if (
+            isinstance(per_panel, (int, float))
+            and isinstance(panels, int)
+            and total is not None
+            and per_panel * panels != total
+        ):
+            report.refuse(
+                "vehicle.yaml#thermal.radiators.csm_radiator",
+                f"gives {panels} x {per_panel} W of rejection and the thermal domain's "
+                f"radiator model derives {total} W from it",
+            )
+        area = panel.get("area_m2")
+        geometric = model.get("area_geometric_m2")
+        if area is not None and geometric is not None and area != geometric:
+            report.refuse(
+                "vehicle.yaml#thermal.radiators.csm_radiator",
+                f"gives {area} m2 of panel area and the thermal domain gives {geometric} m2 "
+                "geometric",
+            )
+
+    # The zones. Both files list the same six, and the domain's `vehicle` is what binds a zone to
+    # the compartment whose atmosphere it is; a zone named in one file and not the other is a
+    # compartment that is either unregulated or unwatched, and the two are hard to tell apart.
+    zones_one = {str(z.get("id")) for z in thermal.get("zones") or []}
+    zones_two = {str(z.get("id")) for z in domain.get("zones") or []}
+    if zones_one != zones_two:
+        report.refuse(
+            "vehicle.yaml#thermal.zones",
+            f"lists {sorted(zones_one)} and the thermal domain lists {sorted(zones_two)}",
+        )
 
 
 def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
@@ -4175,27 +4356,44 @@ def main(argv: list[str] | None = None) -> int:
             all_commands[path.name] = load(path / "commands.yaml", Report()) or {}
     check_profile_immutability(all_commands, threshold_ids, report)
     check_domains(root, registry, coupling, channels, report)
+    # `vehicle.yaml` is the file every cross-file check joins against, so when it cannot be
+    # loaded the answer is not to run them with a hole in the middle of the argument list — it is
+    # to say once that the joins are unavailable and carry on with the checks that do not need it.
+    # The alternative was measured: the file was made unparseable and the linter died with
+    # `AttributeError: 'NoneType' object has no attribute 'get'` **from inside a check**, losing
+    # the report that named the parse error. A linter that crashes on the input it exists to
+    # diagnose is worse than one that misses a fault, because the operator sees a traceback and
+    # reasonably concludes the tool is broken rather than the definition.
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)
+        check_thermal_bindings(root, vehicle, report)
+    else:
+        report.refuse(
+            "vehicle.yaml",
+            "could not be loaded, so every check that joins another file against it — the "
+            "electrical and thermal inventories, the phase-to-configuration names, the crew "
+            "placements and the propulsion budgets — is unavailable for this run",
+        )
     check_power_inventory(root, report)
     if mission is not None:
-        check_mission(mission, vehicle, report)
+        if vehicle is not None:
+            check_mission(mission, vehicle, report)
+            check_propulsion(mission, vehicle, report)
+            if channels is not None:
+                check_mission_bindings(channels, mission, registry, report, vehicle)
+                check_crew_bindings(
+                    mission,
+                    vehicle,
+                    registry,
+                    report,
+                    {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
+                )
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
         check_landing_site(mission, report)
         if channels is not None:
             check_objectives(mission, registry, report)
-        if channels is not None:
-            check_mission_bindings(channels, mission, registry, report, vehicle)
-            check_crew_bindings(
-                mission,
-                vehicle,
-                registry,
-                report,
-                {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
-            )
-        check_propulsion(mission, vehicle, report)
         check_trajectory(mission, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.

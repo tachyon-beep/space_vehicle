@@ -1385,6 +1385,49 @@ The same comparison also showed that **`service` covers two things a fault treat
 perturbed, so the layer cannot be used to tell them apart. What would is `origin: commanded |
 derived`, and until it exists the only way to say a channel is untouchable is to list it.
 
+## The thermal section was empty, and its three children were top-level keys
+
+`vehicle.yaml` had this:
+
+```
+thermal:
+
+loops:
+  - id: primary
+```
+
+A section header with nothing under it, and its three subsections one indent level out. YAML reads
+that as `thermal: null` plus three orphan keys — so **every reader that asked for
+`vehicle["thermal"]["loops"]` got `None`**, and the loops, radiators and zones the file declares
+were read by no tool at all. This is the cause of a symptom the section-level audit had been
+carrying for two rounds: `vehicle.yaml:zones`/`radiators`/`loops` kept appearing on the unread list,
+and the list cannot tell a section nobody wired up from a section nobody *can* reach.
+
+Writing the join found the second half immediately, and it is the kind that survives review because
+each file reads correctly on its own. **`vehicle.yaml` named the LM's coolant loop "secondary"** —
+it carried the LM's fluid (65 % water against the CSM's 62.5 % glycol), the LM's flow band
+(1.5-1.9 L/min) and the LM's 11.3 kg of coolant — while `domains/thermal/components.yaml` has three
+loops: `loop_primary`, `loop_secondary` (the CSM's *second* loop, `chosen` and scaled, which the
+vehicle-level file mentioned nowhere) and `loop_lm`, carrying exactly the fluid and exactly the flow
+band that `vehicle.yaml` had filed under `secondary`. A reader taking the globals file for the loop
+list would have sized the wrong vehicle, and the LM would have had no loop at all.
+
+So the ids are the domain's now, the CSM's second loop is declared, and two checks hold the two
+views together: **`check_thermal_bindings`**, which is `check_electrical_bindings`'s shape one domain
+over — same loops by id, same fluid, same flow band, same volume, the radiator's per-panel rejection
+times its panel count against the model's derived total, and the same six zones — and
+**`check_vehicle_sections`**, which refuses a top-level key nothing reads and a section declared and
+left empty. The second is the root cause rather than the symptom: a block that has lost its parent
+is refused at the point it happens instead of being discovered two rounds later as an entry on a
+list of things nobody reads.
+
+**And chasing it found the linter crashing on the input it exists to diagnose.** With
+`vehicle.yaml` unparseable, `check_mission` dereferenced `None` and the linter died with
+`AttributeError` *from inside a check* — so the traceback replaced the report and the one line that
+mattered, naming the parse error, was buried under a crash in a check that never ran. An operator
+sees that and concludes the tool is broken rather than the definition. The cross-file checks are now
+gated on the file they join against, and the run says once that the joins are unavailable.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

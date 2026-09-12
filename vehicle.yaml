@@ -391,94 +391,111 @@ consumables:
 # --------------------------------------------------------------------------------------
 thermal:
 
-loops:
+  loops:
+    # Three loops, and until round 43 this file named two of them wrongly. The entry called
+    # `secondary` carried the **LM's** fluid, the LM's flow band and the LM's coolant mass — it was
+    # the LM loop wearing the CSM's naming — while the CSM's actual second loop, which
+    # `domains/thermal/components.yaml` has always declared, appeared nowhere here. The vehicle
+    # carries two glycol loops on the CSM and one water-glycol loop on the LM (apollo_diode.md:97),
+    # and a reader taking this block for the loop list would have sized the wrong vehicle. The ids
+    # now match the domain's, which is what `check_thermal_bindings` holds them to.
 
-    - id: primary
-      fluid: "62.5 % ethylene glycol / 37.5 % water"
-      flow_l_min: [1.3, 1.7]
-      supply_c: [2.8, 7.2]
-      return_c: [5, 15]
-      evaporator_outlet_c: 5.3
-      radiator_inlet_c: [22.8, 23.9]
-      evaporator_actuation_c: 9.4
-      loop_volume_l: 25
-      provenance:
-        basis: historical
-        source: "TN D-6718 and NR ch.14: primary loop 200 lb/hr, about 1.44 L/min of glycol-water and inside apollo's own 1.3-1.7 L/min band; mixed supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range, radiator inlet 73-75 F, evaporator actuating above 49 F. Total coolant mass is NOT published — only a 1 gal reservoir — so loop_volume_l is chosen"
-    - id: secondary
-      fluid: "65 % water / 35 % inhibited ethylene glycol (LM loop)"
-      flow_l_min: [1.5, 1.9]
-      supply_c: [1.7, 12]
-      return_c: [8, 20]
-      coolant_mass_kg: 11.3
-      provenance:
-        basis: historical
-        source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F = -1.7 to 48.9 C"
-radiators:
+      - id: loop_primary
+        vehicle: csm
+        fluid: "62.5 % ethylene glycol / 37.5 % water"
+        flow_l_min: [1.3, 1.7]
+        supply_c: [2.8, 7.2]
+        return_c: [5, 15]
+        evaporator_outlet_c: 5.3
+        radiator_inlet_c: [22.8, 23.9]
+        evaporator_actuation_c: 9.4
+        loop_volume_l: 25
+        provenance:
+          basis: historical
+          source: "TN D-6718 and NR ch.14: primary loop 200 lb/hr, about 1.44 L/min of glycol-water and inside apollo's own 1.3-1.7 L/min band; mixed supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range, radiator inlet 73-75 F, evaporator actuating above 49 F. Total coolant mass is NOT published — only a 1 gal reservoir — so loop_volume_l is chosen"
+      - id: loop_secondary
+        vehicle: csm
+        fluid: "62.5 % ethylene glycol / 37.5 % water"
+        flow_l_min: [1.0, 1.5]
+        loop_volume_l: 18
+        provenance:
+          basis: chosen
+          reason: "apollo_diode.md:97 names two water-glycol loops with primary and secondary pumps and gives figures for neither, so the secondary is scaled from the primary: 1.0-1.5 L/min and 18 L against the primary's 1.3-1.7 and 25. The thermal domain carries the same choice for the same reason, and this entry exists because until round 43 it did not — the file that is supposed to be the loop list had the LM's loop under this name instead"
+      - id: loop_lm
+        vehicle: lm
+        fluid: "65 % water / 35 % inhibited ethylene glycol"
+        flow_l_min: [1.5, 1.9]
+        supply_c: [1.7, 12]
+        return_c: [8, 20]
+        coolant_mass_kg: 11.3
+        provenance:
+          basis: historical
+          source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F = -1.7 to 48.9 C. The fluid is the LM's own mixture and not the CSM's — 65 % water against 62.5 % glycol — which is the single clearest reason the two are separate loops rather than one loop with two pumps"
+  radiators:
 
-    - id: csm_radiator
-      panels: 2
-      area_m2: 9.1
-      rejection_w_per_panel: 1294
-      provenance:
-        basis: historical
-        source: "NR and TN D-6718: two panels of about 49 sq ft each, about 4,415 Btu/hr per panel = 1,294 W"
-    - id: csm_evaporator
-      rejection_w: 2345
-      provenance:
-        basis: historical
-        source: "NR: about 8,000 Btu/hr = 2,345 W; the evaporator consumes water, which is why water_cooling is a scored resource"
-    - id: lm_sublimator
-      rejection_w: UNCONFIGURED
-      water_consumption_kg_per_h: UNCONFIGURED
-      provenance:
-        basis: historical
-        source: "the LM sublimator's water consumption rate is NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented: this is half of the thermal water budget"
-zones:
+      - id: csm_radiator
+        panels: 2
+        area_m2: 9.1
+        rejection_w_per_panel: 1294
+        provenance:
+          basis: historical
+          source: "NR and TN D-6718: two panels of about 49 sq ft each, about 4,415 Btu/hr per panel = 1,294 W"
+      - id: csm_evaporator
+        rejection_w: 2345
+        provenance:
+          basis: historical
+          source: "NR: about 8,000 Btu/hr = 2,345 W; the evaporator consumes water, which is why water_cooling is a scored resource"
+      - id: lm_sublimator
+        rejection_w: UNCONFIGURED
+        water_consumption_kg_per_h: UNCONFIGURED
+        provenance:
+          basis: historical
+          source: "the LM sublimator's water consumption rate is NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented: this is half of the thermal water budget"
+  zones:
 
-    - id: csm_cabin
-      limit_c: [10, 30]
-      regulated: true
-      dwell_min_s: 30
-      volume_m3: 5.9
-      provenance:
-        basis: apollo
-        ref: "apollo_diode.md:89"
-        note: "cabin_temp_c events are <10 and >30; NR gives 210 cu ft habitable = 5.9 m3 at 5 psia. Paired thresholds with a minimum dwell are mandatory for a regulated zone (thermal_diode.md:131)"
-    - id: csm_avionics_bay
-      limit_c: [10, 50]
-      regulated: true
-      dwell_min_s: 30
-      provenance:
-        basis: apollo
-        ref: "apollo_diode.md:105"
-        note: "avionics_plate_c event is >50"
-    - id: csm_service_bay
-      limit_c: [-20, 60]
-      regulated: false
-      provenance:
-        basis: chosen
-        reason: "unregulated in this model; its temperature matters through the propellant and pressurant it contains, which is where the F-09 frozen-line chain lives"
-    - id: lm_cabin
-      limit_c: [10, 32]
-      regulated: true
-      dwell_min_s: 30
-      volume_m3: 6.7
-      provenance:
-        basis: historical
-        source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3 at about 5 psia, roughly 160 cu ft habitable. The limits mirror the CSM cabin's because no source distinguishes them"
-    - id: lm_descent_bay
-      limit_c: [-30, 50]
-      regulated: false
-      provenance:
-        basis: chosen
-        reason: "the descent stage is exposed and unregulated; its thermal state is what the frozen-line chain needs"
-    - id: radiator_loop
-      limit_c: [null, null]
-      regulated: false
-      provenance:
-        basis: chosen
-        reason: "the radiator is an observable with no command interface (simulator-design.md:158): a rejection curve, not a limit"
+      - id: csm_cabin
+        limit_c: [10, 30]
+        regulated: true
+        dwell_min_s: 30
+        volume_m3: 5.9
+        provenance:
+          basis: apollo
+          ref: "apollo_diode.md:89"
+          note: "cabin_temp_c events are <10 and >30; NR gives 210 cu ft habitable = 5.9 m3 at 5 psia. Paired thresholds with a minimum dwell are mandatory for a regulated zone (thermal_diode.md:131)"
+      - id: csm_avionics_bay
+        limit_c: [10, 50]
+        regulated: true
+        dwell_min_s: 30
+        provenance:
+          basis: apollo
+          ref: "apollo_diode.md:105"
+          note: "avionics_plate_c event is >50"
+      - id: csm_service_bay
+        limit_c: [-20, 60]
+        regulated: false
+        provenance:
+          basis: chosen
+          reason: "unregulated in this model; its temperature matters through the propellant and pressurant it contains, which is where the F-09 frozen-line chain lives"
+      - id: lm_cabin
+        limit_c: [10, 32]
+        regulated: true
+        dwell_min_s: 30
+        volume_m3: 6.7
+        provenance:
+          basis: historical
+          source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3 at about 5 psia, roughly 160 cu ft habitable. The limits mirror the CSM cabin's because no source distinguishes them"
+      - id: lm_descent_bay
+        limit_c: [-30, 50]
+        regulated: false
+        provenance:
+          basis: chosen
+          reason: "the descent stage is exposed and unregulated; its thermal state is what the frozen-line chain needs"
+      - id: radiator_loop
+        limit_c: [null, null]
+        regulated: false
+        provenance:
+          basis: chosen
+          reason: "the radiator is an observable with no command interface (simulator-design.md:158): a rejection curve, not a limit"
 
 # --------------------------------------------------------------------------------------
 # Communications. The domain no specification covers — `communcations_diode.md` contains
