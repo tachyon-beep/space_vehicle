@@ -1431,6 +1431,113 @@ def check_fault_coverage(path: Path, docs: dict[str, dict[str, Any]], report: Re
             "channel nothing should be diagnosing, and the reader cannot tell which",
         )
 
+    # ------------------------------------------------------------------------------------
+    # The four siblings. `unperturbed` was the first key in this block to be checked, and
+    # checking it made the block *look* read: four other keys sitting beside it made claims of
+    # exactly the same kind — counts and directions — and nothing had ever compared one of them
+    # to the policy. Five of their first eight numeric claims were wrong, in both directions:
+    # `avionics` said six of its faults crossed a domain boundary and four did, `comms` said four
+    # and five did, `gnc` said five and one did, and `gnc` separately said seven of eleven faults
+    # moved `gnc.nav_integrity` when nine do. `avionics` also claimed the vehicle's *highest*
+    # cross-domain reach while `eclss` has three times as many.
+    #
+    # Prose cannot be checked, so each block now declares its claim as a field. The notes stay —
+    # they are the reasoning, and the reasoning was mostly right — but the number is data.
+    # ------------------------------------------------------------------------------------
+    prefix = DOMAIN_PREFIX.get(path.name, path.name)
+
+    def crosses(channel: Any) -> bool:
+        return not re.match(rf"^{re.escape(prefix)}[._]", str(channel))
+
+    crossing = {
+        str(fault.get("id"))
+        for fault in policy.get("faults") or []
+        if any(crosses(c) for c in fault.get("perturbs") or [])
+    }
+    cross_domain = coverage.get("cross_domain")
+    if isinstance(cross_domain, dict):
+        claim = cross_domain.get("faults_outside")
+        if not isinstance(claim, int):
+            report.refuse(
+                f"{where}.cross_domain",
+                "states no `faults_outside`, so its count is prose. A claim of the form 'six of the "
+                "eleven faults perturb a channel outside this domain' is exactly checkable, and "
+                "leaving it in a sentence is how it drifts while the policy it describes moves",
+            )
+        elif claim != len(crossing):
+            report.refuse(
+                f"{where}.cross_domain",
+                f"claims {claim} fault(s) perturb a channel outside `{prefix}.*`, and "
+                f"{len(crossing)} do: {sorted(crossing)}",
+            )
+
+    ladder = coverage.get("ladder_coupling")
+    if isinstance(ladder, dict):
+        channel = str(ladder.get("channel") or "")
+        claim = ladder.get("faults_perturbing")
+        moves = {
+            str(fault.get("id"))
+            for fault in policy.get("faults") or []
+            if channel in (fault.get("perturbs") or [])
+        }
+        if not channel:
+            report.refuse(f"{where}.ladder_coupling", "names no channel")
+        elif not isinstance(claim, int):
+            report.refuse(
+                f"{where}.ladder_coupling",
+                f"states no `faults_perturbing`, so the claim that {claim!r} faults move {channel} "
+                "is prose",
+            )
+        elif claim != len(moves):
+            report.refuse(
+                f"{where}.ladder_coupling",
+                f"claims {claim} fault(s) move `{channel}`, and {len(moves)} do: {sorted(moves)}",
+            )
+
+    gated = coverage.get("gated_alarms")
+    if isinstance(gated, dict):
+        profiles = docs.get("profiles.yaml") or {}
+        by_id = {str(t.get("id")): t for t in profiles.get("thresholds") or []}
+        for tid in gated.get("thresholds") or []:
+            entry = by_id.get(str(tid))
+            if entry is None:
+                report.refuse(
+                    f"{where}.gated_alarms",
+                    f"names {tid!r}, which is not a threshold in this domain's profiles.yaml",
+                )
+            elif not entry.get("gated_by"):
+                report.refuse(
+                    f"{where}.gated_alarms",
+                    f"names {tid!r} as a gated alarm, and that threshold declares no `gated_by`. "
+                    "A suppression a fleet is told about and the vehicle does not apply is a "
+                    "silence nobody can explain",
+                )
+
+    shared = coverage.get("shared_rules")
+    if isinstance(shared, dict):
+        components = docs.get("components.yaml") or {}
+        diagnostics = {
+            str(d.get("id")): d
+            for d in components.get("diagnostics") or []
+            if isinstance(d, dict) and d.get("id")
+        }
+        for did in shared.get("implemented_elsewhere") or []:
+            entry = diagnostics.get(str(did))
+            if entry is None:
+                report.refuse(
+                    f"{where}.shared_rules",
+                    f"names {did!r}, which is not a diagnostic function in this domain's "
+                    "components.yaml",
+                )
+            elif not entry.get("implemented_by"):
+                report.refuse(
+                    f"{where}.shared_rules",
+                    f"names {did!r} as implemented elsewhere, and that diagnostic declares no "
+                    "`implemented_by` domain. Two implementations of one rule is how two domains "
+                    "come to disagree, and one implementation with no pointer is how a reader "
+                    "finds neither",
+                )
+
 
 def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) -> None:
     """D-05's two rules, neither of which was enforced: narrow only, and never edit.
@@ -2404,6 +2511,55 @@ def check_domain(
             )
 
 
+def check_outbound_extremes(
+    root: Path, report: Report, policies: dict[str, dict[str, Any]]
+) -> None:
+    """A domain that claims the vehicle's largest or smallest cross-domain reach is checked.
+
+    Every other coverage claim is a statement about one domain, which is why this one is separate:
+    `outbound_extreme` is a claim about **all eleven**, and it is the kind of claim that rots
+    without anyone touching it — the domain that made it stays still while another domain's faults
+    grow past it. That is exactly what happened. `avionics` said it had "the highest cross-domain
+    reach of any domain on the vehicle", and by round 44 `eclss` had three times as many, because
+    a life-support failure reaches every domain that plans around a consumable.
+
+    `gnc` makes the opposite claim and it is the domain's thesis rather than a boast: one fault of
+    eleven crosses a boundary, against `eclss`'s twelve, because navigation is a consumer of the
+    vehicle rather than a component of it. That reading is worth holding to a count, since the
+    whole `ladder_coupling` argument rests on the failures being visible through degraded
+    knowledge rather than through spilled channels.
+    """
+    counts: dict[str, int] = {}
+    for name, policy in policies.items():
+        prefix = DOMAIN_PREFIX.get(name, name)
+        counts[name] = len(
+            {
+                str(fault.get("id"))
+                for fault in policy.get("faults") or []
+                if any(
+                    not re.match(rf"^{re.escape(prefix)}[._]", str(c))
+                    for c in fault.get("perturbs") or []
+                )
+            }
+        )
+    for name, policy in sorted(policies.items()):
+        coverage = policy.get("coverage") or {}
+        block = coverage.get("cross_domain")
+        if not isinstance(block, dict):
+            continue
+        claim = block.get("outbound_extreme")
+        if claim not in ("lowest", "highest"):
+            continue
+        best = (min if claim == "lowest" else max)(counts, key=lambda k: counts[k])
+        if best != name:
+            report.refuse(
+                f"domains/{name}/fault_policy.yaml:coverage.cross_domain",
+                f"claims the vehicle's {claim} cross-domain reach, and `{best}` has it "
+                f"({counts[best]} against this domain's {counts[name]}). A superlative is a claim "
+                "about all eleven domains, so it is the one that rots while nobody touches it",
+            )
+
+
 def check_domains(
     root: Path,
     registry: dict[str, dict[str, Any]],
@@ -2430,6 +2586,7 @@ def check_domains(
     # *ECLSS* lithium-hydroxide element, which is the normal shape of a cross-domain fault rather
     # than an error, so the vehicle's components and states are collected before the loop too.
     components_elsewhere: set[str] = set()
+    policies: dict[str, dict[str, Any]] = {}
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
             profiles = load(path / "profiles.yaml", report) or {}
@@ -2443,6 +2600,7 @@ def check_domains(
                 for entry in (parts.get(key) or [])
                 if isinstance(entry, dict) and entry.get("id")
             }
+            policies[path.name] = load(path / "fault_policy.yaml", report) or {}
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
             present.add(path.name)
@@ -2455,6 +2613,7 @@ def check_domains(
                 thresholds_by_domain,
                 components_elsewhere,
             )
+    check_outbound_extremes(root, report, policies)
     # ----------------------------------------------------------------------------------
     # Intra-node ordering. A node is advanced by one or more states, and when it is more
     # than one, *which advances first is a modelling decision that nothing declared*.

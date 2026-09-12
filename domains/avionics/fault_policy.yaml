@@ -468,23 +468,31 @@ coverage:
   unperturbed_reason: >-
     a commanded state: the crew or an agent sets it and no fault writes it
   cross_domain:
+    faults_outside: 4
     note: >-
-      six of the eleven faults perturb a channel outside `avionics.*`, which is the highest
-      cross-domain reach of any domain on the vehicle and is the natural consequence of what
-      this domain is: an instrument layer does not fail in its own channels, it fails in the
-      channels of everything it instruments. `gnc.nav_position_sigma_m` and
-      `gnc.estimator_rejection_reason` for the innovation test (F-10),
+      **four** of the eleven faults perturb a channel outside `avionics.*`: an instrument layer does
+      not fail in its own channels, it fails in the channels of everything it instruments.
+      `gnc.nav_position_sigma_m` and `gnc.estimator_rejection_reason` for the innovation test (F-10),
       `rcs.thruster_[n]_health` and `rcs.control_authority_margin` for the actuator rule,
-      `prop.chamber_pressure_pct` for the same rule on the engine, and `mission.met_s` for the
-      clock. The one direction that does not appear is the reverse — no avionics fault perturbs
-      a channel in a domain it does not instrument, because the instrument set is bounded by
-      what apollo's 277 analogue channels actually monitored.
+      `prop.chamber_pressure_pct` for the same rule on the engine, and `mission.met_s` for the clock.
+      
+      It is **not** the vehicle's highest reach, which this note claimed until round 44. `eclss` has
+      twelve and `structure` ten, because a life-support failure reaches every domain that plans around
+      a consumable while an instrument failure reaches only what that instrument serves — which is a
+      more useful statement about this domain than the superlative was, and the superlative was false.
+      The one direction that does not appear is the reverse: no avionics fault perturbs a channel in a
+      domain it does not instrument, because the instrument set is bounded by what apollo's 277 analogue
+      channels actually monitored.
   shared_rules:
+    implemented_elsewhere: [power_rule, thermal_rule]
     note: >-
-      two of the nine diagnostic functions are *declared here and implemented elsewhere*, on
-      purpose and once each: `power_rule` is the power domain's task-shedding ladder and
-      `thermal_rule` is the thermal domain's hysteresis. They are recorded in
-      `components.yaml#diagnostics` so that the vehicle has one written statement of each rule,
-      and they are not implemented here because two implementations of one rule is how two
-      domains come to disagree. `actuator_tracking` is the exception that proves it: RCS and
-      propulsion both consume it and neither owns it, so this domain does.
+      two of the nine diagnostic functions are *declared here and implemented elsewhere*, on purpose
+      and once each: `power_rule` is the power domain's task-shedding ladder and `thermal_rule` is the
+      thermal domain's hysteresis. Each carries an `implemented_by` naming the domain that owns the
+      implementation, so the double declaration is a pointer rather than a duplicate. They are recorded
+      in `components.yaml#diagnostics` so that the vehicle has one written statement of each rule, and
+      they are not implemented here because two implementations of one rule is how two domains come to
+      disagree.
+      
+      `actuator_tracking` is the exception that proves it: RCS and propulsion both consume it and
+      neither owns it, so this domain does.

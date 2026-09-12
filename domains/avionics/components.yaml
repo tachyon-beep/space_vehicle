@@ -261,6 +261,7 @@ diagnostics:
         come to disagree about whether a valve is late
 
   - id: power_rule
+    implemented_by: power
     rule: "critical band with a dwell before shedding, warn band without; CRITICAL_PENDING while the dwell runs"
     watches: [power.dc_bus_a_v, power.dc_bus_b_v]
     outputs: [power.load_shed_class]
@@ -274,6 +275,7 @@ diagnostics:
         distrust the ladder. Not implemented as a second monitor — one rule, one home
 
   - id: thermal_rule
+    implemented_by: thermal
     rule: "critical above, warn above, with a hysteresis band on the way down"
     watches: ["thermal.zone_[id]_t_c", thermal.avionics_plate_c, thermal.comm_amp_c,
               power.battery_temp_c]

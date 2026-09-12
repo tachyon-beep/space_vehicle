@@ -516,23 +516,33 @@ coverage:
     a commanded state: the crew or an agent sets it and no fault writes it
     an estimate or statistic over a channel a fault already perturbs
   cross_domain:
+    faults_outside: 1
+    outbound_extreme: lowest
     note: >-
-      five of the eleven faults perturb a channel outside `gnc.*`, and this domain has the
-      vehicle's *largest* cross-domain reach in one direction and its smallest in the other: every
-      fault here is about the vehicle's knowledge of itself, so they show up in the domains that
-      act on that knowledge — `prop.accumulated_dv_m_s` for a burn's magnitude, `rcs.thruster_[n]_health`
-      for the torque behind a saturated gyro, `mission.met_s` for the clock, and
-      `domains/comms/`'s blackout for a coast's start. What does *not* appear is the reverse:
-      almost nothing outside this domain perturbs a `gnc.*` channel, because navigation is a
-      consumer of the vehicle rather than a component of it. The exceptions are the whole point of
-      the domain — F-04's stuck thruster arrives here as a rate, and GNC-06 is where it becomes a
-      navigation fault.
+      **one** of the eleven faults perturbs a channel outside `gnc.*` — `GNC-09`, whose burn error
+      shows up in `prop.accumulated_dv_m_s` because a propulsion quantity is what a navigation error
+      physically moves. This note claimed five until round 44 and named three couplings that do not
+      exist: `rcs.thruster_[n]_health`, `mission.met_s` and the comms blackout.
+      
+      They are real relationships with the arrows the wrong way round, which is why the claim read as
+      true. A stuck thruster arrives here as a rate (F-04 perturbs `gnc.*`), a saturated gyro is a
+      consequence of it rather than a cause, `mission.met_s` is the clock the whole vehicle shares
+      rather than a navigation output, and an occultation *causes* GNC-10 rather than following from
+      it. So this domain has the vehicle's **smallest** outbound reach — one fault, against `eclss`'s
+      twelve — and it is a consumer of the vehicle rather than a component of it. What that costs is
+      stated in `ladder_coupling`: the failures here are visible because they degrade a *ladder*, not
+      because they spill into other domains' channels.
   ladder_coupling:
+    channel: gnc.nav_integrity
+    faults_perturbing: 9
     note: >-
-      seven of the eleven faults move `gnc.nav_integrity`, which makes it the most-perturbed
-      channel on the vehicle and the reason it is P0. That is not a modelling convenience: it is
-      the domain's thesis. Every navigation fault eventually reduces to "the vehicle no longer
-      knows where it is", and a ladder says *how much* in a way that a sigma cannot — because a
-      sigma is a number a fleet has to interpret and a ladder is a state a flight rule can gate
-      on. `profiles.yaml#flight_rules` is where that happens, and it is the GNC domain's
+      **nine** of the eleven faults move `gnc.nav_integrity` — all but `GNC-07` (radar false lock,
+      which the estimator rejects rather than absorbing) and `GNC-09` (a burn that went wrong, which is
+      a trajectory error before it is a knowledge error). It said seven until round 44.
+      
+      That makes the channel the most-perturbed on the vehicle and the reason it is P0. It is not a
+      modelling convenience: it is the domain's thesis. Every navigation fault eventually reduces to
+      "the vehicle no longer knows where it is", and a ladder says *how much* in a way that a sigma
+      cannot — because a sigma is a number a fleet has to interpret and a ladder is a state a flight
+      rule can gate on. `profiles.yaml#flight_rules` is where that happens, and it is the GNC domain's
       contribution to the executive rather than to a threshold.

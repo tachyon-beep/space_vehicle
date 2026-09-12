@@ -1428,6 +1428,48 @@ mattered, naming the parse error, was buried under a crash in a check that never
 sees that and concludes the tool is broken rather than the definition. The cross-file checks are now
 gated on the file they join against, and the run says once that the joins are unavailable.
 
+## Checking `unperturbed` made the coverage block look read
+
+`coverage` has five keys. One of them, `unperturbed`, is the claim round 41 learned to check — "every
+channel this domain publishes is perturbed by at least one fault, except ..." — and checking it
+turned out to be the most misleading thing in the file, because **four siblings sitting right beside
+it made claims of exactly the same kind and nothing compared one of them to the policy.**
+
+An audit of named blocks that appear in no tool found them, and hand-checking found that **five of
+their first eight numeric claims were wrong, in both directions**:
+
+| domain | claim | actual |
+|---|---|---|
+| `avionics.cross_domain` | 6 of 11 faults cross a domain boundary | **4** |
+| `avionics.cross_domain` | "the highest cross-domain reach of any domain" | **`eclss` has 12, `structure` 10** |
+| `comms.cross_domain` | 4 faults cross | **5** |
+| `gnc.cross_domain` | 5 of 11 faults cross | **1** |
+| `gnc.ladder_coupling` | 7 of 11 faults move `gnc.nav_integrity` | **9** |
+| `comms.gated_alarms` | 3 thresholds carry `gated_by` | 3 ✓ |
+| `rcs.cross_domain` | 4 of 11 faults cross | 4 ✓ |
+
+`gnc.cross_domain` is the one worth reading twice, because it named three couplings that **do not
+exist** — `rcs.thruster_[n]_health` "for the torque behind a saturated gyro", `mission.met_s` "for
+the clock", and the comms blackout "for a coast's start". Every one of those is a real relationship
+with the arrow the wrong way round: a stuck thruster arrives in `gnc` rather than leaving it, the
+clock is what the whole vehicle shares rather than a navigation output, and an occultation *causes*
+GNC-10 rather than following from it. That is why the sentence read as true, and why nothing caught
+it — a direction is not visible in prose the way a wrong number is.
+
+The audit also measured something no file stated: the domain's actual thesis. **`gnc` has the
+vehicle's smallest outbound reach — one fault of eleven, against `eclss`'s twelve** — and the
+vehicle's four largest exporters are `eclss` (12), `structure` (10), `consumables` (9) and `crew`
+(7), which is a statement about what a crewed vehicle *is*: life support reaches everything that
+plans around a consumable, and navigation reaches almost nothing, because it is a consumer of the
+vehicle rather than a component of it.
+
+So the prose stays — the reasoning was mostly right — and the number becomes data.
+`cross_domain.faults_outside`, `ladder_coupling.channel`/`faults_perturbing`,
+`gated_alarms.thresholds` and `shared_rules.implemented_elsewhere` are each checked, and
+`outbound_extreme` is checked against all eleven domains rather than against itself, because a
+superlative is the claim that rots while the domain that made it never moves. Each of the five new
+refusals was verified by breaking a copy of the definition.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

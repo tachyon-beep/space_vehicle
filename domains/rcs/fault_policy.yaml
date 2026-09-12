@@ -442,6 +442,7 @@ coverage:
   unperturbed_reason: >-
     a commanded state: the crew or an agent sets it and no fault writes it
   cross_domain:
+    faults_outside: 4
     note: >-
       four of the eleven faults perturb a channel outside `rcs.*`, and in each case that channel
       is the *first* or the *only* evidence: `gnc.body_rate_xyz_deg_s` for a stuck thruster (the

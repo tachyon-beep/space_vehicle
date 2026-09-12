@@ -423,23 +423,29 @@ coverage:
   unperturbed_reason: >-
     nothing is unperturbed: every channel this domain publishes is moved by at least one fault
   gated_alarms:
+    thresholds: [snr_loss, carrier_lock_loss, link_mode_none]
     note: >-
-      three thresholds in `profiles.yaml` carry `gated_by: "comm.blackout_state is clear"`, and
-      they are the domain's central operational decision rather than a convenience. An alarm that
-      fires every orbit is an alarm a fleet learns to dismiss, and the failure mode is F-11's
-      third order — controllers lose evidence during another anomaly. The vehicle therefore
-      suppresses three alarms for a condition it can predict, so that when they fire they mean
-      something. The cost is real and worth stating: a fleet that cannot see
-      `comm.blackout_state` would read a scheduled silence as a fault, which is why the channel
-      is published at P2 to every profile down to `emergency`.
+      three thresholds in `profiles.yaml` carry `gated_by: "comm.blackout_state is clear"`, and they
+      are the domain's central operational decision rather than a convenience. An alarm that fires every
+      orbit is an alarm a fleet learns to dismiss, and the failure mode is F-11's third order —
+      controllers lose evidence during another anomaly. The vehicle therefore suppresses three alarms
+      for a condition it can predict, so that when they fire they mean something.
+      
+      The cost is real and worth stating: a fleet that cannot see `comm.blackout_state` would read a
+      scheduled silence as a fault, which is why the channel is published at P2 to every profile down to
+      `emergency`.
   cross_domain:
+    faults_outside: 5
     note: >-
-      four faults perturb a channel outside `comms.*`, and in each case the outside channel is
-      part of the *diagnosis* rather than a consequence: `power.bus_a_current_a` for the
-      amplifier that has become a load (E-AMP-LOAD), `power.dc_bus_a_v` for the transmitter that
-      has lost its supply, `thermal.comm_amp_c` for the amplifier that is hot before it is
-      electrical, and `gnc.nav_position_sigma_m` for the occultation that ended late. That last
-      one is the domain's most useful export: an occultation is the one time the vehicle is
-      *supposed* to be silent, so a silence that runs long is a free measurement of the orbit —
-      F-10's navigation degradation becoming visible as a communications fact rather than as a
-      number a fleet has to notice.
+      **five** faults perturb a channel outside `comm.*`, not the four this note claimed until round
+      44. In each case the outside channel is part of the *diagnosis* rather than a consequence:
+      `power.bus_a_current_a` for the amplifier that has become a load (E-AMP-LOAD),
+      `power.dc_bus_a_v` for the transmitter that has lost its supply, `thermal.comm_amp_c` for the
+      amplifier that is hot before it is electrical, and `gnc.nav_position_sigma_m` for the occultation
+      that ended late.
+      
+      That last one is the domain's most useful export: an occultation is the one time the vehicle is
+      *supposed* to be silent, so a silence that runs long is a free measurement of the orbit — F-10's
+      navigation degradation becoming visible as a communications fact rather than as a number a fleet
+      has to notice. The fifth is the reverse coupling, `domains/gnc/`'s GNC-10 reaching in, and it is
+      the mirror of the same phenomenon: the two domains observe the same outage from opposite sides.
