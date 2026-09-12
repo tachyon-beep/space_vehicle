@@ -446,6 +446,57 @@ def emit_state(
     }
 
 
+def blackout_budget(root: Path) -> list[dict[str, Any]]:
+    """The mission's second clock: how many times each phase loses the Earth, and for how long.
+
+    A phase declares one duration and an orbit declares another, and until this projection existed
+    nothing put them together. `mission.yaml#comms_blackout` derives 46.5 minutes of silence per
+    117.8-minute lunar revolution and names the five phases it affects — but "affects `surface`"
+    and "costs `surface` eight and a half hours of contact" are different statements, and only the
+    second one tells a fleet what it is planning around. The block's own note points at the sharpest
+    case without quantifying it: "a blackout during a powered descent is eleven minutes of the most
+    consequential flying on the mission happening unwatched."
+
+    **What this computes and what it must not be read as.** The figure is the blackout for a vehicle
+    in a 100 km circular lunar orbit for the whole phase, which is the CSM and only the CSM. The LM
+    is in orbit briefly during `descent` and `ascent_rendezvous` and is *on the surface* for most of
+    `surface`, and a vehicle on the surface near the sub-Earth point has the Earth fixed in its sky
+    — so its blackouts are a function of landing longitude, which this file does not declare. That
+    is the half still owed, and stating it here is what keeps this number from being read as the
+    whole mission's.
+    """
+    mission = load_yaml(root / "mission.yaml")
+    block = mission.get("comms_blackout") or {}
+    period = float((block.get("orbit") or {}).get("period_min") or 0.0)
+    blackout = float(block.get("duration_min") or 0.0)
+    if period <= 0 or blackout <= 0:
+        return []
+    affected = {str(p) for p in block.get("phases_affected") or []}
+    rows: list[dict[str, Any]] = []
+    for phase in mission.get("phases") or []:
+        pid = str(phase.get("id"))
+        if pid not in affected:
+            continue
+        minutes = float(phase.get("duration_h") or 0.0) * 60.0
+        revolutions = minutes / period
+        # A phase boundary clips a revolution, and a clipped revolution may hold no blackout — so
+        # the count a fleet can rely on is the whole ones, and the fraction says how much of
+        # another one the phase contains.
+        whole = int(revolutions)
+        rows.append(
+            {
+                "phase": pid,
+                "minutes": minutes,
+                "revolutions": revolutions,
+                "blackouts_at_least": whole,
+                "clipped_fraction": revolutions - whole,
+                "blackout_min": revolutions * blackout,
+                "contact_min": revolutions * (period - blackout),
+            }
+        )
+    return rows
+
+
 def crew_placement(root: Path) -> list[dict[str, Any]]:
     """Who is at which station, for every configuration every phase names.
 
@@ -733,6 +784,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--phase", default="translunar_coast", help="the mission phase to report")
     parser.add_argument(
+        "--blackout",
+        action="store_true",
+        help="the mission's second clock: blackouts and contact per phase, for a vehicle in orbit",
+    )
+    parser.add_argument(
         "--crew",
         action="store_true",
         help="where each crew member is, phase by phase, from the two halves of the crew model",
@@ -777,6 +833,32 @@ def main(argv: list[str] | None = None) -> int:
             state_revision=0,
         )
         print(yaml.safe_dump(frame, sort_keys=False, default_flow_style=False).rstrip())
+        return 0
+
+    if args.blackout:
+        rows = blackout_budget(root)
+        if not rows:
+            sys.stderr.write("no comms blackout is declared, so there is no second clock\n")
+            return 3
+        print("  the CSM's lunar orbit, at 100 km: one blackout per revolution, for a vehicle")
+        print("  in orbit for the whole phase. The LM is on the surface for most of `surface`.")
+        print()
+        total_blackout = total_contact = 0.0
+        for row in rows:
+            total_blackout += row["blackout_min"]
+            total_contact += row["contact_min"]
+            print(
+                f"  {row['phase']:22} {row['minutes']:7.1f} min = {row['revolutions']:5.2f} rev  "
+                f"blackout {row['blackout_min']:6.1f} min  contact {row['contact_min']:7.1f} min"
+                f"  ({row['blackouts_at_least']} whole"
+                + (f" + {row['clipped_fraction']:.2f} clipped" if row["clipped_fraction"] else "")
+                + ")"
+            )
+        print()
+        print(
+            f"  total: {total_blackout / 60:.1f} h silent, {total_contact / 60:.1f} h in contact "
+            f"across {len(rows)} phase(s)"
+        )
         return 0
 
     if args.crew:

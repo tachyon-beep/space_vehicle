@@ -35,6 +35,7 @@ python3 tools/plant.py --readiness        # the build order: ready, blocked, and
 python3 tools/plant.py --frame            # one telemetry frame in the declared shape
 python3 tools/plant.py --state            # one state.json: the mirror and the capability snapshot
 python3 tools/plant.py --crew             # who is at which station, and which phases cannot say
+python3 tools/plant.py --blackout         # the second clock: revs, silence and contact per phase
 python3 tools/plant.py --state --closed-gate reserve_floor_water_cooling_enable
 python3 tools/generate_help.py            # HELP.md, from the command registries
 
@@ -1078,6 +1079,44 @@ What is still owed is the rest of the simultaneity, and the debt says so: a phas
 has two *clocks* and the file gives one duration, so a fleet asking what the CSM is doing while the
 LM descends has no per-vehicle timeline to read. Closing one gap opened the view onto the next,
 which is what a projection is for.
+
+## The second clock, and the derivation nobody was redoing
+
+`mission.yaml#comms_blackout` is the vehicle's one derived figure that can be checked against an
+operational one, and its own comment says so: *"Apollo's loss-of-signal was about 45 minutes per
+revolution. The two figures differ by the orbit's eccentricity and by the Earth's own 1.8-degree
+disc... so the derivation is right to within the effects it deliberately omits, and that is a
+**stronger** statement than a citation would be."*
+
+It is stronger only if somebody redoes the arithmetic, and **no tool read the block at all**. Four
+numbers, a full derivation in a comment, and no referee — which is precisely the arrangement that
+let `E-RAD-WATER` say 3.8e-7 while its own relation computed 4.082e-7, a 7 % disagreement nobody
+could see. Two things were wrong underneath that:
+
+- **The derivation's inputs were not data.** `mu_moon = 4902.8 km³/s²` lived inside the `relation`
+  *sentence*, so the arithmetic could not be reproduced from the file without parsing prose. It is a
+  field now, and `check_blackout` re-derives the period from Kepler, the half-angle from the Moon's
+  angular radius, the fraction, and the duration — refusing a disagreement over 1 %, the same
+  tolerance the `computation` mechanism uses on coupling edges. Verified against a perturbed
+  duration, period, half-angle and μ.
+- **"Affects `surface`" is not "costs `surface` eight and a half hours."** A phase declares one
+  duration and an orbit declares another, and nothing had put them together. `plant.py --blackout`
+  does: **23.5 h of the 60 h across the five lunar phases are silent**, at 46.5 min in every
+  117.8 — `lunar_orbit` 9.7 h, `descent` 1.0 h, `surface` 8.5 h, `ascent_rendezvous` 1.4 h,
+  `lunar_orbit_docked` 3.0 h.
+
+The block's own note points at the sharpest case without quantifying it — *"a blackout during a
+powered descent is eleven minutes of the most consequential flying on the mission happening
+unwatched"* — and the projection supplies the other half of that sentence: `descent` loses 59
+minutes of its 150, and whether one of them lands on the powered-descent window is a question about
+phase alignment rather than about geometry.
+
+And the projection says what it is not. The figure is for a vehicle in a **100 km circular lunar
+orbit throughout the phase**, which is the CSM and only the CSM: the LM is in orbit briefly during
+`descent` and `ascent_rendezvous` and is on the *surface* for most of `surface`, where a vehicle
+near the sub-Earth point has the Earth fixed in its sky. Its blackouts are a function of where it
+landed, which nothing declares — so the owed datum is a landing longitude, and one datum closes
+both that gap and the one `apollo_diode.md:1206` already records.
 
 ## Authoring convention: no flow mappings
 

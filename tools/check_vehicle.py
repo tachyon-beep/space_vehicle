@@ -2746,6 +2746,71 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
     )
 
 
+def check_blackout(doc: dict[str, Any], report: Report) -> None:
+    """Re-derive the lunar comms blackout from its own inputs, the way the trajectory is re-derived.
+
+    `mission.yaml#comms_blackout` is the vehicle's one derived figure that can be checked against an
+    operational one, and its own comment says so: "Apollo's loss-of-signal was about 45 minutes per
+    revolution. The two figures differ by the orbit's eccentricity and by the Earth's own
+    1.8-degree disc, both of which shorten the blackout slightly — so the derivation is right to
+    within the effects it deliberately omits, and that is a stronger statement than a citation
+    would be."
+
+    That claim is only stronger than a citation if somebody re-does the arithmetic. Nothing did: no
+    tool read the block at all, so the four numbers were a paragraph's worth of working with no
+    referee — which is exactly the arrangement that let `E-RAD-WATER` say 3.8e-7 while its own
+    relation computed 4.082e-7, a 7 % disagreement nobody could see. The tolerance is 1 %, matching
+    the `computation` check, because the declared values are rounded for a reader: 71.0 against
+    70.95, 0.395 against 0.3942, 46.5 against 46.43, 117.8 against 117.78.
+    """
+    block = doc.get("comms_blackout")
+    if not isinstance(block, dict):
+        report.refuse("mission.yaml:comms_blackout", "is missing or is not a mapping")
+        return
+    where = "mission.yaml:comms_blackout"
+    orbit = block.get("orbit") or {}
+    radius = block.get("moon_radius_km")
+    mu = block.get("mu_moon_km3_s2")
+    altitude = orbit.get("altitude_km")
+    for name, value in (
+        ("orbit.altitude_km", altitude),
+        ("moon_radius_km", radius),
+        ("mu_moon_km3_s2", mu),
+        ("orbit.period_min", orbit.get("period_min")),
+        ("half_angle_deg", block.get("half_angle_deg")),
+        ("fraction_of_revolution", block.get("fraction_of_revolution")),
+        ("duration_min", block.get("duration_min")),
+    ):
+        if not isinstance(value, (int, float)) or value <= 0:
+            report.refuse(where, f"declares {name} as {value!r}")
+            return
+    if abs(mu - 4902.8) > 1e-6:
+        # The constant is the derivation's root and it is not a design choice: a different mu is a
+        # different Moon. Named so that a change is a decision rather than a typo.
+        report.refuse(
+            where,
+            f"declares mu_moon {mu!r}; the lunar gravitational parameter is 4902.8 km^3/s^2, and a "
+            "different value is a different Moon rather than a rounding",
+        )
+    a = float(radius) + float(altitude)
+    period_min = 2.0 * math.pi * math.sqrt(a**3 / float(mu)) / 60.0
+    half_angle = math.degrees(math.asin(float(radius) / a))
+    fraction = 2.0 * half_angle / 360.0
+    duration = fraction * period_min
+    for name, computed, declared in (
+        ("orbit.period_min", period_min, float(orbit["period_min"])),
+        ("half_angle_deg", half_angle, float(block["half_angle_deg"])),
+        ("fraction_of_revolution", fraction, float(block["fraction_of_revolution"])),
+        ("duration_min", duration, float(block["duration_min"])),
+    ):
+        if abs(computed - declared) > abs(declared) * 0.01 + 1e-9:
+            report.refuse(
+                where,
+                f"declares {name} as {declared:g} and its own derivation gives {computed:.4g}. "
+                "The block states its arithmetic in full and nothing was re-doing it",
+            )
+
+
 def check_scenario_postures(doc: dict[str, Any], report: Report) -> None:
     """The difficulty scaling has to be *scale-invariant in the class*, or it cannot be applied.
 
@@ -3319,6 +3384,7 @@ def main(argv: list[str] | None = None) -> int:
         if mission is not None:
             check_mission(mission, vehicle, report)
             check_scenario_postures(mission, report)
+            check_blackout(mission, report)
             if channels is not None:
                 check_mission_bindings(channels, mission, registry, report, vehicle)
                 check_crew_bindings(

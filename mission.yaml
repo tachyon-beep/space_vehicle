@@ -410,6 +410,14 @@ postures:
 # --------------------------------------------------------------------------------------
 comms_blackout:
 
+  # **Every input the derivation uses is a field, and it was not.** `mu_moon = 4902.8 km^3/s^2`
+  # appeared only inside the `relation` sentence below, so the arithmetic the comment above spells
+  # out could not be reproduced from the file — a reader had to parse prose to find a constant, and
+  # no check could re-derive anything. The mechanism this folder already has for that is the
+  # `computation` field on a coupling edge, which the linter evaluates on every run; the same idea
+  # needs the *inputs* to be data first, which is what this line is for. `check_blackout` then
+  # re-derives all four numbers from these three.
+  mu_moon_km3_s2: 4902.8
   orbit: {altitude_km: 100, period_min: 117.8}
   moon_radius_km: 1737.4
   half_angle_deg: 71.0
@@ -849,7 +857,7 @@ landing_note: >-
 open_debts:
 
   - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
-  - "`configurations` cannot say which vehicles are present throughout a phase without also being the phase's subject, and `also_present` now carries that half — `descent` and `surface` declare `csm_alone` there, which is what places the CM pilot during both. What is still owed is the rest of the simultaneity: a phase with two vehicles has two *clocks* and this file gives one duration, so a fleet asking what the CSM is doing while the LM descends has no per-vehicle timeline to read. The closure is a projection rather than a decision — `plant.py --crew` now places every crew member in every phase — and the debt is what it does not place: nothing in this file says what either vehicle is *doing* at the moment the other is mid-phase."
+  - "A landing longitude, which is what the LM's own blackout depends on. `plant.py --blackout` now computes the mission's second clock — 23.5 h of the 60 h across the five lunar phases are silent, 46.5 min in every 117.8 — but that figure is for a vehicle in a 100 km circular **lunar orbit** throughout the phase, which is the CSM and only the CSM. The LM is in orbit briefly during `descent` and `ascent_rendezvous` and is on the surface for most of `surface`, and a vehicle on the surface near the sub-Earth point has the Earth fixed in its sky: its blackouts are a function of where it landed, which nothing in this file declares. The landing site is owed for a different reason too (`apollo_diode.md:1206` argues against a site whose history is recognisable), so one datum closes both."
 
   - "**Three of six orbital elements are still owed** — the ascending node, the argument of perigee and the true anomaly at cutoff — plus the free-return constraint on them. Four are determined: a = 254,545 km, e = 0.974216, i = 32.521 deg and 10,949.8 m/s at cutoff. What the three need is one datum rather than a design: a lunar ephemeris at 2026-09-12T02:13:45Z + 73 h. A transfer plane that misses the Moon by a degree at arrival misses it by 6,700 km, so the node is not a free parameter and it is not guessable. `check_trajectory` re-derives the four and refuses a disagreement."
   - "The landing site and the entry corridor, for a different reason: `apollo_diode.md:1206` argues against a site whose history is recognisable, so both should be *chosen* rather than inherited. They are not blocked on a datum, they are blocked on a decision — and the decision is John's."
