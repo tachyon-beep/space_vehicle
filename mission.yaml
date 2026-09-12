@@ -137,6 +137,21 @@ crew:
 # printed by `tools/check_vehicle.py --phases`, so the answer cannot drift from the verbs that
 # give it.
 # --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# `configurations` is a **sequence**, and the data settles it rather than a convention: every
+# multi-entry list is a chronological progression and nothing else fits. `lunar_orbit` runs from
+# docked ("LOI complete; the vehicle is in a lunar parking orbit") to undocked ("LM undocked and
+# the descent orbit insertion burn is complete"); `surface` runs from the descent stage to the
+# ascent stage; `ascent_rendezvous` runs from "ascent engine ignition" to "docking complete and the
+# crew transferred to the CSM". So the list is the configurations *the phase's subject* passes
+# through, and it is not a statement that nothing else exists.
+#
+# `also_present` is that second statement, and it exists because a phase can be about one vehicle
+# while another is flying. During `descent` and `surface` the CSM is alone in lunar orbit — the
+# crew entry for the CM pilot says she is "alone in the CSM for the surface phase" — and neither
+# phase names a configuration for it, so before this field existed the vehicle could not say where
+# she was. `plant.py --crew` reported her as UNPLACED for both, which is how the gap surfaced.
+# --------------------------------------------------------------------------------------
 phases:
 
   - id: translunar_coast
@@ -166,6 +181,7 @@ phases:
     duration_h: 2.5
     starts_at_h: 97.5
     configurations: [lm_alone_descent]
+    also_present: [csm_alone]   # the CSM waits in lunar orbit while the LM descends; the CM pilot is aboard it and alone
     entry: "LM undocked, DOI complete, perilune at the descent-orbit altitude; the CSM is on a separate orbit"
     exit: "landing contact, or an abort to the ascent stage"
     provenance:
@@ -177,6 +193,7 @@ phases:
     duration_h: 21.5
     starts_at_h: 100.0
     configurations: [lm_alone_descent, lm_ascent_stage]
+    also_present: [csm_alone]   # the CSM waits in lunar orbit through the whole surface stay; the CM pilot is aboard it and alone
     entry: "landing contact; the descent engine is off and the LM is stable"
     exit: "ascent engine ignition, or a decision to abandon the surface"
     provenance:
@@ -832,7 +849,7 @@ landing_note: >-
 open_debts:
 
   - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
-  - "`descent` and `surface` name no configuration that holds the CSM, so the CSM pilot cannot be placed in either phase — while her own entry in this file says she is \"alone in the CSM for the surface phase\". The two readings of a phase's `configurations` list (the configurations it passes *through* versus the vehicles *present* in it) give different answers and nothing says which is meant. `lunar_orbit` and `ascent_rendezvous` each name two, so the list is at least sometimes a sequence; under the sequence reading `descent` is right and the CSM's presence during it is simply unrecorded."
+  - "`configurations` cannot say which vehicles are present throughout a phase without also being the phase's subject, and `also_present` now carries that half — `descent` and `surface` declare `csm_alone` there, which is what places the CM pilot during both. What is still owed is the rest of the simultaneity: a phase with two vehicles has two *clocks* and this file gives one duration, so a fleet asking what the CSM is doing while the LM descends has no per-vehicle timeline to read. The closure is a projection rather than a decision — `plant.py --crew` now places every crew member in every phase — and the debt is what it does not place: nothing in this file says what either vehicle is *doing* at the moment the other is mid-phase."
 
   - "**Three of six orbital elements are still owed** — the ascending node, the argument of perigee and the true anomaly at cutoff — plus the free-return constraint on them. Four are determined: a = 254,545 km, e = 0.974216, i = 32.521 deg and 10,949.8 m/s at cutoff. What the three need is one datum rather than a design: a lunar ephemeris at 2026-09-12T02:13:45Z + 73 h. A transfer plane that misses the Moon by a degree at arrival misses it by 6,700 km, so the node is not a free parameter and it is not guessable. `check_trajectory` re-derives the four and refuses a disagreement."
   - "The landing site and the entry corridor, for a different reason: `apollo_diode.md:1206` argues against a site whose history is recognisable, so both should be *chosen* rather than inherited. They are not blocked on a datum, they are blocked on a decision — and the decision is John's."

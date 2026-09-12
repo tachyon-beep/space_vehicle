@@ -474,7 +474,12 @@ def crew_placement(root: Path) -> list[dict[str, Any]]:
     people = (mission.get("crew") or {}).get("positions") or []
     rows: list[dict[str, Any]] = []
     for phase in mission.get("phases") or []:
-        named = [str(n) for n in phase.get("configurations") or []]
+        # `configurations` is the sequence the phase's *subject* passes through; `also_present` is
+        # what else is flying. Both place crew, and the second is the only reason the CM pilot can
+        # be located during `descent` and `surface`.
+        named = [str(n) for n in phase.get("configurations") or []] + [
+            str(n) for n in phase.get("also_present") or []
+        ]
         for name in named:
             config = configs.get(name) or {}
             held = str(config.get("crew_in") or "")
@@ -505,43 +510,34 @@ def crew_coverage(root: Path) -> list[dict[str, Any]]:
     """Which crew members a phase places at all, across every configuration it names.
 
     The distinction this exists to draw is the one the per-configuration rows cannot: a crew member
-    missing from `lm_alone_descent` is *not in the LM*, which is a fact about the configuration and
-    not a gap — while a crew member no configuration in the phase holds is a gap in the corpus.
-    `descent` and `surface` are the second case: they name only LM configurations, so the CSM pilot
-    appears in neither, and the phase cannot say where she is.
+    missing from `lm_alone_descent` is *not in the LM*, which is a fact about that configuration and
+    not a gap — while a crew member no configuration in the phase holds at all is a gap in the
+    corpus.
+
+    Both halves of a phase's list count. `configurations` is the sequence the phase's *subject*
+    passes through and `also_present` is what else is flying, and the second is the only reason the
+    CM pilot can be located during `descent` and `surface`: the CSM waits in lunar orbit through
+    both, alone, with her aboard.
     """
     mission = load_yaml(root / "mission.yaml")
     vehicle = load_yaml(root / "vehicle.yaml")
     configs = {str(c.get("id")): c for c in vehicle.get("configurations") or []}
-    people = [str(p.get("id")) for p in (mission.get("crew") or {}).get("positions") or []]
+    people = (mission.get("crew") or {}).get("positions") or []
     summary: list[dict[str, Any]] = []
     for phase in mission.get("phases") or []:
-        held = {
-            str((configs.get(str(n)) or {}).get("crew_in") or "")
-            for n in phase.get("configurations") or []
-        }
+        present = [str(n) for n in phase.get("configurations") or []] + [
+            str(n) for n in phase.get("also_present") or []
+        ]
+        vehicles = {str((configs.get(n) or {}).get("crew_in") or "") for n in present}
         unplaced = [
-            who
-            for who in people
-            if not any(
-                (configs.get(str(n)) or {}).get("crew_in")
-                in (
-                    (
-                        next(
-                            p
-                            for p in (mission.get("crew") or {}).get("positions") or []
-                            if str(p.get("id")) == who
-                        )
-                    ).get("stations")
-                    or {}
-                )
-                for n in phase.get("configurations") or []
-            )
+            str(person.get("id"))
+            for person in people
+            if not vehicles & set((person.get("stations") or {}).keys())
         ]
         summary.append(
             {
                 "phase": str(phase.get("id")),
-                "vehicles": sorted(v for v in held if v),
+                "vehicles": sorted(v for v in vehicles if v),
                 "unplaced": unplaced,
             }
         )

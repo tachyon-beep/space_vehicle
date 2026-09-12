@@ -1059,10 +1059,25 @@ runs from docked to undocked and `ascent_rendezvous` from the ascent stage to a 
 "where is the commander during lunar orbit" has two true answers and reporting neither would be
 worse than reporting both.
 
-And it reports where it cannot answer. `descent` and `surface` name only LM configurations, so the
-CSM pilot is placed by no configuration in either — while her own entry says she is "alone in the
-CSM for the surface phase". That gap was a paragraph in a debt list last round and is now a value
-the plant prints, which is the difference between a record and a fact.
+And it reported where it could not answer: `descent` and `surface` named only LM configurations, so
+the CSM pilot was placed by neither — while her own entry says she is "alone in the CSM for the
+surface phase". Turning that from a debt-list paragraph into a computed value is what closed it,
+and the closure is a second declaration.
+
+**`configurations` is a sequence, and the data settles it rather than a convention.** Every
+multi-entry list is a chronological progression and nothing else fits: `lunar_orbit` runs from
+"LOI complete; the vehicle is in a lunar parking orbit" to "LM undocked and the descent orbit
+insertion burn is complete"; `surface` from the descent stage to the ascent stage;
+`ascent_rendezvous` from "ascent engine ignition" to "docking complete and the crew transferred to
+the CSM". So the list is what the phase's *subject* passes through, and it is not a claim that
+nothing else exists. **`also_present`** makes the second claim, and `descent` and `surface` declare
+`csm_alone` there — the CSM waiting in lunar orbit, alone, with the CM pilot aboard. Every crew
+member is now placed in every phase.
+
+What is still owed is the rest of the simultaneity, and the debt says so: a phase with two vehicles
+has two *clocks* and the file gives one duration, so a fleet asking what the CSM is doing while the
+LM descends has no per-vehicle timeline to read. Closing one gap opened the view onto the next,
+which is what a projection is for.
 
 ## Authoring convention: no flow mappings
 

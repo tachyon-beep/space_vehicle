@@ -2829,6 +2829,25 @@ def check_mission(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) 
                 report.refuse(
                     where, f"names configuration {cfg!r} which vehicle.yaml does not declare"
                 )
+        # `also_present` is the other half of the configuration list and it says something the list
+        # cannot: which vehicles exist throughout the phase without being its subject. During
+        # `descent` and `surface` the CSM is alone in lunar orbit, and naming it here is the only
+        # way the vehicle can say where the CM pilot is — `plant.py --crew` reported her UNPLACED
+        # for both phases until the field existed.
+        sequence = list(phase.get("configurations") or [])
+        for cfg in phase.get("also_present") or []:
+            if cfg not in known:
+                report.refuse(
+                    where,
+                    f"declares also_present {cfg!r}, which vehicle.yaml does not declare",
+                )
+            elif cfg in sequence:
+                report.refuse(
+                    where,
+                    f"lists {cfg!r} in both `configurations` and `also_present`. The first is the "
+                    "sequence the phase's subject passes through and the second is what else is "
+                    "there, so one configuration cannot be both",
+                )
         # A phase used to carry `allowed_verbs` as the inverse of the verbs' `allowed_phases`.
         # By the time eight domains had landed the two lists disagreed in 197 places, and the
         # phase side was the weaker claim: it cannot know whether a verb's guards are
