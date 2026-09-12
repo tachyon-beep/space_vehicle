@@ -225,7 +225,6 @@ coverage:
     which is a function of the thresholds rather than an independent measurement, and the
     ledger channel, which is perturbed only through CNS-11 because a ledger moves when its
     inputs move.
-  unperturbed: ["res.status_[resource]", "res.ledger_[resource]_kg"]
+  unperturbed: ["res.battery_energy_wh", "res.h2_remaining_kg", "res.recon_[resource]_kg", "res.water_potable_kg"]
   unperturbed_reason: >-
-    both are derived from the other channels, so perturbing them directly would be perturbing a
-    conclusion. Declared rather than papered over.
+    an estimate or statistic over a channel a fault already perturbs

@@ -2528,6 +2528,8 @@ crew_positions:
       observation — which is the coverage that no channel on this vehicle provides.
 
 open_debts:
+  - "**`service` covers two things a fault treats differently.** Twelve of the 22 channels no fault perturbs are `layer: service`, and so are 117 of the channels faults *do* perturb — because the layer holds both a *decision* (`rcs.mode`, `power.load_shed_class`, `controls.switches`: something the crew or an agent set, which no physical mechanism writes) and a *conclusion* (`avionics.sensor_health_[class]`, `avionics.redundancy_disagreement`, `avionics.computer_mode`: something the vehicle computed, which a fault moves immediately). The epistemic mapping is right that both are \"an A with a different subject\" for the contract's purposes, and the contract is not where the difference bites; fault injection is. What would separate them is a field — `origin: commanded | derived` — and until it exists the only way to say a channel is untouchable by any fault is to list it in a `coverage.unperturbed`, which is what all eleven domains now do."
+  - "Two of the LM's atmosphere functions have no channel at all. There is no `lm_absorber_capacity_pct` and no `lm_cabin_regulator_state`, so the LiOH bed and the cabin regulator exist in two cabins and are observable in one. Written here rather than in `domains/eclss/` because it is a registry gap: the domain cannot publish a channel the registry does not hold."
   - "**`range_kind` is declared and the check it enables is written; what remains is the judgement
     inside it.** 57 channels carry the field — 43 `band`, 14 `scale` — and the values were assigned
     by evidence rather than by taste: a range with an alarm strictly inside it cannot be a band, so

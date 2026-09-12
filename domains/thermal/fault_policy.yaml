@@ -213,5 +213,6 @@ coverage:
     Every thermal channel is perturbed by at least one fault above except
     thermal.pump_1_commanded, which is a service state rather than a measurement and cannot be
     perturbed by physics. The linter checks the rest.
-  unperturbed: [thermal.pump_1_commanded]
-  unperturbed_reason: "a commanded value is what the vehicle was told, not what happened; a fault cannot change it, and a fault that could would be a fault in the executive rather than in the thermal domain"
+  unperturbed: ["thermal.pump_1_commanded"]
+  unperturbed_reason: >-
+    a commanded state: the crew or an agent sets it and no fault writes it

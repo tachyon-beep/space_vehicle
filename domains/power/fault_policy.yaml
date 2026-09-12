@@ -223,8 +223,6 @@ coverage:
       two battery level channels, which are perturbed only indirectly through PWR-07. That is
       the honest state: a battery that fails in a way that is not thermal has no signature in
     this policy, and inventing one would be inventing a mechanism rather than modelling one.
-  unperturbed: [power.battery_soc_pct, power.battery_temp_c]
+  unperturbed: ["power.load_shed_class"]
   unperturbed_reason: >-
-    battery_temp_c is an input from the thermal domain rather than a power-domain state, and
-    battery_soc_pct is an estimate of a stock whose failure modes (capacity loss, rate
-    limitation) are not yet modelled. Declared rather than papered over.
+    a commanded state: the crew or an agent sets it and no fault writes it

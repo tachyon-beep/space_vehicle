@@ -464,7 +464,9 @@ coverage:
     supply, and the four diagnostic *channels* whose perturbations are the faults themselves —
     `drift_statistic`, `drift_state`, `sensor_health` and `time_sync_state` are all moved by
     AVI-03, AVI-04, AVI-06 and AVI-10.
-  unperturbed: []
+  unperturbed: ["avionics.imu_power"]
+  unperturbed_reason: >-
+    a commanded state: the crew or an agent sets it and no fault writes it
   cross_domain:
     note: >-
       six of the eleven faults perturb a channel outside `avionics.*`, which is the highest

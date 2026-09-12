@@ -420,6 +420,8 @@ coverage:
     `comm.blackout_state`, which only COM-10 moves — deliberately, because the blackout is not a
     fault and a fault that moved it would be a fault that changed where the Moon is.
   unperturbed: []
+  unperturbed_reason: >-
+    nothing is unperturbed: every channel this domain publishes is moved by at least one fault
   gated_alarms:
     note: >-
       three thresholds in `profiles.yaml` carry `gated_by: "comm.blackout_state is clear"`, and

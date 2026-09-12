@@ -438,12 +438,9 @@ coverage:
     `rcs.allocation_status` is perturbed by RCS-09 and `rcs.safety_state` by RCS-09 and RCS-10,
     so the coverage is complete; what is deliberately uncovered is `controls.switches`, which is
     the crew's control surface and not this domain's.
-  unperturbed: [controls.switches]
+  unperturbed: ["rcs.mode", "rcs.thruster_[n]_pulse_width_us"]
   unperturbed_reason: >-
-    a crew switch position is a crew action. In `manual` mode the crew are the controller, and a
-    switch that moved by itself would be a crew-domain or structure-domain fault rather than an
-    RCS one. The RCS domain's job in manual mode is to publish what the vehicle did in response,
-    which is what every channel above does.
+    a commanded state: the crew or an agent sets it and no fault writes it
   cross_domain:
     note: >-
       four of the eleven faults perturb a channel outside `rcs.*`, and in each case that channel

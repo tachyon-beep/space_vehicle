@@ -225,8 +225,6 @@ coverage:
   note: >-
     Every crew channel is perturbed by at least one fault above except the two crew-only control
     surfaces, which report what a person did rather than what is happening to them.
-  unperturbed: [controls.switches, controls.breakers]
+  unperturbed: ["controls.breakers", "controls.switches", "cw.acknowledged"]
   unperturbed_reason: >-
-    a switch position is a crew *action*, and the faults in this file are about crew judgement
-    and availability. A switch that moved by itself would be a structure fault, which is where
-    the hatch and latch faults live.
+    a commanded state: the crew or an agent sets it and no fault writes it

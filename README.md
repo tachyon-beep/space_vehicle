@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 221 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 223 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 146 channels, 119 states over 42 nodes, 140 thresholds, 58
-verbs and 118 classified events across the eleven directories, with 221 declared debts and every
+verbs and 118 classified events across the eleven directories, with 223 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **221** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **223** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1312,6 +1312,54 @@ that is not registered, and a margin with no sense. The last two clauses that co
 written are defence in depth rather than live: an objective scored on a `not_published` truth is
 refused by the truth-boundary check first, because a withheld channel must not be registered — the
 two rules overlap, and the overlap is the safe direction.
+
+## A claim eight domains were getting wrong
+
+Every `fault_policy.yaml` opens its `coverage` block with the same sentence — *"Every channel this
+domain publishes is perturbed by at least one fault above, except ..."* — and names the exceptions.
+It is the most useful claim in the file: it says which channels a fault can **never** move, which is
+exactly what a fleet should know before spending an afternoon diagnosing one. **Nothing read it, and
+eight of the eleven claims were false.**
+
+The drift is structural rather than careless. `perturbs` is edited when a fault is added;
+`unperturbed` is edited when somebody remembers. The two therefore part company in one direction —
+the claim becomes *more optimistic* than the policy. `power` said its two battery channels were
+"perturbed only *indirectly* through PWR-07" while **PWR-07 lists both in its `perturbs`**, and
+`perturbs` is a direct list because that is the only thing it can be.
+
+`check_fault_coverage` compares the claim against the policy exactly — a claim with a slack clause
+is a claim that cannot be checked — and all eleven now hold.
+
+**And the comparison found something worth more than the correction.** Twenty-two channels are
+perturbed by no fault, and they fall into three groups that the registry does not distinguish:
+
+- **twelve `service` channels** that are *decisions* — `rcs.mode`, `power.load_shed_class`,
+  `controls.switches`, `prop.thrust_pct_commanded`. The crew or an agent sets them and no physical
+  mechanism writes them.
+- **six `estimate` channels** derived from a channel a fault already perturbs.
+- **four measurements — the LM's entire atmosphere.** No fault in `domains/eclss/` touches
+  `lm_cabin_pressure_psia`, `lm_cabin_temp_c`, `lm_co2_pp_mmhg` or `lm_pp_o2_mmhg`, while all eleven
+  faults are written against the CSM's four twins.
+
+That last group is a real gap. The domain publishes two atmospheres and its own `points.yaml` says
+why — the LM's is separate *"for exactly the phase in which the crew are living in it"* — and then
+in `descent`, `surface` and `ascent_rendezvous`, **27.5 h during which every hour is spent in the
+LM**, no injectable fault can move the air the crew are breathing. The CSM's cabin can leak, lose
+its regulator, saturate its absorber and lose its vent valve; the LM's can do none of those things.
+A leak in the vehicle the crew are actually in is the emergency a crewed scenario most obviously
+wants, and it is the one the policy cannot produce.
+
+The fix is a design decision rather than a repair, so it is recorded rather than pre-empted: either
+every cabin-specific fault becomes a pair (`ECL-01-csm-cabin-leak` and `ECL-01-lm-cabin-leak`, since
+one leak is in one cabin), or a fault declares which cabins it can affect and the seeding picks one.
+The second is truer to the physics — the mechanism does not know which cabin it is in — and is a
+schema change; the first is mechanical and doubles eleven entries.
+
+The same comparison also showed that **`service` covers two things a fault treats differently**: a
+*decision*, which no fault writes, and a *conclusion* — `avionics.sensor_health_[class]`,
+`avionics.computer_mode` — which faults move immediately. 117 channels are both `service` and
+perturbed, so the layer cannot be used to tell them apart. What would is `origin: commanded |
+derived`, and until it exists the only way to say a channel is untouchable is to list it.
 
 ## Authoring convention: no flow mappings
 

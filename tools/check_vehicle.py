@@ -1271,6 +1271,65 @@ def walk_unset(node: Any, trail: str = "") -> list[str]:
     return found
 
 
+def check_fault_coverage(path: Path, docs: dict[str, dict[str, Any]], report: Report) -> None:
+    """A domain's coverage claim must be true, and every domain makes one.
+
+    Each `fault_policy.yaml` opens its `coverage` block with the same sentence — "Every channel this
+    domain publishes is perturbed by at least one fault above, except ..." — and then names the
+    exceptions in `unperturbed`. It is the most useful claim in the file: it says which of a
+    domain's channels a fault can never move, which is exactly what a fleet should know before it
+    spends an afternoon diagnosing one.
+
+    **Eight of the eleven claims were false**, and nothing read the block at all. `power` said its
+    two battery channels were "perturbed only *indirectly* through PWR-07" while PWR-07 lists both
+    in its `perturbs` — and `perturbs` is a *direct* list, which is the only thing it can be. The
+    drift is structural rather than careless: `perturbs` is edited when a fault is added and
+    `unperturbed` is edited when somebody remembers, so the two drift apart in the direction of the
+    claim being more optimistic than the policy.
+
+    The comparison is exact — the declared exceptions must *be* the channels no fault perturbs —
+    because a claim with a slack clause is a claim that cannot be checked.
+    """
+    points = docs.get("points.yaml") or {}
+    policy = docs.get("fault_policy.yaml") or {}
+    coverage = policy.get("coverage")
+    if not coverage:
+        return
+    published = {
+        re.sub(r"\[[^\]]*\]", "[]", str(p.get("channel")))
+        for p in points.get("points") or []
+        if isinstance(p, dict) and p.get("channel")
+    }
+    perturbed = {
+        re.sub(r"\[[^\]]*\]", "[]", str(c))
+        for fault in policy.get("faults") or []
+        for c in (fault.get("perturbs") or [])
+    }
+    actual = published - perturbed
+    declared = {re.sub(r"\[[^\]]*\]", "[]", str(x)) for x in coverage.get("unperturbed") or []}
+    where = f"domains/{path.name}/fault_policy.yaml:coverage"
+    if actual - declared:
+        report.refuse(
+            where,
+            f"claims every channel is perturbed except {sorted(declared)}, and no fault perturbs "
+            f"{sorted(actual - declared)} either. A coverage claim that is more optimistic than the "
+            "policy is the one direction this can drift without anybody noticing",
+        )
+    if declared - actual:
+        report.refuse(
+            where,
+            f"names {sorted(declared - actual)} as exceptions, and a fault perturbs them. A stale "
+            "exception is a channel a fleet is told to ignore and should not",
+        )
+    if actual and not coverage.get("unperturbed_reason"):
+        report.refuse(
+            where,
+            f"declares {len(actual)} unperturbed channel(s) and no reason. The reason is the whole "
+            "value of the declaration: a channel no fault can move is either a coverage gap or a "
+            "channel nothing should be diagnosing, and the reader cannot tell which",
+        )
+
+
 def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) -> None:
     """D-05's two rules, neither of which was enforced: narrow only, and never edit.
 
@@ -1457,6 +1516,7 @@ def check_domain(
         if loaded is not None:
             docs[filename] = loaded
 
+    check_fault_coverage(path, docs, report)
     check_profiles(path, docs, report)
 
     components = docs.get("components.yaml") or {}

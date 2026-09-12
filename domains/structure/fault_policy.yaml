@@ -327,6 +327,4 @@ coverage:
     service channels, which are the executive's state rather than the structure's.
   unperturbed: ["structure.arm_state_[event]", "structure.event_count_[event]"]
   unperturbed_reason: >-
-    both are records of what the fleet commanded rather than measurements of the vehicle. A fault
-    that perturbed them would be a fault in the executive, which is a different domain and a
-    different problem.
+    a commanded state: the crew or an agent sets it and no fault writes it

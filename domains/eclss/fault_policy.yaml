@@ -319,13 +319,41 @@ faults:
         *unanticipated* observation. A damp cabin is exactly that: it is on no channel, it is
         real, and a fleet that only reads channels will never know
 
+# --------------------------------------------------------------------------------------
+# **The LM's atmosphere has no fault at all, and this is where that is recorded.**
+#
+# This domain publishes two atmospheres. `domains/eclss/points.yaml` says why the LM's is a separate
+# channel in as many words — "it is a separate channel because from undocking to docking the two
+# compartments cannot equalise. A single cabin-pressure channel would have made the LM's atmosphere
+# unobservable for exactly the phase in which the crew are living in it" — and then all eleven faults
+# below are written against the CSM's four channels. Not one perturbs `eclss.lm_cabin_pressure_psia`,
+# `eclss.lm_cabin_temp_c`, `eclss.lm_co2_pp_mmhg` or `eclss.lm_pp_o2_mmhg`.
+#
+# So in `descent`, `surface` and `ascent_rendezvous` — 27.5 h of the 192, and every hour the crew
+# spend in the LM — no injectable fault can move the atmosphere they are breathing. The CSM's cabin
+# can leak, lose its regulator, saturate its absorber and lose its vent valve; the LM's can do none
+# of those things, and a leak in the vehicle the crew are actually in is the emergency a crewed
+# scenario most obviously wants.
+#
+# The fix is a design decision rather than a repair, which is why it is here. Either every
+# cabin-specific fault becomes a pair — `ECL-01-csm-cabin-leak` and `ECL-01-lm-cabin-leak`, since one
+# leak is in one cabin — or a fault declares which cabins it can affect and the seeding picks one.
+# The first is mechanical and doubles eleven entries; the second is a schema change and is truer to
+# the physics, because the mechanism does not know which cabin it is in. What neither can do is
+# leave the coverage claim asserting that every eclss channel is perturbed when four are not, which
+# is what it did until `check_fault_coverage` compared the claim against the policy.
+#
+# The same comparison found a second thing worth naming: two of the LM's atmosphere functions have
+# no channel at all. There is no `lm_absorber_capacity_pct` and no `lm_cabin_regulator_state`, so
+# even a fault written for the LM could not move them — the LiOH bed and the regulator exist in two
+# cabins and are observable in one.
+# --------------------------------------------------------------------------------------
+
 coverage:
   note: >-
     Every eclss channel is perturbed by at least one fault above except `eclss.cabin_temp_c`
     and the CO2 exposure average, both of which are derived from channels that are perturbed
     directly.
-  unperturbed: [eclss.cabin_temp_c, eclss.co2_pp_1h_avg_mmhg]
+  unperturbed: ["eclss.lm_cabin_pressure_psia", "eclss.lm_cabin_temp_c", "eclss.lm_co2_pp_mmhg", "eclss.lm_pp_o2_mmhg"]
   unperturbed_reason: >-
-    cabin_temp_c belongs to the thermal domain and reaches this one through E-ZONE-ATM; the
-    one-hour average is a statistic over a channel that is already perturbed. Declared rather
-    than papered over.
+    **no fault in this domain touches it at all** — a coverage gap rather than a consequence, recorded in `open_debts`

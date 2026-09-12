@@ -217,8 +217,6 @@ coverage:
   note: >-
     Every prop channel is perturbed by at least one fault above except `prop.leak_state` and
     `prop.cutoff_mode`, which are service conclusions derived from the other channels.
-  unperturbed: [prop.leak_state, prop.cutoff_mode]
+  unperturbed: ["prop.thrust_pct_commanded"]
   unperturbed_reason: >-
-    both are state machines over evidence rather than measurements, so perturbing them directly
-    would be perturbing a conclusion — the same distinction the schema draws between a channel's
-    quality and its kind.
+    a commanded state: the crew or an agent sets it and no fault writes it

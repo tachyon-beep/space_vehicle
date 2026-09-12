@@ -511,7 +511,10 @@ coverage:
     `covariance_high` — both are the *consequence* channels of GNC-01 and GNC-02, and the ladder's
     middle rungs exist precisely so that a consequence can be published before its cause has been
     attributed.
-  unperturbed: []
+  unperturbed: ["gnc.attitude_q[0..3]", "gnc.guidance_mode", "gnc.position_xyz_km"]
+  unperturbed_reason: >-
+    a commanded state: the crew or an agent sets it and no fault writes it
+    an estimate or statistic over a channel a fault already perturbs
   cross_domain:
     note: >-
       five of the eleven faults perturb a channel outside `gnc.*`, and this domain has the
