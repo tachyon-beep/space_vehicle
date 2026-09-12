@@ -1151,6 +1151,39 @@ contradicts, and — the one worth having — a site whose *mean* link is fine b
 envelope dips below the horizon. At 0°N 85°E the Earth stands 5° up and libration takes it 2.9°
 below; a site like that is a surface mission whose comms plan depends on the month.
 
+## The electrical inventory was declared twice
+
+`vehicle.yaml#electrical` is the vehicle-level view — what it carries, with the **mass** each item
+contributes to the mass closure. `domains/power/components.yaml` is the domain's view: the same
+hardware, one entry per unit, with the **bus** each load sits on and the protection between them.
+Both are right, they are two views of one machine rather than two machines, and **nothing said so
+and nothing compared them.**
+
+They agreed on every comparable quantity when the check was written — the count, the Ah, the volts,
+the module count, the per-module power, the bus voltage — and nothing was keeping them agreeing.
+That is the whole of the problem: a battery re-rated in one file and not the other is two machines
+wearing one name, and the mass closure would go on summing the mass of the one nobody flies.
+
+`domain_group` is the link, **declared rather than inferred**, because the two files name the same
+batteries differently — `csm_entry` against `battery_csm` — so a rule that guessed from the string
+would have to know that `entry` and `csm` are the same vehicle. The check then compares count, Ah,
+volts and the fuel cells' three quantities, and refuses seven ways.
+
+The voltage comparison is the one that is not a plain equality, and it is the interesting one. The
+two files express the same cell in the shapes their readers need: a *group* carries a range
+(open-circuit 37.2 V down to loaded 27 V) and a *unit* carries the nominal it is modelled at (28 V).
+The claim those two shapes make about each other is that the nominal lies inside the range, and that
+is what is checked — a nominal of 30 V against a loaded range starting at 30 V is refused, which a
+plain equality could not have seen in either direction.
+
+**And the audit that found it also turned up a duplicate.** The unread-field sweep — the one that has
+found a real defect nearly every round — showed `demand_w`, `inrush_w`, `bus`, `rated_w`, `ah` and
+`v_nominal` all read by nothing: **the power domain's entire quantitative inventory**, 17 components
+and 25 loads. The load budget itself closes exactly (CSM 1723 W, LM 1007 W against the declared
+totals), and that closure is now one of the things a check could hold — the same shape as mass
+closure, which the linter has enforced since the beginning. It is not held yet, and that is recorded
+rather than implied.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -140,6 +140,11 @@ FAULT_KINDS = {
 # did; an `advisory` one asks, and the note is where the asking is explained when it needs to be.
 FAULT_RESPONSES = {"service", "advisory"}
 
+# Keys that carry prose wherever they appear. Needed where a *string* has to be told from a
+# malformed mapping: `vehicle.yaml#electrical.batteries` holds three groups and one `note`, and the
+# note is documentation rather than a group somebody flattened.
+DOC_KEYS = {"note", "notes", "provenance", "why", "source", "reason", "ref", "relation"}
+
 # `02-canonical-vocabulary.md` §6's ladder, which V-04 fixes: four annunciated levels and one
 # non-annunciated record class. `INFO` is in the union because a record exists; it is not a level a
 # panel lights at, and the distinction is the reason the ladder has five members and four rungs.
@@ -200,7 +205,6 @@ QUALITY_CODES = {
     "SUBSTITUTED",
 }
 KINDS = {"MEASUREMENT", "ESTIMATE", "COMMAND_ECHO", "SERVICE_STATE", "SIMULATED"}
-SEVERITIES = {"EMERGENCY", "WARNING", "CAUTION", "ADVISORY", "INFO"}
 
 # Names the corpus uses that this vehicle does not. A domain ported from a spec will
 # arrive speaking one of these; the linter's job is to say so by name rather than let a
@@ -2746,6 +2750,120 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
     )
 
 
+def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """One machine, two files, and no sentence saying so.
+
+    `vehicle.yaml#electrical` is the vehicle-level view: what it carries, with the mass each item
+    contributes to the mass closure. `domains/power/components.yaml` is the domain's view: the same
+    hardware, one entry per unit, with the bus each load sits on and the protection between them.
+    Both are right. They agreed on every comparable quantity when this check was written — and
+    **nothing was keeping them agreeing**, which is the whole of the problem: a battery re-rated in
+    one file and not the other is two machines wearing one name, and the mass closure would go on
+    summing the mass of the one nobody flies.
+
+    `domain_group` is the link, and it is declared rather than inferred because the two files name
+    the same batteries differently — `csm_entry` against `battery_csm` — so a rule that guessed from
+    the string would have to know that `entry` and `csm` are the same vehicle.
+    """
+    electrical = (vehicle or {}).get("electrical") or {}
+    power = load(root / "domains" / "power" / "components.yaml", report) or {}
+    components = power.get("components") or []
+    if not electrical or not components:
+        report.debt(
+            "vehicle.yaml#electrical",
+            "either the vehicle's electrical section or the power domain's component list is "
+            "missing, so the two views of the inventory cannot be compared",
+        )
+        return
+
+    cells = electrical.get("fuel_cells") or {}
+    where = "vehicle.yaml:electrical.fuel_cells"
+    group = cells.get("domain_group")
+    sources = [c for c in components if str(c.get("id", "")).startswith(str(group or "\0"))]
+    if not group:
+        report.refuse(where, "declares no `domain_group`, so it is not linked to the domain's list")
+    elif not sources:
+        report.refuse(where, f"names domain_group {group!r}, which matches no component")
+    else:
+        if cells.get("modules") != len(sources):
+            report.refuse(
+                where,
+                f"declares {cells.get('modules')} module(s) and the power domain lists "
+                f"{len(sources)} ({[c.get('id') for c in sources]})",
+            )
+        for cell in sources:
+            if cell.get("rated_w") != cells.get("power_w_each"):
+                report.refuse(
+                    where,
+                    f"declares {cells.get('power_w_each')} W per module and {cell.get('id')!r} is "
+                    f"rated {cell.get('rated_w')} W in the power domain",
+                )
+            if cell.get("bus_v") != cells.get("bus_v"):
+                report.refuse(
+                    where,
+                    f"declares bus_v {cells.get('bus_v')} and {cell.get('id')!r} presents "
+                    f"{cell.get('bus_v')}",
+                )
+
+    for name, battery in sorted((electrical.get("batteries") or {}).items()):
+        bwhere = f"vehicle.yaml:electrical.batteries.{name}"
+        if isinstance(battery, str):
+            # `batteries.note` is documentation and belongs here. The distinction is the *key*: a
+            # known prose key is prose, and a string under any other name is a group someone
+            # flattened — which nothing can compare, and which still reads as documentation.
+            if name in DOC_KEYS:
+                continue
+            report.refuse(
+                bwhere,
+                "is a bare string where a battery group belongs. A group carries a `count`, an "
+                "`ah` and a `domain_group`; prose under a prose key is fine, prose under a group's "
+                "name is a group nobody can compare",
+            )
+            continue
+        if not isinstance(battery, dict):
+            report.refuse(bwhere, f"is a {type(battery).__name__}, not a mapping")
+            continue
+        group = battery.get("domain_group")
+        if not group:
+            report.refuse(bwhere, "declares no `domain_group`, so it is not linked to the domain")
+            continue
+        units = [c for c in components if str(c.get("id", "")).startswith(str(group))]
+        if not units:
+            report.refuse(bwhere, f"names domain_group {group!r}, which matches no component")
+            continue
+        if battery.get("count") != len(units):
+            report.refuse(
+                bwhere,
+                f"declares {battery.get('count')} unit(s) and the power domain lists {len(units)} "
+                f"({[c.get('id') for c in units]})",
+            )
+        for unit in units:
+            if unit.get("ah") != battery.get("ah"):
+                report.refuse(
+                    bwhere,
+                    f"declares {battery.get('ah')} Ah and {unit.get('id')!r} is {unit.get('ah')} Ah",
+                )
+            # The two files express the same cell's voltage in the shapes their readers need: a
+            # group carries a *range* (open-circuit down to loaded) and a unit carries the nominal
+            # it is modelled at. The nominal has to lie inside the range, which is the claim the
+            # two shapes make about each other.
+            nominal = unit.get("v_nominal")
+            low, high = battery.get("min_loaded_v"), battery.get("open_circuit_v")
+            if isinstance(low, (int, float)) and isinstance(high, (int, float)):
+                if not isinstance(nominal, (int, float)) or not low <= nominal <= high:
+                    report.refuse(
+                        bwhere,
+                        f"declares a loaded range {low}-{high} V and {unit.get('id')!r} is modelled "
+                        f"at {nominal!r} V, which is not inside it",
+                    )
+            elif isinstance(battery.get("v"), (int, float)) and nominal != battery.get("v"):
+                report.refuse(
+                    bwhere,
+                    f"declares {battery.get('v')} V and {unit.get('id')!r} is modelled at "
+                    f"{nominal!r} V",
+                )
+
+
 def check_landing_site(doc: dict[str, Any], report: Report) -> None:
     """Re-derive where the Earth is in the LM's sky, because that is what the site decides.
 
@@ -3481,6 +3599,7 @@ def main(argv: list[str] | None = None) -> int:
     check_domains(root, registry, coupling, channels, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
+        check_electrical_bindings(root, vehicle, report)
         if mission is not None:
             check_mission(mission, vehicle, report)
             check_scenario_postures(mission, report)

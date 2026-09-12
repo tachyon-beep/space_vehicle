@@ -596,7 +596,18 @@ comms:
 # --------------------------------------------------------------------------------------
 electrical:
 
+  # **The electrical inventory is declared twice, and nothing joined the two.** This section is the
+  # vehicle-level view: what the vehicle carries, with the mass each item contributes to the mass
+  # closure. `domains/power/components.yaml` is the domain's view: the same hardware, one entry per
+  # unit, with the bus each load sits on and the protection between them. Both are right, and they
+  # are two views of one machine rather than two machines — but nothing said so and nothing compared
+  # them, so a change to either would have diverged in silence.
+  #
+  # `domain_group` is the link, declared rather than inferred: the two files name the same batteries
+  # differently (`csm_entry` against `battery_csm`), and a rule that guessed from the string would
+  # have to know that `entry` and `csm` are the same vehicle.
   fuel_cells:
+    domain_group: fc
     modules: 3
     power_w_each: 1420
     bus_v: [27, 31]
@@ -606,6 +617,7 @@ electrical:
       source: "TN D-7142 and NR: three modules at 563-1,420 W each, 27-31 V dc, cryogenic O2 and H2. NR p.110 gives tank-sustain flows of 10.4 lb O2/hr and 1.02 lb H2/hr total = 4.72 and 0.46 kg/h. Apollo 11 produced about 393 kWh over 195 h at an average 68.7 A on a 29.4 V CM bus, a 2.02 kW average load (derived). A kg-per-kWh reactant figure is NOT published"
   batteries:
     csm_entry:
+      domain_group: battery_csm
       count: 3
       ah: 40
       chemistry: "silver-oxide/zinc"
@@ -616,6 +628,7 @@ electrical:
         basis: historical
         source: "NR and PSR: 3 x 40 Ah rated, 20 cells, 28 lb each. From Apollo 14 the SM carried a 400 Ah (12 kWh) auxiliary battery — the change Apollo 13 forced"
     lm_ascent:
+      domain_group: battery_lm_ascent
       count: 2
       ah: 296
       v: 28
@@ -624,6 +637,7 @@ electrical:
         basis: historical
         source: "NR: 2 x 296 Ah at 28 V, 50 A for 5.9 h, 125 lb each"
     lm_descent:
+      domain_group: battery_lm_descent
       count: 4
       ah: 400
       v: 28
@@ -633,6 +647,7 @@ electrical:
         source: "NR and PSR: 4 x 400 Ah on Apollo 11, 5 x 415 Ah from Apollo 15, 135 lb each. Apollo 11's descent batteries delivered 1,055 Ah of a nominal 1,600 Ah"
     note: "The LM has no fuel cells; its batteries are the sole power source (PSR, NR equipment list). That is what makes LM power a countdown rather than a budget, and it is the constraint that turns the crisis posture into a resource-allocation problem."
 open_debts:
+  - "The **power inventory's relationships** are unchecked beyond the two views agreeing. `demand_w`, `inrush_w`, `bus`, `rated_w`, `ah` and `v_nominal` are read by nothing — 17 components and 25 loads — and the load budget closes exactly (CSM 1723 W, LM 1007 W) with nothing holding it there. What would close it is the same shape as the mass closure: the per-vehicle demand sum against the declared total, every load's `bus` being a bus of its own vehicle, each bus's connected load against the rated capacity of the sources presenting to it, and the battery `ah x v_nominal` against the energy the mission plans on. The last of those is the one with teeth, because `battery_charge_j` declares no capacity at all: what the vehicle actually carries in joules exists only as a product nobody computes."
 
   - "Inertia tensor and centre of mass per configuration. The Apollo 11 mission report tabulates c.g. and inertia per mission phase, but the axis datum lives in the CSM/LM Operational Data Book (SNA-8-D-027), which is not reachable, so the tabulated values cannot be converted to physical offsets. rcs_diode.md:119-121 names both as Unknown and says what they block: attitude gains, achievable angular acceleration, the allocator, the thruster torque-arm matrix. Until they exist E-RCS-DYN is UNCONFIGURED and the vehicle cannot tumble."
   - "Node heat capacities and conductances for the six thermal zones. thermal_diode.md:965 declares every thermal constant UNSPECIFIED and refuses to infer them; without them the thermal edges have no tau and the thermal domain cannot be integrated. This is the largest single debt in the vehicle."
