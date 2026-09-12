@@ -186,7 +186,25 @@ thresholds:
     provenance:
       basis: apollo
       ref: "apollo_diode.md:93"
-      note: "apollo's absorber event is <20 % with a predicted breakthrough inside an hour. With the capacity denominated in man-hours (vehicle.yaml#consumables) this threshold is finally well defined, which it was not when the denominator was unnamed"
+      note: "apollo's absorber event is <20 % with a predicted breakthrough inside an hour. With the capacity denominated in man-hours (vehicle.yaml#consumables) this threshold is finally well defined, which it was not when the denominator was unnamed — and it is the CSM's floor specifically, which it did not say until round 42: the point it watches divided one shared counter, so this declaration covered the LM's cartridge too while naming neither"
+  - id: lm_absorber_reserve_20
+    point: eclss.lm_absorber_capacity_pct
+    comparator: below
+    assert: 20
+    clear: 30
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: WARNING
+    reserve_floor: 20
+    provenance:
+      basis: derived
+      relation: "apollo's <20 % absorber floor, at the LM's 41 man-hour cartridge. The floor is a fraction of a rating, so the same 20 is a different quantity in each cabin: 14.4 man-hours for the CSM's element and 8.2 for the LM's, which is four hours of two-crew time rather than four hours of three-crew time"
+      note: >-
+        the LM's own resource floor, and the one a surface party would plan against. It is a
+        separate declaration rather than a duplicate because the two counters are separate: before
+        round 42 a single percentage covered both cabins, so a fleet rationing for the surface had
+        a floor computed against an article they were not breathing from
   - id: battery_reserve_30
     point: power.battery_soc_pct
     comparator: below

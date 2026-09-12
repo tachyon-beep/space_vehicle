@@ -109,8 +109,8 @@ faults:
         constant
 
   - id: ECL-04-absorber-blower-failure
-    component: lioh_bed_primary
-    mechanism: "the bed's blower stops: air no longer passes through the lithium hydroxide and CO2 accumulates with the capacity untouched"
+    component: csm_lioh_element
+    mechanism: "the element's blower stops: air no longer passes through the lithium hydroxide and CO2 accumulates with the capacity untouched"
     kind: discrete
     seeding:
       hazard: 2.0e-4
@@ -322,38 +322,395 @@ faults:
 # --------------------------------------------------------------------------------------
 # **The LM's atmosphere has no fault at all, and this is where that is recorded.**
 #
-# This domain publishes two atmospheres. `domains/eclss/points.yaml` says why the LM's is a separate
-# channel in as many words — "it is a separate channel because from undocking to docking the two
-# compartments cannot equalise. A single cabin-pressure channel would have made the LM's atmosphere
-# unobservable for exactly the phase in which the crew are living in it" — and then all eleven faults
-# below are written against the CSM's four channels. Not one perturbs `eclss.lm_cabin_pressure_psia`,
-# `eclss.lm_cabin_temp_c`, `eclss.lm_co2_pp_mmhg` or `eclss.lm_pp_o2_mmhg`.
+# The LM's atmosphere, and the pairing that closed the gap.
 #
-# So in `descent`, `surface` and `ascent_rendezvous` — 27.5 h of the 192, and every hour the crew
-# spend in the LM — no injectable fault can move the atmosphere they are breathing. The CSM's cabin
-# can leak, lose its regulator, saturate its absorber and lose its vent valve; the LM's can do none
-# of those things, and a leak in the vehicle the crew are actually in is the emergency a crewed
-# scenario most obviously wants.
+# This domain publishes two atmospheres, and until round 42 all eleven faults above were written
+# against the CSM's four channels: not one perturbed `eclss.lm_cabin_pressure_psia`,
+# `eclss.lm_cabin_temp_c`, `eclss.lm_co2_pp_mmhg` or `eclss.lm_pp_o2_mmhg`. In `descent`,
+# `surface` and `ascent_rendezvous` — 27.5 h of the 192, and every hour the crew spend in the LM —
+# no injectable fault could move the air they were breathing. `points.yaml` says why that is wrong
+# in as many words: the LM's cabin pressure is a separate channel "because from undocking to docking
+# the two compartments cannot equalise".
 #
-# The fix is a design decision rather than a repair, which is why it is here. Either every
-# cabin-specific fault becomes a pair — `ECL-01-csm-cabin-leak` and `ECL-01-lm-cabin-leak`, since one
-# leak is in one cabin — or a fault declares which cabins it can affect and the seeding picks one.
-# The first is mechanical and doubles eleven entries; the second is a schema change and is truer to
-# the physics, because the mechanism does not know which cabin it is in. What neither can do is
-# leave the coverage claim asserting that every eclss channel is perturbed when four are not, which
-# is what it did until `check_fault_coverage` compared the claim against the policy.
+# The fix is pairing rather than a cabin parameter on one fault, because a leak is in one cabin and
+# the pairing is what lets the two diverge. The divergences are the content, and there are four: the
+# LM has no leak-rate channel (`eclss.leak_rate_g_s` is derived from the CSM's own mass balance, so
+# an LM leak never enters it), no regulator-position channel, a shared `res.o2_remaining_kg`, and a
+# party of two where the CSM's is three. `ECL-07-suit-loop-fan-failure` has no twin and should not:
+# the suit loop is a single shared circuit.
 #
-# The same comparison found a second thing worth naming: two of the LM's atmosphere functions have
-# no channel at all. There is no `lm_absorber_capacity_pct` and no `lm_cabin_regulator_state`, so
-# even a fault written for the LM could not move them — the LiOH bed and the regulator exist in two
-# cabins and are observable in one.
+# `lm_cabin_regulator_state` still does not exist, and the reason has changed. It is no longer "the
+# registry has no room for it" — it is that the corpus publishes ONE `cabin_regulator_state`
+# (apollo_diode.md:95) with no vehicle qualifier and says nothing about how the LM's own pressure
+# control is built: a two-position regulator, a relief valve, or a continuous bleed. The twins below
+# are injectable without it, because their effect on pressure and ppO2 is observable; what is
+# missing is the *easy diagnosis*, so on the LM a regulator fault has to be inferred from its
+# signature where the CSM reads a mode. That asymmetry is in the twins' `false_positive_risk` and it
+# is a fidelity property rather than a gap to be papered over.
 # --------------------------------------------------------------------------------------
 
+  # ------------------------------------------------------------------------------------
+  # The LM's atmosphere. Ten faults, paired one-for-one with the CSM's, because one leak
+  # is in one cabin.
+  #
+  # The gap these close: this domain publishes two atmospheres, and until round 42 all
+  # eleven faults above were written against the CSM's four channels. In `descent`,
+  # `surface` and `ascent_rendezvous` — 27.5 h of the 192, and every hour the crew spend
+  # in the LM — no injectable fault could move the air they were breathing. The CSM's
+  # cabin could leak, lose its regulator, saturate its absorber and lose its vent valve;
+  # the LM's could do none of those things.
+  #
+  # They are *pairs* rather than one parameterised fault because a leak is in one cabin,
+  # and the pairing is what lets the two diverge. The differences between each twin and
+  # its CSM original are the interesting content, and they are four:
+  #
+  #   1. **The LM has no leak-rate channel.** `eclss.leak_rate_g_s` is derived from
+  #      `csm_cabin_pressure_pa` (`points.yaml`), so an LM leak does not appear in it at
+  #      all. The CSM's leak is corroborated by a tank falling while the cabin holds; the
+  #      LM's has only the cabin channel and the tank, and no instrument reconciles them.
+  #      This is the single largest asymmetry in the pair and it makes the LM leak harder
+  #      to diagnose from the vehicle, not easier.
+  #   2. **The LM has no regulator *position* channel** (`lm_cabin_regulator_state` does
+  #      not exist; see `open_debts`). The regulator-family twins can still be injected —
+  #      the effect on pressure and ppO2 is observable — but they cannot be diagnosed
+  #      from the commanded position, so the crew have to infer the mechanism from its
+  #      signature. On the CSM the same fault is a mode readout.
+  #   3. **`res.o2_remaining_kg` is shared.** Both cabins draw from the same `res.*`
+  #      aggregate, so a fault in either moves the same resource channel; the cabinet
+  #      channels are what say which tank is emptying.
+  #   4. **The LM's party is two, not three.** Every rate in the originals is scaled by
+  #      crew count where the rate is per crew member, and the CO2-removal counter the
+  #      absorber twins exhaust is the LM's own 41 man-hours rather than the CSM's 72.
+  #
+  # `ECL-07-suit-loop-fan-failure` has no twin and should not have one: the suit loop is
+  # a single shared circuit, so `eclss.suit_loop_flow_cfm` is not a cabin channel and a
+  # second fault would be the same fault twice.
+  # ------------------------------------------------------------------------------------
+  - id: ECL-12-lm-cabin-leak
+    component: lm_cabin_volume
+    mechanism: 'a seal in the LM''s cabin fails: gas leaves faster than the regulator replaces it, and the rate grows as the seal opens'
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-05
+      unit: per_h
+      rate_kg_per_h: 0.023
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_pp_o2_mmhg
+      - eclss.lm_co2_pp_mmhg
+      - res.o2_remaining_kg
+    detection:
+      evidence: >-
+        a pressure slope that the LM's temperature channel does not explain, against a supply that
+        falls over the following hours. The temperature term is the same trap as the CSM's — a 1 K
+        cabin change moves the pressure by 117 Pa — and the LM's own thermal mass is smaller, so it
+        moves further for the same heat.
+      latency: >-
+        seconds on the pressure slope and an hour or more on the supply tank. There is no third
+        channel to break the tie: `eclss.leak_rate_g_s` is derived from the CSM's mass balance and
+        an LM leak does not enter it, so a fleet watching the leak-rate channel sees nothing
+      false_positive_risk: >-
+        a cooling LM cabin and a leaking one are the same single observation. The CSM's version of
+        this fault is separated by a leak-rate estimator that watches the other compartment; the
+        LM's is not, and that asymmetry is the point
+    response:
+      kind: service
+      note: >-
+        the LM's regulator is commanded closed, which isolates the cabin from its supply; the crew
+        then have a limited time in the LM and an obvious reason to leave it
+    provenance:
+      basis: historical
+      source: >-
+        A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification
+        (vehicle.yaml#consumables.leak). The flight figure, not the specification, because the
+        specification is a qualification limit and the fault that actually happened is the one
+        worth injecting
+  - id: ECL-13-lm-regulator-stuck-open
+    component: lm_o2_regulator
+    mechanism: 'the LM cabin regulator sticks open: oxygen flows continuously and the cabin climbs above its setpoint'
+    kind: latent_then_acute
+    seeding:
+      hazard: 5.0e-05
+      unit: per_h
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_pp_o2_mmhg
+      - res.o2_remaining_kg
+    detection:
+      evidence: >-
+        pressure and ppO2 rising together with the LM's temperature flat, and an oxygen supply
+        falling faster than two crew can account for
+      latency: minutes, on the pressure channel at 2 Hz
+      false_positive_risk: >-
+        a genuinely cold LM cabin and an overpressurising one both read as high pressure, separated
+        by the temperature channel. The CSM's twin is additionally separated by
+        `eclss.cabin_regulator_state` reading `primary` when it should be closed; there is no LM
+        equivalent, so this fault on the LM is diagnosable only from its effect
+    response:
+      kind: service
+      note: vent valve, then isolation. The same response as the CSM's, on a smaller volume
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-02-regulator-stuck-open`, at the LM's own compartment. Derived from
+        apollo_diode.md:95's `cabin_regulator_state` by the same argument that makes
+        `eclss.lm_cabin_pressure_psia` a separate channel: pressure control is per-compartment,
+        because two compartments that cannot equalise cannot share one regulator
+  - id: ECL-14-lm-regulator-stuck-closed
+    component: lm_o2_regulator
+    mechanism: 'the LM cabin regulator fails closed: the supply stops reaching the cabin and pressure falls with the tank still full'
+    kind: discrete
+    seeding:
+      hazard: 5.0e-05
+      unit: per_h
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_pp_o2_mmhg
+    detection:
+      evidence: >-
+        pressure falling while the supply tank stays *full* — the inverted signature of the leak,
+        and the observation that separates the two in one glance
+      latency: >-
+        seconds to see the fall, and as long again to check the tank. A fleet that reads only the
+        cabin channel will treat this as a leak and spend the mission hunting a hole that is not
+        there
+      false_positive_risk: >-
+        a leak and a closed regulator are the same falling cabin. The tank is the discriminator,
+        which is why `eclss.o2_supply_pressure_psi` is in the CSM twin's perturbed set and the LM
+        twin does not need it: the LM's supply is the shared `res.o2_remaining_kg`, and a fault
+        that moved it would be a fault about the tank rather than about the regulator
+    response:
+      kind: service
+      note: emergency regulator, and the crew into suits if the pressure cannot be held
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-03-regulator-stuck-closed`. Its discriminator is the one apollo gives
+        for the CSM at apollo_diode.md:336, applied to the LM's tank
+  - id: ECL-15-lm-absorber-blower-failure
+    component: lm_lioh_cartridge_primary
+    mechanism: 'the LM cartridge''s blower stops: air no longer passes through the lithium hydroxide and CO2 accumulates with the cartridge untouched'
+    kind: discrete
+    seeding:
+      hazard: 2.0e-04
+      unit: per_h
+    perturbs:
+      - eclss.lm_co2_pp_mmhg
+      - eclss.lm_absorber_capacity_pct
+      - cw.active_lights
+    detection:
+      evidence: >-
+        CO2 rising in the LM while `eclss.lm_absorber_capacity_pct` says there is capacity left —
+        and the sharper half, capacity that stops being consumed. A cartridge that is not being
+        used does not deplete, so the absence of depletion is the diagnosis
+      latency: minutes. The LM has two crew rather than three, so the same blower failure raises
+        CO2 at two thirds the rate and gives the crew longer to notice it
+      false_positive_risk: >-
+        a channelled or bypassed cartridge produces the same CO2 rise with a normal consumption
+        rate. Separated by whether the counter is advancing, which is a difference in a rate of
+        change rather than in a level
+    response:
+      kind: advisory
+      note: >-
+        the secondary cartridge, if a verb can reach it. It cannot: `set_absorber_path` selects a
+        path rather than a cartridge and no verb in this vehicle swaps one, so on the LM this
+        advisory has no action behind it. That is a real and ugly property of the vehicle rather
+        than a gap in the fault, and it is why the secondary cartridge's 78 man-hours are a debt
+        rather than a capacity
+    provenance:
+      basis: historical
+      source: >-
+        NR and PSR for the 41 man-hour primary cartridge; apollo_diode.md:335 and :84 for the
+        absorber chain. The mechanical half of it, at the LM, where the alternative cartridge was
+        the thing Apollo 13's crew had to build an adapter to reach
+  - id: ECL-16-lm-pressure-sensor-bias
+    component: lm_cabin_pressure_sensor
+    mechanism: 'the LM cabin pressure transducer reads a constant offset: the cabin is fine and the number is not'
+    kind: instrument
+    seeding:
+      hazard: 1.0e-04
+      unit: per_h
+      bias_psia: 0.15
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+    detection:
+      evidence: >-
+        a pressure step with no matching temperature or ppO2 movement, and a cabin that the crew
+        report as normal. ppO2 is derived from the pressure and is itself measured, so the two
+        disagreeing is the instrument speaking
+      latency: one tick, and a diagnosis that takes as long as it takes somebody to cross-check
+      false_positive_risk: >-
+        a real pressure change moves ppO2 and temperature with it. The bias moves the pressure
+        alone, which is the only reason it is findable at all — and on the LM there is no second
+        pressure sensor to vote against, so the cross-check is the crew's
+    response:
+      kind: advisory
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-05-pressure-sensor-bias`, chosen at 0.15 psia: three times the LM
+        channel's 0.01 psia precision and inside the 4.8-5.2 psia band, so it is a reading a fleet
+        would believe rather than an obvious fault
+  - id: ECL-17-lm-pressure-sensor-stuck
+    component: lm_cabin_pressure_sensor
+    mechanism: 'the LM cabin pressure transducer freezes at its last value: a perfectly stable number that is no longer a measurement'
+    kind: instrument
+    seeding:
+      hazard: 1.0e-04
+      unit: per_h
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+    detection:
+      evidence: >-
+        *unnatural* stability. Every real pressure on this vehicle moves; a channel whose variance
+        collapses while its neighbours keep theirs is the instrument, and the detection is a
+        statistic rather than a threshold
+      latency: minutes to hours, and it is the slowest diagnosis in the domain
+      false_positive_risk: >-
+        a genuinely quiescent LM — the crew asleep, nothing running — reads as stuck. The
+        separation is the temperature channel, which never stops moving
+    response:
+      kind: advisory
+      note: cross-check against ppO2, which is measured independently
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-06-pressure-sensor-stuck`. Derived rather than sourced: apollo
+        publishes one cabin pressure channel per compartment and says nothing about how either
+        transducer fails, so the twin is the CSM's fault at the LM's channel and the same caveat
+        applies to both
+  - id: ECL-18-lm-vent-valve-stuck-open
+    component: lm_o2_regulator
+    mechanism: 'the LM vent valve does not reseat: the cabin bleeds to vacuum through a path the regulator cannot outrun'
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 2.0e-04
+      trigger: any LM vent, depressurisation or repressurisation cycle
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_pp_o2_mmhg
+      - res.o2_remaining_kg
+    detection:
+      evidence: >-
+        a pressure fall far too fast to be a seal leak, with the supply emptying as the regulator
+        tries to keep up. The rate is the diagnosis rather than a second channel
+      latency: seconds
+      false_positive_risk: >-
+        a large breach and a stuck vent are the same observation, and the difference is whether the
+        crew can hear it. This fault is *latent* until a vent cycle happens, which on the LM means
+        it waits for the EVA or the depressurisation the mission was going to do anyway
+    response:
+      kind: service
+      note: emergency regulator and the suit loop, in that order — the LM procedure, which the crew
+        drill before the surface stay
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-08-vent-valve-stuck-open`, seeded `on_demand` against an LM vent cycle
+        equivalent to the CSM's
+  - id: ECL-19-lm-emergency-regulator-overpressure
+    component: lm_o2_regulator
+    mechanism: 'the LM emergency regulator does not shut off at its setpoint: the backup path overpressurises the cabin'
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 1.0e-04
+      trigger: a command to the LM emergency regulator
+    perturbs:
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_pp_o2_mmhg
+      - structure.cabin_dp_psi
+    detection:
+      evidence: >-
+        pressure climbing after the emergency regulator was selected, with `structure.cabin_dp_psi`
+        following it. The structural channel is the one that makes this urgent rather than
+        annoying — the LM's cabin is not built for a differential and the ascent stage's structure
+        is lighter than the CSM's
+      latency: seconds
+      false_positive_risk: >-
+        the same overpressure from a stuck primary regulator. The discriminator is which one was
+        commanded, which is why this fault waits for the command rather than occurring on its own
+    response:
+      kind: service
+      note: isolate the emergency path and vent; the crew in suits if the differential keeps rising
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-09-emergency-regulator-overpressure`, on-demand because the emergency
+        regulator is a path a crew selects rather than one that operates continuously
+  - id: ECL-20-lm-nitrogen-dilution
+    component: lm_cabin_n2_kg
+    mechanism: 'nitrogen enters the LM cabin from a leaking descent-stage pressurant line: total pressure holds while ppO2 falls'
+    kind: discrete
+    seeding:
+      hazard: 5.0e-05
+      unit: per_h
+    perturbs:
+      - eclss.lm_pp_o2_mmhg
+      - eclss.lm_cabin_pressure_psia
+      - eclss.lm_co2_pp_mmhg
+    detection:
+      evidence: >-
+        total pressure normal and ppO2 low. This is the one fault in the domain whose signature is
+        a *disagreement* between two channels rather than a movement in either, and it is the
+        reason both are published
+      latency: minutes, and hours to be sure of it
+      false_positive_risk: >-
+        a failing ppO2 sensor. On the CSM the tie is broken by the cabin pressure channel agreeing
+        with the ppO2 reading; on the LM the same tie holds, so the fault is findable — which
+        matters, because the response is to raise ppO2 and the wrong response is to add oxygen to a
+        cabin whose total pressure is already right
+    response:
+      kind: advisory
+      note: the LM has no nitrogen source to shut off, so the action is to find the leak and to
+        manage ppO2 deliberately rather than to add oxygen reflexively
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-10-nitrogen-dilution`. The LM's nitrogen comes from the descent stage's
+        pressurant and its water tank rather than from a cabin supply, so this is a leak path
+        rather than a valve, and the LM's version is the one where the crew cannot close the source
+  - id: ECL-21-lm-condensing-exchanger-failure
+    component: lm_water_separator
+    mechanism: 'the LM exchanger''s water removal falls away: cabin humidity climbs and the crew feel it before any channel moves'
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-04
+      unit: per_h
+    perturbs:
+      - eclss.lm_cabin_temp_c
+      - thermal.zone_[id]_t_c
+      - cw.active_lights
+    detection:
+      evidence: >-
+        nothing on the LM's atmosphere channels worth the name, and a crew member who says the
+        cabin feels damp. On the surface this matters more than it does in the CSM: the LM is the
+        crew's only shelter, they are in it for up to three days, and a damp LM is a cold LM and a
+        cold LM is a frozen water line
+      latency: whenever somebody mentions it
+      false_positive_risk: >-
+        none from the channels. The risk is a fleet that has learned to ignore the crew, and a
+        surface crew with a damp cabin have nowhere to go
+    response:
+      kind: advisory
+    provenance:
+      basis: derived
+      relation: >-
+        the LM twin of `ECL-11-condensing-exchanger-failure`, at the compartment where the
+        consequence is worst
+
 coverage:
+  # The list is empty, and that is the whole claim: every one of this domain's channels is
+  # perturbed by at least one fault. It said four LM channels were exceptions until round 42 —
+  # which was true, and was the coverage gap the twins below exist to close. An exception list is
+  # the one place in this file where being right is not enough, because a stale entry tells a fleet
+  # to ignore a channel a fault is moving; `check_fault_coverage` now refuses both directions.
   note: >-
-    Every eclss channel is perturbed by at least one fault above except `eclss.cabin_temp_c`
-    and the CO2 exposure average, both of which are derived from channels that are perturbed
-    directly.
-  unperturbed: ["eclss.lm_cabin_pressure_psia", "eclss.lm_cabin_temp_c", "eclss.lm_co2_pp_mmhg", "eclss.lm_pp_o2_mmhg"]
+    Every eclss channel is perturbed by at least one fault, in both compartments. `eclss.cabin_temp_c`
+    and `eclss.co2_pp_1h_avg_mmhg` are perturbed both directly and as consequences of the channels
+    they are derived from, which is why they are not exceptions here even though a fault need not
+    name them.
+  unperturbed: []
   unperturbed_reason: >-
-    **no fault in this domain touches it at all** — a coverage gap rather than a consequence, recorded in `open_debts`
+    nothing is unperturbed. The LM's four atmosphere channels, which were the exceptions, are now
+    perturbed by ECL-12 to ECL-21; the vehicle's two absorbers are separately observable and
+    separately faultable, which is what `eclss.lm_absorber_capacity_pct` and ECL-15 closed

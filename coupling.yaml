@@ -72,23 +72,52 @@ nodes:
     unit: kg
     apollo: "836-847"
     preloaded: "the helium charge is loaded at the pad, and the bladder means it does not leave the tank either: the stock is constant for the whole mission and the coupling is a displacement rather than a consumption"
-  absorber_capacity:
+  # Two absorbers, two counters. This was one node called `absorber_capacity`, and the merging was
+  # wrong in the way that matters: `E-ATM-ABSORB` runs from `cabin_atm` and `E-LM-ATM-ABSORB` from
+  # `lm_cabin_atm`, and the second edge's own note says the difference between them "is the edge's
+  # endpoints rather than its value" — while both landed on one counter, which deleted exactly the
+  # distinction the note was defending. A crew on the surface spent the CSM's element; a crew back
+  # in the CM spent the LM's cartridge. The ratings were written down all along, in two other files
+  # (`vehicle.yaml#consumables.co2_removal`, `domains/eclss/components.yaml`), and read by nothing,
+  # which is also why the percentage channel had no denominator to divide by.
+  #
+  # The unit stays man-hours and the `accumulates:` design stays: a man-hour of capacity is by
+  # definition one crew-hour of CO2 removal, so the counter is spent when it reaches its rating.
+  absorber_capacity_csm:
     domain: eclss
     kind: stock
     unit: man_hours
     apollo: "846"
+    exhausted_at: 72
     note: >-
-      modelled in man-hours of CO2 removal, not kilograms: LR and PSR give a primary cartridge as
-      41 man-hours and a secondary as 78 with 6 spares, and no kg-CO2 capacity is published
-      (vehicle.yaml#consumables)
+      the CSM's LiOH element, on a nominal 72 man-hour rotation (vehicle.yaml#consumables, from NR
+      and PSR). Separate from the LM's because the two compartments cannot equalise between
+      undocking and docking, which is the same reason `cabin_atm` and `lm_cabin_atm` are separate
+      stocks. `exhausted_at` is the rating: without it a counter can be spent forever and the
+      `co2_absorber_low` threshold it feeds has no meaning
     accumulates: >-
-      this is a *consumption counter*, not a tank, and the name is the reason it took a linter to
-      notice: `absorber_man_hours` counts man-hours spent, so the cartridge is exhausted when the
-      count reaches its rating and the remaining capacity is a subtraction rather than a stock.
-      Nothing draws from it because nothing should — a counter that could be drawn down would be
-      a counter that could be refilled, and no verb in this vehicle swaps a cartridge. Modelled
-      this way because the sources give man-hours and not kilograms; if a cartridge-swap verb
-      lands, this declaration is what should be deleted
+      a *consumption counter*, not a tank: `absorber_man_hours_csm` counts man-hours spent, so the
+      element is exhausted when the count reaches its rating and the remaining capacity is a
+      subtraction rather than a stock. Nothing draws from it because nothing should — a counter
+      that could be drawn down would be a counter that could be refilled, and no verb in this
+      vehicle swaps an element. Modelled this way because the sources give man-hours and not
+      kilograms; if a cartridge-swap verb lands, this declaration is what should be deleted
+  absorber_capacity_lm:
+    domain: eclss
+    kind: stock
+    unit: man_hours
+    apollo: "846"
+    exhausted_at: 41
+    note: >-
+      the LM's primary cartridge, rated 41 man-hours (NR and PSR, vehicle.yaml#consumables). The
+      secondary is 78 and there are six spares, and NONE of them is reachable: `set_absorber_path`
+      selects between beds, not between cartridges, and no verb in this vehicle swaps one. So the
+      loaded cartridge is the whole LM capacity and the 78 + 6 x 41 = 324 man-hours that are
+      physically aboard are declared in `vehicle.yaml` and modelled nowhere — a debt, named in
+      `open_debts` rather than silently added to `exhausted_at`, because a counter that started at
+      365 man-hours would be a vehicle whose crew can never run out of LiOH
+    accumulates: >-
+      as `absorber_capacity_csm`: a counter of man-hours spent, exhausted at its rating
   battery_energy:    {domain: power,       kind: stock,    unit: J,  apollo: "836-847"}
 
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
@@ -387,14 +416,15 @@ edges:
       computation: "41 / (41 * 0.91 / 24)"
       unit: "man-hours per kg CO2"
       basis: derived
-      relation: "as E-ATM-ABSORB — the man-hour rating is the same cartridge class. The LM's absorber is a *different* cartridge from the CSM's, which is the fact Apollo 13 turned on when the CM's would not fit and the crew built an adapter"
+      relation: "the LM's primary cartridge is rated 41 man-hours (vehicle.yaml#consumables) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the cartridge removes 41 * 0.03792 = 1.554 kg and the sensitivity is 41/1.554 = 26.37 man-hours per kg. The rating cancels — 41/(41 x 0.03792) is 1/0.03792 — so this is man-hours per kg CO2 at ANY rating, which is why it read as the same number as the CSM's edge. It said 'the man-hour rating is the same cartridge class', and that is false: 41 against the CSM element's 72. The LM's absorber IS a different article from the CSM's (Apollo 13 turned on exactly that when the CM's would not fit and the crew built an adapter), and the arithmetic is the reason the sentence went unchallenged"
       at: "primary cartridge"
       note: >-
-        the second of the two CO2 paths, and the one the crisis was about. Its sensitivity is the
-        same number because the rating is the same; what differs is which compartment's atmosphere
-        it draws from, and that is the edge's endpoints rather than its value
+        the second of the two CO2 paths, and the one the crisis was about. What differs from
+        E-ATM-ABSORB is which compartment's atmosphere it draws from and *which counter it
+        exhausts*; the sensitivity is the same number because a man-hour is defined as one
+        crew-hour of removal, not because the two cartridges are alike
     from: lm_cabin_atm
-    to: absorber_capacity
+    to: absorber_capacity_lm
     kind: rate
   - id: E-LM-CREW-ATM
     sensitivity:
@@ -429,23 +459,23 @@ edges:
   - id: E-ATM-ABSORB
     sensitivity:
       value: 26.37
-      computation: "41 / (41 * 0.91 / 24)"
+      computation: "72 / (72 * 0.91 / 24)"
       unit: "man-hours per kg CO2"
       basis: derived
-      relation: "a primary LiOH cartridge is rated 41 man-hours (vehicle.yaml#consumables) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the cartridge removes 41 * 0.03792 = 1.554 kg and the sensitivity is 41/1.554 = 26.37 man-hours per kg"
-      at: "primary cartridge"
+      relation: "the CSM's LiOH element is rated 72 man-hours on its nominal rotation (vehicle.yaml#consumables, from NR and PSR) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the element removes 72 * 0.03792 = 2.731 kg and the sensitivity is 72/2.731 = 26.37 man-hours per kg. Until round 42 it computed from 41 and called that 'a primary LiOH cartridge', which is the LM cartridge's rating and not this edge's: the value survived the substitution because the rating cancels out of man-hours per kg, so this was a right number with a wrong reason — the kind a later reader corrects into a wrong number"
+      at: "the CSM element's rotation"
       note: >-
         closed by arithmetic on two published figures, and it is the *only* way to close it: the
-        absorber node is modelled in man-hours rather than kilograms precisely because no kg-CO2
-        capacity is published for the cartridges, while the man-hour rating and the metabolic rate
+        absorber nodes are modelled in man-hours rather than kilograms precisely because no kg-CO2
+        capacity is published for either article, while the man-hour rating and the metabolic rate
         both are. Deriving the bridge between them is what makes the atmosphere's CO2 path a
         conversion with a stated factor rather than a curve fit — and it is a conversion, not a
-        conservation: the cartridge's capacity is spent in man-hours, and no mass crosses the
+        conservation: the element's capacity is spent in man-hours, and no mass crosses the
         edge one for one. It said `conserve` until the conservation check learned to refuse an
         edge whose endpoints have no dimension, which is the only reason the mislabelling was
         ever visible
     from: cabin_atm
-    to: absorber_capacity
+    to: absorber_capacity_csm
     kind: rate
   - id: E-WATER-RAD
     sensitivity:

@@ -38,7 +38,8 @@ domain: eclss
 # publication of the CO2 channel is what the alarm thresholds are sized against.
 natural_rate_hz: 1
 
-reads: [o2_csm, o2_lm, absorber_capacity, crew_state, cabin_zone_t, lm_cabin_zone_t]
+reads: [o2_csm, o2_lm, absorber_capacity_csm, absorber_capacity_lm, crew_state,
+        cabin_zone_t, lm_cabin_zone_t]
 writes: [cabin_atm, lm_cabin_atm, cabin_regulator]
 
 # --------------------------------------------------------------------------------------
@@ -175,11 +176,31 @@ components:
   - id: o2_regulator
     kind: discrete
     class: regulator
+    vehicle: csm
     modes: [closed, primary, emergency, isolated]
     provenance:
       basis: apollo
       ref: "apollo_diode.md:95"
       note: "primary, emergency and isolated, with an emergency regulator that could hold the cabin above 3.5 psia long enough to don suits (apollo_diode.md:84)"
+  - id: lm_o2_regulator
+    kind: discrete
+    class: regulator
+    vehicle: lm
+    modes: [closed, primary, emergency, isolated]
+    provenance:
+      basis: derived
+      relation: >-
+        the LM's own cabin pressure control, by the argument that already makes
+        `eclss.lm_cabin_pressure_psia` a separate channel: two compartments that cannot equalise
+        cannot share one regulator. The modes are the CSM's four because the LM's control is not
+        published — the corpus gives one `cabin_regulator_state` with no vehicle qualifier
+        (apollo_diode.md:95) — and a per-compartment article with no description is still a
+        per-compartment article
+      note: >-
+        the same four modes, no channel. `eclss.cabin_regulator_state` publishes the CSM's position
+        and the LM has no equivalent, so ECL-13, ECL-14 and ECL-19 are injectable but not readable:
+        on the CSM a regulator fault is a mode, and on the LM it is an inference from pressure and
+        ppO2. `domains/eclss/fault_policy.yaml` carries that asymmetry in the twins' detection notes
   - id: cabin_pressure_sensor_1
     kind: flow
     class: sensor
@@ -205,20 +226,60 @@ components:
     provenance:
       basis: apollo
       ref: "apollo_diode.md:90"
-  - id: lioh_bed_primary
+  - id: lm_cabin_pressure_sensor
+    kind: flow
+    class: sensor
+    vehicle: lm
+    range_psia: [0, 10]
+    precision_psia: 0.01
+    provenance:
+      basis: derived
+      relation: >-
+        the LM's cabin pressure transducer, at the CSM instrument's published range and precision
+        (apollo_diode.md:88). One sensor rather than two, which is `chosen` and is the interesting
+        half: `cabin_pressure_sensor_2` exists because "a single pressure sensor is a fault that
+        hides its own failure", and the LM's cabin has one because it is a two-crew compartment
+        where the second sensor's mass is the cost. So ECL-16 and ECL-17 are faults a crew can only
+        catch by cross-checking against ppO2 and by talking to each other — and that is what makes
+        the crew sensor load-bearing on the surface rather than decorative
+  # The vehicle has two absorbers and, until round 42, this file declared both of the LM's and
+  # neither cabin in its ids. `lioh_bed_primary` and `lioh_bed_secondary` were the LM cartridges,
+  # named as if the vehicle had one absorber; the CSM's element — the one that scrubs the air for
+  # the whole outbound and inbound voyage — was declared in `vehicle.yaml#consumables` and in no
+  # domain, had no fault, and fed no counter. The two ratings that would have exposed the shared
+  # counter were written right here the whole time.
+  - id: csm_lioh_element
     kind: stock
     class: absorber
+    node: absorber_capacity_csm
+    rated_man_hours: 72
+    provenance:
+      basis: historical
+      source: "NR and PSR: the CSM's LiOH elements run on a nominal 72 man-hour rotation, with the caution at 7.6 mmHg (vehicle.yaml#consumables.co2_removal). Denominated in man-hours for the same reason as the LM's: no kg-CO2 figure is published for either article."
+  - id: lm_lioh_cartridge_primary
+    kind: stock
+    class: absorber
+    node: absorber_capacity_lm
     rated_man_hours: 41
     provenance:
       basis: historical
       source: "NR and PSR: an LM primary cartridge is 41 man-hours of CO2 removal. The capacity is denominated in man-hours because no kg-CO2 figure is published, and a stock denominated in the unit the sources give cannot drift from its evidence."
-  - id: lioh_bed_secondary
+  - id: lm_lioh_cartridge_secondary
     kind: stock
     class: absorber
+    node: UNCONFIGURED
     rated_man_hours: 78
     provenance:
       basis: historical
-      source: "NR and PSR: an LM secondary cartridge is 78 man-hours"
+      source: "NR and PSR: an LM secondary cartridge is 78 man-hours, and there are six spares."
+      note: >-
+        aboard and unreachable. `set_absorber_path` selects between beds rather than between
+        cartridges, and no verb in this vehicle swaps one, so the 78 man-hours of the secondary and
+        the six spares behind it — 324 man-hours of CO2 removal, eight times the primary — are
+        physically present and modelled nowhere. `node: UNCONFIGURED` is the binding that is owed,
+        not the cartridge: the cartridge exists and its rating is published. What is missing is the
+        verb, and until it lands this is a debt rather than a capacity, because a counter that
+        started at 365 man-hours would be a vehicle whose crew cannot run out of LiOH
   - id: condensing_heat_exchanger
     kind: flow
     class: exchanger
@@ -234,6 +295,21 @@ components:
     provenance:
       basis: UNCONFIGURED
       note: "the cabin fan's flow is not published. main_propulsion_diode.md:165's principle applies here in a different form: what matters is not the fan's rating but that the same ECS caution light can mean a glycol pump, a water separator or a suit fan (apollo_diode.md:84), so the domain needs a ventilation state without needing its rated flow."
+  - id: lm_water_separator
+    kind: flow
+    class: exchanger
+    vehicle: lm
+    removal_kg_h: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the LM's water separator, named by the corpus as one of the three things the LM's single ECS
+        caution light can mean (apollo_diode.md:84: "glycol-pump, water-separator or suit-fan
+        trouble"), and its removal rate is not published — `condensing_heat_exchanger` above carries
+        the same debt for the CSM. It exists as a separate article because ECL-21 is a *separate*
+        fault from ECL-11: the LM has its own exchanger, the crew have nowhere else to go while it
+        fails, and a shared component would have made a surface humidity failure the same
+        injectable fault as an outbound one
 
 # --------------------------------------------------------------------------------------
 # The atmosphere model, stated so the plant can implement it and the linter can check the

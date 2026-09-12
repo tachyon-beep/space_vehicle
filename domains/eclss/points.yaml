@@ -105,14 +105,26 @@ points:
     derivation: "the suit circuit's fan-driven flow"
     note: "27-33 cfm with a <20 event. It is the fastest life-support channel on the vehicle and the only one whose loss is measured in seconds."
   - channel: eclss.absorber_capacity_pct
-    from: absorber_capacity
+    from: absorber_capacity_csm
     layer: estimate
-    derivation: "remaining man-hours of CO2 removal as a percentage of the loaded beds"
+    derivation: "man-hours of CO2 removal left in the CSM's LiOH element, as a percentage of its 72 man-hour rating"
     note: >-
-      The denominator is man-hours, from the published 41 and 78 (vehicle.yaml#consumables),
-      which is what makes this channel well defined. It was not, when the corpus left the
-      denominator unnamed — and a percentage of nothing is a number an agent will still plan
-      against.
+      The denominator is the rating, 72 man-hours (vehicle.yaml#consumables), and this is now one
+      of a pair of channels rather than the vehicle's only view of CO2 capacity. It said "the
+      published 41 and 78" until round 42 — the LM cartridges' ratings — while the counter behind
+      it was shared between the two cabins, so the note named an article the channel did not
+      describe and no rating reached the arithmetic at all.
+  - channel: eclss.lm_absorber_capacity_pct
+    from: absorber_capacity_lm
+    layer: estimate
+    derivation: "man-hours of CO2 removal left in the LM's loaded cartridge, as a percentage of its 41 man-hour rating"
+    note: >-
+      the LM's own absorber, and the channel that did not exist until round 42. `eclss.lm_co2_pp_mmhg`
+      was the only LM atmosphere channel with an absorber behind it, so a surface crew could watch
+      their CO2 climb with no way to tell a saturated cartridge from a failed blower — the same
+      inference the CSM crew get from watching this channel against their own. The secondary
+      cartridge and the six spares are not in the denominator, because no verb in this vehicle
+      swaps one, and a percentage is not the place to hide a capacity that cannot be reached.
   - channel: eclss.leak_rate_g_s
     from: csm_cabin_pressure_pa
     layer: estimate

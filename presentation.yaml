@@ -265,9 +265,9 @@ ring:
     - {class: fast, rule: "rate_hz >= 5", members: 21, note: "rates, voltages, chamber pressure — the quantities a transient lives in, and the ones a slow rate turns into a step change that looks like nothing happened"}
     - {class: control, rule: "1 <= rate_hz < 5", members: 85, note: "the engineering channels a fleet plans against, and by far the largest class: 59 % of the registry"}
     - {class: slow, rule: "0.5 <= rate_hz < 1", members: 8, note: "consumables and thermal trends — the quantities whose next value the previous one predicts"}
-    - {class: resource, rule: "0 < rate_hz < 0.5", members: 28, note: "the ledger residuals and reconciliation quantities, whose unit is hours"}
+    - {class: resource, rule: "0 < rate_hz < 0.5", members: 29, note: "the ledger residuals and reconciliation quantities, whose unit is hours"}
     - {class: event, rule: "rate_hz == 0", members: 4, note: "a channel with no period: `rcs.thruster_[n]_pulse_width_us`, `avionics.program_alarm_code`, `structure.stage_state` and `cw.acknowledged`. Three of the four are *states* published only when they change, which is why each declares a `max_decision_age_ms` heartbeat — without one a fleet cannot tell 'nothing has happened' from 'the publisher has stopped'"}
-  members_total: 146
+  members_total: 147
   burst: >-
     around events, and `on_event: true` is what the registry uses to say which channels have an
     event worth bursting around. §5's reason is that "the interesting failures are transients, and

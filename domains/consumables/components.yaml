@@ -36,7 +36,7 @@ natural_rate_hz: 1
 
 reads: [fuel_cell, radiator_reject, crew_state, thrust_main, rcs_thrust, battery_energy]
 writes: [o2_csm, o2_lm, h2_csm, water_potable, water_cooling, prop_main, prop_rcs,
-         pressurant_he, absorber_capacity]
+         pressurant_he, absorber_capacity_csm, absorber_capacity_lm]
 
 # --------------------------------------------------------------------------------------
 # The ontology. All seven behaviours from `consumables_diode.md:19-30`, each with where it
@@ -175,15 +175,24 @@ state:
     provenance:
       basis: UNCONFIGURED
       note: "the helium load and its regulated flow are not published for either vehicle; apollo_diode.md:139 gives pressurant_pressure_psi as 'vehicle dependent'. The stock exists so the F-09 trapped-line chain has somewhere to happen, and its magnitudes are owed"
-  - id: absorber_man_hours
-    node: absorber_capacity
+  - id: absorber_man_hours_csm
+    node: absorber_capacity_csm
     method: stock
     unit: man_hours
     quantum: 1.0e-4
-    min_flow_per_s: 8.3e-4
+    min_flow_per_s: 2.78e-4
     provenance:
       basis: derived
-      relation: "quantum 0.0001 man-hours against the consumption of three crew at one man-hour each per hour, 8.3e-4 man-hours/s. Modelled in man-hours rather than kilograms because no kg-CO2 capacity is published, and a stock denominated in the unit the sources actually give is one that cannot drift from its evidence"
+      relation: "quantum 0.0001 man-hours against 2.78e-4 man-hours/s: one crew member, which is the smallest party that ever works this element, because the commander stays in the CM for the whole surface stay while the other two are below. With all three aboard the rate is 8.3e-4, and the quantum is set by the smallest flow rather than the largest. Modelled in man-hours rather than kilograms because no kg-CO2 capacity is published, and a stock denominated in the unit the sources actually give is one that cannot drift from its evidence"
+  - id: absorber_man_hours_lm
+    node: absorber_capacity_lm
+    method: stock
+    unit: man_hours
+    quantum: 1.0e-4
+    min_flow_per_s: 5.56e-4
+    provenance:
+      basis: derived
+      relation: "as absorber_man_hours_csm, at the LM's party size: the LM carries two crew from undocking to docking, so its smallest flow is 2/3600 = 5.56e-4 man-hours/s. Two counters with two minimum flows rather than one with one, which is the arithmetic consequence of the crew splitting up — and the reason a single counter had to assume a crew count that was wrong for whichever cabin it was not in"
 
 # --------------------------------------------------------------------------------------
 # Consumers. Every draw on a stock, with the edge it corresponds to in coupling.yaml or the
@@ -259,11 +268,19 @@ consumers:
       basis: UNCONFIGURED
       note: "regulated blowdown; the regulator's behaviour is owed (vehicle.yaml#open_debts)"
   - id: co2_removal
-    stock: absorber_capacity
-    rate_kg_s: 8.3e-4
+    stock: absorber_capacity_csm
+    crew_cabin: csm
+    rate_man_hours_s: 8.3e-4
     provenance:
       basis: derived
-      relation: "three crew at one man-hour of removal each per hour"
+      relation: "three crew at one man-hour of removal each per hour, 8.3e-4 man-hours/s while all three are in the CM. From undocking to docking only the commander is aboard, and the rate falls to 2.78e-4 — which is why the field is a rate and not a total, and why the cabin is declared: the draw follows the crew, and the crew split is a mission event rather than a constant"
+  - id: co2_removal_lm
+    stock: absorber_capacity_lm
+    crew_cabin: lm
+    rate_man_hours_s: 5.56e-4
+    provenance:
+      basis: derived
+      relation: "two crew at one man-hour of removal each per hour. The LM's counter is spent by the two crew who are in it and by nobody else, which is the whole content of the split: before round 42 a crew on the surface drained the CSM element at the LM's rate and the two absorbers were one number"
 
 # --------------------------------------------------------------------------------------
 # The ledger pair. For each stock that has an independent observation, both terms and the

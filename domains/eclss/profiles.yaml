@@ -151,6 +151,26 @@ thresholds:
       basis: apollo
       ref: "apollo_diode.md:93"
       note: "apollo's <20 % with a predicted breakthrough inside an hour. Duplicated from the consumables domain on purpose: there it is a resource floor an agent plans against, and here it is an atmosphere alarm."
+  - id: lm_co2_absorber_low
+    point: eclss.lm_absorber_capacity_pct
+    comparator: below
+    assert: 20
+    clear: 30
+    dwell_assert_ms: 10000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    reserve_floor: 20
+    provenance:
+      basis: derived
+      relation: "apollo's <20 % absorber event, at the LM's counter. The threshold is a fraction of a rating rather than a property of a cartridge, so the same 20 asserts against 41 man-hours and against 72"
+      note: >-
+        the LM's own alarm, and until round 42 it could not exist: the vehicle had one capacity
+        channel, with the CSM's name on it and both cabins' absorbers behind it. A surface crew now
+        get the warning their own cartridge earns, which is half of why the counter was split —
+        `lm_co2_caution` watches the CO2 the cartridge is failing to remove and this watches the
+        cartridge, and a crew that has only the first learns the difference between them at the
+        point where acting on it is no longer possible
 
   # --- the leak, and the corroboration that makes it a diagnosis ----------------------------
   - id: leak_rate_rising

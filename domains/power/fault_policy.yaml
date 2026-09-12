@@ -24,7 +24,7 @@
 domain: power
 faults:
   - id: PWR-01-source-regulation-loss
-    component: source_converter
+    component: source_converter_v
     mechanism: "the converter's regulation loop degrades: bus voltage follows load instead of holding its setpoint"
     kind: continuous_degradation
     seeding: {hazard: 2.0e-5, unit: per_h, stress: "2x beyond the caution temperature limit"}

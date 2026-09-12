@@ -859,6 +859,24 @@ def check_coupling(
             report.refuse(where, f"domain {node.get('domain')!r} is not canonical")
         if node.get("kind") not in NODE_KINDS:
             report.refuse(where, f"kind {node.get('kind')!r} is not one of {sorted(NODE_KINDS)}")
+        # `accumulates:` says a stock counts what has been *spent* rather than what is held, and a
+        # count with no rating can be spent forever. That is not hypothetical: it is what
+        # `absorber_capacity` did for the life of the file, in the one place where the consequence
+        # is a crew who cannot run out of LiOH, and the ratings that would have exposed it sat in
+        # two other files read by nothing. Until round 42 nothing checked that the field was there.
+        if node.get("accumulates") and not isinstance(node.get("exhausted_at"), (int, float)):
+            report.refuse(
+                where,
+                "declares `accumulates` and no numeric `exhausted_at`. A counter with no rating is "
+                "a quantity that can be spent without limit, so whatever threshold watches it can "
+                "never be reached",
+            )
+        if isinstance(node.get("exhausted_at"), (int, float)) and not node.get("accumulates"):
+            report.refuse(
+                where,
+                "declares `exhausted_at` without `accumulates`, so the rating belongs to a stock "
+                "that is held rather than counted and the reader cannot tell which",
+            )
 
     edge_ids: dict[str, dict[str, Any]] = {}
     for edge in edges:
@@ -1271,6 +1289,65 @@ def walk_unset(node: Any, trail: str = "") -> list[str]:
     return found
 
 
+def check_fault_components(
+    path: Path,
+    docs: dict[str, dict[str, Any]],
+    node_ids: set[str],
+    components_elsewhere: set[str],
+    report: Report,
+) -> None:
+    """A fault's `component` must name something this vehicle actually declares.
+
+    Every fault says what it happens *to*, and until round 42 nothing read the field. That is the
+    usual cost: renaming a component in `components.yaml` leaves every fault that pointed at it
+    dangling, and the fault goes on looking plausible because the channels in `perturbs` are still
+    real. The linter refused none of it — which is how the ECLSS absorber components kept the LM's
+    ratings under CSM-neutral ids while `ECL-04`, the *CSM's* blower failure, named one of them.
+
+    Three kinds of name are accepted, and writing the check is what established that the field
+    already meant all three. A fault happens to a *component* (`csm_lioh_element`), to a *state*
+    when the thing that fails is a quantity rather than an article (`csm_cabin_n2_kg` is the
+    nitrogen inventory, and `ECL-10` has no supply article to name instead), or to a *coupling
+    node* (`o2_csm`, `cabin_regulator`, `crew_state`). Twelve of the vehicle's 128 bindings name a
+    node, and they are naming the tank or the crew rather than the variable the domain keeps about
+    them, which is the more natural way to say what failed. Narrowing the field to components alone
+    would have meant rewriting twelve correct bindings to satisfy a check written after them, and
+    would have lost the distinction between an article and its accounting.
+
+    Neither components nor nodes are matched within the domain, because a fault crossing domains is
+    the normal case rather than an error: `CNS-07` is a consumables fault that happens to the eclss
+    regulator, and `CNS-08` breaks the eclss element. `components_elsewhere` is every other domain's
+    components and states, collected before this domain is checked for the same reason
+    `thresholds_by_domain` is.
+    """
+    policy = docs.get("fault_policy.yaml") or {}
+    components = docs.get("components.yaml") or {}
+    known = (
+        {
+            str(entry["id"])
+            for key in ("components", "state")
+            for entry in (components.get(key) or [])
+            if isinstance(entry, dict) and entry.get("id")
+        }
+        | node_ids
+        | components_elsewhere
+    )
+    for fault in policy.get("faults") or []:
+        if not isinstance(fault, dict):
+            continue
+        component = fault.get("component")
+        where = f"domains/{path.name}/fault_policy.yaml:{fault.get('id')}"
+        if not component:
+            report.refuse(where, "names no component, so there is nothing for it to happen to")
+        elif str(component) not in known:
+            near = sorted(n for n in known if str(component).split("_")[0] in n)
+            report.refuse(
+                where,
+                f"happens to {component!r}, which is not a component, a state or a node of this "
+                f"vehicle" + (f". Did you mean {near}?" if near else ""),
+            )
+
+
 def check_fault_coverage(path: Path, docs: dict[str, dict[str, Any]], report: Report) -> None:
     """A domain's coverage claim must be true, and every domain makes one.
 
@@ -1496,6 +1573,7 @@ def check_domain(
     positions: dict[str, list[str]],
     report: Report,
     thresholds_by_domain: dict[str, set[str]] | None = None,
+    components_elsewhere: set[str] | None = None,
 ) -> None:
     """One `domains/<name>/`, checked against the vocabulary, the graph and the plant contract.
 
@@ -1516,6 +1594,7 @@ def check_domain(
         if loaded is not None:
             docs[filename] = loaded
 
+    check_fault_components(path, docs, node_ids, components_elsewhere or set(), report)
     check_fault_coverage(path, docs, report)
     check_profiles(path, docs, report)
 
@@ -2321,16 +2400,36 @@ def check_domains(
     # open is a claim about `domains/structure/`, and a check that only saw its own directory
     # could not tell a cross-domain interlock from a typo.
     thresholds_by_domain: dict[str, set[str]] = {}
+    # The same reasoning applies to a fault's `component`, and the same surprise arrived with it:
+    # the field may name another domain's article. `CNS-08` is a consumables fault that breaks the
+    # *ECLSS* lithium-hydroxide element, which is the normal shape of a cross-domain fault rather
+    # than an error, so the vehicle's components and states are collected before the loop too.
+    components_elsewhere: set[str] = set()
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
             profiles = load(path / "profiles.yaml", report) or {}
             thresholds_by_domain[path.name] = {
                 str(t.get("id")) for t in profiles.get("thresholds") or [] if t.get("id")
             }
+            parts = load(path / "components.yaml", report) or {}
+            components_elsewhere |= {
+                str(entry["id"])
+                for key in ("components", "state")
+                for entry in (parts.get(key) or [])
+                if isinstance(entry, dict) and entry.get("id")
+            }
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
             present.add(path.name)
-            check_domain(path, node_ids, index, positions, report, thresholds_by_domain)
+            check_domain(
+                path,
+                node_ids,
+                index,
+                positions,
+                report,
+                thresholds_by_domain,
+                components_elsewhere,
+            )
     # ----------------------------------------------------------------------------------
     # Intra-node ordering. A node is advanced by one or more states, and when it is more
     # than one, *which advances first is a modelling decision that nothing declared*.

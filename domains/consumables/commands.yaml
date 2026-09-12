@@ -28,7 +28,8 @@ commands:
   - verb: set_reserve_policy
     argument_schema:
       resource: {type: enum, values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main,
-                                    prop_rcs, pressurant_he, absorber_capacity]}
+                                    prop_rcs, pressurant_he, absorber_capacity_csm,
+                                    absorber_capacity_lm]}
       floor_kg: {type: number, minimum: 0}
       note: {type: string, optional: true, max_length: 200}
     authority: A1
@@ -56,7 +57,8 @@ commands:
   - verb: request_reconciliation
     argument_schema:
       resource: {type: enum, values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main,
-                                    prop_rcs, pressurant_he, absorber_capacity, all]}
+                                    prop_rcs, pressurant_he, absorber_capacity_csm,
+                                    absorber_capacity_lm, all]}
     authority: A0
     gate: {kind: preference, variable: recon_request_enable}
     interlocks: none - reviewed

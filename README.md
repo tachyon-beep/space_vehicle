@@ -39,7 +39,7 @@ python3 tools/plant.py --blackout         # the second clock, and the LM's oppos
 python3 tools/plant.py --state --closed-gate reserve_floor_water_cooling_enable
 python3 tools/generate_help.py            # HELP.md, from the command registries
 
-# the adversary: 118 declared faults, scheduled from the domains' own hazard rates
+# the adversary: 128 declared faults, scheduled from the domains' own hazard rates
 python3 tools/faults.py --seed 20260912                     # the nominal run's fault schedule
 python3 tools/faults.py --seed 20260912 --posture crisis    # x10 hazard, x20 demand, one placed
 python3 tools/faults.py --seed 20260912 --posture degraded  # x5, and one latent primary placed
@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 223 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 226 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -168,21 +168,21 @@ most of it. The linter's SPS figure is 4 % above the flight-measured 15,727 kg (
 SPS firing), which is the expected error from not modelling thrust build-up and tailoff; the
 direction of that error is stated in `check_propulsion` rather than tuned away.
 
-146 channels resolve against the failure chains' clues and the crew perception bound. The phase
+147 channels resolve against the failure chains' clues and the crew perception bound. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 146 channels, 119 states over 42 nodes, 140 thresholds, 58
-verbs and 118 classified events across the eleven directories, with 223 declared debts and every
+**All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
+verbs and 128 classified events across the eleven directories, with 226 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **223** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **226** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **183** the plant
+charging efficiency). The **184** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere. Counting the graph's seven
 took them from being read by nobody to being refusals under `--strict`, which is where a debt that
@@ -617,10 +617,11 @@ produced by the fuel cell and consumed by nothing, so the one number a rationing
 could only go up. The edge that fixes it is `E-CREW-WATER`, and the evidence that it was always
 intended is in the file already — `E-CREW-ATM`'s relation reads "the same rate is the CO2 produced
 and **the water and food consumed**, at the published planning rates". The sentence named the
-consumer; no edge ever declared it. (`absorber_capacity` is the legitimate case and says so in
-`accumulates:`: it is a *consumption counter*, not a tank, so the cartridge is spent when the count
-reaches its rating and the remaining capacity is a subtraction. The name is what made it look like
-a stock that should be drawn.)
+consumer; no edge ever declared it. (`absorber_capacity_csm` and `absorber_capacity_lm` are the
+legitimate case and say so in `accumulates:`: each is a *consumption counter*, not a tank, so the
+cartridge is spent when the count reaches its rating and the remaining capacity is a subtraction.
+The name is what made them look like stocks that should be drawn — and the name is also what hid
+the fact that there were two of them sharing one count, until the LM's faults needed their own.)
 
 The outbound rule is deliberately asymmetric from the inbound one, and the reason is physical: a
 back-edge *out* of a stock still drains it, because the stock's own integrator subtracts the flow
@@ -793,11 +794,11 @@ Apollo has no EVA verb, because depressurisation is `set_vent_valve` and the sui
 because a state machine that is not written down happens to move them. The debt records the shape
 that rule must have, so that whatever writes it does not invent one.
 
-## The diagnostic half of 118 faults was read by nothing
+## The diagnostic half of the faults was read by nothing
 
 Every domain carries a `fault_policy.yaml`, and the linter checked three fields of each entry:
 `component`, `mechanism`, and `perturbs`. It did not read `kind`, `seeding`, `detection` or
-`response` — **the whole diagnostic half of all 118 faults**. A field no tool reads is a field that
+`response` — **the whole diagnostic half of every fault**. A field no tool reads is a field that
 drifts, and these had drifted three ways:
 
 - **Eleven `kind` values with no union**, while `02-canonical-vocabulary.md` §10 had been promising
@@ -1337,23 +1338,46 @@ perturbed by no fault, and they fall into three groups that the registry does no
   `controls.switches`, `prop.thrust_pct_commanded`. The crew or an agent sets them and no physical
   mechanism writes them.
 - **six `estimate` channels** derived from a channel a fault already perturbs.
-- **four measurements — the LM's entire atmosphere.** No fault in `domains/eclss/` touches
-  `lm_cabin_pressure_psia`, `lm_cabin_temp_c`, `lm_co2_pp_mmhg` or `lm_pp_o2_mmhg`, while all eleven
-  faults are written against the CSM's four twins.
+- **nothing at all, as of round 42.** The LM's four atmosphere channels were the previous entry in
+  this list, and they are the exception that proves the comparison is worth making: the same check
+  that produced it is what confirmed the gap had closed, because the domain's claim is now that its
+  exception list is *empty*.
 
-That last group is a real gap. The domain publishes two atmospheres and its own `points.yaml` says
-why — the LM's is separate *"for exactly the phase in which the crew are living in it"* — and then
-in `descent`, `surface` and `ascent_rendezvous`, **27.5 h during which every hour is spent in the
-LM**, no injectable fault can move the air the crew are breathing. The CSM's cabin can leak, lose
-its regulator, saturate its absorber and lose its vent valve; the LM's can do none of those things.
-A leak in the vehicle the crew are actually in is the emergency a crewed scenario most obviously
-wants, and it is the one the policy cannot produce.
+The LM's atmosphere was a real gap while it lasted. The domain publishes two atmospheres and its own
+`points.yaml` says why — the LM's is separate *"for exactly the phase in which the crew are living
+in it"* — and then in `descent`, `surface` and `ascent_rendezvous`, **27.5 h during which every hour
+is spent in the LM**, no injectable fault could move the air the crew were breathing. A leak in the
+vehicle the crew are actually in is the emergency a crewed scenario most obviously wants, and it was
+the one the policy could not produce.
 
-The fix is a design decision rather than a repair, so it is recorded rather than pre-empted: either
-every cabin-specific fault becomes a pair (`ECL-01-csm-cabin-leak` and `ECL-01-lm-cabin-leak`, since
-one leak is in one cabin), or a fault declares which cabins it can affect and the seeding picks one.
-The second is truer to the physics — the mechanism does not know which cabin it is in — and is a
-schema change; the first is mechanical and doubles eleven entries.
+It was closed by pairing rather than by a cabin parameter: **ECL-12 to ECL-21**, ten LM faults
+written against the LM's own channels, because a leak is in one cabin and the pairing is what lets
+the two diverge. The divergences are the content — the LM has no leak-rate channel (so an LM leak
+never appears in `eclss.leak_rate_g_s`, which is derived from the CSM's mass balance), no
+regulator-position channel, a shared `res.o2_remaining_kg`, and a party of two where the CSM's is
+three. `ECL-07-suit-loop-fan-failure` has no twin and should not: the suit loop is one shared
+circuit.
+
+Writing the twins is what exposed the defect underneath them. **The vehicle had one CO2-removal
+counter for two absorbers.** `E-ATM-ABSORB` runs from `cabin_atm` and `E-LM-ATM-ABSORB` from
+`lm_cabin_atm`, and the second edge's own note insisted the difference between them "is the edge's
+endpoints rather than its value" — while both landed on one node, `absorber_capacity`, which deleted
+exactly the distinction the note was defending. A crew on the surface spent the CSM's element; a
+crew back in the CM spent the LM's cartridge. The counter also had **no rating**, so it could be
+spent forever, and the three ratings that would have exposed it were written in two other files
+(`vehicle.yaml#consumables`: CSM element 72 man-hours, LM primary 41, LM secondary 78 with six
+spares) and read by nothing. `eclss.absorber_capacity_pct` — a percentage of a quantity its own
+provenance note said "the corpus never says of what" — divided by nothing, while its sibling note in
+`points.yaml` cited 41 and 78, the *LM's* cartridges, as the denominator of the *CSM's* channel.
+
+The repair is two counters with two ratings (`absorber_capacity_csm` at 72, `absorber_capacity_lm`
+at 41), two stocks with two minimum flows — 2.78e-4 and 5.56e-4 man-hours/s, because the crew split
+up and one crew member is the smallest party that works either — and two channels. It also caught a
+**right number with a wrong reason**: `E-ATM-ABSORB`'s relation called 41 man-hours "a primary LiOH
+cartridge" and applied it to the CSM's edge. The value survives the substitution — man-hours per kg
+is `1/0.03792` at any rating, because a man-hour is *defined* as one crew-hour of removal — which is
+precisely why nobody noticed, and why a later reader would have "corrected" it into a wrong number.
+`E-LM-ATM-ABSORB`'s "the man-hour rating is the same cartridge class" was false for the same reason.
 
 The same comparison also showed that **`service` covers two things a fault treats differently**: a
 *decision*, which no fault writes, and a *conclusion* — `avionics.sensor_health_[class]`,
@@ -1731,7 +1755,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 119 states, 60 edges, 146 channels, 58 verbs — derives the 40-node tick order by importing
+world — 120 states, 60 edges, 147 channels, 58 verbs — derives the 41-node tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

@@ -447,7 +447,36 @@ eclss:
     provenance:
       basis: apollo
       ref: "apollo_diode.md:93"
-      note: "capacity must be a percentage OF a named quantity; the corpus never says of what (corpus-review.md §6)"
+      note: >-
+        capacity must be a percentage OF a named quantity, and the quantity is the CSM element's 72
+        man-hour rating (vehicle.yaml#consumables). The note here used to read "the corpus never
+        says of what (corpus-review.md §6)", which was true when it was written and stopped being
+        true when `vehicle.yaml#consumables.co2_removal` landed with the ratings in it — a debt
+        that outlived its own answer is worse than no note, because it tells the next reader to
+        stop looking
+  - id: eclss.lm_absorber_capacity_pct
+    unit: "%"
+    layer: estimate
+    precision: 1
+    rate_hz: 0.1
+    priority: P4
+    range: [20, 100]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
+    events: ["<20", "predicted breakthrough <1 h"]
+    inputs: [eclss.lm_co2_pp_mmhg]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: >-
+        the LM's own absorber, as a percentage of its 41 man-hour primary cartridge
+        (vehicle.yaml#consumables.co2_removal, NR and PSR). It is a separate channel for the same
+        reason `eclss.lm_cabin_pressure_psia` is: from undocking to docking the two compartments
+        share no air, so one capacity channel would have left the LM's absorber unobservable for
+        exactly the phase in which the crew are breathing from it. The apollo event is the same
+        <20 % because the threshold is a fraction of a rating, not a property of either cartridge
   - id: eclss.leak_rate_g_s
     unit: g/s
     layer: estimate
@@ -2529,7 +2558,7 @@ crew_positions:
 
 open_debts:
   - "**`service` covers two things a fault treats differently.** Twelve of the 22 channels no fault perturbs are `layer: service`, and so are 117 of the channels faults *do* perturb — because the layer holds both a *decision* (`rcs.mode`, `power.load_shed_class`, `controls.switches`: something the crew or an agent set, which no physical mechanism writes) and a *conclusion* (`avionics.sensor_health_[class]`, `avionics.redundancy_disagreement`, `avionics.computer_mode`: something the vehicle computed, which a fault moves immediately). The epistemic mapping is right that both are \"an A with a different subject\" for the contract's purposes, and the contract is not where the difference bites; fault injection is. What would separate them is a field — `origin: commanded | derived` — and until it exists the only way to say a channel is untouchable by any fault is to list it in a `coverage.unperturbed`, which is what all eleven domains now do."
-  - "Two of the LM's atmosphere functions have no channel at all. There is no `lm_absorber_capacity_pct` and no `lm_cabin_regulator_state`, so the LiOH bed and the cabin regulator exist in two cabins and are observable in one. Written here rather than in `domains/eclss/` because it is a registry gap: the domain cannot publish a channel the registry does not hold."
+  - "**Half of the LM's atmosphere registry gap is closed; the other half is now a question rather than a list.** `eclss.lm_absorber_capacity_pct` exists as of round 42, because the vehicle turned out to have two absorbers sharing one counter and the LM's was unobservable — the counter split (`coupling.yaml:absorber_capacity_lm`) and the channel followed it. `lm_cabin_regulator_state` still does not exist, and the reason has changed. It is no longer that the registry has no room: it is that the corpus publishes ONE `cabin_regulator_state` (apollo_diode.md:95) with no vehicle qualifier and says nothing about how the LM's pressure control is built — a two-position regulator like the CSM's, a relief valve, or a continuous bleed. ECL-13, ECL-14 and ECL-19 are injectable without it, because their effect on pressure and ppO2 is observable; what is missing is the easy diagnosis, so on the LM a regulator fault has to be inferred from its signature where the CSM reads a mode. Adding the channel now would mean inventing the mechanism; the question that closes it is which of the three the LM's cabin pressure control is."
   - "**`range_kind` is declared and the check it enables is written; what remains is the judgement
     inside it.** 57 channels carry the field — 43 `band`, 14 `scale` — and the values were assigned
     by evidence rather than by taste: a range with an alarm strictly inside it cannot be a band, so
