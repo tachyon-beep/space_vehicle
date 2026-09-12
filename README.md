@@ -1554,6 +1554,53 @@ decides whether the LM can be heard from the surface at all. `check_answered_deb
 shape: a nested `UNCONFIGURED` whose leaf name is a *configured top-level* declaration of the same
 document.
 
+## The plant's stock integrator had never run, and was wrong three ways
+
+The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
+`lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 120 states, and
+the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
+rules the configuration deliberately does not carry**, so 76 states need code before the plant can
+walk a whole tick.
+
+But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
+first `algebraic` state, so the stock integrator had never executed.** Written, reviewed, and never
+run — and when it was finally exercised it summed `sensitivity * dt` over every incoming edge and
+never read a driver. Handed `lm_cabin_o2_kg` it returned
+
+```
+driver crew_state=1.0  ->  {'lm_cabin_atm': 117.89792}
+driver crew_state=3.0  ->  {'lm_cabin_atm': 117.89792}
+```
+
+The same mass whether one crew member is aboard or three, because the three edges it summed were
+`116.86 Pa per K` (a lag relation between zone temperature and cabin pressure), `1.0 kg O2 per
+kg O2` (a conservation ratio whose flux is the tank's *outflow*, which the ratio does not contain) and
+`0.03792 kg/h per crew`. Adding pascals-per-kelvin to kilograms-per-hour and calling the result a
+mass is not an approximation; it is a dimension error wearing a number.
+
+`stock_flux()` establishes the flux from the edge's own declared unit and **refuses where the unit
+does not establish one**, which turns out to be most of the graph:
+
+| | edges | |
+|---|---|---|
+| computable | 3 | `E-CREW-ATM`, `E-LM-CREW-ATM` at `kg/h per crew`; `E-RAD-WATER` at `kg/s per W` |
+| a ratio whose flow is undeclared | 3 | `E-O2-ECLSS`, `E-LM-O2-ECLSS`, `E-FC-WATER` |
+| a structural relation landing on a stock | 5 | `E-ZONE-ATM`, `E-ZONE-ATM-LM`, `E-PLATE-BAT`, `E-ATM-ABSORB`, `E-LM-ATM-ABSORB` |
+| unset value | 3 | `E-BUS-BAT`, `E-PRESS-PROP`, `E-FC-DRAW-O2`/`H2` |
+
+**Eleven of fourteen stock edges cannot be integrated as written**, and the two kinds need different
+things declared. A ratio needs the *flow* it applies to — the oxygen leaving `o2_csm` through the
+regulator, which is nowhere in the graph. A structural relation needs to stop being an inbound edge:
+a cabin's pressure depends on its temperature and its mass, but its mass does not depend on its
+temperature; those edges land on the stock node because the *channel* hangs off the node. The
+absorber pair is the sharper case, because `man-hours per kg CO2` is a conversion whose driver
+should be the CO2 *removal rate* rather than the cabin's inventory.
+
+The refusals are the output, and they are recorded as a `coupling.yaml:open_debts` entry that names
+all eleven. Where the two repairs diverge — a declared `flux_node` on the edge, or promoting the
+producing state to a channel the edge can read — is a **graph decision rather than a patch**, and it
+is the largest single thing standing between this folder and a plant that walks a tick.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

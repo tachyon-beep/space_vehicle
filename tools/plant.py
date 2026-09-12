@@ -671,6 +671,102 @@ def emit_frame(
     return {name: provided[name] for name in world.frame_fields}
 
 
+SECONDS_PER_HOUR = 3600.0
+
+
+def stock_flux(world: World, edge: Edge, values: dict[str, Any], dt: float) -> float:
+    """What one edge moves into a stock over `dt`, or a named refusal.
+
+    This function exists because the line it replaces was wrong three ways at once and **had never
+    run**. The schedule stops at the first state it cannot compute — an `algebraic` one — long before
+    it reaches any of the vehicle's 24 stock states, so the integrator that every consumable in the
+    mission depends on was written, reviewed and never executed. Handed `lm_cabin_o2_kg` it
+    returned the same 117.89792 kg whether one crew member was aboard or three, because it summed
+    `sensitivity * dt` over every incoming edge and never read a driver. The three edges it summed
+    were `116.86 Pa per K` (a lag relation between zone temperature and cabin pressure),
+    `1.0 kg O2 per kg O2` (a conservation ratio whose flux is the tank's *outflow*, which the ratio
+    does not contain) and `0.03792 kg/h per crew` (a per-hour rate needing a crew count and a 3600).
+    Adding pascals-per-kelvin to kilograms-per-hour and calling the result a mass is not an
+    approximation; it is a dimension error wearing a number.
+
+    So the flux is established from the edge's own declared unit, and where the unit does not
+    establish one the plant refuses instead of guessing. Three cases, and the third is the one the
+    vehicle actually has:
+
+      * **a rate with a time denominator** — `kg/s per W`, `kg/h per crew`. The driver multiplies it
+        and the time basis converts it to per-second. This is the case a stock integrator is for.
+      * **a dimensionless ratio** — `kg O2 per kg O2`. The driver is a *level* and the sensitivity is
+        a transfer fraction, so the flux is (source's own outflow) x ratio, and the outflow belongs to
+        whichever state produces it. The plant cannot recover a flow from a level, so this refuses
+        and names the flow that is owed.
+      * **a structural relation** — `Pa per K`, `J per K`. These land on a stock node because the
+        *channel* hangs off the node, not because anything flows into it: a cabin's pressure depends
+        on its temperature and its mass, but its mass does not depend on its temperature. Summing one
+        into the other is the dimension error above, so this also refuses.
+
+    The refusals are the useful output. Each names the edge and what a correct model would have to
+    declare, which turns the vehicle's largest silent wrongness into a build order.
+    """
+    unit = str((edge.sensitivity or {}).get("unit") or "")
+    tokens = unit.replace("^", "").split()
+    where = f"coupling.yaml:edge {edge.id}"
+
+    if not edge.usable:
+        raise Unconfigured(
+            where,
+            f"drives {edge.target} and carries no sensitivity value, so the plant cannot apply it",
+        )
+
+    per_hour = any(token.endswith("/h") for token in tokens)
+    per_second = any(token.endswith("/s") for token in tokens) or "s" in tokens[1:]
+    if per_hour and per_second:
+        raise Unconfigured(
+            where,
+            f"declares the unit {unit!r}, which names a per-second and a per-hour basis at once, so "
+            "the plant cannot tell which one the sensitivity is in",
+        )
+
+    if not per_hour and not per_second:
+        # Either a same-dimension ratio or a relation between two different quantities, and the
+        # distinction is which side of "per" carries the same unit symbol.
+        sides = unit.split(" per ")
+        shared = (
+            len(sides) >= 2
+            and sides[0].split()
+            and sides[1].split()
+            and sides[0].split()[0] == sides[1].split()[0]
+        )
+        if shared:
+            reason = (
+                f"carries the dimensionless ratio {unit!r} into a stock, so its flux is the "
+                "source's own outflow multiplied by that ratio — and the outflow is a flow this "
+                "edge does not declare. A level cannot be converted into a rate"
+            )
+        else:
+            reason = (
+                f"declares {unit!r}, which is not a flux into a stock: it relates the node's "
+                "quantity to a different physical quantity, and the configuration does not say "
+                "which state produces the flow. Summing it into the stock would add "
+                "incommensurable units"
+            )
+        raise Unconfigured(where, reason)
+
+    driver = values.get(edge.source)
+    if driver is None:
+        raise Unconfigured(
+            where,
+            f"drives {edge.target} and reads {edge.source!r}, which nothing supplies this tick",
+        )
+    if not isinstance(driver, (int, float)):
+        raise Unconfigured(
+            where,
+            f"drives {edge.target} and reads {edge.source!r} as {driver!r}, which is not a number "
+            "the sensitivity can multiply",
+        )
+    flux = float(edge.sensitivity["value"]) * float(driver)
+    return flux * (dt / SECONDS_PER_HOUR if per_hour else dt)
+
+
 def advance(world: World, state: State, values: dict[str, Any], dt: float) -> dict[str, Any]:
     """One state's contribution to a tick, or a named refusal.
 
@@ -709,7 +805,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         quantum = float(state.spec["quantum"])
         total = 0.0
         for edge in incoming:
-            total += float(edge.sensitivity["value"]) * dt
+            total += stock_flux(world, edge, values, dt)
         if abs(total) and abs(total) < quantum:
             # plant.md §4: a flow below the quantum is a modelling error, not a rounding one, and
             # the accumulator must still carry it rather than lose it.

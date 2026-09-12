@@ -1617,6 +1617,37 @@ failure_chains:
 # --------------------------------------------------------------------------------------
 open_debts:
 
+  # Added in round 47, and it is a property of the graph rather than of any one edge: **eleven of
+  # the fourteen edges that land on a stock node cannot be integrated as written.** Writing the
+  # plant's stock integrator is what surfaced it, because the integrator had never run — the
+  # schedule stops at the first `algebraic` state, long before it reaches a stock — and when it was
+  # finally exercised it summed every incoming edge as `sensitivity x dt`. Handed
+  # `lm_cabin_o2_kg` it returned the same mass whether one crew member was aboard or three.
+  #
+  # Three of the eleven are simply unset (E-BUS-BAT, E-PRESS-PROP, E-FC-DRAW-O2 and E-FC-DRAW-H2,
+  # whose values are `UNCONFIGURED` and already debts elsewhere) or a per-hour rate the integrator
+  # can now convert (E-LM-CREW-ATM, E-CREW-ATM and E-RAD-WATER are the three that work). The other
+  # eight divide into two kinds, and each kind needs a different thing declared:
+  #
+  #   * **A ratio whose flow is undeclared** — E-O2-ECLSS and E-LM-O2-ECLSS at `1.0 kg O2 per
+  #     kg O2`, E-FC-WATER at `1.0 kg water per kg reactants`. A dimensionless ratio converts the
+  #     source's *outflow* into the target's inflow, and the outflow belongs to whichever state
+  #     produces it: the oxygen leaves `o2_csm` through the regulator, and the regulator's flow is
+  #     the quantity these edges are missing. The transfer fraction is right; the flow it applies
+  #     to is nowhere in the graph.
+  #   * **A structural relation landing on a stock node** — E-ZONE-ATM and E-ZONE-ATM-LM at
+  #     `116.86 Pa per K`, E-PLATE-BAT at `0.0 J per K`, and E-ATM-ABSORB and E-LM-ATM-ABSORB at
+  #     `26.37 man-hours per kg CO2`. A cabin's pressure depends on its temperature and its mass,
+  #     but its *mass* does not depend on its temperature: these edges land on the stock node
+  #     because the channel hangs off the node, not because anything flows into it. The absorber
+  #     pair is the sharper case — man-hours per kg of CO2 is a conversion, and it needs the CO2
+  #     *removal rate* as its driver rather than the cabin's CO2 inventory.
+  #
+  # The plant refuses all eight by name rather than approximating them, so the build order is now
+  # legible: `plant.py --readiness` cannot reach a stock until these say what drives them. Choosing
+  # between the two repairs — a declared `flux_node` on the edge, or promoting the producing state
+  # to a channel the edge can read — is a graph decision rather than a patch, and it is the next
+  # thing this file owes.
   # This debt named two edges and one coefficient, and the three turned out not to be the same
   # size of thing. E-FC-BUS asked for a "V per W" droop, but the source regulator is specified as
   # a *regulated* output (electrical_diode.md:249: 24-32 V over 25-100 % of 1.2 kW, >=94 %,
