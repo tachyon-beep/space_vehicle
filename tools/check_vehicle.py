@@ -465,6 +465,180 @@ def duplicate_keys(text: str) -> list[tuple[int, str]]:
     return found
 
 
+def rederive(where: str, declared: Any, computation: Any, report: Report) -> None:
+    """A value that states its own arithmetic is re-derived, on every run.
+
+    The idiom is opt-in and it exists because of one edge found by hand: `E-RAD-WATER` declared
+    3.8e-7 while the relation beside it computed `1/2.45e6 = 4.082e-7`, and the two had disagreed by
+    7 % since the edge was written. A relation is prose and prose cannot be evaluated — but a
+    `computation` can, so a value that states one in a form the linter can evaluate is a value that
+    cannot drift from its own derivation.
+
+    It is written as a function rather than inline in the coupling check because three more
+    declarations arrived with the same shape and one of them was the same defect: `mission.yaml`'s
+    `total_ticks_provenance` gave "192.0 h x 3600 s/h x 50 Hz = 34,560,000 ticks" in a *sentence*,
+    so the vehicle's tick count — the figure the whole review has been pricing — existed only as
+    prose. The expression is arithmetic over literals and nothing else: no names, no calls, no
+    attribute access, so the configuration cannot become executable.
+    """
+    if computation is None:
+        return
+    if not isinstance(declared, (int, float)):
+        report.refuse(where, "declares a `computation` and no numeric value to check it against")
+        return
+    try:
+        if not re.fullmatch(r"[0-9eE+\-*/(). \t]+", str(computation)):
+            raise ValueError("not a numeric expression")
+        computed = eval(str(computation), {"__builtins__": {}}, {})  # noqa: S307
+    except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+        report.refuse(where, f"has a `computation` the linter cannot evaluate: {exc}")
+        return
+    if abs(computed - float(declared)) > abs(float(declared)) * 0.01 + 1e-12:
+        report.refuse(
+            where,
+            f"declares {declared!r} and its computation {computation!r} gives {computed:.6g}: a "
+            "derived value that does not re-derive is a value nobody has checked",
+        )
+
+
+def check_met_clock(doc: dict[str, Any], report: Report) -> None:
+    """The mission's clock is derived from the phase ladder three times, and none was checked.
+
+    `mission.yaml` states the same total in three places and each says the linter holds it:
+    `phase_total_check`'s note reads "the linter re-derives this and refuses a mismatch",
+    `total_duration_provenance` reads "sum of the phase durations below; the linter refuses a build
+    where they disagree", and `total_ticks_provenance` gives the tick count as a sentence. The
+    linter does re-derive the ladder — the trajectory checks trip the moment a phase duration moves
+    — but **none of the three declarations was read**: `sums_to_h` set to 999.0 passes silently.
+
+    That is worse than an unchecked number, because the note tells the next reader not to check it
+    by hand. So all three are held to the ladder now, and each states its arithmetic in a form the
+    linter evaluates rather than in a sentence.
+    """
+    phases = doc.get("phases") or []
+    if not phases:
+        return
+    durations = [p.get("duration_h") for p in phases]
+    unset = [
+        p.get("id")
+        for p, d in zip(phases, durations, strict=True)
+        if not isinstance(d, (int, float))
+    ]
+    if unset:
+        report.debt("mission.yaml:phases", f"has phases with no duration: {unset}")
+        return
+    total = float(sum(durations))
+
+    block = doc.get("phase_total_check")
+    if not isinstance(block, dict):
+        report.refuse(
+            "mission.yaml",
+            "has no `phase_total_check`, so nothing states what the phase ladder is supposed to "
+            "sum to",
+        )
+    else:
+        where = "mission.yaml:phase_total_check"
+        if block.get("sums_to_h") != total:
+            report.refuse(
+                where,
+                f"declares {block.get('sums_to_h')!r} h and the phases sum to {total:g} h",
+            )
+        rederive(where, block.get("sums_to_h"), block.get("computation"), report)
+
+    provenance = doc.get("met_epoch_provenance") or {}
+    declared = provenance.get("total_duration_h")
+    if declared != total:
+        report.refuse(
+            "mission.yaml:met_epoch_provenance",
+            f"declares total_duration_h {declared!r} and the phases sum to {total:g} h. MET is an "
+            "integer tick count from the epoch, so a duration that disagrees with the ladder is a "
+            "mission whose clock runs out somewhere other than where the phases end",
+        )
+    ticks = provenance.get("total_ticks")
+    tick_hz = provenance.get("tick_hz")
+    if not isinstance(ticks, (int, float)) or not isinstance(tick_hz, (int, float)):
+        report.refuse(
+            "mission.yaml:met_epoch_provenance",
+            "does not state `total_ticks` and `tick_hz` as numbers, so the vehicle's tick count — "
+            "the figure the whole review prices — exists only as a sentence in a relation",
+        )
+    else:
+        expected = total * 3600.0 * float(tick_hz)
+        if abs(float(ticks) - expected) > 1.0:
+            report.refuse(
+                "mission.yaml:met_epoch_provenance",
+                f"declares {ticks!r} ticks and {total:g} h at {tick_hz} Hz is {expected:,.0f}",
+            )
+        rederive(
+            "mission.yaml:met_epoch_provenance.total_ticks_provenance",
+            ticks,
+            (provenance.get("total_ticks_provenance") or {}).get("computation"),
+            report,
+        )
+
+
+def absorbed_keys(text: str) -> list[tuple[int, str, int]]:
+    """Keys that were written where a block scalar's prose lives, and are therefore text.
+
+    `duplicate_keys` above describes this accident and catches the half of it that *collides*: a
+    block scalar's content indented to the same depth as the list item or mapping that follows, so
+    the item is absorbed and its keys overwrite the entry above. That check needs a clash to fire.
+
+    **The other half is silent**, and it is the half that survived: when the absorbed keys are new,
+    nothing collides, nothing is replaced, and the declaration simply does not exist. Two were
+    found this way.
+
+    `coupling.yaml`'s `C-WATER-BUDGET` had
+
+        note: >-
+          ...a temperature rise rather than a valve closing.
+          stability:
+            hysteresis_required: false
+
+    — so the cycle's `stability` was prose, and the linter's own relay-oscillation rule read it as
+    absent. It passed only because no member of that cycle happens to be latched, which is a
+    coincidence rather than a declaration: the author wrote the field, and the file lost it.
+
+    `domains/consumables/components.yaml`'s `reconciliation` lost **two** the same way — its
+    `on_mismatch` rule ("publish a RECONCILIATION_MISMATCH event and leave both numbers alone") and
+    its whole `provenance` block, so the vehicle's rule about never rewriting the ledger was a
+    sentence in a note that no reader of the parsed document could reach.
+
+    The shape is unambiguous and needs no tolerance: a bare `key:` line at exactly the indentation
+    a block scalar's content sits at, followed by a line indented deeper. Prose does not do that;
+    a `key: value` in a sentence stays on one line. Three instances existed in the corpus when this
+    check was written and all three were accidents, so it carries no exemption list — an intentional
+    YAML example inside a note has to be indented out of the scalar's own content column, and that
+    is the right price.
+    """
+    found: list[tuple[int, str, int]] = []
+    lines = text.split("\n")
+    for index, line in enumerate(lines[:-1]):
+        match = re.match(r"^(\s+)([a-z_][a-z0-9_]*):\s*$", line)
+        if not match:
+            continue
+        indent, key = len(match.group(1)), match.group(2)
+        following = lines[index + 1]
+        if not following.strip():
+            continue
+        if len(following) - len(following.lstrip()) <= indent:
+            continue
+        # Walk back for the block scalar this line sits inside, stopping at anything shallower.
+        for above in range(index - 1, max(-1, index - 80), -1):
+            previous = lines[above]
+            if not previous.strip():
+                continue
+            opener = re.match(r"^(\s*)[a-z_][a-z0-9_]*:\s*[>|][-+]?\s*$", previous)
+            if opener:
+                if len(opener.group(1)) < indent:
+                    found.append((index + 1, key, above + 1))
+                break
+            shallower = re.match(r"^(\s*)\S", previous)
+            if shallower and len(shallower.group(1)) < indent:
+                break
+    return found
+
+
 def load(path: Path, report: Report) -> dict[str, Any] | None:
     if not path.exists():
         report.refuse(path.name, "not present")
@@ -475,6 +649,13 @@ def load(path: Path, report: Report) -> dict[str, Any] | None:
             f"{path.name}:{line}",
             f"writes {trail!r} a second time in the same mapping. The last one wins and the first "
             "is silently replaced, which is how an absorbed list item destroys the entry above it",
+        )
+    for line, key, opener in absorbed_keys(text):
+        report.refuse(
+            f"{path.name}:{line}",
+            f"writes {key!r} at the indentation of the block scalar opened on line {opener}, so it "
+            "is prose rather than a key and the declaration does not exist in the parsed document. "
+            "Dedent it to the level of its siblings",
         )
     try:
         data = yaml.safe_load(text)
@@ -1024,29 +1205,7 @@ def check_coupling(
         sensitivity = edge.get("sensitivity") or {}
         computation = sensitivity.get("computation")
         value = sensitivity.get("value")
-        if computation is not None:
-            if not isinstance(value, (int, float)):
-                report.refuse(
-                    where, "declares a `computation` and no numeric value to check it against"
-                )
-            else:
-                try:
-                    # Only arithmetic over literals: no names, no calls, no attribute access.
-                    if not re.fullmatch(r"[0-9eE+\-*/(). \t]+", str(computation)):
-                        raise ValueError("not a numeric expression")
-                    computed = eval(str(computation), {"__builtins__": {}}, {})  # noqa: S307
-                except Exception as exc:  # noqa: BLE001 - any failure is a refusal
-                    report.refuse(where, f"has a `computation` the linter cannot evaluate: {exc}")
-                else:
-                    if not isinstance(value, (int, float)):
-                        pass
-                    elif abs(computed - float(value)) > abs(float(value)) * 0.01 + 1e-12:
-                        report.refuse(
-                            where,
-                            f"declares {value!r} and its computation {computation!r} gives "
-                            f"{computed:.6g}: a derived value that does not re-derive is a value "
-                            "nobody has checked",
-                        )
+        rederive(where, value, computation, report)
 
         # Conservation is the one invariant a linter can check without a plant.
         #
@@ -4554,6 +4713,7 @@ def main(argv: list[str] | None = None) -> int:
         if channels is not None:
             check_objectives(mission, registry, report)
         check_trajectory(mission, report)
+        check_met_clock(mission, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.
     all_verbs: dict[str, dict[str, Any]] = {}

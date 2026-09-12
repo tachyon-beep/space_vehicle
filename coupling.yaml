@@ -1468,8 +1468,8 @@ cycles:
       convention as C-REACTANT-DRAW, and it matters for the same reason: a dry feed does not
       stop the heat, it only stops the rejection, so the failure mode of this cycle running
       out is a temperature rise rather than a valve closing.
-      stability:
-        hysteresis_required: false
+    stability:
+      hysteresis_required: false
 
 # --------------------------------------------------------------------------------------
 # Failure chains, as data. apollo_diode.md:325-343 gives fifteen as prose: primary fault,

@@ -1470,6 +1470,54 @@ So the prose stays — the reasoning was mostly right — and the number becomes
 superlative is the claim that rots while the domain that made it never moves. Each of the five new
 refusals was verified by breaking a copy of the definition.
 
+## A declaration can be swallowed by the note above it
+
+`duplicate_keys` was written for this accident and describes it: a block scalar's content indented
+to the same depth as the mapping that follows, so the entry is absorbed into the prose. It catches
+the half of the accident that **collides** — where the absorbed keys overwrite the entry above, and
+the last one wins. That check needs a clash.
+
+**The other half is silent, and it survived.** When the absorbed keys are new, nothing is replaced,
+the YAML parses, the linter composes, and the declaration simply does not exist. Two were found by
+scanning the source for the shape — a bare `key:` line at exactly the indentation a block scalar's
+content sits at, followed by a line indented deeper:
+
+- **`coupling.yaml`'s `C-WATER-BUDGET`** had `stability: hysteresis_required: false` inside its own
+  `note`. The linter's relay-oscillation rule therefore read the cycle as having no stability
+  declaration — and passed, because it fires only when a member is latched and no member of that
+  cycle happens to be. A pass by coincidence rather than by declaration is the worst kind, because
+  it looks like evidence.
+- **`consumables/components.yaml`'s `reconciliation`** lost **two**: its `on_mismatch` rule
+  ("publish a RECONCILIATION_MISMATCH event and leave both numbers alone") and its entire
+  `provenance` block. The vehicle's rule about never rewriting the ledger was a sentence inside a
+  string that no reader of the parsed document could reach.
+
+The check is `absorbed_keys`, it runs at load time on the source rather than on the parsed document
+— the parsed document has already lost the evidence — and it carries no exemption list: three
+instances existed and all three were accidents. An intentional YAML example inside a note has to be
+indented out of the scalar's own content column, which is the right price for catching this.
+
+## The mission's clock said the linter checked it
+
+`mission.yaml` states the same total three times and each statement claims the linter holds it:
+
+| declaration | its own words | read? |
+|---|---|---|
+| `phase_total_check.sums_to_h` | "the linter re-derives this and refuses a mismatch" | **no** |
+| `met_epoch_provenance.total_duration_h` | "the linter refuses a build where they disagree" | **no** |
+| `met_epoch_provenance.total_ticks_provenance.relation` | "192.0 h x 3600 s/h x 50 Hz = 34,560,000 ticks" | **no** |
+
+The linter *does* re-derive the ladder — the trajectory and Kepler checks trip the moment a phase
+duration moves — but not one of the three declarations was read: `sums_to_h: 999.0` passed in
+silence. **That is worse than an unchecked number, because the sentence tells the next reader not to
+check it by hand.**
+
+`check_met_clock` holds all three to the ladder, and the tick count stops being a sentence:
+`total_ticks: 34560000` with `computation: "192.0 * 3600 * 50"`, and `phase_total_check` gets the
+same treatment with the eight durations added in the open. The `computation` evaluator that had
+lived inline in the coupling check is now a shared `rederive()`, because this is the same defect
+`E-RAD-WATER` produced — a value whose arithmetic exists only in prose beside it.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

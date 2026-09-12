@@ -45,9 +45,11 @@ met_epoch_provenance:
     relation: "sum of the phase durations below; the linter refuses a build where they disagree"
 
   tick_hz: 50
+  total_ticks: 34560000
   total_ticks_provenance:
     basis: derived
-    relation: "192.0 h x 3600 s/h x 50 Hz = 34,560,000 ticks, which is the figure review-findings.md §13 has been pricing"
+    computation: "192.0 * 3600 * 50"
+    relation: "the phase ladder's 192.0 h at 3600 s/h and the plant's 50 Hz tick, which is the figure review-findings.md §13 has been pricing. It was a sentence rather than a value until round 45, and the linter could not tell whether it was still true — nor whether `total_duration_h` above still agreed with the phases, which is the half that would have moved first"
 
 # --------------------------------------------------------------------------------------
 # Crew. Two fly to the surface; three are aboard until the LM separates. Metabolic loads
@@ -247,7 +249,8 @@ phases:
 phase_total_check:
 
     sums_to_h: 192.0
-    note: "73.0 + 24.5 + 2.5 + 21.5 + 3.5 + 7.5 + 58.5 + 1.0; the linter re-derives this and refuses a mismatch"
+    computation: "73.0 + 24.5 + 2.5 + 21.5 + 3.5 + 7.5 + 58.5 + 1.0"
+    note: "the eight phase durations in ladder order, added in the open so that the total is a derivation rather than a restatement. It said \"the linter re-derives this and refuses a mismatch\" until round 45, and the linter did not: setting `sums_to_h` to 999.0 passed silently, which is worse than an unchecked number because the sentence tells the next reader not to check it by hand. It is checked now, against both the phases and the arithmetic above"
 
 # --------------------------------------------------------------------------------------
 # The execution posture. This axis is the one `mission_diode.md` supplied and nothing else in

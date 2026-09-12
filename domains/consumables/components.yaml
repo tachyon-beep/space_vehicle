@@ -337,10 +337,10 @@ reconciliation:
     uncertainty, which differs per resource and per sensor. A single number here would be the
     invented-threshold failure the whole artifact is built to avoid, so the tolerance is
     declared per resource as a debt rather than chosen once.
-    on_mismatch:
-      action: "publish a RECONCILIATION_MISMATCH event and leave both numbers alone"
-      never: "rewrite the ledger, or adjust the observation, or average them"
-    provenance:
-      basis: apollo
-      ref: "consumables_diode.md:60-64"
-      note: "a mismatch is evidence, not permission to silently rewrite the ledger. Any correction must be an authorised adjustment carrying evidence, reason, signer and before/after values"
+  on_mismatch:
+    action: "publish a RECONCILIATION_MISMATCH event and leave both numbers alone"
+    never: "rewrite the ledger, or adjust the observation, or average them"
+  provenance:
+    basis: apollo
+    ref: "consumables_diode.md:60-64"
+    note: "a mismatch is evidence, not permission to silently rewrite the ledger. Any correction must be an authorised adjustment carrying evidence, reason, signer and before/after values"
