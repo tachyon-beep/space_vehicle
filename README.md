@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 220 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 222 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 146 channels, 119 states over 42 nodes, 140 thresholds, 58
-verbs and 118 classified events across the eleven directories, with 220 declared debts and every
+verbs and 118 classified events across the eleven directories, with 222 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **220** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **222** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1183,6 +1183,44 @@ and 25 loads. The load budget itself closes exactly (CSM 1723 W, LM 1007 W again
 totals), and that closure is now one of the things a check could hold — the same shape as mass
 closure, which the linter has enforced since the beginning. It is not held yet, and that is recorded
 rather than implied.
+
+## The power inventory's arithmetic, and a field that means two things
+
+Round 36 linked the two views of the electrical inventory and left the *relationships* owed.
+They are held now, and the shape is the mass closure's, one domain over: the per-vehicle demand
+sums against the declared totals (CSM 1723 W, LM 1007 W — they closed before and nothing was
+keeping them closed), every load sits on a bus belonging to its own vehicle, the source capacity
+presenting to a vehicle covers its connected load, and the batteries' `ah × v_nominal` against the
+energy the vehicle carries.
+
+**That last one is the one with teeth**, because `power.battery_soc_pct` is a percentage whose
+denominator was declared nowhere and `battery_charge_j` is a stock with no capacity — so what the
+vehicle carries in joules existed only as a product nobody computed. It is declared now, and the LM's
+is declared in **three** parts: the descent batteries are jettisoned with the descent stage, so
+`lm_ascent_stage` flies on 16,576 Wh alone against a 3.5-hour phase, and the split between the
+stages is the number that decides whether the ascent can be flown.
+
+**And the check that could not be written is worth more than the four that could.** Chasing the
+sweep's top hit — `range`, 85 declarations, read by nothing — turned up what looked like three dead
+alarms. `power.battery_soc_pct` declares `range: [40, 100]` and three thresholds watch it at `<30`
+and `<15`; `power.dc_bus_a_v` ranges 27.0–30.5 with an event at `<26.5`; `power.battery_temp_c`
+ranges 10–40 with an event at `>45`. All three looked like a channel that cannot hold the values its
+own alarms require — the bus-tie `bool` again, one domain over.
+
+They are all correct, and the reason is that **`range` carries two meanings and nothing says which.**
+On a physical channel it is the *acceptable operating band* and every event fires **outside** it. On a
+reserve channel it is the **full scale** and the events fire **inside** it —
+`rcs.propellant_remaining_pct` ranges 0–100 with a reserve at `<25`, which is inside a full scale and
+correct. Both readings are right, the two are indistinguishable from the data, and a rule of the form
+"an alarm must lie outside its channel's range" would refuse 34 legitimate thresholds. So the honest
+output is not a check but a debt: `range_kind: band | scale`, and until it exists `range` is
+documentation no check can use. Two smaller conventions sit in the same field — `[True, True]` for a
+boolean channel and `[null, null]` for unbounded — and both are conventions rather than declarations.
+
+The general shape, which is why it is written up rather than fixed: **a field with two legitimate
+readings cannot be checked, and the way to tell is to write the check and watch it refuse things that
+are right.** The first rule tried here would have refused a third of the thresholds in the vehicle,
+and every one of them was doing exactly what it should.
 
 ## Authoring convention: no flow mappings
 

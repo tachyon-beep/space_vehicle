@@ -576,6 +576,18 @@ load_budget:
 
   csm_total_demand_w: 1723
   lm_total_demand_w: 1007
+  # **The denominator `power.battery_soc_pct` never had.** The channel is a percentage and nothing
+  # said a percentage *of what*: `battery_charge_j` is a stock with no capacity, and the batteries'
+  # `ah` and `v_nominal` were read by nothing. These are the products, summed per vehicle.
+  #
+  # The LM's figure is a total and not a *simultaneous* one: the four descent batteries are
+  # jettisoned with the descent stage, so `lm_ascent_stage` flies on the two ascent batteries alone
+  # — 16,576 Wh, which is 16.5 h of the LM bus at full draw against an `ascent_rendezvous` phase of
+  # 3.5 h. Both halves are recorded because the interesting number is the smaller one.
+  csm_battery_energy_wh: 3360
+  lm_battery_energy_wh: 61376
+  lm_battery_energy_ascent_stage_wh: 16576
+  lm_battery_energy_descent_stage_wh: 44800
   provenance:
     basis: derived
     relation: >-

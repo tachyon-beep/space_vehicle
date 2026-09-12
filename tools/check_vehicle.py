@@ -2750,6 +2750,149 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
     )
 
 
+def check_power_inventory(root: Path, report: Report) -> None:
+    """The power domain's quantities, related to each other rather than merely declared.
+
+    `demand_w`, `inrush_w`, `bus`, `rated_w`, `ah` and `v_nominal` were read by nothing — 17
+    components and 25 loads — so the whole quantitative inventory was a set of numbers with no
+    arithmetic between them. The linter has enforced the *mass* closure since the beginning; this is
+    the same check one domain over, and the load budget happens to close (CSM 1723 W, LM 1007 W)
+    with nothing keeping it closed.
+
+    Four relationships, and the fourth is the one with teeth: `power.battery_soc_pct` is a
+    percentage whose denominator was declared nowhere, and `battery_charge_j` is a stock with no
+    capacity, so what the vehicle carries in joules existed only as a product nobody computed.
+    """
+    power = load(root / "domains" / "power" / "components.yaml", report) or {}
+    loads = power.get("loads") or []
+    components = power.get("components") or []
+    budget = power.get("load_budget") or {}
+    if not loads or not components or not budget:
+        report.debt(
+            "domains/power/components.yaml",
+            "has no loads, components or load_budget, so the power inventory relates to nothing",
+        )
+        return
+
+    # 1. The demand closes, per vehicle, against the total the file states.
+    by_vehicle: dict[str, int] = {}
+    for row in loads:
+        by_vehicle[str(row.get("vehicle"))] = by_vehicle.get(str(row.get("vehicle")), 0) + int(
+            row.get("demand_w") or 0
+        )
+    for vehicle, total in sorted(by_vehicle.items()):
+        declared = budget.get(f"{vehicle}_total_demand_w")
+        if not isinstance(declared, (int, float)):
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"states no total for {vehicle!r}, whose loads sum to {total} W",
+            )
+        elif int(declared) != total:
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"declares {vehicle}_total_demand_w as {declared} and its loads sum to {total} W. "
+                "This is the mass closure's check one domain over: a stated total that does not "
+                "equal its parts is a vehicle whose demand nobody has added up",
+            )
+
+    # 2. A load sits on a bus, and the bus belongs to the same vehicle as the load.
+    buses = {str(c.get("id")): str(c.get("vehicle")) for c in components if c.get("class") == "bus"}
+    for row in loads:
+        bus = str(row.get("bus"))
+        if bus not in buses:
+            report.refuse(
+                f"domains/power/components.yaml:load {row.get('id')}",
+                f"sits on bus {bus!r}, which no component of class `bus` declares",
+            )
+        elif buses[bus] != str(row.get("vehicle")):
+            report.refuse(
+                f"domains/power/components.yaml:load {row.get('id')}",
+                f"is a {row.get('vehicle')} load on {bus!r}, which is a {buses[bus]} bus",
+            )
+
+    # 3. The sources cover the connected load, per vehicle. Not per bus: which bus a source feeds
+    #    is a routing decision the tie makes and the file does not state, so the honest bound is
+    #    the vehicle's own total against the capacity presenting to it.
+    capacity: dict[str, int] = {}
+    for cell in components:
+        if cell.get("class") == "source":
+            # A source feeds the vehicle whose bus band its output sits in.
+            for bus_id, vehicle in buses.items():
+                band = next(
+                    (c.get("v_band") for c in components if str(c.get("id")) == bus_id), None
+                )
+                out = cell.get("bus_v")
+                if (
+                    isinstance(band, list)
+                    and isinstance(out, list)
+                    and out[0] <= band[1]
+                    and out[1] >= band[0]
+                ):
+                    capacity[vehicle] = capacity.get(vehicle, 0) + int(cell.get("rated_w") or 0)
+    for vehicle, total in sorted(by_vehicle.items()):
+        if vehicle in capacity and capacity[vehicle] < total:
+            report.refuse(
+                "domains/power/components.yaml:components",
+                f"presents {capacity[vehicle]} W of source capacity to {vehicle!r} against {total} W "
+                "of connected load",
+            )
+
+    # 4. The energy the batteries carry, which is the denominator `battery_soc_pct` never had.
+    energy: dict[str, int] = {}
+    for cell in components:
+        if cell.get("class") == "storage":
+            ah, volts = cell.get("ah"), cell.get("v_nominal")
+            if not isinstance(ah, (int, float)) or not isinstance(volts, (int, float)):
+                report.refuse(
+                    f"domains/power/components.yaml:component {cell.get('id')}",
+                    f"is a battery with ah={ah!r} and v_nominal={volts!r}, so its energy cannot be "
+                    "computed and the state of charge has no denominator",
+                )
+                continue
+            group = str(cell.get("id", "")).rsplit("_", 1)[0]
+            energy[group] = energy.get(group, 0) + int(ah * volts)
+    # Grouped by vehicle, and by *substring* rather than suffix: the groups are named
+    # `battery_csm`, `battery_lm_ascent` and `battery_lm_descent`, and only the first of those ends
+    # with its vehicle's name. The first version of this used `endswith` and summed the LM's cells
+    # to zero, which is the kind of error the check itself exists to catch one level up.
+    per_vehicle: dict[str, int] = {}
+    for group, total in energy.items():
+        vehicle = "csm" if "csm" in group else "lm"
+        per_vehicle[vehicle] = per_vehicle.get(vehicle, 0) + total
+    for vehicle, total in sorted(per_vehicle.items()):
+        declared = budget.get(f"{vehicle}_battery_energy_wh")
+        if not isinstance(declared, (int, float)):
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"states no battery energy for {vehicle!r}, whose cells carry {total} Wh",
+            )
+        elif int(declared) != total:
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"declares {vehicle}_battery_energy_wh as {declared} and its cells carry {total} Wh "
+                "(ah x v_nominal)",
+            )
+    # The staged split is a claim about which stage carries which cells, and it has to add up.
+    asc = budget.get("lm_battery_energy_ascent_stage_wh")
+    desc = budget.get("lm_battery_energy_descent_stage_wh")
+    lm = budget.get("lm_battery_energy_wh")
+    if all(isinstance(v, (int, float)) for v in (asc, desc, lm)):
+        if asc + desc != lm:
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"declares the LM's ascent stage at {asc} Wh and its descent stage at {desc} Wh, "
+                f"which is {asc + desc} against a stated total of {lm}. The descent batteries are "
+                "jettisoned with the descent stage, so the split is the number that decides whether "
+                "the ascent can be flown",
+            )
+        if asc != energy.get("battery_lm_ascent", asc):
+            report.refuse(
+                "domains/power/components.yaml:load_budget",
+                f"declares the ascent stage at {asc} Wh and the ascent cells carry "
+                f"{energy.get('battery_lm_ascent')} Wh",
+            )
+
+
 def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """One machine, two files, and no sentence saying so.
 
@@ -3600,22 +3743,23 @@ def main(argv: list[str] | None = None) -> int:
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)
-        if mission is not None:
-            check_mission(mission, vehicle, report)
-            check_scenario_postures(mission, report)
-            check_blackout(mission, report)
-            check_landing_site(mission, report)
-            if channels is not None:
-                check_mission_bindings(channels, mission, registry, report, vehicle)
-                check_crew_bindings(
-                    mission,
-                    vehicle,
-                    registry,
-                    report,
-                    {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
-                )
-            check_propulsion(mission, vehicle, report)
-            check_trajectory(mission, report)
+    check_power_inventory(root, report)
+    if mission is not None:
+        check_mission(mission, vehicle, report)
+        check_scenario_postures(mission, report)
+        check_blackout(mission, report)
+        check_landing_site(mission, report)
+        if channels is not None:
+            check_mission_bindings(channels, mission, registry, report, vehicle)
+            check_crew_bindings(
+                mission,
+                vehicle,
+                registry,
+                report,
+                {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
+            )
+        check_propulsion(mission, vehicle, report)
+        check_trajectory(mission, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.
     all_verbs: dict[str, dict[str, Any]] = {}
