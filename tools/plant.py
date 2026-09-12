@@ -126,6 +126,7 @@ class Edge:
     target: str
     kind: str
     sensitivity: dict[str, Any]
+    advances: str | None = None
 
     @property
     def usable(self) -> bool:
@@ -187,6 +188,7 @@ def load_world(root: Path) -> World:
             target=str(e["to"]),
             kind=str(e.get("kind")),
             sensitivity=e.get("sensitivity") or {},
+            advances=e.get("advances"),
         )
         for e in coupling.get("edges") or []
     ]
@@ -760,7 +762,18 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
     if owed and state.spec.get(owed[0]) in (None, "UNCONFIGURED"):
         raise Unconfigured(f"{where}.{owed[0]}", owed[1])
 
-    incoming = [e for e in world.edges if e.target == state.node and e.id not in world.back_edges]
+    # `advances` first, node second. A node can carry more than one state an edge drives —
+    # `cabin_atm` carries four gas masses and a pressure — and resolving by node alone handed every
+    # one of them the same edge list, so each gas integrated every other gas's flux. Where the
+    # declaration is absent the node is a singleton (the linter refuses otherwise), so the node test
+    # is still the whole answer.
+    incoming = [
+        e
+        for e in world.edges
+        if e.target == state.node
+        and e.id not in world.back_edges
+        and (e.advances is None or e.advances == state.id)
+    ]
     if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming:
         raise Unconfigured(
             where, f"is a {state.method} with no incoming edge, so nothing drives it"

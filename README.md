@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 243 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 245 declared debts and every
+verbs and 128 classified events across the eleven directories, with 243 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **243** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1606,6 +1606,55 @@ linter reports each of the eight as a named debt, the plant refuses the same eig
 words, and **237 became 245.** Where the two repairs diverge — a declared `flux_node` on the edge, or promoting the
 producing state to a channel the edge can read — is a **graph decision rather than a patch**, and it
 is the largest single thing standing between this folder and a plant that walks a tick.
+
+## An edge has to say which state it advances
+
+Ten of the vehicle's 41 nodes hold more than one state, and the plant resolved a state's drivers **by
+node**. On `cabin_atm`, which holds four gas masses, `csm_cabin_o2_kg`, `csm_cabin_n2_kg`,
+`csm_cabin_co2_kg` and `csm_cabin_h2o_kg` were all handed the same three edges — the oxygen supply,
+the crew's CO2 production and a pressure/temperature relation. Every gas integrated every other gas's
+flux, and a nitrogen state that nothing supplies would have been filled by the crew's breathing.
+
+`advances` names the state an edge drives, and the linter requires it wherever a node holds more than
+one state a value can move. It is required rather than inferred because **the inference is exactly
+what was wrong**: "the only state on this node" is true today and stops being true the moment a second
+state lands, silently and in the direction of the plant integrating the wrong thing. The result:
+
+```
+csm_cabin_o2_kg        incoming ['E-O2-ECLSS']
+csm_cabin_co2_kg       incoming ['E-CREW-ATM']
+csm_cabin_n2_kg        incoming []
+csm_cabin_pressure_pa  incoming ['E-ZONE-ATM']
+```
+
+### Two rules that refused the right answer before they accepted it
+
+Both versions are worth keeping, because the failure mode is the one this folder keeps meeting.
+
+The first set of candidate states was the methods that read incoming edges — `stock`, `lag`, `delay`,
+`dynamics` — on the theory that only those are ambiguous *for the plant*. That **refused the one true
+answer**: `E-ZONE-ATM` carries the cabin's dP/dT, so the state it drives is `csm_cabin_pressure_pa`,
+which is `algebraic` and was excluded. A rule that refuses the correct declaration is more expensive
+than no rule, because the next author bends the data to satisfy it.
+
+The second set was *every* state, and it demanded that an executive command to `engine_main` declare
+whether it advances `sps_state`, `dps_state` or `aps_state`. It advances whichever the command
+names — a command is not a flux. So the set is the methods an edge's **value** can drive, which
+excludes `discrete` and `service` because those are advanced by transitions and by authority. The
+test is whether the edge's number is what moves the state.
+
+### The pressure moved onto the cabin node
+
+Moving `csm_cabin_pressure_pa` off the `internal` sentinel and onto `cabin_atm` is what gave
+`E-ZONE-ATM` something true to advance. It is also where the state belongs: a pressure is a property
+of the node's contents, and the graph had nowhere to put the cabin's dP/dT — so the edge carried it
+into the *mass* node instead, where a cabin's pressure depends on its temperature and its mass but its
+mass does not depend on its temperature. The relation is now stated once, in the state that computes
+it, and the 116.86 Pa per kelvin figure survives there.
+
+**Two of round 48's eight structural stock-edge defects turned out not to be defects at all** — they
+were edges that landed on a stock node's *channel* while driving something else, and `advances` is
+what makes that visible. Six structural and four unset remain. **245 became 243.**
 
 ## Authoring convention: no flow mappings
 

@@ -281,12 +281,14 @@ edges:
 
   # --- consumables into everything ----------------------------------------------------
   - id: E-O2-FC
+    advances: fuel_cell_power_w   # reactant availability sets the cell's output, which is what the node's power state holds
     from: o2_csm
     to: fuel_cell
     kind: rate
     sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "8 kg O2 per kg H2 consumed, charged exactly to the O2 stock",
     at: nominal, note: "exact stoichiometric draw; the O2 inventory is shared between ECLSS and the fuel cells (apollo_diode.md:780-784), which is the coupling that makes Apollo 13 possible"}
   - id: E-H2-FC
+    advances: fuel_cell_power_w   # as E-O2-FC; the cell is limited by whichever reactant runs out first and both edges drive the same output
     from: h2_csm
     to: fuel_cell
     kind: rate
@@ -384,32 +386,30 @@ edges:
     sensitivity: {value: UNCONFIGURED, unit: "V per J", basis: UNCONFIGURED,
     at: nominal, note: "LM and backup source; battery SOC and temperature both move the terminal voltage"}
   - id: E-O2-ECLSS
+    # `advances` because `csm` is not a node state's only occupant:
+    # the cryogenic supply's oxygen enters the CSM cabin, and the node carries more than one state an edge can drive.
+    advances: csm_cabin_o2_kg
     from: o2_csm
     to: cabin_atm
     kind: conserve
     sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
   - id: E-LM-O2-ECLSS
+    # `advances` because `lm` is not a node state's only occupant:
+    # as E-O2-ECLSS, at the second compartment, and the node carries more than one state an edge can drive.
+    advances: lm_cabin_o2_kg
     from: o2_lm
     to: lm_cabin_atm
     kind: conserve
     sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
     note: "LM ECLSS is a separate compartment; the CSM/LM boundary is a phase-dependent topology switch, not a pipe (apollo_diode.md:1068-1072)"}
-  - id: E-ZONE-ATM
-    sensitivity:
-      value: 116.86
-      computation: "5 * 6894.757 / 295"
-      unit: "Pa per K"
-      basis: derived
-      relation: "the ideal-gas relation P = nRT/V gives dP/dT = P/T. At the cabin's nominal 5 psia = 34,474 Pa and 295 K, that is 116.9 Pa per kelvin"
-      at: "csm cabin, nominal"
-      note: >-
-        the edge whose note has said "computable" since it was written, and it is. It is also the
-        reason a leak diagnosis needs the thermal domain: a cabin that warms by one kelvin gains
-        117 pascals without gaining a molecule, and a leak detector built on pressure alone reads
-        every thermal transient as a mass loss
-    from: cabin_zone_t
-    to: cabin_atm
-    kind: lag
+  # `E-ZONE-ATM` was declared here as a `lag` edge from `cabin_zone_t` into `cabin_atm`, with a
+  # sensitivity of 116.86 Pa per K. It was not a flux and never could be: a cabin's *pressure*
+  # depends on its temperature and its mass, but its mass does not depend on its temperature,
+  # and the edge landed on the mass node only because the pressure has no node to land on —
+  # `csm_cabin_pressure_pa` is a state on the `internal` sentinel. It is removed rather than
+  # re-pointed, and the relation it carried is now stated once, in the state that computes it
+  # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
+  # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
   - id: E-LM-ATM-ABSORB
     sensitivity:
       value: 26.37
@@ -427,6 +427,9 @@ edges:
     to: absorber_capacity_lm
     kind: rate
   - id: E-LM-CREW-ATM
+    # `advances` because `lm` is not a node state's only occupant:
+    # as E-CREW-ATM, at the second compartment, and the node carries more than one state an edge can drive.
+    advances: lm_cabin_co2_kg
     sensitivity:
       value: 0.03792
       computation: "0.91 / 24"
@@ -441,21 +444,14 @@ edges:
     from: crew_state
     to: lm_cabin_atm
     kind: rate
-  - id: E-ZONE-ATM-LM
-    sensitivity:
-      value: 116.86
-      computation: "5 * 6894.757 / 295"
-      unit: "Pa per K"
-      basis: derived
-      relation: "as E-ZONE-ATM: dP/dT = P/T at the LM's nominal 5 psia and 295 K, 116.9 Pa per kelvin"
-      at: "lm cabin, nominal"
-      note: >-
-        the same relation at the second compartment, and the same trap: the LM's volume is 6.7 m3
-        against the CSM's 5.9, so the same kelvin moves the same pressure in a slightly larger
-        room and the masses differ by 14 %
-    from: lm_cabin_zone_t
-    to: lm_cabin_atm
-    kind: lag
+  # `E-ZONE-ATM-LM` was declared here as a `lag` edge from `cabin_zone_t` into `cabin_atm`, with a
+  # sensitivity of 116.86 Pa per K. It was not a flux and never could be: a cabin's *pressure*
+  # depends on its temperature and its mass, but its mass does not depend on its temperature,
+  # and the edge landed on the mass node only because the pressure has no node to land on —
+  # `csm_cabin_pressure_pa` is a state on the `internal` sentinel. It is removed rather than
+  # re-pointed, and the relation it carried is now stated once, in the state that computes it
+  # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
+  # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
   - id: E-ATM-ABSORB
     sensitivity:
       value: 26.37
@@ -477,6 +473,39 @@ edges:
     from: cabin_atm
     to: absorber_capacity_csm
     kind: rate
+  - id: E-ZONE-ATM
+    sensitivity:
+      value: 116.86
+      computation: "5 * 6894.757 / 295"
+      unit: "Pa per K"
+      basis: derived
+      relation: "the ideal-gas relation P = nRT/V gives dP/dT = P/T. At the cabin's nominal 5 psia = 34,474 Pa and 295 K, that is 116.9 Pa per kelvin"
+      at: "csm cabin, nominal"
+      note: >-
+        the edge whose note has said "computable" since it was written, and it is. It is also the
+        reason a leak diagnosis needs the thermal domain: a cabin that warms by one kelvin gains
+        117 pascals without gaining a molecule, and a leak detector built on pressure alone reads
+        every thermal transient as a mass loss
+    from: cabin_zone_t
+    to: cabin_atm
+    kind: lag
+    advances: csm_cabin_pressure_pa
+  - id: E-ZONE-ATM-LM
+    sensitivity:
+      value: 116.86
+      computation: "5 * 6894.757 / 295"
+      unit: "Pa per K"
+      basis: derived
+      relation: "as E-ZONE-ATM: dP/dT = P/T at the LM's nominal 5 psia and 295 K, 116.9 Pa per kelvin"
+      at: "lm cabin, nominal"
+      note: >-
+        the same relation at the second compartment, and the same trap: the LM's volume is 6.7 m3
+        against the CSM's 5.9, so the same kelvin moves the same pressure in a slightly larger
+        room and the masses differ by 14 %
+    from: lm_cabin_zone_t
+    to: lm_cabin_atm
+    kind: lag
+    advances: lm_cabin_pressure_pa
   - id: E-WATER-RAD
     sensitivity:
       value: 4.0816e-07
@@ -595,6 +624,7 @@ edges:
             no bus, nothing powered
 
   - id: E-BUS-COMM
+    advances: tx_power   # bus power reaches the transmitter, and the transmitter's power is the state this drives
     from: bus_a
     to: link
     kind: algebraic
@@ -634,6 +664,9 @@ edges:
             no bus, nothing powered
 
   - id: E-BUS-PUMP
+    # `advances` because `coolant` is not a node state's only occupant:
+    # bus power drives the pump, and the pump sets the flow, and the node carries more than one state an edge can drive.
+    advances: coolant_flow_kg_s
     sensitivity:
       value: 8.9998e-04
       computation: "(200 * 0.45359237 / 3600) / 28"
@@ -895,6 +928,7 @@ edges:
     at: "hot end, plate > 323 K",
     note: "avionics_plate_c event is >50 C (apollo_diode.md:105). Near zero nominally."}
   - id: E-PLATE-COMM
+    advances: link_snr   # the amplifier's temperature enters the link budget as a loss, not as a transmitted power
     from: coldplate_t
     to: link
     kind: lag
@@ -935,6 +969,9 @@ edges:
 
   # --- dynamics, guidance, and the geometry that comms depends on ---------------------
   - id: E-ENG-DYN
+    # `advances` because `orbital` is not a node state's only occupant:
+    # main-engine thrust is a translational force, and the node carries more than one state an edge can drive.
+    advances: orbital_state
     sensitivity:
       value: 2.2683e-05
       computation: "1 / 44085"
@@ -953,6 +990,9 @@ edges:
     to: vehicle_dynamics
     kind: lag
   - id: E-RCS-DYN
+    # `advances` because `body` is not a node state's only occupant:
+    # RCS thrust through a lever arm is a torque about the centre of mass, and the node carries more than one state an edge can drive.
+    advances: body_rate
     from: rcs_thrust
     to: vehicle_dynamics
     kind: lag
@@ -1111,6 +1151,7 @@ edges:
         Collapsing the two would have made a gimbal failure indistinguishable from a vehicle
         pointing the wrong way.
   - id: E-GEOM-LINK
+    advances: link_snr   # antenna geometry is a pointing loss, and the loss lands in the signal-to-noise ratio
     from: antenna_geometry
     to: link
     kind: algebraic
@@ -1226,6 +1267,9 @@ edges:
             the smallest of the four and the one most likely to be dismissed as negligible, which
             is why it is a regime rather than a footnote
   - id: E-CREW-ATM
+    # `advances` because `csm` is not a node state's only occupant:
+    # the crew's metabolic CO2, the producing half of the exchange, and the node carries more than one state an edge can drive.
+    advances: csm_cabin_co2_kg
     sensitivity:
       value: 0.03792
       computation: "0.91 / 24"
@@ -1618,7 +1662,11 @@ failure_chains:
 open_debts:
 
   # Added in round 47, and it is a property of the graph rather than of any one edge: **eleven of
-  # the fourteen edges that land on a stock node cannot be integrated as written.** Writing the
+  # the fourteen edges that land on a stock node cannot be integrated as written.** Round 49 added
+  # `advances` to every edge on a multi-state node, which is what distinguishes an edge that drives
+  # a *stock* from one that merely lands on a stock node's channel: `E-ZONE-ATM` and `E-ZONE-ATM-LM`
+  # drive the cabin *pressure*, which is algebraic, so they were never fluxes and are no longer
+  # counted. **Six structural and four unset remain.** Writing the
   # plant's stock integrator is what surfaced it, because the integrator had never run — the
   # schedule stops at the first `algebraic` state, long before it reaches a stock — and when it was
   # finally exercised it summed every incoming edge as `sensitivity x dt`. Handed
@@ -1635,8 +1683,9 @@ open_debts:
   #     produces it: the oxygen leaves `o2_csm` through the regulator, and the regulator's flow is
   #     the quantity these edges are missing. The transfer fraction is right; the flow it applies
   #     to is nowhere in the graph.
-  #   * **A structural relation landing on a stock node** — E-ZONE-ATM and E-ZONE-ATM-LM at
-  #     `116.86 Pa per K`, E-PLATE-BAT at `0.0 J per K`, and E-ATM-ABSORB and E-LM-ATM-ABSORB at
+  #   * **A structural relation landing on a stock node** — E-PLATE-BAT at `0.0 J per K`
+  #     (a derating of usable capacity, not a flux into the battery), and E-ATM-ABSORB and
+  #     E-LM-ATM-ABSORB at
   #     `26.37 man-hours per kg CO2`. A cabin's pressure depends on its temperature and its mass,
   #     but its *mass* does not depend on its temperature: these edges land on the stock node
   #     because the channel hangs off the node, not because anything flows into it. The absorber

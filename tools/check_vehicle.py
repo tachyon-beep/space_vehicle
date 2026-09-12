@@ -112,6 +112,12 @@ PREFIX_DOMAIN = {prefix: domain for domain, prefix in DOMAIN_PREFIX.items()}
 # is a sink that is never read back.
 NON_DOMAIN_NODE_DOMAINS = {"executive", "window"}
 NODE_KINDS = {"stock", "flow", "state", "discrete", "service", "sink"}
+# The integrator classes whose state is moved by an edge's *value*, and therefore the ones an
+# `advances` declaration can name. `discrete` and `service` are excluded on purpose: they are
+# advanced by transitions and by authority, so an executive command to `engine_main` advances
+# whichever engine the command names rather than one state rather than another. See
+# `states_by_node`.
+DRIVEN_BY_A_VALUE = {"stock", "lag", "delay", "dynamics", "algebraic"}
 EDGE_KINDS = {"conserve", "rate", "algebraic", "lag", "accumulate", "discrete", "delay"}
 
 # `02-canonical-vocabulary.md` §9b's union, and §10 has promised it since it was written: "**a code
@@ -1051,6 +1057,57 @@ def withheld_channels(root: Path) -> set[str]:
     return names
 
 
+def states_by_node(root: Path) -> dict[str, list[str]]:
+    """Every state each coupling node carries, in declaration order, `internal` excluded.
+
+    This is the set an edge's `advances` may name, and the reason the field exists is that the set
+    is not always a singleton: an edge says what it drives, and on a node holding four gas masses and
+    a pressure it has five things to choose between.
+
+    Two versions of this helper were wrong before this one, in opposite directions, and both are
+    worth keeping.
+
+    The first returned only the states whose *method* reads incoming edges — `stock`, `lag`, `delay`,
+    `dynamics` — on the theory that only those are ambiguous for the plant. That refused the one true
+    answer: `E-ZONE-ATM` carries the cabin's dP/dT, so the state it drives is
+    `csm_cabin_pressure_pa`, which is `algebraic` and was excluded. **A rule that refuses the correct
+    declaration is more expensive than no rule, because the next author bends the data to satisfy
+    it.**
+
+    The second returned *every* state, and demanded that an executive command to `engine_main` name
+    which of `sps_state`, `dps_state` or `aps_state` it advances. It advances whichever the command
+    says; a command is not a flux and does not drive one state rather than another.
+
+    So the set is the methods an edge's *value* can drive — `stock`, `lag`, `delay`, `dynamics`,
+    `algebraic` — which excludes `discrete` and `service` because those are advanced by transitions
+    and by authority rather than by a sensitivity. The distinction is whether the edge's number is
+    what moves the state.
+    """
+    by_node: dict[str, list[str]] = {}
+    if not (root / "domains").is_dir():
+        return by_node
+    for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        components = load(path / "components.yaml", Report()) or {}
+        for state in components.get("state") or []:
+            node = str(state.get("node") or "")
+            if state.get("method") in DRIVEN_BY_A_VALUE and state.get("id") and node:
+                by_node.setdefault(node, []).append(str(state["id"]))
+    return by_node
+
+
+def state_methods(root: Path) -> dict[str, str]:
+    """Every state id and its integrator class, across the vehicle."""
+    out: dict[str, str] = {}
+    if not (root / "domains").is_dir():
+        return out
+    for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        components = load(path / "components.yaml", Report()) or {}
+        for state in components.get("state") or []:
+            if state.get("id"):
+                out[str(state["id"])] = str(state.get("method") or "")
+    return out
+
+
 def enumerated_values_by_node(root: Path) -> dict[str, set[str]]:
     """Which enumerated values each coupling node's own states can take.
 
@@ -1133,6 +1190,8 @@ def check_coupling(
     threshold_point: dict[str, str] | None = None,
     enum_values: dict[str, set[str]] | None = None,
     withheld: set[str] | None = None,
+    states_by_node_map: dict[str, list[str]] | None = None,
+    state_methods: dict[str, str] | None = None,
 ) -> None:
     nodes = doc.get("nodes") or {}
     edges = doc.get("edges") or []
@@ -1180,14 +1239,65 @@ def check_coupling(
     # Unset values are skipped here: they are already debts, reported by the edge walk with the
     # recipe the edge owes, and saying it twice would double-count the same obligation.
     stock_nodes = {name for name, node in node_of.items() if node.get("kind") == "stock"}
+    stock_states = {sid for sid, method in (state_methods or {}).items() if method == "stock"}
     for edge in edges:
         if edge.get("to") not in stock_nodes:
             continue
         if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
             continue
+        # Only an edge that actually drives a *stock* has to be a flux. `advances` is what says so,
+        # and it is required on every multi-state node; on a singleton node the node's one state is
+        # the answer. `E-ZONE-ATM` is the case this distinction exists for: it lands on the cabin
+        # node, which is a stock, but it drives `csm_cabin_pressure_pa` — an algebraic state — and a
+        # pressure is not a conserved quantity that something flows into.
+        driven = edge.get("advances")
+        if driven is not None and str(driven) not in stock_states:
+            continue
         basis, reason = stock_flux_basis(edge, node_of)
         if basis is None:
             report.debt(f"coupling.yaml:edge {edge.get('id')}", reason)
+
+    # An edge that drives a state has to say *which* state, whenever the node carries more than one
+    # it could drive.
+    #
+    # Ten of the vehicle's 41 nodes hold more than one state, and the plant resolves a state's
+    # drivers by node — so on `cabin_atm`, which holds four gas masses, `csm_cabin_o2_kg`,
+    # `csm_cabin_n2_kg`, `csm_cabin_co2_kg` and `csm_cabin_h2o_kg` were all handed the same three
+    # edges: the oxygen supply, the crew's CO2 production and a pressure/temperature relation. Every
+    # gas integrated every other gas's flux. The discrete and dynamics nodes are harmless — those
+    # methods do not consume `incoming` — so the rule counts only the methods that do, which makes
+    # it four nodes and nine edges rather than ten and a guess.
+    #
+    # The field is required rather than inferred because the inference is exactly what was wrong:
+    # "the only state on this node" is true today and stops being true the moment a second state
+    # lands, silently and in the direction of the plant integrating the wrong thing.
+    states_by_node = states_by_node_map or {}
+    for edge in edges:
+        # A `discrete` edge carries a command or a mode rather than a slope, so "which state does this
+        # value drive" does not apply to it — the same reason `discrete` is excluded from the states
+        # the field may name. `E-CMD-LINK` is an executive command to the link, and it advances
+        # whichever state the command names.
+        if edge.get("kind") == "discrete":
+            continue
+        target = str(edge.get("to"))
+        candidates = states_by_node.get(target) or []
+        if len(candidates) < 2:
+            continue
+        where = f"coupling.yaml:edge {edge.get('id')}"
+        advances = edge.get("advances")
+        if advances is None:
+            report.refuse(
+                where,
+                f"drives {target}, which carries {len(candidates)} states an edge can advance "
+                f"({sorted(candidates)}), and declares no `advances`. The plant resolves a state's "
+                "drivers by node, so without this every one of them integrates this edge",
+            )
+        elif str(advances) not in candidates:
+            report.refuse(
+                where,
+                f"declares `advances: {advances!r}`, which is not one of {target}'s edge-consuming "
+                f"states ({sorted(candidates)})",
+            )
 
     edge_ids: dict[str, dict[str, Any]] = {}
     for edge in edges:
@@ -4824,6 +4934,8 @@ def main(argv: list[str] | None = None) -> int:
             threshold_point=threshold_point,
             enum_values=enumerated_values_by_node(root),
             withheld=withheld_channels(root),
+            states_by_node_map=states_by_node(root),
+            state_methods=state_methods(root),
         )
         schedule = derive_schedule(coupling, report)
     check_range_kinds(registry, report)

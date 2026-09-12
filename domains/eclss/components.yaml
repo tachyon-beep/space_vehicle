@@ -12,7 +12,7 @@
 # So the conserved quantities are the **gas masses** — oxygen, diluent, carbon dioxide and water
 # vapour — and pressure is derived from them. That makes the leak a mass loss rather than a
 # pressure decay, which is what `eclss.leak_rate_g_s` actually is (`apollo_diode.md:94`), and it
-# makes the thermal coupling of `E-ZONE-ATM` physical rather than a correction term.
+# makes the thermal coupling of the cabin physical rather than a correction term.
 #
 # ## The band that had to be derived rather than guessed
 #
@@ -139,19 +139,29 @@ state:
       basis: derived
       relation: "the absorber bed's removal rate, which is its rated man-hour capacity converted through the metabolic production rate. Algebraic because the rate follows the bed's state and the blower's flow rather than accumulating."
   - id: csm_cabin_pressure_pa
-    node: internal
+    node: cabin_atm
     method: algebraic
     unit: Pa
     provenance:
       basis: derived
-      relation: "P = (sum of n_i) R T / V, from the four gas stocks and E-ZONE-ATM's temperature. Derived rather than stated, which is the whole reason the stocks exist."
+      relation: >-
+        P = (sum of n_i) R T / V, from the four gas stocks and the cabin zone's temperature. Derived
+        rather than stated, which is the whole reason the stocks exist. The thermal sensitivity is
+        dP/dT = P/T, which at the nominal 5 psia and 295 K is **116.86 Pa per kelvin** — carried here
+        because this is the state that computes it, and `E-ZONE-ATM` is the edge that declares it as
+        this state's driver. A 1 K cabin change therefore moves the pressure by twice the
+        instrument's 0.01 psia precision, which is what makes a leak and a cooling cabin the same
+        observation
   - id: lm_cabin_pressure_pa
-    node: internal
+    node: lm_cabin_atm
     method: algebraic
     unit: Pa
     provenance:
       basis: derived
-      relation: "as the CSM compartment, over the LM's own volume"
+      relation: >-
+        as the CSM compartment, over the LM's own volume, and the same 116.86 Pa per kelvin. The LM's
+        volume is 6.7 m3 against the CSM's 5.9, so the same kelvin moves the same pressure in a
+        slightly larger room and the masses differ by 14 %
 
 # --------------------------------------------------------------------------------------
 # Components.
