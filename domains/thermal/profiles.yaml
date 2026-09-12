@@ -267,7 +267,10 @@ alternatives:
     - id: tight
       revision: 1
       description: "every zone limit pulled 10 % toward its nominal value"
-      factor: 0.9
+      factors:
+        below: 1.1111
+        above: 0.9
+    # the zone limits are the reason this matters: a tighter profile must narrow the band
       provenance:
         basis: chosen
         reason: "an agent that wants earlier warning has somewhere legitimate to go, so it has no reason to want writable limits"

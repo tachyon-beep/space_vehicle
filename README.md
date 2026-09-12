@@ -1238,6 +1238,46 @@ readings cannot be checked, and the way to tell is to write the check and watch 
 are right.** The first rule tried here would have refused a third of the thresholds in the vehicle,
 and every one of them was doing exactly what it should.
 
+## The profile that widened what it promised to narrow
+
+Every domain declares `profiles`, `profile_selection` and `alternatives`, and **nothing read any of
+it**. Two rules live there, and `thermal_diode.md:823-826` states the first as a design constraint
+rather than a preference — *"the model that reasons about the spacecraft must not also be able to
+rewrite the limits by which its reasoning is constrained"*. Each domain's `profile_selection` says
+the second half in its own words: *"An agent may select a profile revision and may never edit one."*
+An alternative profile exists so an agent wanting more margin has somewhere legitimate to go.
+
+**Neither was enforced, and the narrowing rule had a defect behind it.** A profile scales its
+thresholds by a factor, and the direction that factor must move **depends on the comparator**:
+tightening a ceiling means lowering it, tightening a floor means raising it. One number cannot do
+both. Three of the four domains had chosen whichever direction suited the thresholds they happened
+to have:
+
+| domain | was | below thresholds | above thresholds | effect |
+|---|---|---|---|---|
+| `power` | `factor: 0.9` | 9 | 6 | **widened all 9 floors** |
+| `thermal` | `factor: 0.9` | 7 | 10 | **widened all 7 floors** |
+| `propulsion` | `factor: 1.25` | 5 | 7 | **widened all 7 ceilings** |
+| `consumables` | `factor: 1.33` | 12 | 0 | tightens — it has no ceilings |
+
+`power` is the one that matters most: its `tight` profile, selected by a fleet that wanted warning
+*earlier*, dropped the bus undervoltage ladder from **26.5 V to 23.85 V**. The whole shed ladder
+moved down 2.65 V — warning later, and therefore shedding later, in the domain where shedding late
+is how a bus dies. **A profile whose name promises margin and whose arithmetic delivers less of it
+is worse than no profile: it is a decision an agent can make in good faith and lose by.**
+
+The fix declares the direction: `factors: {below: ..., above: ...}`, with each domain's original
+number **mirrored** into the other direction rather than invented — 10 % tighter is `0.9` on a
+ceiling and `1/0.9` on a floor, so `power.tight` became `{below: 1.1111, above: 0.9}`. A factor that
+lowers a floor or raises a ceiling is now refused, as is a profile that declares no factor for a
+comparator its domain uses — an omission that would leave half the envelope untouched while
+appearing to tighten everything.
+
+**And D-05 itself is now a refusal**, vacuous today: every verb mentions thresholds only in its
+`interlocks`, which is the legitimate direction, and none declares a write at all. That is one line
+of a future domain away from being false, and the thing it protects is the experiment. An agent that
+can widen its own envelope has not been tested on the envelope.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

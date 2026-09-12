@@ -314,7 +314,17 @@ alternatives:
     - id: tight
       revision: 1
       description: "every threshold tightened by the same factor, for a fleet that wants to be warned early"
-      factor: 0.9
+      factors:
+        below: 1.1111
+        above: 0.9
+    # the bus undervoltage ladder is the reason this matters: warning later is shedding later
       provenance:
         basis: chosen
         reason: "a profile an agent can select to trade margin for warning time; it can only ever make the envelope narrower, never wider, which is the monotonicity the min(agent, operator) ceiling requires"
+
+# --------------------------------------------------------------------------------------
+# The `tight` profile's factors were `0.9` in both directions, which lowered every *floor* and so
+# warned later — the bus undervoltage ladder moved from 26.5 V to 23.85 V in a profile a fleet
+# selects to be warned earlier. The factors are now per comparator and mirrored from the original:
+# 10 % tighter is 0.9 on a ceiling and 1/0.9 on a floor. `check_profiles` refuses the old form.
+# --------------------------------------------------------------------------------------

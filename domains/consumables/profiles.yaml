@@ -284,7 +284,9 @@ alternatives:
     - id: prudent
       revision: 1
       description: "every reserve floor raised by a third, for a fleet that wants to arrive with margin"
-      factor: 1.33
+      factors:
+        below: 1.33
+    # every threshold in this domain is a floor, so one factor has always been enough
       provenance:
         basis: chosen
         reason: "a floor can only be raised by choice and never lowered below the service's own, so this profile is monotonically safe"

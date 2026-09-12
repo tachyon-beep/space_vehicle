@@ -1271,6 +1271,111 @@ def walk_unset(node: Any, trail: str = "") -> list[str]:
     return found
 
 
+def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) -> None:
+    """D-05's two rules, neither of which was enforced: narrow only, and never edit.
+
+    `thermal_diode.md:823-826` states the first as a design constraint rather than a preference —
+    "the model that reasons about the spacecraft must not also be able to rewrite the limits by
+    which its reasoning is constrained" — and each domain's `profile_selection` states the second in
+    its own words: "An agent may select a profile revision and may never edit one."
+
+    **The narrowing rule is the one with a defect behind it.** A profile's `factors` scale its
+    thresholds, and the direction a factor has to move depends on the comparator: tightening a
+    *ceiling* means lowering it, and tightening a *floor* means raising it. One number cannot do
+    both, and three of the four domains had chosen whichever direction suited the thresholds they
+    happened to have — so `power`'s `tight` profile, selected by a fleet that wanted warning
+    *earlier*, dropped the bus undervoltage ladder from 26.5 V to 23.85 V and widened the envelope
+    it was supposed to narrow. A profile whose name promises margin and whose arithmetic delivers
+    less of it is worse than no profile: it is a decision an agent can make in good faith and lose
+    by.
+    """
+    profiles_doc = docs.get("profiles.yaml") or {}
+    alternatives = profiles_doc.get("alternatives") or []
+    selection = profiles_doc.get("profile_selection") or {}
+    if not alternatives and not selection:
+        return
+    where = f"domains/{path.name}/profiles.yaml"
+    if selection and selection.get("selectable_by") not in AUTHORITIES:
+        report.refuse(
+            f"{where}:profile_selection",
+            f"declares selectable_by {selection.get('selectable_by')!r}, which is not one of "
+            f"{sorted(AUTHORITIES)}. D-05 makes selection an agent authority; a profile nobody may "
+            "select is a profile that exists to be edited instead",
+        )
+    comparators = {
+        str(th.get("comparator"))
+        for th in profiles_doc.get("thresholds") or []
+        if isinstance(th.get("assert"), (int, float))
+    }
+    for alt in alternatives:
+        awhere = f"{where}:alternative {alt.get('id')}"
+        factors = alt.get("factors")
+        if not isinstance(factors, dict) or not factors:
+            report.refuse(
+                awhere,
+                "declares no `factors`. One number cannot tighten both a ceiling and a floor — the "
+                "direction depends on the comparator — so a profile that will be applied to both "
+                "has to say which way each one moves",
+            )
+            continue
+        if not alt.get("revision"):
+            report.refuse(awhere, "declares no `revision`")
+        if not (alt.get("provenance") or {}).get("reason"):
+            report.refuse(
+                awhere, "declares no reason; a selectable envelope is a reviewed decision"
+            )
+        for comparator in sorted(comparators):
+            if comparator not in factors:
+                report.refuse(
+                    awhere,
+                    f"declares no factor for its {comparator}-comparator thresholds, so selecting "
+                    "it leaves them untouched while appearing to tighten everything",
+                )
+                continue
+            factor = factors[comparator]
+            if not isinstance(factor, (int, float)) or factor <= 0:
+                report.refuse(awhere, f"declares {comparator} factor {factor!r}")
+            elif comparator == "below" and factor < 1:
+                report.refuse(
+                    awhere,
+                    f"declares a below factor of {factor}, which *lowers* a floor and so warns "
+                    "later. Tightening a floor means raising it: the factor must be at least 1, or "
+                    "a fleet that selects this profile for margin gets less of it",
+                )
+            elif comparator == "above" and factor > 1:
+                report.refuse(
+                    awhere,
+                    f"declares an above factor of {factor}, which *raises* a ceiling and so warns "
+                    "later. Tightening a ceiling means lowering it: the factor must be at most 1",
+                )
+
+
+def check_profile_immutability(
+    docs: dict[str, dict[str, Any]], threshold_ids: set[str], report: Report
+) -> None:
+    """No verb may edit a threshold or a profile, which is D-05 stated as a refusal.
+
+    This is vacuous today — every verb mentions a threshold only in its `interlocks`, which is the
+    legitimate direction, and none declares a write at all — and that is the point: the property is
+    one line of a future domain away from being false, and the thing it protects is the experiment.
+    An agent that can widen its own envelope has not been tested on the envelope.
+    """
+    for doc in docs.values():
+        for verb in doc.get("commands") or []:
+            writes = verb.get("writes")
+            if not isinstance(writes, list):
+                continue
+            for target in writes:
+                if str(target) in threshold_ids:
+                    report.refuse(
+                        f"commands.yaml:{verb.get('verb')}",
+                        f"declares that it writes {target!r}, which is a threshold. D-05: an agent "
+                        "may select a profile revision and may never edit one, because the model "
+                        "that reasons about the spacecraft must not also be able to rewrite the "
+                        "limits by which its reasoning is constrained",
+                    )
+
+
 def check_range_kinds(registry: dict[str, dict[str, Any]], report: Report) -> None:
     """A channel's alarms have to be able to fire, and `range` alone cannot say whether they can.
 
@@ -1351,6 +1456,8 @@ def check_domain(
         loaded = load(file, report)
         if loaded is not None:
             docs[filename] = loaded
+
+    check_profiles(path, docs, report)
 
     components = docs.get("components.yaml") or {}
     where = f"domains/{name}/components.yaml"
@@ -3835,6 +3942,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         schedule = derive_schedule(coupling, report)
     check_range_kinds(registry, report)
+    threshold_ids: set[str] = set()
+    all_commands: dict[str, dict[str, Any]] = {}
+    if (root / "domains").is_dir():
+        for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+            profiles = load(path / "profiles.yaml", Report()) or {}
+            for threshold in profiles.get("thresholds") or []:
+                if threshold.get("id"):
+                    threshold_ids.add(str(threshold["id"]))
+            all_commands[path.name] = load(path / "commands.yaml", Report()) or {}
+    check_profile_immutability(all_commands, threshold_ids, report)
     check_domains(root, registry, coupling, channels, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)

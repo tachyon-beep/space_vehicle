@@ -235,7 +235,10 @@ alternatives:
     - id: conservative
       revision: 1
       description: "raise every cutoff guard by a quarter, for a fleet that would rather keep its propellant than spend it"
-      factor: 1.25
+      factors:
+        below: 1.25
+        above: 0.8
+    # the chamber and feed limits are ceilings, so tightening them means lowering them
       provenance:
         basis: chosen
         reason: "guards can only be tightened, never loosened below the service's own, so this profile is monotonically safe in the direction that matters"
