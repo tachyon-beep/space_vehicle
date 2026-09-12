@@ -1,0 +1,842 @@
+# mission.yaml — the profile: phases, durations, crew, MET epoch, targets, Δv.
+#
+# Why this file matters more than it looks
+# ----------------------------------------
+# `docs/diode-contract.md:147` makes the executive re-check "gates, interlocks, allowances
+# and **phase**" at the moment of effect, and `apollo_diode.md:439` carries `allowed_phases`
+# on a command registry entry — but no document in the corpus defines the phase set, the
+# transitions or their durations. `main_propulsion_diode.md:105` disclaims it and
+# `gnc_diode.md:117` defers it. So the executive's central safety predicate referenced a
+# quantity that did not exist until this file (conflict register C-22).
+#
+# The durations also settle an argument. `review-findings.md` §13 computes a throughput
+# budget over "34.56M ticks" from an **assumed** 8-day mission, and `corpus-review.md` §3
+# notes apollo supplies no duration at all. The phase ladder below sums to exactly 192.0 h
+# = 8.00 days, so the figure the design has been reasoning with since is now derived from a
+# phase list rather than assumed — and 34,560,000 ticks is exactly 192 h at 50 Hz.
+#
+# The profile is Apollo-shaped and Apollo-timed, because the couplings and the resource
+# arithmetic are what make an inference correct or incorrect. It is not Apollo labelled:
+# `apollo_diode.md:1206` warns explicitly against matching the historical labels closely
+# enough that an agent can shortcut the diagnosis by recognising the mission, so the phase
+# names, the targets and the failure schedule are this vehicle's own.
+#
+# Sources: mission timings are historical (Apollo 11's timeline is the reference for phase
+# durations and for the manoeuvre sequence), and the mission *content* — targets, sites,
+# the objectives the fleet is scored against — is chosen.
+
+schema_version: 1
+vehicle: vehicle.yaml
+vocabulary: ../integration/reconciliation/02-canonical-vocabulary.md
+
+met_epoch_utc: "2026-09-12T02:13:45Z"
+met_epoch_provenance:
+  basis: chosen
+  reason: >-
+    a fixed UTC epoch, so MET is an integer tick count from an absolute origin and every
+    published timestamp is reproducible. apollo_diode.md:227 makes the vehicle's clock the
+    one that stamps results, and diode-contract.md:226-228 makes time UTC everywhere; an
+    epoch is the missing half of that statement. The value is arbitrary and recorded here so
+    two runs cannot silently disagree about when they started.
+
+  total_duration_h: 192.0
+  total_duration_provenance:
+    basis: derived
+    relation: "sum of the phase durations below; the linter refuses a build where they disagree"
+
+  tick_hz: 50
+  total_ticks_provenance:
+    basis: derived
+    relation: "192.0 h x 3600 s/h x 50 Hz = 34,560,000 ticks, which is the figure review-findings.md §13 has been pricing"
+
+# --------------------------------------------------------------------------------------
+# Crew. Two fly to the surface; three are aboard until the LM separates. Metabolic loads
+# live in vehicle.yaml#consumables; this is who is where, which is what bounds what a crew
+# member can honestly report (simulator-design.md:392-403).
+# --------------------------------------------------------------------------------------
+crew:
+
+  size: 3
+  surface_party: 2
+  positions:
+    - id: commander
+      location_phase_default: csm
+      goes_to_surface: true
+      # Where this person is, per vehicle. `location_phase_default` answers *which vehicle* and
+      # this answers *which station*, and the two are different questions because
+      # `ask_crew`'s perception bound is per station: the CSM's three stations have three
+      # different panel sets and three different `cannot_see` lists, so a question asked from
+      # the wrong one is bounded against the wrong displays.
+      stations:
+        csm: csm_commander
+        lm: lm_commander
+      stations_provenance:
+        basis: chosen
+        reason: >-
+          the only pairing the corpus leaves no room to argue with: `csm_commander`'s own note
+          calls it "the left seat", the commander's station, and `lm_commander` is the LM's.
+    - id: lm_pilot
+      location_phase_default: csm
+      goes_to_surface: true
+      stations:
+        csm: csm_lower_equipment_bay
+        lm: lm_pilot
+      stations_provenance:
+        basis: chosen
+        reason: >-
+          `csm_navigator`'s note calls it "the right seat" and names it for the *navigation*
+          role, which is the CM pilot's — so the LM pilot takes the CSM's third station, the
+          lower equipment bay. The choice is deliberate and it has a consequence worth wanting:
+          the bay's note says a crew member there "cannot see a single display the other two
+          seats are reading", so the LM pilot in the CSM has a strictly different perception
+          bound from the other two, and a fleet that asks all three the same question gets two
+          answers and one abstention. The alternative — the LM pilot in the right seat and the
+          CM pilot in the bay — puts the navigation specialist where she cannot see the
+          guidance display, which the corpus's own notes argue against.
+    - id: csm_pilot
+      location_phase_default: csm
+      goes_to_surface: false
+      stations:
+        csm: csm_navigator
+      stations_provenance:
+        basis: chosen
+        reason: >-
+          the right seat, named `csm_navigator` for the role this crew member holds. She has no
+          LM station because she does not go: `goes_to_surface: false` and the linter refuses a
+          station in a vehicle she never boards.
+      note: "alone in the CSM for the surface phase; the only person who can see the CSM's own state, which is what makes the F-01 chain diagnosable and what makes the LM-as-lifeboat decision expensive"
+  provenance:
+    basis: historical
+    source: "Apollo CSM crew of 3, LM crew of 2 (the LM carried two to the surface)"
+
+# --------------------------------------------------------------------------------------
+# The phase ladder. The phase gate itself lives on the *verb*: every registry entry carries
+# `allowed_phases`, and an invocation outside them is refused at the moment of effect rather
+# than at submission (diode-contract.md:145, apollo_diode.md:439). `entry`/`exit` are the
+# conditions the supervisor and the white team use to advance the clock; a phase with no exit
+# condition is a phase a run can strand in.
+#
+# ## There used to be a second list here, and it was wrong
+#
+# Each phase carried `allowed_verbs` as well — the inverse of the same relation, authored from
+# apollo's verb table (`apollo_diode.md:243`). By the time eight domains had landed the two
+# lists disagreed in 197 places: the phase side still named sixteen verbs that no domain
+# declares — ten belonging to GNC and comms, which have not landed; three from apollo's
+# scheduling row (`schedule_burn`, `schedule_attitude`, `cancel_scheduled`), which no domain
+# implements; two the RCS domain renamed to apollo's own names (C-15's pruning); and
+# `safe_engine`, which the propulsion domain folded into `arm_engine`'s state argument — and
+# omitted every verb the landed domains had added: `enter_safe_hold`, `ask_crew`,
+# `request_translation`, `reset_latched_fault` and forty more.
+# The phase side was also the *weaker* claim: it cannot know whether a verb's guards are
+# satisfiable, and `state.json`'s capability snapshot publishes the authoritative answer at
+# runtime anyway (vocabulary §1, `communcations_diode.md:436-452`), which is better than a
+# static list a fleet would have to trust.
+#
+# So it is deleted rather than synchronised, and the linter refuses it if it comes back. What a
+# reader wants from it — "what can be done in descent?" — is now derived from the registry and
+# printed by `tools/check_vehicle.py --phases`, so the answer cannot drift from the verbs that
+# give it.
+# --------------------------------------------------------------------------------------
+phases:
+
+  - id: translunar_coast
+    name: "translunar coast, CSM and LM docked"
+    duration_h: 73.0
+    starts_at_h: 0.0
+    configurations: [csm_lm_docked]
+    entry: "TLI complete; the vehicle is on a free-return-capable translunar trajectory"
+    exit: "LOI burn armed and committed, or the trajectory is unrecoverable"
+    provenance:
+      basis: historical
+      source: "Apollo translunar coast, TLI to LOI, about three days"
+
+  - id: lunar_orbit
+    name: "lunar orbit, CSM and LM docked, LM checkout and undocking"
+    duration_h: 24.5
+    starts_at_h: 73.0
+    configurations: [csm_lm_docked, lm_alone_descent]
+    entry: "LOI complete; the vehicle is in a lunar parking orbit"
+    exit: "LM undocked and the descent orbit insertion burn is complete"
+    provenance:
+      basis: historical
+      source: "Apollo lunar orbit phase, LOI to undocking; the reference timeline spends about 24 h here"
+
+  - id: descent
+    name: "powered descent, LM alone"
+    duration_h: 2.5
+    starts_at_h: 97.5
+    configurations: [lm_alone_descent]
+    entry: "LM undocked, DOI complete, perilune at the descent-orbit altitude; the CSM is on a separate orbit"
+    exit: "landing contact, or an abort to the ascent stage"
+    provenance:
+      basis: historical
+      source: "powered descent from the 15 km perilune; Apollo 11's descent ran about 12 minutes of burn within a longer descent phase"
+
+  - id: surface
+    name: "lunar surface, LM alone, EVA"
+    duration_h: 21.5
+    starts_at_h: 100.0
+    configurations: [lm_alone_descent, lm_ascent_stage]
+    entry: "landing contact; the descent engine is off and the LM is stable"
+    exit: "ascent engine ignition, or a decision to abandon the surface"
+    provenance:
+      basis: historical
+      source: "a nominal surface stay of about one lunar day's daylight portion, with one EVA; Apollo 11 spent 21.6 h on the surface"
+
+  - id: ascent_rendezvous
+    name: "ascent and rendezvous, LM ascent stage alone"
+    duration_h: 3.5
+    starts_at_h: 121.5
+    configurations: [lm_ascent_stage, csm_alone]
+    entry: "ascent engine ignition; the descent stage is left on the surface"
+    exit: "docking complete and the crew transferred to the CSM"
+    provenance:
+      basis: historical
+      source: "LM ascent to lunar orbit rendezvous and docking, about 3.5 h of manoeuvres"
+
+  - id: lunar_orbit_docked
+    name: "lunar orbit, docked again, TEI preparation"
+    duration_h: 7.5
+    starts_at_h: 125.0
+    configurations: [csm_alone]
+    entry: "docking complete; the LM ascent stage is jettisoned or retained as a contingency"
+    exit: "TEI burn armed and committed"
+    provenance:
+      basis: historical
+      source: "the docked interval between rendezvous and TEI; about 7 h in the reference timeline"
+
+  - id: transearth_coast
+    name: "transearth coast"
+    duration_h: 58.5
+    starts_at_h: 132.5
+    configurations: [csm_alone]
+    entry: "TEI complete; the vehicle is on a return trajectory"
+    exit: "entry interface; the service module is jettisoned"
+    provenance:
+      basis: historical
+      source: "transearth coast, TEI to entry interface, about 2.5 days"
+
+  - id: entry
+    name: "entry and landing"
+    duration_h: 1.0
+    starts_at_h: 191.0
+    configurations: [csm_alone]
+    entry: "entry interface at the atmospheric corridor; the service module is jettisoned"
+    exit: "landing and recovery"
+    provenance:
+      basis: historical
+      source: "entry and landing, about one hour from interface to recovery"
+
+phase_total_check:
+
+    sums_to_h: 192.0
+    note: "73.0 + 24.5 + 2.5 + 21.5 + 3.5 + 7.5 + 58.5 + 1.0; the linter re-derives this and refuses a mismatch"
+
+# --------------------------------------------------------------------------------------
+# The execution posture. This axis is the one `mission_diode.md` supplied and nothing else in
+# the corpus had: the phase ladder says *where in the timeline* the vehicle is, and the posture
+# says *whether the mission is running*. They are independent, and collapsing them is how a
+# vehicle ends up unable to say "the descent is held".
+#
+# Conflict C-22 fixed the phase set and stopped there, so until now the vehicle had no abort
+# state at all: the only terminal condition was the phase ladder running out at `entry`, which
+# means a mission that was abandoned halfway and a mission that succeeded were the same vehicle
+# with a different clock. `mission_diode.md:300-347` supplies the missing machine, and two of
+# its invariants are why it matters:
+#
+#   Invariant E — AbortLatched => no hazardous action is permitted. The latch dominates every
+#   other transition, including ones that would otherwise be permitted.
+#
+#   Invariant J — ABORTED is terminal. It does not return to EXECUTE without a new mission
+#   authorized outside the agent interface. A post-abort vehicle that is merely "between
+#   phases" is a vehicle a fleet will try to fly again.
+#
+# `SAFE` and `ABORTED` are deliberately different states for the reason the document gives at
+# :309: a vehicle that has been made safe after an abort has the same hardware as one that is
+# simply waiting, and the difference is entirely in whether the mission still exists.
+# --------------------------------------------------------------------------------------
+postures:
+
+  - id: init
+    name: "startup checks; nothing is authorized yet"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "process start"
+    exit: "INITIALIZED — the executive's startup checks pass"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:307 and :317 — `s0 = INIT`, which leaves on INITIALIZED"
+
+  - id: safe
+    name: "powered and quiescent; a mission may still proceed"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "INITIALIZED, or a mission that has been made safe"
+    exit: "REQUEST_STANDBY with g_safe_exit true"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:309 and :320 — 'SAFE describes an operational configuration from which a mission may later proceed'"
+
+  - id: standby
+    name: "the mission exists and is idle between activities"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "REQUEST_STANDBY granted"
+    exit: "REQUEST_PREPARE with g_prepare true"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:321"
+
+  - id: prepare
+    name: "an activity is being loaded, armed or checked"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "REQUEST_PREPARE granted; the guards are health, confidence and phase"
+    exit: "REQUEST_EXECUTE, or CANCEL back to standby"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:322 and :324. This is where `load_burn` and the arm steps live"
+
+  - id: execute
+    name: "the mission is running and effectful verbs are permitted"
+    terminal: false
+    hazardous_actions_permitted: true
+    entry: "REQUEST_EXECUTE granted, with full effect-time revalidation"
+    exit: "REQUEST_HOLD, TELEMETRY_STALE, RECOVERABLE_FAULT, MISSION_COMPLETE, or ABORT"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:323 and :325-327"
+
+  - id: hold
+    name: "paused by request or by stale evidence; resumable"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "REQUEST_HOLD, TELEMETRY_STALE or RECOVERABLE_FAULT"
+    exit: "REQUEST_RESUME with g_resume true, or REQUEST_RECOVERY, or ABORT"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:329-330. `TELEMETRY_STALE` as a *transition event* is the reason the freshness manifest below is a safety mechanism rather than a convenience"
+      note: >-
+        a hold is a reversible pause and is deliberately not an abort (mission_diode.md:190):
+        the whole value of having both is that a fleet can stop without ending the mission, and
+        a machine with only one of them makes every hesitation terminal
+
+  - id: recovery
+    name: "working a fault that is not fatal; no mission activity"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "REQUEST_RECOVERY from hold"
+    exit: "RECOVERY_COMPLETE with g_standby true, or RECOVERY_INCOMPLETE back to hold"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:191 and :331-332 — 'Recovery: explicit state/substate; never implicit retry loop'. That clause is why recovery is a posture rather than a retry counter: an implicit retry is indistinguishable in the log from a mission that never stopped"
+
+  - id: complete
+    name: "the mission succeeded; terminal"
+    terminal: true
+    hazardous_actions_permitted: false
+    entry: "MISSION_COMPLETE with g_complete true"
+    exit: "none — terminal"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:334 and :345"
+
+  - id: aborting
+    name: "an abort is latched and safe effects are being confirmed"
+    terminal: false
+    hazardous_actions_permitted: false
+    entry: "ABORT from any posture, or FATAL_FAULT from init"
+    exit: "SAFE_EFFECTS_CONFIRMED"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:336-343 — abort reaches ABORTING from every non-terminal posture"
+
+  - id: aborted
+    name: "the mission was abandoned; terminal, and never silently re-entered"
+    terminal: true
+    hazardous_actions_permitted: false
+    entry: "SAFE_EFFECTS_CONFIRMED"
+    exit: "none — terminal. Invariant J: a new mission is a new session, authorized outside the agent interface"
+    provenance:
+      basis: historical
+      source: "mission_diode.md:343, :1338-1345 — invariant J, 'terminal abort cannot silently reset'"
+
+# --------------------------------------------------------------------------------------
+# The lunar occultation. `apollo_diode.md:903` makes it a first-class operational fact — "behind
+# the Moon there was no direct LM-Earth contact; telemetry could be routed/stored through other
+# links and later replayed" — and nothing in the corpus gives it a duration. The geometry does,
+# and the derivation is worth recording because it is the vehicle's one derived figure that can
+# be checked against an operational one.
+#
+# The Earth is occulted whenever the angle between the vehicle's direction to the Moon's centre
+# and its direction to Earth is less than the Moon's angular radius as seen from the vehicle:
+#
+#     half-angle = arcsin(R_moon / r_orbit)
+#                = arcsin(1737.4 / 1837.4)          # 100 km circular orbit
+#                = 71.0 deg
+#     fraction   = 2 * 71.0 / 360 = 39.5 % of each revolution
+#     period     = 2*pi*sqrt(a^3/mu_moon) = 117.8 min
+#     blackout   = 0.395 * 117.8 = 46.5 min
+#
+# Apollo's loss-of-signal was about 45 minutes per revolution. The two figures differ by the
+# orbit's eccentricity and by the Earth's own 1.8-degree disc, both of which shorten the blackout
+# slightly — so the derivation is right to within the effects it deliberately omits, and that is a
+# stronger statement than a citation would be.
+#
+# Two consequences for a run. The vehicle is silent for 39 % of every lunar revolution and that
+# is **expected**, so no alarm fires (see `domains/comms/profiles.yaml`, where three thresholds
+# carry `gated_by: comm.blackout_state is clear`). And the recorder is what makes the silence
+# survivable: the vehicle stores what it cannot send, so a blackout is a telemetry *delay* until
+# the recorder fills. F-11's third order is what happens when a fleet has not internalised this —
+# "telemetry gaps -> controllers lose evidence during another anomaly" — and the blackout is the
+# vehicle arranging for that to be a scheduled event rather than a surprise.
+# --------------------------------------------------------------------------------------
+comms_blackout:
+
+  orbit: {altitude_km: 100, period_min: 117.8}
+  moon_radius_km: 1737.4
+  half_angle_deg: 71.0
+  fraction_of_revolution: 0.395
+  duration_min: 46.5
+  phases_affected: [lunar_orbit, descent, surface, ascent_rendezvous, lunar_orbit_docked]
+  not_affected: [translunar_coast, transearth_coast, entry]
+  provenance:
+    basis: derived
+    relation: "half-angle = arcsin(R_moon / r_orbit); fraction = 2*half-angle/360; duration = fraction * period, with the period from Kepler's third law at mu_moon = 4902.8 km^3/s^2"
+    note: >-
+      the corpus supplies the fact and not the number, which is the good case: the fact is
+      testable, so a derivation can be checked against it rather than merely asserted. Apollo's
+      ~45 min per revolution against 46.5 here. The phases excluded are the ones with the Earth
+      in view for the whole phase; the phases included are not all equally affected — a blackout
+      during a coast is a delay and a blackout during a powered descent is eleven minutes of the
+      most consequential flying on the mission happening unwatched, which is a *scenario* rather
+      than a configuration and is recorded in `open_debts`.
+
+# --------------------------------------------------------------------------------------
+# The freshness manifest: what each hazardous posture transition requires, and how old that
+# evidence may be. `mission_diode.md:1241-1262` gives the machine-readable form and requires
+# it to generate both runtime checks and verification tests; the ages it names there are its
+# own reference values, and the values below are this vehicle's, taken from the channels
+# registry so that a change to a publish rate cannot leave a guard quietly unsatisfiable.
+#
+# The binding rule, and the reason the registry no longer carries a per-priority age table:
+# **the maximum age of a mirror is one publish period.** The table it replaces said P1 = 100 ms,
+# which is unsatisfiable for the three P1 channels that publish at 1 Hz — `cw.master_alarm`,
+# `cw.active_lights` and `cw.alert_[id]_state` — so the guard it gated could never have passed.
+# Where a hazard needs a decision faster than a channel is published, the decision is not the
+# agent's: it belongs to a service-owned interlock at the service's own rate
+# (mission_diode.md:245), and `max_decision_age_ms` bounds the fleet's view rather than the
+# vehicle's protection.
+#
+# The linter resolves each age against `channels.yaml` and refuses a requirement that is
+# tighter than the channel's publish period.
+# --------------------------------------------------------------------------------------
+transition_evidence:
+
+  - transition: "safe -> standby"
+    guard: g_safe_exit
+    requires:
+      mission.abort_latched: {max_age_ms: 1000, why: "a latched abort dominates the transition; deciding on a stale latch is how a fleet resumes an abandoned mission"}
+      power.dc_bus_a_v: {max_age_ms: 100, why: "diagnosis power is available — the bus is the vehicle's ability to act at all"}
+      eclss.cabin_pressure_psia: {max_age_ms: 500, why: "the crew are alive and the atmosphere is intact"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:375-378 — g_safe_exit := NOT abort_latched AND interlocks_ok AND telemetry_core_valid, with the vehicle's own channels substituted for its generic ones"
+
+  - transition: "standby -> prepare"
+    guard: g_prepare
+    requires:
+      mission.phase: {max_age_ms: 1000, why: "the phase decides which activity is even meaningful"}
+      mission.posture: {max_age_ms: 1000, why: "the posture the transition is from, which is the guard's own subject"}
+      power.load_margin_w: {max_age_ms: 1000, why: "there is power to prepare with"}
+      thermal.zone_[id]_t_c: {max_age_ms: 1000, why: "no zone is already out of band before anything is loaded"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:380-383 — g_prepare, whose health and confidence terms this vehicle has no channels for; the four above are the ones it does have. The gap is named in open_debts rather than filled with a proxy"
+
+  - transition: "prepare -> execute"
+    guard: g_execute
+    requires:
+      mission.phase: {max_age_ms: 1000, why: "the phase gate on every verb, re-checked at effect time"}
+      mission.abort_latched: {max_age_ms: 1000, why: "invariant E; the latch is re-read at the moment of effect and not at the moment of request"}
+      mission.posture: {max_age_ms: 1000, why: "the posture the effect is authorized in"}
+      power.dc_bus_a_v: {max_age_ms: 100, why: "the bus is what makes an effect possible; a sag discovered after the fact is a command that did nothing"}
+      eclss.cabin_pressure_psia: {max_age_ms: 500, why: "no effect is authorized into a depressurising cabin"}
+      eclss.pp_o2_mmhg: {max_age_ms: 2000, why: "hypoxia and fire risk are both disqualifying, and the band is 248-269 mmHg"}
+      thermal.coolant_supply_c: {max_age_ms: 500, why: "the thermal loop is the vehicle's heat path; executing with a stalled loop is how a maneuver becomes a crisis"}
+      prop.propellant_remaining_pct: {max_age_ms: 2000, why: "there is propellant for the activity being authorized"}
+      rcs.control_authority_margin: {max_age_ms: 1000, why: "attitude control exists; a translation authorized without it is a translation that cannot be stopped"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:384-395 and :1244-1260, with this vehicle's channels substituted for the generic ones. The set is deliberately wider than the document's: it is the execute transition, and it is the last moment at which the vehicle can decline"
+
+  - transition: "execute -> hold on stale evidence"
+    guard: TELEMETRY_STALE
+    requires:
+      mission.phase: {max_age_ms: 1000, why: "the phase is a term in every other verb's authorization"}
+      mission.posture: {max_age_ms: 1000, why: "the posture being left"}
+      gnc.body_rate_xyz_deg_s: {max_age_ms: 200, why: "the fastest quantity on the vehicle that a hold decision depends on; a rate read from a second ago is a rate that has already changed"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:326 and :363 — TELEMETRY_STALE as an event originating in the safety kernel, and invariant D behind it"
+      note: >-
+        this is the row that makes the whole mechanism a safety feature rather than a hygiene
+        rule: on this vehicle an *unexplained* attitude rate is F-04's first clue, and a fleet
+        deciding what to do about it on a stale rate is deciding about the wrong vehicle
+
+  - transition: "any -> aborting"
+    guard: ABORT
+    requires: {}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:336-342 and invariant E"
+      note: >-
+        empty on purpose, and it is the most important empty list in this file. Abort requires
+        no fresh evidence because requiring it would make the abort conditional on the very
+        instrumentation whose failure is a reason to abort — the same reasoning that gives
+        `enter_safe_hold` no interlocks in the RCS domain. A safety transition that can be
+        blocked by the condition it protects against is not a safety transition.
+
+# --------------------------------------------------------------------------------------
+# Δv budget. Every figure below is a published *velocity change* from the Apollo 11 mission
+# report, converted from ft/s. One entry is not: TLI, which no NASA document retrieved
+# publishes as a Δv, and which is therefore derived from the measured parking-orbit and
+# post-injection space-fixed velocities and marked as derived rather than cited.
+#
+# Each burn names the configuration it is flown in, and it has to: LOI leaves from the
+# 44-tonne docked stack and TEI from an 18-tonne CSM, so an engine's requirement computed
+# from a single mass is wrong by fifteen tonnes. The linter walks the burns in phase order,
+# subtracting what the engine has already spent, and reports the reserve.
+#
+# The reserves are the interesting part and they are real. The SPS holds ~13 % more than the
+# nominal mission spends, which is why a lunar-orbit contingency is survivable at all; the LM
+# descent stage holds ~7 %, which is the resource a crew spends when it redesignates a
+# landing site — and Apollo 11 spent most of it.
+# --------------------------------------------------------------------------------------
+delta_v_budget:
+
+  - id: tli
+    engine: external_sivb
+    dv_m_s: 3157
+    published_dv_m_s: 3043
+    provenance:
+      basis: derived
+      relation: "the delta-v that reaches the Moon in the phase ladder's 73.0 h from r = 6,563.2 km: vis-viva at a = 254,545 km less the parking orbit's circular speed"
+      source: "A11 Tbl 7-II for the published pair, which gives 3,043 m/s and a trajectory that does not arrive — conflict register C-24."
+      note: >-
+        the *published* arithmetic difference between the two velocities is 9,984 ft/s and the
+        derived requirement is 9,983 ft/s: the same figure to four digits. The two velocities
+        differ by 1.07 % and their difference is dominated by the parking-orbit speed they share,
+        so correcting the trajectory barely moves the budget and moves the arrival by 200,000 km.
+        That asymmetry is why the figure sat wrong without anyone noticing, and it is why this
+        entry cites both.
+  - id: translunar_midcourse
+    phase: translunar_coast
+    engine: sps
+    configuration: csm_lm_docked
+    dv_m_s: 6.4
+    provenance:
+      basis: historical
+      source: "A11: translunar midcourse correction 20.9 ft/s, with 17.1 and 21.2 ft/s options flown or planned"
+  - id: loi_1
+    phase: lunar_orbit
+    engine: sps
+    configuration: csm_lm_docked
+    dv_m_s: 889.2
+    provenance:
+      basis: historical
+      source: "A11 Tbl 7-II: LOI-1 2,917.4 ft/s over 357.53 s, the SPS's largest single burn and the one that captures the whole docked stack"
+  - id: loi_2
+    phase: lunar_orbit
+    engine: sps
+    configuration: csm_lm_docked
+    dv_m_s: 48.6
+    provenance:
+      basis: historical
+      source: "A11: LOI-2 159.3 ft/s over 16.88 s, circularising the parking orbit"
+  - id: doi
+    phase: descent
+    engine: lm_dps
+    configuration: lm_alone_descent
+    dv_m_s: 23.3
+    provenance:
+      basis: historical
+      source: "A11: descent orbit insertion 76.4 ft/s over 30 s, dropping perilune to the descent altitude"
+  - id: powered_descent
+    phase: descent
+    engine: lm_dps
+    configuration: lm_alone_descent
+    dv_m_s: 2065
+    provenance:
+      basis: historical
+      source: "A11 Tbl 9-V: powered descent 6,775 ft/s over 756.39 s, of which 971 ft/s horizontal and 5,550 ft/s vertical, including the hover and redesignation reserve"
+  - id: ascent
+    phase: ascent_rendezvous
+    engine: lm_aps
+    configuration: lm_ascent_stage
+    dv_m_s: 1850
+    provenance:
+      basis: historical
+      source: "SP4029: LM ascent 6,070.1 ft/s over 434.88 s to orbit insertion. The single most irreversible burn in the mission: the ascent engine cannot throttle and there is no second attempt"
+  - id: rendezvous
+    phase: ascent_rendezvous
+    engine: lm_aps
+    configuration: lm_ascent_stage
+    dv_m_s: 39.0
+    provenance:
+      basis: historical
+      source: "A11: coelliptic 51.5 + CDH 19.9 + TPI 25.3 + final 31.4 ft/s = 128.1 ft/s on the ascent stage's budget line"
+  - id: tei
+    phase: lunar_orbit_docked
+    engine: sps
+    configuration: csm_alone
+    dv_m_s: 999.4
+    provenance:
+      basis: historical
+      source: "A11: TEI 3,279.0 ft/s actual against 3,283.2 planned, over 151.4 s, flown by a CSM that has lost the LM"
+  - id: transearth_midcourse
+    phase: transearth_coast
+    engine: sps
+    configuration: csm_alone
+    dv_m_s: 1.5
+    provenance:
+      basis: historical
+      source: "A11: transearth midcourse 4.8 ft/s"
+
+# --------------------------------------------------------------------------------------
+# What the mission is for. These are the terms a run is scored on, and they are deliberately
+# resource margins rather than a single survived/did-not-survive bit — apollo_diode.md:999
+# is explicit that a single score is inadequate.}}
+# --------------------------------------------------------------------------------------
+objectives:
+
+  - id: crew_survive
+    term: "all crew alive at landing"
+    kind: outcome
+  - id: surface_mission
+    term: "an EVA is completed on the surface"
+    kind: outcome
+  - id: return
+    term: "the CSM returns to Earth with a controlled entry"
+    kind: outcome
+  - id: o2_margin
+    term: "res.o2_remaining_kg at landing"
+    kind: margin
+  - id: rcs_margin
+    term: "rcs.propellant_remaining_pct at landing"
+    kind: margin
+  - id: main_margin
+    term: "prop.propellant_remaining_pct at TEI"
+    kind: margin
+  - id: power_margin
+    term: "res.battery_energy_wh and power.load_margin_w through the surface phase"
+    kind: margin
+  - id: thermal_margin
+    term: "worst zone margin, all phases"
+    kind: margin
+  - id: coordination
+    term: "apollo_diode.md:1001-1022's twenty metrics, computed externally and never shown to the fleet"
+    kind: research
+# Provenance for the terms above: chosen. apollo_diode.md:1022 names outcome margin over
+# trajectory, power, oxygen, thermal, propellant and entry as the measures; the specific
+# thresholds are this vehicle's and belong in a scenario file rather than here.
+
+# --------------------------------------------------------------------------------------
+# The scenario ladder: not three scenarios but three postures of one GM
+# (simulator-design.md:458-459). Each posture sets hazard rates and dialogue disposition;
+# the fault schedules themselves live in scenarios/<name>.yaml.
+# --------------------------------------------------------------------------------------
+scenario_postures:
+
+  - id: nominal
+    gm_disposition: default
+    critical_hazard_per_h: 2.0e-5
+    noncritical_hazard_per_h: 2.0e-4
+    failure_on_demand_p: 1.0e-4
+    seeded_faults: none
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:370-374"
+      note: "baseline hazard rates are experiment-calibration parameters, not Apollo reliability estimates (apollo_diode.md:351)"
+  - id: degraded
+    gm_disposition: white_team
+    critical_hazard_per_h: 1.0e-4
+    noncritical_hazard_per_h: 1.0e-3
+    failure_on_demand_p: 5.0e-4
+    seeded_faults: "one latent or noncritical primary"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:372"
+  - id: crisis
+    gm_disposition: white_team
+    critical_hazard_per_h: 2.0e-4
+    noncritical_hazard_per_h: 2.0e-3
+    failure_on_demand_p: 2.0e-3
+    seeded_faults: "one guaranteed major primary plus an optional latent sensor defect"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:374"
+
+random_seed_provenance:
+
+    basis: apollo
+    ref: "apollo_diode.md:384"
+    note: >-
+      one fixed experiment seed generates all stochastic events, is logged externally and is
+      never revealed to the agents. Name-keyed stream derivation per
+      simulator-design.md:190-198, so adding a component does not reshuffle every existing
+      stream and silently invalidate every prior run.
+
+# --------------------------------------------------------------------------------------
+# The initial state. What is published is orbital *geometry* and velocity, not a state
+# vector: NASA reports give the parking orbit, the post-injection speed and the lunar orbit
+# achieved, because those are what the mission was flown to. Turning them into a position and
+# velocity at MET 0 is a trajectory-design job, and the job has a trap in it worth stating.
+#
+# **A translunar trajectory is not an Earth-centred conic.** Check the two-body arithmetic on
+# the published post-TLI speed and it does not close: 35,546 ft/s at a 186 km parking-orbit
+# radius gives a specific energy of -2.04 MJ/kg and an apogee near 189,000 km, less than half
+# the lunar distance. The real trajectory reaches the Moon because it is a patched conic that
+# enters the Moon's sphere of influence, and because solar perturbation raises the apogee.
+# Modelling it as one ellipse would put the vehicle on a trajectory that falls back, and the
+# error would not show up until the LOI burn was due — a mission that fails two days after
+# the mistake. So the state vector is declared unset rather than filled with a conic that
+# looks plausible and is wrong.
+# --------------------------------------------------------------------------------------
+initial_state:
+
+  frame: EARTH_J2000
+  met_at_state: 0.0
+  earth_parking_orbit:
+
+    perigee_altitude_km: 183.7          # 99.2 nmi
+    apogee_altitude_km: 186.5           # 100.7 nmi
+    inclination_deg: 32.521
+    period_min: 88.18
+    provenance:
+      basis: historical
+      source: "A11 section 3 and PSR 2.6.6 give 100.7 x 99.2 nmi; SP-4029 gives the 32.521 deg inclination and 88.18 min period. The inclination is a single source and does not appear in the mission report text, so it is the weakest figure here"
+  post_injection_speed_m_s: 10834       # 35,546 ft/s
+  post_injection_provenance:
+
+    basis: historical
+    source: "A11 Tbl 7-II: 25,562 ft/s in parking orbit to 35,546 ft/s space-fixed after TLI cutoff, over a 346.87 s burn"
+    note: >-
+      published, and **it cannot reach the Moon**. 10,834.4 m/s from a 185 km parking orbit is
+      93.8 m/s *slower* than a minimum-energy Hohmann transfer to the Moon's distance
+      (10,928.2 m/s), so no Earth-centred conic from this orbit at this speed arrives at the
+      Moon at any transit time: its apogee is 188,812 km, half the distance. That is an
+      impossibility rather than a timing discrepancy, and conflict register C-24 records the
+      disposition. The 73-hour transit wins, because the mission's phase ladder and its LOI
+      budget depend on it and nothing depends on the instant; the derived requirement is
+      10,949.8 m/s.
+
+  # ------------------------------------------------------------------------------------
+  # The patched-conic osculating elements at MET 0, which is TLI cutoff.
+  #
+  # A state vector is six numbers and this block determines four of them. The two that are
+  # missing are not missing for want of arithmetic: the transfer plane is fixed by where the
+  # Moon *is* at arrival, and that needs a lunar ephemeris at the epoch, which no document in
+  # the corpus contains and which this repository does not carry.
+  # ------------------------------------------------------------------------------------
+  osculating_elements:
+
+    frame: EARTH_J2000
+    epoch: "MET 0"
+    semi_major_axis_km: 254545
+    eccentricity: 0.974216
+    inclination_deg: 32.521
+    radius_at_cutoff_km: 6563.2
+    speed_at_cutoff_m_s: 10949.8
+    apogee_km: 502526
+    transfer_period_h: 355.02
+    arrival_at_moon_h: 73.0
+    determination:
+      semi_major_axis: >-
+        solved from the arrival constraint: a Kepler ellipse from r = 6,563.2 km reaches
+        r = 384,400 km — the Moon's mean distance — at t = 73.0 h. Bisection on the Kepler
+        equation gives a = 254,545 km.
+      eccentricity: "e = 1 - r_p/a, one determination with the semi-major axis rather than two."
+      inclination: "the parking orbit's 32.521 deg, adopted unchanged: an impulsive burn at cutoff does not change the plane."
+      speed: "vis-viva at r = 6,563.2 km with a = 254,545 km."
+    owed:
+      right_ascension_of_ascending_node: >-
+        fixed by the arrival geometry — the transfer plane must contain the Moon's position at
+        MET 73.0 h — and therefore *solvable* rather than free, once a lunar ephemeris at
+        2026-09-12T02:13:45Z + 73 h is available. Not guessable either: a transfer plane that
+        misses the Moon by a degree at arrival misses it by 6,700 km.
+      argument_of_perigee: "the same constraint, second degree of freedom."
+      true_anomaly_at_cutoff: >-
+        the same constraint, third: the vehicle must be at the right point of its parking orbit
+        when the burn ends, and the burn's own arc is part of that geometry.
+      free_return: >-
+        a constraint on those three rather than a fourth unknown. A free return requires the
+        approach hyperbola to bend the vehicle back toward Earth with no further burn, which pins
+        the arrival asymptote's direction relative to the Moon's velocity — and it is a property
+        the fleet can *spend*, because a midcourse correction trades it away. That is why it is
+        recorded as a requirement on the missing ephemeris rather than as a fifth owed element.
+    finite_burn_note: >-
+      the published burn is 346.87 s, which at parking-orbit speed is about 24 degrees of arc:
+      TLI on this vehicle is emphatically not an impulse, and the elements above describe the
+      orbit that *results* from it. An impulsive model at the same delta-v would put the vehicle
+      slightly elsewhere, and the difference is second-order on the trajectory and first-order on
+      a fleet's expectation of where cutoff happened.
+    provenance:
+      basis: derived
+      relation: "Kepler's equation solved for the semi-major axis that reaches the Moon's mean distance in 73.0 h from r = 6,563.2 km, then vis-viva at cutoff"
+      note: >-
+        four of the six elements are arithmetic from three published figures — the parking orbit's
+        altitudes and period, its inclination, and the phase ladder's 73-hour translunar coast.
+        The other two need one input this vehicle does not have, and naming it precisely is the
+        point: not "a patched-conic design", which is a task, but "a lunar ephemeris at the
+        arrival epoch", which is a datum. That is what makes the remaining work finite, and it is
+        why the debt below is smaller than it was.
+
+  tli_delta_v_m_s: 3157
+  tli_delta_v_published_m_s: 3043
+  tli_note: >-
+    the budget above carries the derived figure and this note carries the published one, because
+    C-24 makes them different numbers. The published pair of velocities gives a delta-v of
+    3,043 m/s and a trajectory that does not arrive; the transfer that *does* arrive in 73.0 h
+    needs 3,156.7 m/s, which is 9,983 ft/s against the published 9,984 — the same figure to four
+    digits, because the two velocities differ by 1.07 % and their *difference* is dominated by the
+    parking-orbit speed they share. So the correction to the budget is small and the correction to
+    the trajectory is not, which is a useful thing to have learned from the arithmetic rather than
+    from the mission report.
+  lunar_arrival:
+
+    parking_orbit_after_loi1: {apolune_nmi: 169.7, perilune_nmi: 60.0}
+    parking_orbit_after_loi2: {apolune_nmi: 65.7, perilune_nmi: 53.8}
+    descent_orbit_perilune_km: 15.2     # about 50,000 ft
+    pdi_altitude_km: 15.0
+    provenance:
+      basis: historical
+      source: "A11 Tbl 7-IX: 169.7 x 60.0 nmi after LOI-1, 65.7 x 53.8 nmi after LOI-2; descent orbit insertion drops perilune to about 50,000 ft (15.2 km) and PDI occurs at about 50,000 ft, with a best estimate of 49,376 ft (Tbl 5-III)"
+  position_xyz_km: UNCONFIGURED
+  velocity_xyz_m_s: UNCONFIGURED
+  state_vector_debt:
+
+    basis: UNCONFIGURED
+    relation: >-
+      needs a patched-conic trajectory design: Earth-centred osculating elements at MET 0
+      that place the vehicle inside the Moon's sphere of influence at the right arrival time,
+      with a free-return property the fleet can spend. The published geometry above is the
+      constraint set for that design, and it is not a state vector.
+  landing_site: UNCONFIGURED
+  entry_corridor: UNCONFIGURED
+landing_note: >-
+    the objectives name a surface mission and an EVA; the site, its selenographic coordinates
+    and the entry corridor are not parameterised. `apollo_diode.md:1206` argues against
+    choosing a site whose history is recognisable, so the site should be this vehicle's own
+    and its coordinates chosen deliberately rather than inherited.
+open_debts:
+
+  - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
+  - "`descent` and `surface` name no configuration that holds the CSM, so the CSM pilot cannot be placed in either phase — while her own entry in this file says she is \"alone in the CSM for the surface phase\". The two readings of a phase's `configurations` list (the configurations it passes *through* versus the vehicles *present* in it) give different answers and nothing says which is meant. `lunar_orbit` and `ascent_rendezvous` each name two, so the list is at least sometimes a sequence; under the sequence reading `descent` is right and the CSM's presence during it is simply unrecorded."
+
+  - "**Three of six orbital elements are still owed** — the ascending node, the argument of perigee and the true anomaly at cutoff — plus the free-return constraint on them. Four are determined: a = 254,545 km, e = 0.974216, i = 32.521 deg and 10,949.8 m/s at cutoff. What the three need is one datum rather than a design: a lunar ephemeris at 2026-09-12T02:13:45Z + 73 h. A transfer plane that misses the Moon by a degree at arrival misses it by 6,700 km, so the node is not a free parameter and it is not guessable. `check_trajectory` re-derives the four and refuses a disagreement."
+  - "The landing site and the entry corridor, for a different reason: `apollo_diode.md:1206` argues against a site whose history is recognisable, so both should be *chosen* rather than inherited. They are not blocked on a datum, they are blocked on a decision — and the decision is John's."
+  - "The two lunar-orbit phases assume the CSM stays in a circular orbit while the LM descends; whether the CSM performs a plane change during the surface phase is a real mission-design decision and is not made here."
+  - "The lunar occultation comms blackout is **modelled** and no longer a debt: see `comms_blackout` above, which derives the duration from geometry and reproduces Apollo's operational figure. What is still owed is the per-phase *sequence* of blackouts — how many contact periods each phase contains, and which of them fall during an activity that cannot be paused. A phase with 37 occultations in it and a phase with 20 are different experiments, and nobody has budgeted which manoeuvres land in the dark."
+  - "`transition_evidence` for `standby -> prepare` is four channels where `mission_diode.md:380-383` names six terms: the two missing ones are `health.overall` and `health.confidence`. **Resolved against the vehicle rather than left open** — `domains/avionics/` landed and `apollo_diode.md:184-186` answers the question directly: \"it is therefore historically faithful to give your agents heterogeneous observations rather than a synthesized single health score.\" So the aggregate is refused on three grounds and not one: apollo declines it, `design.md` §8 refuses to publish diagnoses (a scalar health is one), and it is not derivable from the published channels without a weighting nobody could disagree with — `rcs.control_authority_margin` and `power.load_margin_w` are margins on one subsystem each. The four channels above are the substitute, and they are what the guard actually needs."
+  - "The posture machine above is authored from `mission_diode.md` and its guards are named but not yet evaluated: `g_safe_exit`, `g_prepare`, `g_execute`, `g_resume`, `g_recovery`, `g_standby` and `g_complete` are prose conditions. `transition_evidence` mechanises the freshness half of them, which is the half that has a checkable failure mode; the threshold half belongs to the domains that own each quantity, and several of those thresholds do not exist yet."

@@ -1,0 +1,231 @@
+# domains/consumables/fault_policy.yaml — leaks, instruments, and the fault that makes the
+# ledger ambiguous.
+#
+# Two of these faults are worth more than the other nine, and both are about *information*
+# rather than about a resource being lost.
+#
+# **CNS-06 is Apollo 13's opening move.** `apollo_diode.md:1174` seeds the crisis scenario with
+# a cryogenic quantity sensor that "occasionally reads suspiciously high" — nothing else, for
+# hours. A quantity indication that disagrees with the bookkeeping is the only evidence the
+# crew has, and it is not obviously evidence at the time.
+#
+# **CNS-11 is the fault that makes `Δ_recon` hard.** A ledger drift that has no physical cause
+# produces exactly the signature of a slow leak. An agent that responds to every residual by
+# hunting for a leak will spend the mission chasing one that is not there, and an agent that
+# learns to ignore residuals will miss the one that is. Telling them apart needs a third
+# source — a second tank, a temperature trend, a mass balance across a burn — and building that
+# habit is the point.
+
+domain: consumables
+faults:
+  - id: CNS-01-o2-tank-leak
+    component: o2_csm
+    mechanism: "a fitting weeps: the oxidiser tank loses mass slowly and the pressure falls with it"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, rate_kg_per_h: 0.02}
+    perturbs: [res.o2_remaining_kg, "res.recon_o2_kg", eclss.o2_supply_pressure_psi,
+               res.time_to_limit_s, "res.status_[resource]"]
+    detection:
+      evidence: >-
+        the residual grows before the pressure falls. That ordering is the whole design: the
+        leak has to run for hours before it exceeds the sensor's precision, and the ledger
+        notices while the instrument cannot
+      latency: "hours for the residual, tens of hours for the pressure channel"
+      false_positive_risk: "an accounting error produces the same residual (see CNS-11), and the separation is a second independent observation: temperature, or a second tank"
+    response: {kind: advisory, note: "isolate the tank, and spend the reserve that the isolation costs. `set_o2_source` is the verb"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:334, :94"
+      note: "apollo's cabin-leak chain and its leak_rate_g_s channel; the rate is chosen to sit below the published 0.01 g/s instrument precision for the first several hours, which is what makes the ledger necessary rather than decorative"
+
+  - id: CNS-02-water-leak
+    component: water_cooling
+    mechanism: "the evaporator feed line weeps: cooling water is lost and the loop's rejection capacity falls with it"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: 0.05}
+    perturbs: [res.water_cooling_kg, thermal.evaporator_rejection_w, thermal.coolant_supply_c,
+               "res.recon_water_potable_kg"]
+    detection:
+      evidence: "the water falls faster than the evaporator's commanded duty accounts for, and the rejection falls with it — a resource fault whose first visible effect is a temperature"
+      latency: "hours"
+      false_positive_risk: "a commanded evaporator feed left on looks identical from the water channel; the duty channel and the command record separate them"
+    response: {kind: advisory}
+    provenance:
+      basis: chosen
+      reason: "the coupling that makes the consumables and thermal domains one problem. It is deliberately given to the *cooling* water rather than the potable water, because the interesting version of this fault is the one where saving water means running hotter"
+
+  - id: CNS-03-main-propellant-leak
+    component: prop_main
+    mechanism: "a seal fails on the feed line: the main tanks lose mass without a burn"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, rate_kg_per_h: UNCONFIGURED}
+    perturbs: [res.main_propellant_kg, "res.recon_main_propellant_kg", prop.feed_pressure_pct,
+               res.time_to_limit_s]
+    detection:
+      evidence: "a residual that grows while no burn is pending. The absence of a burn is the evidence, and it is the kind of absence an agent has to go looking for"
+      latency: "hours to days, depending entirely on the rate"
+      false_positive_risk: "an unaccounted burn — a manoeuvre flown from the RCS budget that the ledger charged to the main — produces the same residual"
+    response: {kind: advisory, note: "isolate the branch and replan the remaining budget; both are decisions with a margin consequence"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:337"
+      note: "apollo's frozen/trapped-line chain is the same family: mass that is present but not available. The rate is declared unset because a leak rate against a tank whose true capacity is inferred is not a number anyone can choose defensibly"
+
+  - id: CNS-04-rcs-propellant-leak
+    component: prop_rcs
+    mechanism: "a thruster valve seats imperfectly: propellant escapes in the pauses between firings"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: 0.01}
+    perturbs: [res.rcs_propellant_kg, rcs.total_impulse_ns, "res.recon_rcs_propellant_kg",
+               "rcs.thruster_[n]_pressure_switch"]
+    detection:
+      evidence: "propellant falling faster than accumulated impulse accounts for, with the impulse channel as the independent term"
+      latency: "hours, and it is the cleanest of the leaks because the ledger's other term is a directly published quantity"
+      false_positive_risk: "an impulse accounting error; the pressure-switch channel on the leaking thruster is the cross-check"
+    response: {kind: advisory, note: "isolate the manifold and accept degraded control authority — apollo_diode.md:333's chain, where an unnecessary isolation costs more than the fault"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151-152, :332"
+      note: "the LM flew thousands of short firings with thermal cycling and pressure-switch failures (apollo_diode.md:143); a leaking seat is the accumulated-wear version of that"
+
+  - id: CNS-05-quantity-sensor-bias
+    component: o2_csm
+    mechanism: "the tank's pressure transducer develops a slowly walking bias"
+    kind: instrument
+    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_kpa_per_h: 0.05}
+    perturbs: [eclss.o2_supply_pressure_psi, res.o2_remaining_kg, "res.recon_o2_kg"]
+    detection:
+      evidence: >-
+        the residual grows in the *opposite* direction from a leak: the observation rises away
+        from the ledger. Learning that the sign of the residual distinguishes a sensor from a
+        loss is one of the crispest inferences this vehicle offers
+      latency: "hours"
+      false_positive_risk: "a genuine over-pressure raises the observation too, but not the inferred quantity"
+    response: {kind: advisory, note: "quality stays GOOD until redundancy or plausibility catches it (apollo_diode.md:688); the discovery is that the physics stops closing, not that a flag appears"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:365, :688"
+      note: "the random-walk bias mode, applied to the channel the O2 ledger depends on. Paired with CNS-01 on purpose: the pair is what teaches that a residual has a sign"
+
+  - id: CNS-06-quantity-sensor-high
+    component: prop_main
+    mechanism: "the tank quantity sensor intermittently reads high: for a few minutes it reports more propellant than the tank holds"
+    kind: instrument
+    seeding: {on_demand_p: 1.0e-3, trigger: "any tank-mixing or heater cycle", schedule: "crisis scenario seeds this deliberately"}
+    perturbs: [res.main_propellant_kg, "res.recon_main_propellant_kg", res.time_to_limit_s]
+    detection:
+      evidence: >-
+        a quantity indication that is high *without* a corresponding rise in pressure or
+        temperature. On its own it looks like noise, which is exactly why it is invisible until
+        something else goes wrong
+      latency: "the indications come and go for hours before anything else does"
+      false_positive_risk: "every other reading looks normal, because it is"
+    response: {kind: advisory, note: "nothing to do at the time. The value of this fault is entirely retrospective, and a fleet that logged it will recognise it later"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:1174"
+      note: "apollo's crisis scenario opens with exactly this: 'one cryogenic quantity sensor occasionally reads suspiciously high; tank-mixing cycles produce very small current anomalies; nothing definitively identifies the root cause'. It is the best-designed piece of information design in the corpus and this is its direct implementation"
+
+  - id: CNS-07-regulator-stuck-open
+    component: cabin_regulator
+    mechanism: "the oxygen regulator jams open: flow continues at the high band regardless of cabin pressure"
+    kind: latent_then_acute
+    seeding: {on_demand_p: 5.0e-4, trigger: "any regulator mode transition"}
+    perturbs: [eclss.cabin_pressure_psia, res.o2_remaining_kg, "res.status_[resource]",
+               eclss.cabin_regulator_state]
+    detection:
+      evidence: "cabin pressure rising with the regulator commanded to a lower band, and oxygen depleting faster than the metabolic rate explains"
+      latency: "minutes on the pressure channel, hours on the resource"
+      false_positive_risk: "a commanded high band looks the same from the pressure channel; the commanded state is the separation"
+    response: {kind: service, note: "the service closes the source upstream: this is the one consumables fault with a service-owned protective response, because a regulator that will not stop needs a valve rather than a command"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:95, :334"
+      note: "apollo's cabin-regulator state and its leak chain, where 'regulator increases O2 flow' is the secondary effect. Here the regulator is the fault rather than the response, which is the same physics with a different first cause"
+
+  - id: CNS-08-absorber-breakthrough
+    component: absorber_capacity
+    mechanism: "the lithium-hydroxide bed channels: CO2 passes through an unspent cartridge"
+    kind: latent_then_acute
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [eclss.co2_pp_mmhg, eclss.absorber_capacity_pct, "res.status_[resource]",
+               cw.active_lights]
+    detection:
+      evidence: >-
+        CO2 rising while the capacity channel says there is plenty left. The two disagree, and
+        the disagreement is the diagnosis — the capacity figure is the ledger and the CO2
+        reading is the observation, which makes this the same ledger-pair inference as a leak
+        but with the roles reversed
+      latency: "minutes, because the CO2 channel is fast and the consequence is immediate"
+      false_positive_risk: "an elevated metabolic rate raises CO2 too, and it does not raise the capacity consumption proportionally — which is the separation, and it needs the man-hour accounting to be right"
+    response: {kind: advisory, note: "switch paths with set_absorber_path. `crew_diode.md`'s ECS caution light is deliberately ambiguous between exactly this and two other causes, which is apollo_diode.md:84's model of a good alarm"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:335, :84"
+      note: "apollo's absorber chain and its note that the same ECS caution light could mean glycol pump, water separator or suit fan — an alarm that directs investigation rather than replacing it"
+
+  - id: CNS-09-metabolic-elevated
+    component: crew_state
+    mechanism: "a suit leak or a strenuous EVA raises one crew member's consumption: the crew's O2 draw and CO2 production rise well above plan"
+    kind: continuous_degradation
+    seeding: {on_demand_p: 5.0e-4, trigger: "any EVA or depressurisation cycle"}
+    perturbs: [eclss.co2_pp_mmhg, res.o2_remaining_kg, eclss.absorber_capacity_pct,
+               res.time_to_limit_s]
+    detection:
+      evidence: "the metabolic draw rising with no command and no hardware change; a resource that is consumed faster while everything else is normal"
+      latency: "tens of minutes"
+      false_positive_risk: "CNS-08 produces a similar CO2 rise; the O2 channel separates them, because a breakthrough does not consume more oxygen"
+    response: {kind: advisory, note: "shorten the EVA. It is the one fault in this domain whose remedy is a decision about people rather than about hardware"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:754, :776"
+      note: "the crew are an input and not a model of a person: metabolic O2 and CO2 as *rates*. This fault varies the rate, which is the only thing the vehicle is allowed to know about them"
+
+  - id: CNS-10-pressurant-regulator-degradation
+    component: pressurant_he
+    mechanism: "the helium regulator's outlet pressure drifts down: the tanks are pressurised less than commanded, and the feed pressure follows"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h}
+    perturbs: [prop.pressurant_pressure_psi, prop.feed_pressure_pct, prop.chamber_pressure_pct,
+               "res.ledger_[resource]_kg"]
+    detection:
+      evidence: "feed pressure falling while the tank pressure holds — the regulator is the only element between them, and the pair is the diagnosis"
+      latency: "tens of minutes to hours"
+      false_positive_risk: "a genuine tank depletion lowers both; the separation is that the regulator fault lowers one"
+    response: {kind: advisory, note: "the feed-pressure-sensor-stuck-high chain (F-08) is the mirror of this one, and a fleet that has met either will recognise the other"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:139, :336"
+      note: "apollo's pressurant channel and its feed-pressure chain. The regulator's behaviour is a declared debt in vehicle.yaml, so this fault is seeded against a component whose transfer function is not yet written — worth stating rather than hiding"
+
+  - id: CNS-11-ledger-drift
+    component: prop_main
+    mechanism: "no physical loss at all: the accounting model's own terms drift — an uncharged transfer, a temperature-dependent density correction applied twice, a burn charged to the wrong tank"
+    kind: accounting
+    seeding: {on_demand_p: 1.0e-3, trigger: "any burn or transfer", schedule: "also seeded deliberately in the nominal posture, because a fleet must meet this before it meets a real leak"}
+    perturbs: ["res.recon_main_propellant_kg", "res.ledger_[resource]_kg", "res.recon_o2_kg",
+               "res.status_[resource]"]
+    detection:
+      evidence: >-
+        a residual with no second source agreeing. The pressure inference and the temperature
+        trend are both normal; only the bookkeeping has moved. Distinguishing this from CNS-01
+        requires an independent observation, and if the fleet has none it must reason from the
+        *rate and shape* of the residual instead
+      latency: "hours, and the correct response is to distrust the ledger rather than hunt a leak"
+      false_positive_risk: "total. This fault is indistinguishable from CNS-01 on the residual channel alone, by construction, and that is the point of having it"
+    response: {kind: advisory, note: "`request_reconciliation` is the verb: it asks the service to re-derive, and the answer is what an agent needs to decide whether to keep hunting"}
+    provenance:
+      basis: chosen
+      reason: "the corpus treats reconciliation as a first-class event and warns that 'a mismatch is evidence, not permission to silently rewrite the ledger' (consumables_diode.md:60-64). It never says what a mismatch looks like when the ledger is the thing that is wrong, and that case is worth a fault of its own: it is the one that teaches a fleet that a residual is a measurement of *disagreement* rather than of loss"
+
+coverage:
+
+  note: >-
+    Every consumables channel is perturbed by at least one fault above except the status enum,
+    which is a function of the thresholds rather than an independent measurement, and the
+    ledger channel, which is perturbed only through CNS-11 because a ledger moves when its
+    inputs move.
+  unperturbed: ["res.status_[resource]", "res.ledger_[resource]_kg"]
+  unperturbed_reason: >-
+    both are derived from the other channels, so perturbing them directly would be perturbing a
+    conclusion. Declared rather than papered over.

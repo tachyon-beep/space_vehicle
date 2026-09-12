@@ -1,0 +1,455 @@
+# domains/rcs/fault_policy.yaml — eleven faults, and the corroboration rule that governs them.
+#
+# ## The rule this domain exists to test
+#
+# `apollo_diode.md:333` and `rcs_dode.md:944` state the same requirement from two directions: **a
+# single discrepant pressure switch must not condemn a thruster.** The pressure switch is a
+# low-cost, single-string indication of something the vehicle cannot otherwise see directly, and
+# it is wrong often enough that believing it is a mistake with a specific shape — you isolate a
+# healthy thruster, lose its control authority, and discover the error when the authority you
+# needed is gone.
+#
+# The corroboration ladder is therefore built into the fault definitions rather than into a
+# threshold:
+#
+#     ok  ->  suspect  ->  failed_off | failed_on  ->  isolated
+#
+# A legal commanded pulse with drive evidence and no response evidence reaches `suspect` and goes
+# no further. `failed_off` needs a second qualifying pulse, or a corroborating accelerometer, or
+# both. `isolated` is a *fleet* decision and no fault in this file produces it — which is why
+# F-05's third-order effect is a thing a fleet does rather than a thing that happens.
+#
+# ## The fault that is the vehicle's own unknown
+#
+# RCS-11 is the reason the residual accumulator is a published channel. If the qualified minimum
+# firing time is larger than the widths the controller keeps requesting, the accumulator grows,
+# every pulse is refused as illegally short, and the thruster never fires. Nothing has failed:
+# no valve fault, no switch disagreement, no driver evidence, no health conclusion. The only
+# trace is `rcs.thruster_[n]_residual_ns` climbing while `rcs.thruster_[n]_valve` never asserts —
+# a vehicle that has stopped complying, with all its instrumentation reporting normally.
+#
+# ## Where a fault's `perturbs` list carries the argument
+#
+# The linter refuses a fault that perturbs no published channel (`review-findings.md` #11). For
+# most domains that is a coverage rule. Here it is sharper: three of the eleven faults below
+# perturb channels in *other* domains on purpose, because the RCS domain's own instrumentation is
+# exactly what fails to show them. A stuck-on thruster is first visible as a body rate; a
+# no-response thruster is first visible as an acceleration that did not happen; a driver fault is
+# first visible as a bus current. An RCS fault list that only perturbed `rcs.*` would be a list
+# of faults that cannot be seen.
+
+domain: rcs
+
+faults:
+
+  - id: RCS-01-stuck-on
+    component: thruster_valve
+    mechanism: "a thruster valve fails open and stays open: it fires continuously, or in pulses that never end"
+    kind: discrete
+    seeding:
+      hazard: 6.0e-4
+      unit: per_h
+      trigger: "any thruster whose valve has been commanded at least once in the last hour"
+    perturbs: ["rcs.thruster_[n]_valve", "rcs.thruster_[n]_pressure_switch",
+               "rcs.thruster_[n]_health", rcs.total_impulse_ns, rcs.propellant_remaining_pct,
+               "rcs.control_authority_margin", gnc.body_rate_xyz_deg_s]
+    detection:
+      evidence: >-
+        F-04's chain, and the point of it is that the first clue is not in this domain. The valve
+        still reads as commanded — it *is* commanded, and it is not obeying — so the first
+        unmistakable evidence is `gnc.body_rate_xyz_deg_s` climbing when nothing asked it to. The
+        vehicle's corroboration is `structure.accel_xyz_g` for a real acceleration and
+        `rcs.total_impulse_ns` for propellant leaving the tank, and the FDIR rule is
+        `rcs_dode.md:1050`: command OFF, thrust evidence TRUE, after `VALVE_CLOSE_MAX` plus the
+        sensor-latency margin
+      latency: >-
+        seconds to the rate, minutes to the conclusion. The rate is immediate and the *attribution*
+        is not: a rate with no commanded torque could be a stuck thruster, a leak, a plume
+        impingement or an estimator fault, and separating them is the work
+      false_positive_risk: >-
+        low for the rate and high for the attribution. Any of the four causes produces the same
+        first clue, and the vehicle will not choose between them for the fleet
+    response:
+      kind: service
+      note: >-
+        S0: the branch is isolated or the group inhibited without asking, because a thruster
+        firing continuously is spending the propellant a return depends on. The fleet's decision
+        is what happens next, and the vehicle's contribution is `rcs.control_authority_margin`,
+        which is what the isolation just cost. F-04's third-order effect — the high-gain antenna
+        leaving its beam — is not a separate fault: it is the attitude rate meeting the pointing
+        requirement, and `comm.snr_db` is where a fleet notices it
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:332, :1158"
+      note: >-
+        apollo's failure chain and its "stuck-on/off signature" event on `rcs.thruster_[n]_valve`.
+        The corroboration rule is `rcs_dode.md:947-949`
+
+  - id: RCS-02-no-response
+    component: thruster_valve
+    mechanism: "a thruster is commanded and nothing happens: the valve does not open, or opens onto a dead catalyst bed"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.5e-3
+      trigger: "any commanded pulse whose width exceeds the verification-pulse minimum"
+    perturbs: ["rcs.thruster_[n]_pressure_switch", "rcs.thruster_[n]_impulse_ns",
+               "rcs.thruster_[n]_health", rcs.control_authority_margin,
+               rcs.allocation_residual, gnc.body_rate_xyz_deg_s]
+    detection:
+      evidence: >-
+        the FDIR rule of `rcs_dode.md:1047`: pulse width at or above `VERIFY_PULSE_MIN`, drive
+        evidence TRUE, response evidence FALSE, after `IGNITION_RESPONSE_MAX` plus the
+        sensor-latency margin. The vehicle reaches `suspect` on the first qualifying pulse and
+        `failed_off` only on corroboration — a second pulse, or an accelerometer that agrees
+        nothing happened
+      latency: "one qualifying pulse to `suspect`; two to a conclusion"
+      false_positive_risk: >-
+        the pressure switch is exactly the sensor most likely to be wrong, and RCS-03 below is
+        that failure with its own entry. The separation is the *response* the vehicle takes:
+        nothing is removed from the allocator at `suspect`, so a false positive costs the fleet
+        nothing until it decides to act on one
+    response:
+      kind: service
+      note: >-
+        the thruster leaves the allocator's available set and the other fifteen absorb the work,
+        which is a real loss of authority on the affected axis and is reported as one. The
+        interesting consequence is not the thruster: it is that a fleet which has been training on
+        nominal responses learns here that `suspect` and `failed_off` want different decisions
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:947 — 'Commanded legal pulse + electrical drive evidence, but no response sensor and/or expected angular acceleration'; 'Require configured corroboration over one or more qualifying pulses'"
+
+  - id: RCS-03-pressure-switch-failure
+    component: thruster_thrust
+    mechanism: "a pressure switch fails while the thruster is healthy: it reports no thrust for a thruster that fired"
+    kind: instrument
+    seeding:
+      hazard: 3.0e-4
+      unit: per_h
+      bias: "stuck low, intermittent"
+    perturbs: ["rcs.thruster_[n]_pressure_switch", "rcs.thruster_[n]_health",
+               rcs.control_authority_margin]
+    detection:
+      evidence: >-
+        the *absence* of the consequences. A genuinely failed thruster costs attitude performance
+        and shows in `rcs.allocation_residual` and the body rate; this one costs nothing until
+        somebody acts on it. So the corroboration is `structure.accel_xyz_g` — the acceleration
+        the vehicle actually got — and `rcs.total_impulse_ns` still rising as though the thruster
+        were working, because it is
+      latency: >-
+        the switch is wrong from the moment it fails; the *belief* that something is wrong arrives
+        in one question, and the decision to act on it in a few minutes
+      false_positive_risk: >-
+        and this is the fault where the risk is not the vehicle's but the fleet's. The vehicle
+        reaches `suspect` and stops. Whether `failed_off` follows is a decision — the fleet's, or
+        the FDIR's if it were allowed to condemn on one sensor, which is what `apollo_diode.md:333`
+        forbids
+    response:
+      kind: advisory
+      note: >-
+        the vehicle's response is deliberately nothing beyond `suspect`, and F-05's third-order
+        effect is entirely in the fleet's hands: operators isolate a healthy thruster, the
+        isolation costs authority, and the vehicle reports the cost in
+        `rcs.control_authority_margin` without ever saying the isolation was a mistake. This is
+        the cleanest test of whether a command team can hold two hypotheses at once
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:333"
+      note: >-
+        apollo's chain, whose note is explicit that a single discrepant switch must not condemn a
+        thruster. `rcs_dode.md:944` repeats it, which is why it is stated twice in this file:
+        once as a detection rule and once as a response
+
+  - id: RCS-04-low-thrust
+    component: thruster_thrust
+    mechanism: "a thruster still fires but delivers less than it should: a partially blocked injector, a degraded catalyst bed, a failing seal"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      bias_walk: 0.03
+    perturbs: ["rcs.thruster_[n]_impulse_ns", rcs.total_impulse_ns,
+               rcs.propellant_remaining_pct, rcs.allocation_residual,
+               rcs.control_authority_margin]
+    detection:
+      evidence: >-
+        `rcs_dode.md:950`: "realized angular/linear impulse systematically below model", with the
+        residual persisting beyond the dispersion envelope. This is a *statistical* detection and
+        the only one in the file — a single low pulse is noise, and the evidence is a trend against
+        a model. The per-thruster impulse channel exists for this fault and nothing else: in
+        `rcs.total_impulse_ns` a single derated thruster is invisible next to fifteen healthy ones
+      latency: "tens of pulses to a trend, longer to a conclusion"
+      false_positive_risk: >-
+        the model is the risk. If Isp or thrust is wrong for the whole fleet, every thruster looks
+        derated together, and the fault is in `components.yaml` rather than in the vehicle. The
+        separation is that a real derating appears on one thruster against its siblings — which is
+        exactly why the domain publishes per-thruster impulse rather than only the total
+    response:
+      kind: advisory
+      note: >-
+        derate the thruster's effectiveness, let the allocator work around it, and isolate only if
+        severe. The fleet-visible consequence is a slow drift in the propellant estimate against
+        the consumables ledger, which is `CNS-11`'s signature arriving from the other direction:
+        two faults that look alike and want different responses
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:950 and :933 — Cassini thruster-leakage work as the precedent for model-based thruster monitoring, and the healthy-versus-fault hypothesis comparison"
+
+  - id: RCS-05-valve-feedback-mismatch
+    component: thruster_valve
+    mechanism: "the valve's commanded state and its sensed state disagree past the transit time"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any commanded valve transition"
+    perturbs: ["rcs.thruster_[n]_valve", "rcs.thruster_[n]_pressure_switch",
+               "rcs.thruster_[n]_health"]
+    detection:
+      evidence: >-
+        `rcs_dode.md:953` — command and sensed state disagree past the transit time, with driver
+        current and position or pressure evidence as corroboration. It is a *timing* diagnosis
+        rather than a value one: the same readings inside the transit window are normal and
+        outside it are a fault, which makes the valve's own latency a parameter of the detector
+        and one of the constants this domain does not have
+      latency: "one transit time past the command"
+      false_positive_risk: >-
+        high if the transit time is wrong, which is why the detection is stated against
+        `VALVE_CLOSE_MAX` rather than a bare threshold. A mismatch that appears on every pulse is
+        the transit time being mis-set, not a valve failing
+    response:
+      kind: service
+      note: "inhibit the dependent thrusters and isolate as appropriate — the conservative direction, because a valve whose position is unknown is a valve that might be open"
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:953 — 'Command and sensed state disagree past transit time'; driver current plus position/pressure evidence"
+
+  - id: RCS-06-driver-fault
+    component: valve_driver
+    mechanism: "the driver circuit opens or shorts: the command is issued and the coil never energizes, or energizes without limit"
+    kind: discrete
+    seeding:
+      hazard: 1.5e-4
+      unit: per_h
+    perturbs: ["rcs.thruster_[n]_valve", "rcs.thruster_[n]_health",
+               rcs.control_authority_margin, power.bus_a_current_a]
+    detection:
+      evidence: >-
+        current where current should not be, or none where it should. `rcs_dode.md:1064` and :954
+        both key on a current envelope nobody publishes for this thruster, so the *fault* is
+        modelled and the envelope is not: what the vehicle can detect is the electrical
+        consequence on `power.bus_a_current_a` and the mechanical consequence of a valve that
+        never moved. The short circuit is the urgent half and `rcs_dode.md:955` makes it
+        independent protection rather than a computed threshold, which is the correct division —
+        a fault fast enough to destroy a driver is not one to detect in software
+      latency: "immediate for the short, one pulse for the open"
+      false_positive_risk: "low; the failure modes are electrical and unambiguous once the current is visible at all"
+    response:
+      kind: service
+      note: "de-energize or isolate immediately for the short; disable the channel and substitute a thruster for the open. The asymmetry is speed: an overcurrent is a hazard in milliseconds and an open circuit is merely a capability loss"
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:954-955 — driver open circuit and driver short/overcurrent, with independent electrical protection on the short"
+
+  - id: RCS-07-feed-pressure-low
+    component: feed_pressure
+    mechanism: "a feed branch loses pressure: a regulator fails, a line partially blocks, or the pressurant is not keeping up with demand"
+    kind: sustained
+    seeding:
+      hazard: 4.0e-4
+      unit: per_h
+      drift_pct_per_h: 1.5
+    perturbs: ["rcs.quad_[a-d]_feed_pressure_pct", "rcs.thruster_[n]_impulse_ns",
+               rcs.control_authority_margin, rcs.allocation_residual]
+    detection:
+      evidence: >-
+        apollo's own `<90` event on `rcs.quad_[a-d]_feed_pressure_pct`, whose nominal band is
+        95-105. The threshold is published and the *attribution* is not: a low feed is a
+        regulator, a blockage or a pressurant problem, and the three want different responses.
+        `rcs_dode.md:957` requires multiple sensors or model plausibility where available, which on
+        this vehicle means checking whether the consumables ledger agrees that propellant is
+        leaving the tank
+      latency: "seconds at the sensor, a minute to the cause"
+      false_positive_risk: >-
+        a genuine pressure transient during a heavy firing sequence is not a fault. The 1 s assert
+        dwell exists for exactly this, and the reason it is only one second is that a feed below
+        its firing-ready limit makes every subsequent pulse a guess
+    response:
+      kind: service
+      note: "inhibit the affected group and re-evaluate the alternate string — the same decision the group-state verb exposes, taken by the vehicle when the fleet is not there to take it"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:148"
+      note: "apollo's <90 event. `rcs_dode.md:957-958` adds the corroboration requirement and the alternate-string response"
+
+  - id: RCS-08-branch-leak
+    component: feed_pressure
+    mechanism: "propellant or pressurant leaves a branch without being fired: a seal weeps, a line cracks, a valve seats badly"
+    kind: sustained
+    seeding:
+      hazard: 1.0e-4
+      unit: per_h
+      rate_kg_per_h: UNCONFIGURED
+    perturbs: ["rcs.quad_[a-d]_feed_pressure_pct", rcs.propellant_remaining_pct,
+               rcs.propellant_sigma_pct, "rcs.thruster_[n]_pressure_switch"]
+    detection:
+      evidence: >-
+        the disagreement between the two ways this vehicle counts its RCS propellant. The
+        impulse-derived estimate (`rcs.propellant_remaining_pct`) falls only when thrust is
+        produced; the consumables ledger falls whenever mass leaves. A leak is mass leaving without
+        impulse, so the *difference* is the evidence — and the difference is also what a wrong Isp
+        looks like, which is why the domain publishes both terms instead of a residual
+      latency: "hours. The leak runs below any sensor's precision and the only thing with the resolution to notice is the pair"
+      false_positive_risk: >-
+        total, against a model error. This is the RCS domain's version of the consumables
+        `CNS-11` problem and it has the same answer: it needs a third source or a reasoning step,
+        and `rcs.propellant_sigma_pct` widening while the feed pressure sags is the shape a fleet
+        should be looking for rather than either number alone
+    response:
+      kind: service
+      note: "isolate the branch if safe and declare the resource loss — `rcs_dode.md:952`'s 'declare' is deliberate, because a fleet that isolates a branch without recording the propellant it lost will misprice every later maneuver"
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:951 — 'Pressure/mass decay or anomalous disturbance consistent with leakage while commanded off', thermal-corrected leak model plus secondary evidence"
+
+  - id: RCS-09-allocation-infeasible
+    component: allocation_status
+    mechanism: "the commanded wrench leaves the set the surviving thrusters can produce: an axis has lost too many jets, or a constraint has removed the combination that was doing the work"
+    kind: emergent
+    seeding:
+      coupled_to: "any fault that removes thrusters, plume constraints that appear mid-maneuver, or a mass property change that invalidates the allocator's geometry"
+      trigger: "weighted residual above the configured maximum, or required-axis authority below the configured minimum"
+    perturbs: [rcs.allocation_status, rcs.allocation_residual, rcs.control_authority_margin,
+               rcs.attitude_error_deg, rcs.safety_state]
+    detection:
+      evidence: >-
+        the allocator's own result, which is why it is a published conclusion rather than an
+        inference: the allocator knows the request, the available set and the constraints, and it
+        is the only component that does. `rcs_dode.md:1055` gives the test in two clauses and both
+        matter — a large residual on an axis with authority to spare is a transient, and a small
+        residual on an axis with none is the beginning of the end
+      latency: "one control frame. This is the fastest fault in the domain and the only one detected at 100 Hz"
+      false_positive_risk: >-
+        a large requested slew can legitimately exceed the instantaneous wrench set while remaining
+        feasible over its duration. The hysteresis band is what separates them, and the
+        `constrained` value is the band
+    response:
+      kind: service
+      note: >-
+        degrade the maneuver, refuse the translation, or enter safe hold. The ladder is the
+        vehicle's and the *timing* is the fleet's: `rcs.safety_state` will move on its own if
+        authority keeps falling, and a fleet that has not decided by then has had the decision
+        made for it. This is the fault most likely to be reported as something else — "the target
+        moved" and "the vehicle cannot reach the target" produce the same attitude error
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:961 and :1055-1057 — allocation infeasible as a deterministic allocator result, 'degrade maneuver, refuse translation or enter safe hold'"
+
+  - id: RCS-10-attitude-divergence
+    component: attitude_error
+    mechanism: "the attitude error grows outside its allowed envelope while the controller is trying to converge"
+    kind: emergent
+    seeding:
+      coupled_to: "the estimator, the actuator set, or the controller profile"
+      trigger: "exclude the commanded slew transient, then error or rate outside the envelope"
+    perturbs: [rcs.attitude_error_deg, rcs.safety_state, "rcs.allocation_status",
+               gnc.body_rate_xyz_deg_s, rcs.deadband_deg]
+    detection:
+      evidence: >-
+        `rcs_dode.md:963` with its exclusion clause, which is the whole difficulty: a commanded
+        slew *is* a large attitude error, so the detector has to know what was asked for before it
+        can say the answer is wrong. That makes this fault undetectable without the target, and the
+        target is the fleet's — the vehicle knows what it was told to do only because
+        `set_attitude_target` recorded it
+      latency: "the duration of the transient plus the envelope's own dwell"
+      false_positive_risk: >-
+        a slow slew against a disturbance torque can sit at the edge of the envelope for minutes
+        without diverging. `rcs_dode.md:1074` makes hysteresis and dwell mandatory where threshold
+        chatter would switch modes repeatedly, and this is the threshold that would do it — a
+        chattering divergence alarm would walk the vehicle down the safety ladder on a healthy slew
+    response:
+      kind: service
+      note: >-
+        abort the maneuver and rate-damp or enter safe hold. The interesting part is *which* rung:
+        a fleet with a working estimator and a degraded actuator set should be holding attitude
+        with fewer jets, not giving up, and `rcs_dode.md:1082`'s ladder says so explicitly. A team
+        that treats any divergence as a reason for safe hold will spend the mission's remaining
+        authority on postures it did not need
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:963 — 'Attitude divergence: error/rate grows outside allowed envelope; exclude commanded slew transient; abort maneuver; rate damp/safe hold'"
+
+  - id: RCS-11-accumulator-stall
+    component: pulse_residual
+    mechanism: "the residual accumulator never crosses the minimum-firing threshold, so every requested pulse is refused as illegally short and the thruster stops firing without failing"
+    kind: emergent
+    seeding:
+      on_demand_p: 1.0
+      trigger: >-
+        a minimum qualified firing time larger than the pulse widths the controller is requesting,
+        which is a *configuration* condition rather than a hardware failure: it is what an unknown
+        t_min_on does when the guess goes the wrong way
+    perturbs: ["rcs.thruster_[n]_residual_ns", "rcs.thruster_[n]_valve",
+               "rcs.thruster_[n]_impulse_ns", rcs.control_authority_margin,
+               rcs.attitude_error_deg]
+    detection:
+      evidence: >-
+        a residual that climbs and stays, against a valve that never asserts. There is no other
+        evidence and that is the fault's entire character: the accumulator is doing exactly what
+        it was designed to do — refusing to fire an illegally short pulse — and the vehicle is
+        behaving correctly while ceasing to comply. `rcs_dode.md:822` calls the scheme
+        pulse-density modulation and notes it "preserves long-term average control effort"; this
+        fault is the case where the average it preserves is zero
+      latency: >-
+        the accumulator fills in seconds to minutes depending on the requested widths, and the
+        vehicle's *performance* degrades over the same window. Both are slow enough that the first
+        symptom a fleet sees is usually the attitude error rather than the cause
+      false_positive_risk: >-
+        none, which makes it the rarest kind of fault in this corpus. A rising residual with a
+        silent valve is unambiguous, and it is unambiguous *because* the residual is published —
+        the channel exists to make an unpublished constant's worst failure observable, and if the
+        channel were hidden this fault would be invisible until the attitude was gone
+    response:
+      kind: advisory
+      note: >-
+        there is no vehicle-side response, because nothing is broken. What a fleet can do is change
+        the controller profile to request longer, less frequent pulses, which is the `conservative`
+        deadband profile of `profiles.yaml` — and that is the point of the fault: the correct
+        response is a *fleet* action taken on evidence, not a service action taken on a fault
+        conclusion. A vehicle that "fixed" this by lowering its own minimum firing time would be
+        firing pulses the hardware is not qualified for, which is `set_minimum_pulse_width` by
+        another route
+    provenance:
+      basis: derived
+      relation: >-
+        the failure mode of `rcs_dode.md:807-825`'s accumulator when `t_min_on` exceeds the
+        requested widths, combined with this vehicle's UNCONFIGURED
+        `capability.minimum_firing_time`. It is derived rather than historical because the corpus
+        supplies the mechanism and the vehicle supplies the missing constant
+      note: >-
+        this is the fault that justifies publishing `rcs.thruster_[n]_residual_ns`. Every other
+        channel in the domain could be replaced by an inference from something else; this one
+        cannot, and without it an unknown minimum impulse bit would be a silent failure rather
+        than a bounded one
+
+coverage:
+  note: >-
+    Every channel this domain publishes is perturbed by at least one fault above except the two
+    that report the *service's* own condition rather than the vehicle's —
+    `rcs.allocation_status` is perturbed by RCS-09 and `rcs.safety_state` by RCS-09 and RCS-10,
+    so the coverage is complete; what is deliberately uncovered is `controls.switches`, which is
+    the crew's control surface and not this domain's.
+  unperturbed: [controls.switches]
+  unperturbed_reason: >-
+    a crew switch position is a crew action. In `manual` mode the crew are the controller, and a
+    switch that moved by itself would be a crew-domain or structure-domain fault rather than an
+    RCS one. The RCS domain's job in manual mode is to publish what the vehicle did in response,
+    which is what every channel above does.
+  cross_domain:
+    note: >-
+      four of the eleven faults perturb a channel outside `rcs.*`, and in each case that channel
+      is the *first* or the *only* evidence: `gnc.body_rate_xyz_deg_s` for a stuck thruster (the
+      valve reads as commanded), `structure.accel_xyz_g` for a no-response thruster and for a
+      failed pressure switch (the switch is the thing in doubt), and `power.bus_a_current_a` for
+      a driver fault (a driver with no current envelope cannot be seen electrically from inside
+      this domain). An RCS fault list that only perturbed `rcs.*` would be a list of faults that
+      cannot be seen.

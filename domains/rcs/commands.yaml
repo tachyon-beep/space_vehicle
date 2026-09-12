@@ -1,0 +1,434 @@
+# domains/rcs/commands.yaml — nine verbs, and the eleven this vehicle refuses to have.
+#
+# ## The architectural claim, turned into a verb list
+#
+# `rcs_dode.md:9`: expose RCS/ACS as a trusted attitude-and-wrench **execution service**, not as a
+# remote thruster-firing bus. The verb list is where that claim is either true or false. If a
+# fleet can name a thruster and a duration, the document's architecture has been abandoned; if
+# the smallest thing a fleet can ask for is an *effect* — hold this attitude, translate by this
+# Δv, go to safe hold, stop — then the service owns the estimator, the controller, the allocator
+# and the pulse generator, and the diode is doing its job.
+#
+# So the boundary is drawn at effects, and three consequences follow:
+#
+# - **`request_translation` takes a Δv, not a pulse train.** `rcs_dode.md:735` is explicit: a
+#   translation request "is not synonymous with firing one labeled jet". The agent states a frame,
+#   an impulse or Δv, a window, an attitude policy and a resource ceiling; the trusted service
+#   converts it to force and torque objectives and picks the jets. This is also the difference
+#   between a translation a fleet can reason about and one it can only guess at.
+# - **The minimum impulse bit is not an argument.** `rcs_dode.md:375` puts
+#   `SET_MINIMUM_PULSE_WIDTH` on the forbidden list, and it is the most interesting entry: a
+#   fleet that could set it would be choosing how finely it is allowed to lie about its own
+#   pulses. The value is a qualified hardware constant and the only agent-selectable thing near
+#   it is a *profile*.
+# - **`enter_safe_hold` is never refused.** A1, no interlocks, always admissible — because a
+#   vehicle that can refuse a request to become safer has a safety system that depends on its own
+#   health. This is the one verb here whose authority is deliberately lower than its consequence.
+#
+# ## Where the guards are, and where they deliberately are not
+#
+# Five of the nine verbs declare `none - reviewed`, and in three of those the absence is the
+# point rather than an omission:
+#
+# - `enter_safe_hold` and `abort_rcs_activity` are the two ways to *stop*. A stop with an
+#   interlock is a stop that can be refused, and the propulsion domain's note on `stop_burn`
+#   applies here in full: not having a plain stop is what makes an action irreversible.
+# - `set_rcs_quad` and `isolate_rcs_manifold` have no interlock because a fleet must be
+#   able to make the mistake F-05 describes. The chain's third-order effect is *operators
+#   unnecessarily isolate a healthy thruster*, and a vehicle that refused would delete the
+#   mistake the crisis posture exists to observe. What the vehicle does instead is publish
+#   `rcs.control_authority_margin`, so the cost of the decision is visible while it is being
+#   made. Preventing it would be teaching; showing it is testing.
+#
+# The three that do have interlocks are the three where the guard protects against a
+# *consequence* rather than against a mistake: a new target while the vehicle is already rotating
+# uncommanded, a translation the actuator set cannot fly or the tank cannot afford, and a fault
+# reset while the fault's cause is still present.
+
+domain: rcs
+
+commands:
+
+  - verb: set_rcs_mode
+    argument_schema:
+      mode: {type: enum, values: [auto, manual, free_drift]}
+    authority: A1
+    gate: {kind: preference, variable: rcs_mode_<mode>_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.mode
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Choose who is flying the attitude loop: the service (`auto`), the crew (`manual`), or
+      nobody (`free_drift`). apollo's three modes and no others — `ATT_HOLD` and `TRACK` are
+      targets, argued through `set_attitude_target`, because a mode says *who* is flying and a
+      target says *where*. `manual` is not a fallback here: in it the crew's switch positions
+      reach the valves without passing through this service at all, so a fleet that selects
+      `manual` has handed the vehicle to three people and should expect its own commands to stop
+      mattering.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:147"
+      note: >-
+        vocabulary §4 resolves rcs_dode.md:365's SET_RCS_MODE(ATT_HOLD|TRACK|FREE_DRIFT) into
+        apollo's three modes plus a target verb. The spec's mode list is a control-law taxonomy
+        wearing mode names, and adopting it would have meant a mode enum that duplicates the
+        target channel
+
+  - verb: set_attitude_target
+    argument_schema:
+      frame: {type: enum, values: [body, lvlh, inertial_earth, inertial_moon]}
+      quaternion: {type: array, items: number, length: 4, note: "unit quaternion, w-first"}
+      rate_limit_deg_s: {type: number, optional: true, minimum: 0}
+      tolerance_profile: {type: enum, values: [tight, nominal, loose], optional: true}
+      safe_vector: {type: enum, optional: true,
+                    values: [sun_safe, earth_safe, comm_safe, inertial_safe]}
+    authority: A1
+    gate: {kind: preference, variable: rcs_target_<frame>_enable}
+    interlocks: [rcs_uncommanded_rate]
+    conflict_domain: rcs.target
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Request an attitude: a frame, a unit quaternion, an optional rate limit and tolerance
+      profile, and — for the safe-hold case — which safe vector to acquire. This is the only way
+      to ask the vehicle to *hold* or to *track*, because those are properties of the target and
+      not modes of the controller. The interlock is the interesting one: the vehicle will refuse a
+      new target while it is already rotating uncommanded, because a slew request during an
+      unexplained rate is how a stuck thruster becomes a tumbling vehicle — the controller would
+      fight a torque nobody commanded and the fleet would read the result as a guidance problem.
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:365 and :96 — SET_ATTITUDE_TARGET(frame, quaternion, optional rate, tolerance profile) at A1, and the safe-target list at :1105-1112"
+      note: >-
+        the verb the spec's mode list was standing in for. `safe_vector` is an argument rather
+        than a mode for the same reason: `rcs_dode.md:1107` insists no generic specification can
+        say Sun pointing is always safe, so the safe target is a choice the fleet makes with the
+        power and thermal evidence in front of it
+
+  - verb: set_deadband
+    argument_schema:
+      profile: {type: enum, values: [conservative, nominal, tight, safe_vector]}
+    authority: A2
+    gate: {kind: preference, variable: rcs_profile_<profile>_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.profile
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Select a controller profile, which is what moves the published deadband. A profile and never
+      a gain: vocabulary §4 keeps both `SET_CONTROL_PROFILE` and apollo's derived
+      `rcs.deadband_deg` telemetry, so a fleet chooses between postures somebody qualified and
+      then *sees* what it chose. There is deliberately no interlock — a fleet whose authority is
+      low must be able to loosen the deadband to conserve propellant, and an interlock on
+      authority would forbid exactly the response the vehicle wants. `safe_vector` is in the list
+      because the ladder's safe-hold rung is a controller profile, not a separate mode.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:153"
+      note: >-
+        apollo publishes `rcs.deadband_deg` with a "configuration change" event and no verb to
+        change it; rcs_dode.md:377 supplies SET_CONTROL_PROFILE. Vocabulary §4 keeps both, and
+        `set_control_gain` is on the refused list below
+
+  - verb: request_translation
+    argument_schema:
+      frame: {type: enum, values: [body, lvlh, inertial_earth, inertial_moon]}
+      dv_m_s: {type: number, optional: true, minimum: 0}
+      impulse_ns: {type: number, optional: true, minimum: 0}
+      window_s: {type: number, minimum: 0, maximum: 3600}
+      attitude_policy: {type: enum, values: [hold_current, hold_target, allow_bounded_rotation]}
+      max_propellant_kg: {type: number, minimum: 0}
+      max_attitude_error_deg: {type: number, optional: true, minimum: 0}
+    authority: A2
+    gate: {kind: preference, variable: rcs_translate_<frame>_enable}
+    interlocks: [rcs_authority_floor, rcs_feed_low, rcs_propellant_reserve,
+                 rcs_propellant_uncertainty_high]
+    conflict_domain: rcs.translation
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: false
+    execution_class: deferred
+    maximum_queue_age_s: 600
+    help: >-
+      Ask for a bounded translation: a direction, a Δv or an equivalent impulse, a window, an
+      attitude policy and a propellant ceiling. The trusted service converts it to force and
+      torque objectives and chooses the jets, which is why the argument is an effect and not a
+      thruster. Four guards, and each one is a different kind of no: `rcs_authority_floor` — the
+      actuator set cannot produce the wrench at all; `rcs_feed_low` — the string is not ready;
+      `rcs_propellant_reserve` — there is not enough left; and
+      `rcs_propellant_uncertainty_high` — there may be enough left, and nobody can say so
+      confidently enough to spend it. Not idempotent: two identical requests are two translations,
+      and a retry that the vehicle deduplicated would silently halve the Δv.
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:735-746 — the request schema, and the statement that the vehicle, not the agent, selects legal combinations of jets"
+      note: >-
+        A2 rather than A3 because every argument is bounded and the service can refuse: there is
+        no arbitrary-command surface here, which is what makes A2 defensible for something that
+        moves the vehicle
+
+  - verb: enter_safe_hold
+    argument_schema:
+      safe_vector: {type: enum, optional: true,
+                    values: [sun_safe, earth_safe, comm_safe, inertial_safe, current]}
+      reason: {type: string, optional: true, max_length: 200}
+    authority: A1
+    gate: {kind: preference, variable: rcs_safe_hold_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.safety
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Put the attitude service into its safe ladder and acquire a safe vector. **A1, no
+      interlocks, always admissible** — `rcs_dode.md:349` makes the safer-state request the one
+      command that nothing may refuse, and the reasoning is worth stating: a vehicle that can
+      reject a request to become safer has a safety system whose availability depends on the
+      health of the thing being protected. It is also the only verb on this vehicle whose
+      authority is lower than its consequence, and that asymmetry is deliberate. The queue age is
+      30 seconds because a stale safe-hold request is a request to change the vehicle's posture
+      based on a situation that has moved on.
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:344-349 — ENTER_SAFE_HOLD at P0/A1, 'reassertable; always admissible as safer-state request'"
+      note: >-
+        the rung it enters is `rcs.safety_state`, whose lowest value `fault_safe` still fires.
+        `rcs_dode.md:889` is explicit that a passive no-fire state may be less safe than rate
+        damping, so this verb asks for a *posture* and never for silence
+
+  - verb: abort_rcs_activity
+    argument_schema:
+      scope: {type: enum, values: [translation, slew, all]}
+    authority: A1
+    gate: {kind: preference, variable: rcs_abort_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.activity
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 10
+    help: >-
+      Stop what the service is doing: the current translation, the current slew, or both. This is
+      the plain stop, and its existence is what keeps every other verb here interruptible — a
+      slew that cannot be stopped is a maneuver a fleet has to be sure about before it starts, and
+      `set_attitude_target` would become irreversible in effect while claiming not to be. Ten
+      seconds of queue age, as `stop_burn` has, because a stop that arrives after the activity was
+      due to end reads as an intervention that happened.
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:345 — ABORT_RCS_ACTIVITY, P0/A1, 'cancels current translation/dump/slew if safely abortable'"
+      note: >-
+        the guard clause is kept and the dump is not: C-15 removes reaction wheels from this
+        vehicle, so the only activities left to abort are translations and slews
+
+  - verb: set_rcs_quad
+    argument_schema:
+      group: {type: enum, values: [sm_primary, sm_secondary, cm, lm]}
+      state: {type: enum, values: [enable, inhibit]}
+    authority: A2
+    gate: {kind: preference, variable: rcs_group_<group>_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.group_<group>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Enable or inhibit a whole string of thrusters. Inhibiting is always allowed and enabling is
+      not symmetric: a group whose thrusters have latched health conclusions cannot be re-enabled
+      until those are cleared through `reset_latched_fault`, which is the recovery-check
+      requirement `rcs_dode.md:372` states. No interlock, deliberately — F-05's third-order effect
+      is operators isolating a healthy string on one sensor's word, and the vehicle's job is to
+      show the authority cost (`rcs.control_authority_margin`) rather than to prevent the
+      decision. A vehicle that refused would be running the experiment's conclusion for it.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243"
+      note: >-
+        apollo's `set_rcs_quad`, widened. apollo names a quad, which is the SM's unit (four
+        quads of four) and the LM's (four clusters of four); the CM's unit is a *system* of six
+        and this vehicle has four strings in total, so a verb that could only name a quad could
+        not isolate a command-module system at all. The name is apollo's because V-01 makes
+        apollo's name win on a collision, and `rcs_dode.md:371-372`'s
+        `SET_THRUSTER_GROUP_STATE` is the same idea under a second name — one verb for one idea,
+        recorded here rather than silently renamed. What survives from the spec is the asymmetry
+        in `help`: re-enabling a latched group needs the recovery check
+
+  - verb: isolate_rcs_manifold
+    argument_schema:
+      branch: {type: enum, values: [sm_feed_a, sm_feed_b, cm_feed_a, lm_feed_a, lm_feed_b,
+                                    lm_feed_c, lm_feed_d]}
+    authority: A2
+    gate: {kind: preference, variable: rcs_branch_<branch>_enable}
+    interlocks: none - reviewed
+    conflict_domain: rcs.branch_<branch>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Close a feed branch, which is a fluid-topology action rather than a command-level one, and
+      is what a fleet reaches for when a branch is leaking or feeding a thruster that will not
+      stop. Irreversible in effect for the rest of the mission in most cases — a branch isolated
+      on a leaking seal is not reopened — but declared `irreversible: false` because the topology
+      permits reopening, and the *hysteresis* that makes it feel permanent lives in the feed
+      system rather than in the verb. Thirty seconds of queue age: isolating the wrong branch is
+      cheap to type and expensive to live with.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243"
+      note: >-
+        apollo's `isolate_rcs_manifold`. The argument is a feed branch rather than a manifold
+        because that is the level `vehicle.yaml#propulsion.rcs_*` publishes feed counts at, and
+        a fluid-topology verb above the level the inventory is kept at could not be checked
+        against it. `rcs_dode.md:373`'s ISOLATE_RCS_BRANCH is the same verb under a second name
+
+  - verb: reset_latched_fault
+    argument_schema:
+      fault_id: {type: enum, values: [thruster_health, allocation_status, safety_state]}
+      recovery_token: {type: string, optional: true}
+    authority: A2
+    gate: {kind: preference, variable: rcs_reset_<fault_id>_enable}
+    interlocks: [rcs_uncommanded_rate, rcs_feed_low, rcs_feed_high]
+    conflict_domain: rcs.latched.<fault_id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Clear a latched conclusion — a thruster's health, an infeasible allocation, a safety-ladder
+      rung — once its cause is gone. The interlocks are the whole verb: `rcs_dode.md:374` requires
+      the root condition to be absent, and the three guards here are the root conditions this
+      domain knows how to test for. An uncommanded rate means a thruster is still firing; a feed
+      outside its band means the string is not ready. Clearing a fault whose cause is present is
+      how a fleet converts a latched conclusion into an intermittent one, which is strictly worse
+      than either state.
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:374 — RESET_LATCHED_FAULT(fault ID/recovery token), P1/A2, 'root condition must be absent'"
+      note: >-
+        `rcs_dode.md:379` also lists CLEAR_FAULT_WITHOUT_RECOVERY_CHECK as forbidden, which is the
+        same requirement stated as a prohibition. This vehicle has only the guarded form
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent — and this list is the architecture.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: fire_thruster
+    why: >-
+      `rcs_dode.md:369` forbids FIRE_THRUSTER_7_FOR_ARBITRARY_MICROSECONDS and the reason is the
+      whole document: an agent that can name a thruster and a duration is inside the control
+      loop, and `:89` puts external agents outside it. A pulse-level verb would also make the
+      allocator decorative — the wrench the vehicle produces would be whatever a fleet's mental
+      model of the geometry said, and the residual, the authority margin and the pulse-width
+      legality check would all be reporting on pulses nobody chose.
+
+  - verb: open_valve
+    why: >-
+      the same prohibition at one level lower (`rcs_dode.md:369`). A valve verb is worse than a
+      thruster verb, because it can be used without any intent to produce thrust at all — a valve
+      held open is a propellant leak with an audit trail.
+
+  - verb: set_control_gain
+    why: >-
+      `rcs_dode.md:662` supports several controller families and `:678` says ordinary agents select
+      *signed, qualified profile IDs* rather than modifying gains. A gain verb would be a
+      stability-loop parameter exposed to a fleet that cannot see the inertia tensor the gains
+      were computed from, and `:379` lists WRITE_CONTROLLER_GAIN among the forbidden forms.
+
+  - verb: set_minimum_pulse_width
+    why: >-
+      the most interesting refusal on the vehicle. The minimum firing time is an unpublished
+      hardware constant (`components.yaml#capability.minimum_firing_time`), and a fleet that could
+      set it would be choosing how fine its own control resolution is — which sounds like a
+      capability and is actually a way to command illegal pulses at a thruster and then blame the
+      vehicle for the result. `rcs_dode.md:375` forbids it; the residual accumulator is what makes
+      the constant's absence survivable without exposing it.
+
+  - verb: override_plume_keep_out
+    why: >-
+      `rcs_dode.md:376`. There is no plume model on this vehicle yet — the geometry is owed
+      (`components.yaml#open_debts`) — and a verb that overrides a constraint that does not exist
+      is a verb whose only function is to appear in a capability list. It goes in when the
+      constraint does.
+
+  - verb: disable_stuck_on_monitor
+    why: >-
+      `rcs_dode.md:370`, and the reason it is forbidden rather than merely absent is F-04: the
+      stuck-on monitor is the only thing standing between a single failed valve and a vehicle
+      that cannot hold an attitude. Every FDIR function on this vehicle is S0 and none of them is
+      agent-writable.
+
+  - verb: set_sensor_good
+    why: >-
+      `rcs_dode.md:371`. Quality is assigned by a function that cannot see the simulator's fault
+      state (`simulator-design.md:496-508`); a verb that sets a quality code would be a channel
+      through which an agent could assert the thing the quality code exists to withhold.
+      `rcs_dode.md:209` says the same from the other side: a hidden fault does not set `SUSPECT`
+      merely because the simulator knows.
+
+  - verb: write_body_rate
+    why: >-
+      `rcs_dode.md:372`. The estimator is the trusted side's, and an agent-writable state estimate
+      would let a fleet change what the controller believes the vehicle is doing. This is the
+      measurement-integrity line that `design.md` §8 draws around the whole diode.
+
+  - verb: write_prop_mass
+    why: >-
+      `rcs_dode.md:373`, and on this vehicle it is doubly refused: the propellant *ledger* is the
+      consumables domain's conserved stock and the RCS figure is an independent estimate derived
+      from impulse. A verb that wrote either would destroy the comparison that makes a slow leak
+      visible at all (`domains/consumables/points.yaml`).
+
+  - verb: disable_watchdog
+    why: >-
+      `rcs_dode.md:380`. The pulse generator's deadline miss is a published channel
+      (`rcs_dode.md:255`, `rcs.deadline_miss_count`) precisely because a fleet should be able to
+      see that a real-time guarantee failed. A verb that could turn the monitor off would make
+      that channel's silence ambiguous.
+
+  - verb: load_attitude_profile
+    why: >-
+      `rcs_dode.md:366-368` supplies LOAD/ARM/COMMIT_ATTITUDE_PROFILE as a three-step for bounded
+      waypoint sequences, and this vehicle declines the family rather than the safety property.
+      Conflict C-16 reserves arm/commit for effects that cannot be undone; a slew is interruptible
+      and `abort_rcs_activity` exists, so a two-step for an attitude profile adds latency rather
+      than safety. The *deferred-execution* case the arm step also serves — "accept now, actuate
+      later" — is real, and it is answered here by `execution_class: deferred` plus
+      `maximum_queue_age_s` and a full effect-time revalidation, which is the property
+      `rcs_dode.md:90` actually asks for.
+
+  - verb: request_momentum_dump
+    why: >-
+      C-15: this vehicle has no reaction wheels, no CMGs and no magnetorquers
+      (`apollo_diode.md:52`, `:147-153`). There is no momentum to dump, so the verb, the dump
+      controller, the 80/90/95 % thresholds and the two wheel faults in `rcs_dode.md`'s FDIR
+      table are all pruned together. Keeping the verb "for completeness" would put a control
+      surface on the vehicle that controls nothing — the most expensive kind of fidelity error,
+      because a fleet would spend a planning cycle on it before discovering that.

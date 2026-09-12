@@ -1,0 +1,2334 @@
+# channels.yaml — the canonical point dictionary.
+#
+# Why this file exists as its own artifact, and not as `points` inside each domain:
+# the corpus's worst structural failure is that eight documents name the same object
+# eight ways (corpus-review.md §5). A single registry is the fix, and a per-domain
+# `points` file then *references* it instead of forking it. This is a deliberate
+# addition to the five-file factoring in simulator-design.md:128-134; the design did not
+# anticipate that the sources would disagree about names, and a registry is cheaper than
+# eight reconciliations.
+#
+# Rows marked apollo are apollo_diode.md's catalogue verbatim — identifiers, units,
+# ranges, precisions and rates included — because it is the only document making a claim
+# about a vehicle. Rows marked chosen are additions this project needs and apollo lacks;
+# each states why. Rows marked derived are computed from other channels listed in
+# `inputs`.
+#
+# `layer` is apollo's A/I distinction (apollo_diode.md:34-38) plus the SERVICE_STATE kind
+# eclss_diode.md:65 adds:
+#   measurement — a direct instrument reading, authoritative about the report only
+#   estimate    — derived from readings or a model; wrong-without-a-sensor-failing is normal
+#   service     — the vehicle's own state (commanded position, mode); not a physical claim
+# `max_decision_age_ms` is the maximum age at which a sample may still be used as the
+# basis of a decision. The concept was declared here from `communcations_diode.md:265`
+# and the *mechanism* was missing until `mission_diode.md` arrived: it supplies the
+# freshness calculation (:1227-1262), the per-guard dependency manifest, and the
+# invariant that makes the whole thing load-bearing —
+#
+#     Invariant D: RequiredTelemetryStale  =>  not HazardousEffect
+#
+# The rule below is derived rather than tabulated, because the table it replaces was
+# unsatisfiable. It said P1 = 100 ms; `cw.master_alarm`, `cw.active_lights` and
+# `cw.alert_[id]_state` are all P1 and all publish at 1 Hz, so a 100 ms requirement on a
+# 1000 ms channel marks every sample stale and the guard can never pass. Nineteen of the
+# fifty channels a threshold watches were in that position. The number was authored as
+# though the executive read the service's internal value, and a *published* channel is a
+# mirror of it:
+#
+#   **the maximum age of a mirror is one publish period**, because a value older than one
+#   period is a value the publisher was obliged to refresh and did not. The effective
+#   value is the channel's own `max_decision_age_ms` if declared, else `1000 / rate_hz`.
+#
+# Two consequences worth stating, because they are what a fleet has to know:
+#
+#   - Where a hazard needs a decision faster than the point is published, the decision is
+#     **not the agent's to make**. It belongs to a service-owned interlock evaluated at the
+#     service's own rate, and `mission_diode.md:245` says so in the same words: a display
+#     or a mirror must not become the primary fast hazard detector. So the vehicle's
+#     interlocks do not wait for the mirror, and `max_decision_age_ms` bounds *the fleet's*
+#     view rather than the vehicle's protection.
+#   - A channel that publishes only on events has no period and must declare a value, or
+#     the executive cannot tell a fresh sample from one that will never arrive. The linter
+#     refuses a threshold whose point resolves to no age at all.
+#
+# `quality` lists which canonical quality codes this point may carry.
+
+schema_version: 1
+source: docs/deep_research/apollo_diode.md
+vocabulary: docs/deep_research/integration/reconciliation/02-canonical-vocabulary.md
+
+defaults:
+  decision_age_ms: "one publish period: 1000 / rate_hz, per the rule in the header"
+  quality_allowed: [GOOD, SUSPECT, STALE, SATURATED, OUT_OF_RANGE, INVALID, UNKNOWN, SUBSTITUTED]
+  # A silently biased sensor stays GOOD (apollo_diode.md:688). Quality is assigned only by a
+  # function that cannot see the simulator's fault state (simulator-design.md:496-508).
+
+power:
+
+  - id: power.dc_bus_a_v
+    unit: V
+    layer: measurement
+    precision: 0.05
+    rate_hz: 10
+    priority: P2
+    range: [27.0, 30.5]
+    events: ["<26.5 for 0.5 s", "fall >1 V/s"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:73"
+  - id: power.dc_bus_b_v
+    unit: V
+    layer: measurement
+    precision: 0.05
+    rate_hz: 10
+    priority: P2
+    range: [27.0, 30.5]
+    events: ["<26.5 for 0.5 s", "fall >1 V/s"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:74"
+  - id: power.bus_a_current_a
+    unit: A
+    layer: measurement
+    precision: 0.2
+    rate_hz: 5
+    priority: P2
+    range: [10, 120]
+    events: ["> configured bus capacity", "step >20 A"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:75"
+  - id: power.source_1_current_a
+    unit: A
+    layer: measurement
+    precision: 0.2
+    rate_hz: 2
+    priority: P3
+    range: [0, 80]
+    events: ["unexpected zero", "overload"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:76"
+  - id: power.battery_soc_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.2
+    priority: P4
+    range: [40, 100]
+    events: ["<30", "<15", "predicted depletion <2 h"]
+    inputs: [power.bus_a_current_a, power.battery_temp_c]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:77"
+  - id: power.battery_temp_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [10, 40]
+    events: [">45", "rise >2 degC/min"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:78"
+  - id: power.bus_tie_state
+    unit: "enum[open,closed,tripped]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    events: ["unintended trip", "unintended change"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:79"
+  - id: power.load_margin_w
+    unit: W
+    layer: estimate
+    precision: 10
+    rate_hz: 1
+    priority: P3
+    range: [250, null]
+    events: ["<100", "negative"]
+    inputs: [power.dc_bus_a_v, power.bus_a_current_a]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:80"
+  - id: "power.lcl_[n]_state"
+    unit: "enum[closed,tripped,retrying,latched]"
+    layer: service
+    precision: exact
+    rate_hz: 2
+    on_event: true
+    priority: P2
+    events: ["trip", "second trip within the recovery dwell"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "apollo's power table has no per-load protection state; electrical_diode.md:254 supplies one controlled reclose then latch, which is the right hysteresis for a latched discrete and is adopted (review-findings.md #7)"
+      note: >-
+        the fourth member is `latched` and it was `open` until the linter's state/channel binding
+        refused the mismatch — `lcl_tripped` holds `latched`, and the two words are not the same
+        statement. `tripped` is the transient that a controlled reclose may clear; `latched` is the
+        position it holds when the reclose failed. A channel that published `open` for both would
+        have made an LCL that is about to reclose indistinguishable from one that never will, and
+        the difference is the whole reason electrical_diode.md:254 specifies a reclose at all
+  - id: "power.lcl_[n]_current_a"
+    unit: A
+    layer: measurement
+    precision: 0.05
+    rate_hz: 5
+    priority: P3
+    range: [0, null]
+    events: ["> 110 % of rating", "> 200 % hard short"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:254 gives an LCL a 110-125 % limit and a >200 % hard-short trip; a per-load current is what makes an overloaded load distinguishable from a failed bus, which is the difference between the F-PWR-01 and F-PWR-06 signatures"
+  - id: power.load_shed_class
+    unit: "enum[none,P3,P2,P1,P0]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["any shed", "any restore"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:48"
+      note: "apollo lists breaker/load shedding as a principal operator control and gives the bus event condition; the four priority classes are chosen, from the P0-P3 factoring in electrical_diode.md:847"
+
+eclss:
+
+  - id: eclss.cabin_pressure_psia
+    unit: psia
+    layer: measurement
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [4.8, 5.2]
+    events: ["<4.5 caution", "<3.5 emergency", "fast leak"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:88"
+      note: "conflict register C-04: eclss_diode.md:734 deletes this; apollo wins deliberately"
+  - id: eclss.cabin_temp_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.2
+    priority: P4
+    range: [21.1, 23.9]
+    events: ["<10", ">30", "rapid trend"]
+    event_class: realised_by
+    event_thresholds: [csm_cabin_low, csm_cabin_high]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:89"
+  - id: eclss.co2_pp_mmhg
+    unit: mmHg
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P3
+    range: [0, 5]
+    events: [">7.6 caution"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:90"
+      note: "instantaneous alarm; the 1-hour-average 3 mmHg limit is a different statistic and lives on the derived point below (C-05)"
+  - id: eclss.co2_pp_1h_avg_mmhg
+    unit: mmHg
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.1
+    priority: P4
+    range: [0, 3]
+    events: [">3 sustained"]
+    inputs: [eclss.co2_pp_mmhg]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "eclss_diode.md:735 adopts NASA's one-hour-average ppCO2 limit of 3 mmHg; it needs its own channel or the instantaneous alarm and the exposure limit contaminate one another"
+  - id: eclss.pp_o2_mmhg
+    unit: mmHg
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P3
+    range: [248, 269]
+    events: ["<200 hypoxia", ">300 fire risk"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "eclss_diode.md:46 makes ppO2 the primary controlled variable and apollo has no such channel; a cabin-pressure channel alone cannot express a dilution or a fire risk. The band is derived, not chosen: the cabin sits at 4.8-5.2 psia of essentially pure oxygen (apollo_diode.md:88), and 5 psia is 258.6 mmHg, so the published band is 248-269. The first version of this channel carried a sea-level 140-180, which is the value a mixed atmosphere at 14.7 psia would give — the kind of error a range check would not catch and a fire-risk threshold would."
+  - id: eclss.lm_cabin_temp_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.2
+    priority: P3
+    events: ["<10", ">30", "rapid trend"]
+    event_class: realised_by
+    event_thresholds: [lm_cabin_low, lm_cabin_high]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:94"
+      note: >-
+        the LM compartment's temperature, under the naming pattern apollo uses for its own cabin
+        channel and at apollo's rate and precision. It exists because the two compartments are
+        separate conserved masses with separate ECLSS units (`apollo_diode.md:1071`) and one
+        temperature channel cannot describe both — and because the crew positions already assumed
+        it: the LM commander and the LM pilot list a cabin temperature among the things they can
+        perceive, and until this channel existed the only one they could have been reading was the
+        *other* spacecraft's
+
+  - id: eclss.o2_supply_pressure_psi
+    unit: psi
+    layer: measurement
+    precision: 1
+    rate_hz: 0.5
+    priority: P3
+    range: [750, 950]
+    events: ["low pressure", "fall >5 psi/min"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:91"
+      note: "C-06: eclss_diode.md:736 removes this; apollo wins"
+  - id: eclss.lm_cabin_pressure_psia
+    unit: psia
+    layer: measurement
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [4.8, 5.2]
+    events: ["<4.5 caution", "<3.5 emergency", "fast leak"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: >-
+        the LM cabin runs at about the same 5 psia as the CSM (NR), and it is a *separate*
+        channel because from undocking to docking the two compartments cannot equalise. A single
+        cabin-pressure channel would have made the LM's atmosphere unobservable for exactly the
+        phase in which the crew are living in it.
+  - id: eclss.lm_co2_pp_mmhg
+    unit: mmHg
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P3
+    range: [0, 5]
+    events: [">7.6 caution"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: >-
+        the LM's own CO2 channel. Apollo 13's improvised cartridge kept this below 1 mmHg, and
+        it is the channel that constrains how long a surface stay can be extended — a different
+        constraint from the CSM's, because the LM's absorber is a cartridge rather than a bed.
+  - id: eclss.lm_pp_o2_mmhg
+    unit: mmHg
+    layer: measurement
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P3
+    inputs: [eclss.lm_cabin_pressure_psia]
+    range: [248, 269]
+    events: ["<200 hypoxia", ">300 fire risk"]
+    event_class: alarm
+    provenance:
+      basis: derived
+      relation: "as the CSM compartment: 4.8-5.2 psia of essentially pure oxygen is 248-269 mmHg"
+  - id: eclss.suit_loop_flow_cfm
+    unit: ft3/min
+    layer: measurement
+    precision: 0.5
+    rate_hz: 1
+    priority: P3
+    range: [27, 33]
+    events: ["<20"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:92"
+  - id: eclss.absorber_capacity_pct
+    unit: "%"
+    layer: estimate
+    precision: 1
+    rate_hz: 0.1
+    priority: P4
+    range: [20, 100]
+    events: ["<20", "predicted breakthrough <1 h"]
+    inputs: [eclss.co2_pp_mmhg]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:93"
+      note: "capacity must be a percentage OF a named quantity; the corpus never says of what (corpus-review.md §6)"
+  - id: eclss.leak_rate_g_s
+    unit: g/s
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P4
+    range: [0, null]
+    events: ["sustained above configured threshold"]
+    inputs: [eclss.cabin_pressure_psia, eclss.o2_supply_pressure_psi]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:94"
+      note: "THE slow-leak channel; a fixed-point stock with quantum q cannot represent a flow below q/dt, which would delete this phenomenon silently (review-findings.md #1)"
+  - id: eclss.cabin_regulator_state
+    unit: "enum[primary,emergency,isolated,closed]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    events: ["unexpected mode"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:95"
+      note: >-
+        `closed` is the fourth member and it was missing until the linter's state/channel binding
+        caught it: `cabin_regulator_position` can take four values and the channel published
+        three, so the vehicle could be in a configuration its own telemetry could not report. It
+        is the most consequential of the four — a closed regulator is a cabin isolated from its
+        supply, which is the configuration Apollo 13 flew after the tank failure and the one a
+        crew reaches for when the leak is downstream of the regulator rather than in the cabin
+
+thermal:
+
+  - id: thermal.coolant_supply_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 2
+    priority: P3
+    range: [2.8, 7.2]
+    events: [">10", "<1"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:101"
+      note: "Apollo-anchored band; water-glycol leaving the evaporator was 37-45 F (apollo_diode.md:97)"
+  - id: thermal.coolant_return_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 2
+    priority: P3
+    range: [5, 15]
+    events: [">20"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:102"
+  - id: thermal.primary_flow_l_min
+    unit: L/min
+    layer: measurement
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [1.3, 1.7]
+    events: ["<0.8", "zero flow"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:103"
+      note: "around the Apollo order of ~24 gal/h"
+  - id: thermal.pump_1_state
+    unit: "enum[off,on,stalled]"
+    layer: service
+    precision: exact
+    rate_hz: 2
+    on_event: true
+    priority: P3
+    events: ["commanded-on but zero flow"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:104"
+      note: "only publishable if the vehicle really has such a diagnostic; the more interesting pair is pump_commanded + pump_current + flow (apollo_diode.md:109)"
+  - id: thermal.pump_1_commanded
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 2
+    priority: P3
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:109"
+  - id: thermal.pump_1_current_a
+    unit: A
+    layer: measurement
+    precision: 0.05
+    rate_hz: 2
+    priority: P3
+    range: [0, 8]
+    events: ["current with no flow"]
+    event_class: realised_by
+    event_thresholds: [pump_no_flow]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:109"
+      note: "the evidence pair that lets an agent infer a stall rather than read one"
+  - id: thermal.avionics_plate_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [10, 45]
+    events: [">50"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:105"
+  - id: thermal.comm_amp_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [10, 55]
+    events: [">60", "fast rise"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:106"
+  - id: thermal.radiator_rejection_w
+    unit: W
+    layer: estimate
+    precision: 10
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["capacity < generated heat"]
+    inputs: [thermal.coolant_supply_c, thermal.coolant_return_c, thermal.primary_flow_l_min]
+    event_class: realised_by
+    event_thresholds: [thermal_no_progress]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:107"
+  # The `[id]` covers the zones apollo does not name: `csm_avionics`, `csm_service`, `lm_descent`
+  # and `radiator`. The two **cabins** are excluded, and the exclusion is the fix for a
+  # duplication the linter's `from` check surfaced: `thermal.zone_csm_cabin_t` and
+  # `eclss.cabin_temp_c` were one cabin temperature published twice under two names, produced by
+  # one state and read by two sets of thresholds. The reconciliation's oldest problem — two names
+  # for one object — arriving somewhere new, and it survived because the two points named their
+  # sources differently: one a state, the other a coupling node.
+  #
+  # The resolution follows vocabulary §3: apollo's name wins where apollo has one. Apollo names
+  # the cabin temperature and does not name a zone family, so the cabins are
+  # `eclss.cabin_temp_c` and `eclss.lm_cabin_temp_c`, and this family is what the *chosen*
+  # six-zone decomposition needs for the zones apollo is silent about.
+  - id: "thermal.zone_[id]_t_c"
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [5, 40]
+    events: ["> configured limit"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md names zero points and only sensor classes (:165-181); a zone temperature is the minimum a thermal zone needs and the six-zone decomposition is supplied in vehicle.yaml"
+  - id: thermal.loop_transport_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [0, 30]
+    events: ["> 20"]
+    event_class: realised_by
+    event_thresholds: [coolant_return_high]
+    provenance:
+      basis: chosen
+      reason: "the temperature that has just arrived from the far end of the loop. It exists as its own channel because the transport delay is what separates 'the pump stalled just now' from 'the pump has been degrading for an hour' (review-findings.md #12), and a lumped network that mixes instantaneously cannot express the difference"
+  - id: thermal.radiator_inlet_c
+    unit: degC
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [15, 30]
+    events: ["> 35"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "TN D-6718 and NR: radiator inlet 73-75 F = 22.8-23.9 C in lunar orbit"
+  - id: thermal.evaporator_rejection_w
+    unit: W
+    layer: estimate
+    precision: 10
+    rate_hz: 0.2
+    priority: P4
+    range: [0, 2345]
+    events: ["saturated at rated capacity"]
+    inputs: [thermal.coolant_supply_c, res.water_cooling_kg]
+    event_class: realised_by
+    event_thresholds: [thermal_no_progress]
+    provenance:
+      basis: historical
+      source: "NR: the CSM evaporator rejects about 8,000 Btu/hr = 2,345 W and consumes water to do it. That consumption is why the thermal domain and the water stock are coupled rather than adjacent"
+  - id: "thermal.heater_[bank]_duty"
+    unit: "%"
+    layer: service
+    precision: 1
+    rate_hz: 1
+    priority: P3
+    range: [0, 100]
+    events: ["duty above zero with the zone above its limit"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:191-207 makes heater banks the TCS's main actuation and its :765-772 hard-limit table includes 'do not blindly command heating and cooling simultaneously'. Neither is checkable without a commanded-duty channel"
+  - id: "thermal.pump_[n]_speed_rpm"
+    unit: rpm
+    layer: measurement
+    precision: 10
+    rate_hz: 2
+    priority: P3
+    range: [0, 12000]
+    events: ["commanded on and speed zero", "speed falling with constant command"]
+    event_class: realised_by
+    event_thresholds: [flow_low, pump_no_flow]
+    provenance:
+      basis: chosen
+      reason: "the pump's spin-up lag is one of the two first-order lags on the flagship cycle, and a flow channel alone cannot distinguish a pump that is slowing from a loop that is blocked"
+
+gnc:
+
+  - id: "gnc.attitude_q[0..3]"
+    unit: dimensionless
+    layer: estimate
+    precision: 1.0e-5
+    rate_hz: 10
+    priority: P2
+    range: [null, null]
+    events: ["invalid norm", "estimate unavailable"]
+    inputs: [gnc.body_rate_xyz_deg_s, gnc.imu_alignment_error_deg]
+    event_class: realised_by
+    event_thresholds: [nav_integrity_degraded]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:117"
+      note: "normalised quaternion; gnc_diode.md:368 requires rejecting non-normalised quaternions and gives no tolerance, so the tolerance is declared here or the check is unimplementable"
+  - id: gnc.body_rate_xyz_deg_s
+    unit: deg/s
+    layer: measurement
+    precision: 0.001
+    rate_hz: 10
+    priority: P2
+    range: [-0.5, 0.5]
+    events: ["outside current mode limits"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:118"
+  - id: gnc.position_xyz_km
+    unit: km
+    layer: estimate
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [null, null]
+    events: ["covariance invalid", "source invalid"]
+    inputs: [gnc.velocity_xyz_m_s, gnc.radar_altitude_m, gnc.nav_position_sigma_m]
+    event_class: realised_by
+    event_thresholds: [estimator_divergence]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:119"
+      note: "mission dependent in apollo; supplied by mission.yaml"
+  - id: gnc.velocity_xyz_m_s
+    unit: m/s
+    layer: estimate
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [null, null]
+    events: ["source invalid"]
+    event_class: realised_by
+    event_thresholds: [nav_integrity_degraded]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:120"
+  - id: gnc.nav_position_sigma_m
+    unit: m
+    layer: estimate
+    precision: 1
+    rate_hz: 1
+    priority: P3
+    range: [null, null]
+    events: ["> phase-specific tolerance"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121"
+      note: "the channel that makes IMU degradation visible before it matters"
+  - id: gnc.nav_velocity_sigma_m_s
+    unit: m/s
+    layer: estimate
+    precision: 0.001
+    rate_hz: 1
+    priority: P3
+    range: [null, null]
+    events: ["> phase-specific tolerance"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:122"
+  - id: gnc.imu_alignment_error_deg
+    unit: deg
+    layer: estimate
+    precision: 0.001
+    rate_hz: 1
+    priority: P3
+    range: [0, 0.2]
+    events: [">0.5"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:123"
+      note: "gnc_diode.md has bias states but no alignment-error channel and no alignment function (:314 has only REQUEST_NAV_REACQUIRE)"
+  - id: gnc.radar_altitude_m
+    unit: m
+    layer: measurement
+    precision: 0.5
+    rate_hz: 5
+    priority: P3
+    range: [0, 15000]
+    events: ["invalid", "dropout", "disagreement"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:124"
+  - id: gnc.radar_range_rate_m_s
+    unit: m/s
+    layer: measurement
+    precision: 0.05
+    rate_hz: 5
+    priority: P3
+    range: [null, null]
+    events: ["implausible jump"]
+    event_class: realised_by
+    event_thresholds: [innovation_rejected]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:125"
+  - id: gnc.guidance_mode
+    unit: "enum[coast,burn,landing,rendezvous,alignment,free_drift]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["unexpected transition"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:126"
+      note: "gnc_diode.md:1341-1351 has no lunar phases; the enum is apollo's"
+  - id: gnc.estimator_rejection_reason
+    unit: "enum[none,innovation,stale,out_of_range,redundancy]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    events: ["any rejection"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "gnc_diode.md:511-512 separates a datum's quality from whether the estimator used it; without this channel an agent cannot tell 'the sensor is bad' from 'the filter is ignoring a good sensor'"
+
+  # ------------------------------------------------------------------------------------
+  # The navigation-integrity ladder, and the two states behind it. `gnc_diode.md:666-691` is
+  # the source, and its own summary of why the ladder is a channel rather than a number is
+  # the best sentence in the document: **"a high covariance can therefore be an operational
+  # state transition, not merely a number in telemetry."**
+  #
+  # The vehicle publishes `gnc.nav_position_sigma_m` and has since the registry was written —
+  # and a sigma alone cannot say whether the vehicle is navigating, coasting on gyros, or lost.
+  # Those are three different vehicles with three different correct responses, and F-10's
+  # chain turns on exactly that ambiguity.
+  # ------------------------------------------------------------------------------------
+
+  - id: gnc.nav_integrity
+    unit: "enum[nominal,degraded,coasting,invalid,reacquire]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P0
+    max_decision_age_ms: 1000
+    events: ["integrity change"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:666-691 — the navigation-integrity state machine, NOMINAL / DEGRADED / COASTING / INVALID / REACQUIRE"
+      note: >-
+        the ladder, published because every other GNC channel describes a *quantity* and this one
+        describes whether the quantities mean anything. `coasting` is the value that earns the
+        channel: no absolute update, the estimator propagating on gyros alone, still flying and
+        no longer being corrected — a vehicle that is fine now and will not be in twenty minutes,
+        which no sigma reports as a distinct condition. `reacquire` is separate from `invalid` for
+        the same reason `degraded` is separate from `nominal`: the vehicle is doing something
+        about it, and a fleet that cannot see the difference will intervene in a recovery that is
+        already under way
+  - id: "gnc.gyro_bias_xyz_deg_s"
+    unit: deg/s
+    layer: estimate
+    precision: 1e-05
+    rate_hz: 1
+    priority: P3
+    events: ["bias growing"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:815-825 — the error-state vector includes `b_g`, and :825 notes WMAP estimated attitude and gyro bias errors together"
+      note: >-
+        the estimated gyro bias, which is the quantity that separates the two ways a rate
+        measurement can be wrong. A gyro with a bias reports a rate the vehicle is not
+        experiencing, and the filter estimates the bias by comparing the gyro against everything
+        else — so a *growing* bias estimate is the instrument drifting and a *steady* one is the
+        vehicle having been correctly calibrated. The channel matters most in the state this
+        domain adds: a coasting vehicle is one whose only measurement is the gyro, and a bias
+        that was tolerable with star sightings is not tolerable without them
+  - id: gnc.maneuver_state
+    unit: "enum[idle,target_loaded,plan_valid,plan_invalid,armed,executing,verifying,complete]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:628-663 — the maneuver state machine"
+      note: >-
+        where a maneuver is in its own lifecycle, and it is a *fourth* state machine on a vehicle
+        that already has the canonical command chain (V-02), the propulsion engines' machines and
+        the mission posture machine. It is worth the duplication because it answers a question
+        none of them can: `plan_valid` and `plan_invalid` are the outcome of the trajectory
+        generator's feasibility evaluation (`gnc_diode.md:753` — a segment is marked valid only
+        after being checked against velocity, acceleration, jerk, pointing, keep-out and
+        actuator-authority limits), and a burn that is *requested* and *not flyable* is a
+        different situation from a burn that is requested and merely waiting. The propulsion
+        domain's guards ask whether the engine can do it; this asks whether the trajectory can
+  - id: gnc.trajectory_residual_m
+    unit: m
+    layer: estimate
+    precision: 0.1
+    rate_hz: 1
+    priority: P2
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:658-660 — VERIFYING, whose two exits are 'terminal tolerances pass' and 'correctable residual'"
+      note: >-
+        how far the achieved state is from the planned one at the end of a maneuver, and it is
+        the only channel on the vehicle that reports an outcome rather than a condition. The
+        state machine's two exits are the interesting part: a residual inside tolerance is
+        `complete`, and a residual outside it *but correctable* returns to planning rather than
+        failing. Publishing the residual is what lets a fleet tell a burn that went well from one
+        that went well enough, which is the difference between a mission that has margin left and
+        one that is spending it
+  - id: "gnc.coast_elapsed_s"
+    unit: s
+    layer: estimate
+    precision: 1
+    rate_hz: 1
+    priority: P2
+    max_decision_age_ms: 1000
+    events: ["coast limit approaching"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:684-686 — COASTING, whose exits are a validated reacquisition and 'coast limit / covariance limit'"
+      note: >-
+        how long the estimator has been propagating without an absolute update. It is the clock
+        on `gnc.nav_integrity`'s `coasting` state and the input to its limit, and it is published
+        rather than left to be inferred because the inference is exactly what a fleet gets wrong:
+        a coasting vehicle looks completely normal — the attitude is right, the rates are right,
+        the sigma is growing slowly — and the only thing that says how much time is left is a
+        number nobody can compute from the other channels. Apollo 13's crew flew a large part of
+        a mission on a platform that had not been aligned since a burn, and the elapsed time was
+        the fact that governed what they could still do
+
+propulsion:
+
+  - id: prop.main_armed
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    range: [false, false]
+    events: ["unexpected arm"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:134"
+      note: "main_propulsion_diode.md has no equivalent boolean; the FSM carries MPS_ARMED as a service state only"
+  - id: prop.chamber_pressure_pct
+    unit: "% nominal"
+    layer: measurement
+    precision: 0.1
+    rate_hz: 10
+    priority: P2
+    range: [0, 105]
+    events: ["<90 after ignition", "decay"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:135"
+      note: "C-10: mps:193 uses Pa and a fault at 80%; apollo's percentage channel and 90% threshold win, Pa stays internal"
+  - id: prop.thrust_pct_commanded
+    unit: "%"
+    layer: service
+    precision: 0.1
+    rate_hz: 10
+    priority: P2
+    range: [0, 100]
+    events: ["command/state mismatch"]
+    event_class: realised_by
+    event_thresholds: [thrust_discrepancy]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:136"
+  - id: prop.thrust_pct_estimated
+    unit: "%"
+    layer: estimate
+    precision: 0.2
+    rate_hz: 10
+    priority: P2
+    range: [0, 105]
+    events: ["discrepancy >5%"]
+    inputs: [prop.chamber_pressure_pct, structure.accel_xyz_g]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:137"
+      note: "the commanded-versus-estimated pair is the whole point; a single newton-valued channel cannot express it (C-11)"
+  - id: prop.feed_pressure_pct
+    unit: "% nominal"
+    layer: measurement
+    precision: 0.2
+    rate_hz: 5
+    priority: P3
+    range: [95, 105]
+    events: ["<90"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:138"
+  - id: prop.pressurant_pressure_psi
+    unit: psi
+    layer: measurement
+    precision: 1
+    rate_hz: 2
+    priority: P3
+    range: [null, null]
+    events: ["phase-specific low", "phase-specific high"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:139"
+      note: "the trapped-line chain publishes 300.0 + SATURATED while the truth is 700-800 psi (apollo_diode.md:215, :347)"
+  - id: prop.propellant_remaining_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P4
+    range: [0, 100]
+    events: ["20", "10", "5"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:140"
+  - id: prop.accumulated_dv_m_s
+    unit: m/s
+    layer: estimate
+    precision: 0.01
+    rate_hz: 10
+    priority: P2
+    range: [0, null]
+    events: ["burn cutoff target reached", "divergence from target"]
+    inputs: [structure.accel_xyz_g, prop.thrust_pct_estimated]
+    event_class: realised_by
+    event_thresholds: [thrust_discrepancy]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:141"
+      note: "C-12: mps cuts off on duration, plan or GNC request and never accumulates dv, so this channel would have no producer without adding the cutoff path"
+  - id: prop.sps_burn_count
+    unit: count
+    layer: service
+    precision: 1
+    rate_hz: 0.2
+    priority: P3
+    range: [0, 50]
+    events: ["> 40 of the 50 qualified restarts"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "the AJ10-137 report: the SPS was qualified for 50 restarts and Apollo 11 used 5. A count against a qualified life is a resource with a hard limit, which is what turns 'we can fix this with a burn' into a decision with a price"
+  - id: prop.dps_throttle_pct
+    unit: "%"
+    layer: service
+    precision: 0.5
+    rate_hz: 10
+    priority: P2
+    range: [10, 60]
+    events: ["commanded into the 65-92.5 % non-operating region"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "the DPS experience report: 10.5 % to 92.5 % with 65-92.5 % a NON-OPERATING region. The band matters more than the endpoints: a throttle command inside it is impossible rather than merely unwise, which the published channel makes visible"
+  - id: prop.cutoff_mode
+    unit: "enum[duration,plan,gnc_request,dv_target,abort,depletion]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["abort", "depletion"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:141"
+      note: "apollo publishes accumulated_dv_m_s with a 'burn cutoff target / divergence' event, which requires a cutoff that is by delta-v. main_propulsion_diode.md:645 gives only duration, plan and GNC request, so this channel is where the fourth trigger becomes visible — and it is the one a fleet will reach for when a burn is going wrong"
+  - id: prop.leak_state
+    unit: "enum[nominal,suspect,corroborating,confirmed,isolated,uncontained]"
+    layer: service
+    precision: exact
+    rate_hz: 0.5
+    on_event: true
+    priority: P3
+    events: ["leak confirmed"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "main_propulsion_diode.md:695-702's evidence-counting leak FSM is a genuine addition to apollo: it distinguishes 'one sensor said something' from 'three agree', which is exactly the corroboration the RCS pressure-switch chain needs (apollo_diode.md:333)"
+
+rcs:
+
+  - id: rcs.mode
+    unit: "enum[auto,manual,free_drift]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["unexpected mode"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:147"
+      note: "C-16: rcs_diode.md:365 has ATT_HOLD/TRACK/FREE_DRIFT and no AUTO or MANUAL at all"
+  - id: "rcs.quad_[a-d]_feed_pressure_pct"
+    unit: "% nominal"
+    layer: measurement
+    precision: 0.2
+    rate_hz: 2
+    priority: P3
+    range: [95, 105]
+    events: ["<90"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:148"
+      note: "C-17: rcs_diode.md:242 uses Pa absolute and names no quads"
+  - id: "rcs.thruster_[n]_valve"
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 10
+    priority: P2
+    events: ["stuck-on signature", "stuck-off signature"]
+    event_class: realised_by
+    event_thresholds: [rcs_uncommanded_rate]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:149"
+  - id: "rcs.thruster_[n]_pressure_switch"
+    unit: bool
+    layer: measurement
+    precision: exact
+    rate_hz: 10
+    priority: P2
+    events: ["disagrees with acceleration"]
+    event_class: realised_by
+    event_thresholds: [rcs_uncommanded_rate]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:150"
+      note: "a bad switch must not read as a failed thruster (apollo_diode.md:143)"
+  - id: rcs.propellant_remaining_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.5
+    priority: P4
+    range: [0, 100]
+    events: ["25", "10"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151"
+  - id: rcs.total_impulse_ns
+    unit: N*s
+    layer: estimate
+    precision: 1
+    rate_hz: 1
+    priority: P3
+    range: [0, null]
+    events: ["excessive use rate"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:152"
+      note: "monotonically rising; rcs_diode.md:247 matches it exactly"
+  - id: rcs.deadband_deg
+    unit: deg
+    layer: measurement
+    precision: 0.01
+    rate_hz: 1
+    priority: P3
+    events: ["configuration change"]
+    on_event: true
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:153"
+      note: "keep both this telemetry and rcs_diode.md:377's SET_CONTROL_PROFILE verb"
+
+  # ------------------------------------------------------------------------------------
+  # Reaction control, as an attitude-and-wrench *service* rather than a thruster bus
+  # (rcs_diode.md:9). apollo's seven points say what the thrusters are doing; these say
+  # whether the service could do what it was asked, which is a different question and the
+  # one a fleet in trouble actually has. Vocabulary §3 renames `acs.*` to `rcs.*` and keeps
+  # rcs_diode's `mass_sigma` as its own point, so the sigma appears here and not as a
+  # tolerance on the percentage.
+  # ------------------------------------------------------------------------------------
+
+  - id: rcs.propellant_sigma_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.1
+    rate_hz: 1
+    priority: P4
+    events: ["uncertainty widening"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: >-
+        vocabulary §3 keeps rcs_dode.md:246's `mass_sigma` as a separate point rather than a
+        tolerance, and rcs_dode.md:1063 makes the reserve judgement explicitly net of it
+        ("estimated mass minus uncertainty/reserve below configured margin"). A remaining
+        percentage with no uncertainty cannot support that judgement: 12 % remaining is
+        comfortable at ±1 % and a coin toss at ±8 %, and the vehicle would be publishing the
+        same number for both
+  - id: rcs.attitude_error_deg
+    unit: deg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 5
+    priority: P3
+    events: ["out of band"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:219 makes the attitude error a derived telemetry and :726 requires the
+        allocator to let the mission layer distinguish "target not reached because guidance
+        changed" from "target is physically unachievable". Neither is expressible without the
+        error: the target is a request, the attitude is an estimate, and *their difference* is
+        the only evidence that the request was granted. It is also the input the phase-plane
+        latch switches on (rcs_dode.md:668), which is what makes the deadband a state rather
+        than a number
+  - id: "rcs.thruster_[n]_health"
+    unit: "enum[ok,suspect,failed_off,failed_on,isolated]"
+    layer: service
+    precision: exact
+    rate_hz: 2
+    on_event: true
+    priority: P1
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:241 has `health` as an FDIR conclusion over the per-thruster evidence, and
+        :949-952 makes the sequence the point: one discrepant switch must reach `suspect` and
+        must not reach `failed_off` without corroboration. `failed_off` and `failed_on` are
+        separate values because they have opposite consequences — one costs control authority,
+        the other keeps spending propellant and can leave the vehicle with a rate it cannot
+        damp — and a single `failed` would make F-04 and the no-response chain the same
+        reading. The probe threshold `rcs.thruster_[n]_pressure_switch` is apollo's; this is
+        the conclusion drawn from it
+  - id: "rcs.thruster_[n]_pulse_width_us"
+    unit: us
+    layer: service
+    precision: exact
+    rate_hz: 0
+    on_event: true
+    priority: P2
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:233 publishes the commanded pulse width per pulse and :234 publishes the
+        *effective* width beside it, which is the distinction that turns "the valve was
+        commanded" into "the valve was open for this long". The commanded width is what the
+        minimum-pulse interlock is checked against; without it a fleet can see that a thruster
+        is being pulsed and not how, which is the whole content of the minimum-impulse
+        problem. Rate is `0` because a pulse has no cadence — it is an event or it did not
+        happen
+  - id: "rcs.thruster_[n]_residual_ns"
+    unit: N*s
+    layer: service
+    precision: 1e-4
+    rate_hz: 1
+    priority: P3
+    provenance:
+      basis: chosen
+      reason: >-
+        the unexecuted-impulse accumulator `r_i` of rcs_dode.md:800-825, published because a
+        residual that never clears is the *only* evidence of the failure mode the vehicle's
+        one unpublished constant creates: if the minimum qualified firing time is larger than
+        the widths the controller keeps requesting, the accumulator grows, every requested
+        pulse is refused as illegally short, and the thruster never fires — without a valve
+        fault, a switch disagreement or a health conclusion. This channel is that fault's
+        entire detection surface, and publishing it is what makes an unknown minimum impulse
+        bit a *bounded* problem rather than a silent one
+  - id: "rcs.thruster_[n]_impulse_ns"
+    unit: N*s
+    layer: estimate
+    precision: 0.01
+    rate_hz: 1
+    priority: P3
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:238's per-pulse impulse estimate with uncertainty, and the quantity the
+        low-thrust fault is defined against: :950 detects it as realized impulse
+        "systematically below model". `rcs.total_impulse_ns` cannot carry that, because a
+        single derated thruster disappears into a total that sixteen others are also moving
+  - id: rcs.allocation_status
+    unit: "enum[feasible,constrained,infeasible]"
+    layer: service
+    precision: exact
+    rate_hz: 2
+    on_event: true
+    priority: P1
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:722 requires the allocator to publish an allocation status so that
+        "target is physically unachievable with the current actuators" is distinguishable
+        from "guidance changed". `constrained` is the middle value and the useful one: the
+        request was met with a degraded actuator set, which is a fact about the vehicle that
+        a boolean cannot express and that a fleet needs before it commits to a burn
+  - id: rcs.allocation_residual
+    unit: normalized
+    layer: estimate
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    events: ["above configured wrench residual"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: >-
+        `acs.allocation_residual[6]` (rcs_dode.md:230) reduced to the weighted scalar its own
+        feasibility test uses (:1055, `weighted_residual > WRENCH_RESIDUAL_MAX(mode)`). The
+        six-vector is the allocator's internal state; the scalar is the same quantity the
+        threshold watches, and publishing both would be publishing one thing twice
+  - id: rcs.control_authority_margin
+    unit: normalized
+    layer: estimate
+    precision: 0.05
+    rate_hz: 1
+    priority: P2
+    events: ["below configured authority minimum"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:231 and :1056 make the authority margin the trigger for the safe-hold
+        ladder, and :889 makes it the thing FDIR recomputes *before* the mission layer decides
+        anything. It is the one number that says how much attitude control is left, in the
+        sense a propellant gauge says how much Δv is left — and unlike the residual it is a
+        margin, so it degrades *before* a request fails rather than after
+  - id: rcs.safety_state
+    unit: "enum[nominal,rate_damp,safe_hold,fault_safe]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P0
+    provenance:
+      basis: chosen
+      reason: >-
+        rcs_dode.md:867-887's safe-mode ladder, published because the ladder's last rung is a
+        trap a fleet walks into: :889 is explicit that "FAULT_SAFE does not mean fire
+        nothing", and a passive no-fire state can be *less* safe than rate damping or a
+        sun acquisition. A fleet that reads safe-mode entry as quiescence will stand down on
+        a vehicle that is still firing. The values are the ladder's, and `attitude_hold` is
+        deliberately not one of them: vocabulary §4 makes ATT_HOLD and TRACK *targets*
+        (rcs_dode.md:365), so "what am I pointing at" is an argument to a verb and this enum
+        is only "how degraded is the service".
+
+comms:
+
+  - id: comm.link_mode
+    unit: "enum[sband_high,sband_low,vhf,none]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["loss", "change"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:161"
+  - id: comm.carrier_lock
+    unit: bool
+    layer: measurement
+    precision: exact
+    rate_hz: 10
+    priority: P2
+    range: [true, true]
+    events: ["lock loss"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:162"
+  - id: comm.hga_pointing_error_deg
+    unit: deg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 5
+    priority: P2
+    range: [0, 2]
+    events: [">2 warning", "scan limit"]
+    inputs: ["gnc.attitude_q[0..3]", gnc.position_xyz_km]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:163"
+  - id: comm.snr_db
+    unit: dB
+    layer: estimate
+    precision: 0.1
+    rate_hz: 2
+    priority: P2
+    range: [8, 30]
+    events: ["<8 degraded", "<3 loss"]
+    inputs: [comm.hga_pointing_error_deg, comm.tx_power_w]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:164"
+  - id: comm.telemetry_rate_bps
+    unit: bit/s
+    layer: service
+    precision: 1
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    range: [1600, 51200]
+    events: ["mode change"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:165"
+      note: "1600 and 51200 are Apollo's reduced and normal rates (apollo_diode.md:7)"
+  - id: comm.rx_frame_loss_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.01
+    rate_hz: 1
+    priority: P3
+    range: [0, 0.5]
+    events: [">2"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:166"
+  - id: comm.antenna
+    unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    events: ["unexpected switch"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:167"
+  - id: comm.tx_power_w
+    unit: W
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [0, 100]
+    events: ["low output", "high draw"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:168"
+      note: "36 W bare and 72 W with the power amplifier (apollo_diode.md:157); a real electrical load, not an abstract link"
+
+  # ------------------------------------------------------------------------------------
+  # The two channels the blackout needs. `apollo_diode.md:903` supplies the property —
+  # "behind the Moon there was no direct LM-Earth contact; telemetry could be routed/stored
+  # through other links and later replayed" — and `:901` supplies the fidelity rule that goes
+  # with it: "when communications degrade, the simulator should actually have to choose which
+  # data arrives. Do not merely set comm.degraded=true while delivering every telemetry field
+  # normally." So the blackout is a *state* and the recorder is a *stock*, and neither is a
+  # quality flag.
+  # ------------------------------------------------------------------------------------
+
+  - id: comm.blackout_state
+    unit: "enum[clear,occulted]"
+    layer: service
+    precision: exact
+    rate_hz: 0.2
+    on_event: true
+    priority: P2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903"
+      note: >-
+        whether the Moon is between the vehicle and Earth. `occulted` is a *planned* condition
+        and the domain deliberately raises no alarm on it: a blackout every orbit that announced
+        itself as a fault would teach a fleet to ignore communications alarms, which is the
+        failure F-11's third order depends on. What is alarming is a link loss the geometry does
+        not predict, and that is `snr_db`'s and `carrier_lock`'s business. Published because the
+        difference between "the vehicle is behind the Moon" and "the vehicle has stopped
+        transmitting" is the whole content of a comms fault, and a fleet that cannot see the
+        first will spend every orbit diagnosing the second
+  - id: comm.recorder_fill_pct
+    unit: "%"
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.2
+    priority: P3
+    events: ["above 80"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903"
+      note: >-
+        how much of the on-board record is held and not yet transmitted. This is the channel that
+        makes a blackout survivable rather than merely survivable in principle: the vehicle
+        stores what it cannot send and replays it, so an occulted vehicle is a vehicle whose
+        *evidence is late* rather than one whose evidence is gone. It is a stock rather than a
+        flag for the reason apollo gives at :901 — a degraded link must actually choose what
+        arrives — and the choice is visible here: a fleet that spends its bandwidth on channels
+        it does not need fills the recorder, and the fill percentage is what tells it so
+
+avionics:
+
+  - id: avionics.computer_mode
+    unit: "enum[idle,run,standby,failed]"
+    layer: service
+    precision: exact
+    rate_hz: 2
+    on_event: true
+    priority: P2
+    events: ["restart", "mode change"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:176"
+  - id: avionics.exec_margin_pct
+    unit: "%"
+    layer: estimate
+    precision: 1
+    rate_hz: 2
+    priority: P3
+    range: [20, null]
+    events: ["<10"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:177"
+      note: "apollo supplies the only number here; avionics_diode.md contributes inequalities but no compute-margin value at all"
+  - id: avionics.program_alarm_code
+    unit: code
+    layer: service
+    precision: exact
+    rate_hz: 0
+    on_event: true
+    max_decision_age_ms: 2000
+    priority: P1
+    events: ["any non-null"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:178"
+      note: >-
+        the third event-driven state on the vehicle and the third to declare a heartbeat, for
+        the reason the first two did: an alarm that is republished only when it changes cannot
+        distinguish "no alarm standing" from "the computer stopped publishing", and those want
+        opposite responses. Also, unlike the other two, a code is a *value* — Apollo 11's 1202
+        and 1201 are the same class of alarm with different correct responses, which is why the
+        channel carries the code rather than a boolean
+  - id: avionics.imu_power
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    range: [true, true]
+    events: ["unexpected loss"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:179"
+  - id: avionics.telemetry_frame_sync
+    unit: bool
+    layer: measurement
+    precision: exact
+    rate_hz: 10
+    priority: P2
+    range: [true, true]
+    events: ["sync loss"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:180"
+  - id: avionics.sensor_bus_errors_s
+    unit: count/s
+    layer: measurement
+    precision: 1
+    rate_hz: 1
+    priority: P3
+    range: [0, 0]
+    events: [">0"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:181"
+  - id: avionics.instrumentation_power_w
+    unit: W
+    layer: measurement
+    precision: 0.1
+    rate_hz: 1
+    priority: P3
+    range: [null, null]
+    events: ["excessive", "zero"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:182"
+      note: "the instrument-power fault is the one that destroys evidence rather than hardware (apollo_diode.md:342)"
+  - id: avionics.clock_offset_ms
+    unit: ms
+    layer: estimate
+    precision: 1
+    rate_hz: 1
+    priority: P3
+    range: [null, null]
+    events: [">100"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:183"
+  - id: avionics.oldest_sample_age_ms
+    unit: ms
+    layer: estimate
+    precision: 1
+    rate_hz: 1
+    priority: P2
+    range: [0, null]
+    events: ["older than 2x the slowest rate in the active profile"]
+    inputs: [avionics.telemetry_frame_sync]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "a number without an age is a number an agent will reason about as if it were now (diode-contract.md:244). Per-point age exists as a field; this channel is the publisher's single honest statement that part of the picture is old, and it is how an instrumentation-power fault becomes visible before an agent trusts a frozen value (apollo_diode.md:342)"
+  - id: avionics.redundancy_disagreement
+    unit: count
+    layer: service
+    precision: 1
+    rate_hz: 1
+    priority: P2
+    range: [0, null]
+    events: ["any"]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: "avionics_diode.md:390-411's redundant_vote is one of the only two mechanisms allowed to assign SUSPECT; a count of disagreements is the evidence behind it and the fastest way for an agent to discover that two sensors have parted company"
+
+  # ------------------------------------------------------------------------------------
+  # The instrument diagnostics. `avionics_diode.md` is an aircraft ICD — ARINC 429/664,
+  # GNSS, elevons, DO-178C — and `corpus-review.md` §1 dismisses it accordingly. What it
+  # also contains, at `:371-509`, is nine diagnostic *functions* in executable form, and
+  # they are the most reusable code in the corpus: a quality-assignment function whose
+  # signature provably cannot see the simulator's fault state, a redundancy vote, an
+  # innovation test, a CUSUM drift detector, an actuator-tracking rule, and a command
+  # authorization chain with an ordering argument. Three of the four channels below exist
+  # because a diagnostic with no published evidence is a diagnostic nobody can audit.
+  # ------------------------------------------------------------------------------------
+
+  - id: "avionics.sensor_health_[class]"
+    unit: "enum[good,suspect,fault]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:371-388 — `sensor_health`, whose `bad_count >= trip_count` branch returns FAULT"
+      note: >-
+        the *conclusion*, and deliberately not a quality code: `FAULT` is refused as a quality
+        (`design.md:211-214`, the linter's rejected-name table), because a quality says how much
+        to trust one sample and a health conclusion says what the vehicle has decided about an
+        instrument. Publishing them as one channel would collapse exactly the distinction the
+        design spends a section on, so `quality` travels on the frame and this travels beside it.
+        Per class rather than per sensor: apollo's instrumentation had 277 analogue channels
+        (`:184-186`), and 277 health flags is a log, not evidence
+  - id: "avionics.drift_statistic_[group]"
+    unit: normalized
+    layer: estimate
+    precision: 0.01
+    rate_hz: 1
+    priority: P2
+    events: ["detected"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428 — `cusum_rule`, a positive and a negative accumulator with an allowance and a decision threshold"
+      note: >-
+        the single most useful thing in `avionics_diode.md`, and the reason it is worth reading
+        past its first page. A CUSUM accumulator is the *only* detector on this vehicle for a
+        drift whose per-sample size is below the instrument's own precision — and
+        `plant.md` §4 states that requirement in the strongest possible terms: the nominal cabin
+        leak is 0.023 kg/h, below `eclss.leak_rate_g_s`'s 0.01 g/s quantum, and it "must still
+        happen". A threshold cannot see that leak. A trend test cannot see it. A cumulative sum
+        of (sample − expectation) against an allowance can, and the published statistic is what
+        lets a fleet watch the evidence accumulate rather than waiting for an alarm
+  - id: "avionics.drift_state_[group]"
+    unit: "enum[good,drift_detected]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428 — the DRIFT_DETECTED return"
+      note: >-
+        the conclusion the statistic crosses into. `drift_detected` is a *latched* state and the
+        only way out is a reset verb, because the property being reported — a systematic bias —
+        does not become untrue when the statistic is reset. The two channels together are how a
+        fleet can tell "the instrument has drifted" from "the vehicle's model of the instrument
+        has drifted", which is the question `simulator-design.md:379-386` says a quality code
+        must never answer
+  - id: avionics.time_sync_state
+    unit: "enum[sync,degraded,unsync]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["integrity change"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:474-483 — `time_health`, whose three returns are SYNC, DEGRADED and UNSYNC"
+      note: >-
+        `avionics.clock_offset_ms` is apollo's and carries the number; this carries the verdict,
+        and the verdict is what gates a command. `avionics_diode.md:496-508` requires a
+        *time-trusted* clock before an irreversible action may execute — `require(vehicle.
+        time_quality == SYNC, "TIME_UNTRUSTED")` — and an offset with no verdict leaves that
+        gate to be re-derived by whoever reads the number, differently each time
+
+consumables:
+
+  - id: res.o2_remaining_kg
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["reserve threshold"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:193"
+      note: "mission dependent; mission.yaml supplies the initial load"
+  - id: res.h2_remaining_kg
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["reserve threshold"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:194"
+  - id: res.water_potable_kg
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.1
+    priority: P4
+    range: [null, null]
+    events: ["low"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:195"
+      note: "I/A depending on whether a tank quantity sensor exists; kind follows the sensor, not the usefulness"
+  - id: res.water_cooling_kg
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.1
+    priority: P4
+    range: [null, null]
+    events: ["low"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:196"
+  - id: res.main_propellant_kg
+    unit: kg
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["reserve threshold"]
+    event_class: realised_by
+    event_thresholds: [prop_reserve_20]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:197"
+  - id: res.rcs_propellant_kg
+    unit: kg
+    layer: estimate
+    precision: 0.05
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["reserve threshold"]
+    event_class: realised_by
+    event_thresholds: [rcs_reserve_25]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:198"
+  - id: res.battery_energy_wh
+    unit: Wh
+    layer: estimate
+    precision: 1
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["time to empty"]
+    event_class: realised_by
+    event_thresholds: [battery_reserve_30]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:199"
+  - id: "res.ledger_[resource]_kg"
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P4
+    range: [null, null]
+    events: ["ledger reaches its reserve floor"]
+    event_class: realised_by
+    event_thresholds: [o2_reserve_20, water_reserve_20, h2_reserve_20, cooling_water_reserve, prop_reserve_20, rcs_reserve_25]
+    provenance:
+      basis: chosen
+      reason: "consumables_diode.md:55-65 defines the ledger as the accounting model's own prediction, separate from any observation. It has to be published as its own channel, because the residual below is only evidence if both of its terms are visible — a residual published alone is a diagnosis, and design.md:211-214 forbids publishing those"
+  - id: "res.recon_[resource]_kg"
+    unit: kg
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P3
+    range: [null, null]
+    events: ["sustained beyond the configured tolerance"]
+    inputs: ["res.ledger_[resource]_kg", "res.[resource]_kg"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "consumables_diode.md:55-65"
+      note: "delta_recon = observed - ledger, published as a pair with the observation and never reconciled silently. It is how a slow leak first becomes visible, and hiding it deletes the exact inference the experiment exists to observe (simulator-design.md:250-252)"
+  - id: "res.status_[resource]"
+    unit: "enum[NORMAL,WATCH,RESTRICTED,CRITICAL,EXHAUSTED,UNKNOWN,UNCONFIGURED]"
+    layer: service
+    precision: exact
+    rate_hz: 0.2
+    on_event: true
+    priority: P3
+    events: ["any transition toward CRITICAL"]
+    event_class: notification
+    provenance:
+      basis: historical
+      source: "consumables_diode.md:284: the status enum is the corpus's own, including UNCONFIGURED, which is the fail-safe state that stops a missing limit resolving to a fabricated typical value"
+  - id: res.time_to_limit_s
+    unit: s
+    layer: estimate
+    precision: 10
+    rate_hz: 0.1
+    priority: P4
+    range: [null, null]
+    events: ["< configured planning horizon"]
+    inputs: [res.o2_remaining_kg, res.water_potable_kg, res.battery_energy_wh, res.main_propellant_kg]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:200"
+      note: "the single most useful inferred quantity in the vehicle and the one most likely to be trusted past its age; consensus: the ledger-versus-observation pair means the forecast must never silently reconcile"
+
+structure:
+
+  - id: "structure.arm_state_[event]"
+    unit: "enum[none,armed,expired,consumed]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["armed", "expired without an execute"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:487-509"
+      note: >-
+        the state of the arm/commit pattern, which is the only place on this vehicle where it is
+        used (conflict C-16). It has to be published because the token's whole purpose is to make
+        an irreversible command deliberate: an agent that cannot see whether an event is armed,
+        whether the arm has expired, or whether the token was already consumed is an agent that
+        cannot tell a deliberate act from an accidental one.
+  - id: "structure.event_count_[event]"
+    unit: count
+    layer: service
+    precision: 1
+    rate_hz: 0.2
+    priority: P2
+    events: ["any increment of an irreversible event"]
+    on_event: true
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:509"
+      note: >-
+        a successful staging, jettison or pyro event increments the vehicle configuration
+        permanently and can never be undone by another command. Counting them is how the record
+        says what the vehicle *is* rather than what it was told: the configuration is a
+        consequence of the count, not of the last command.
+  - id: structure.cabin_dp_psi
+    unit: psi
+    layer: measurement
+    precision: 0.01
+    rate_hz: 2
+    priority: P3
+    range: [null, null]
+    events: ["high", "low"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:206"
+  - id: structure.hatch_state
+    unit: "enum[closed,latched,open]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["incompatible with pressure"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:207"
+  - id: structure.docking_latches
+    unit: count
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    events: ["latch disagreement"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:208"
+  - id: structure.leak_estimate_g_s
+    unit: g/s
+    layer: estimate
+    precision: 0.01
+    rate_hz: 0.2
+    priority: P4
+    range: [0, null]
+    events: ["rising leak"]
+    event_class: realised_by
+    event_thresholds: [leak_rate_rising]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:209"
+  - id: structure.accel_xyz_g
+    unit: g
+    layer: measurement
+    precision: 0.001
+    rate_hz: 10
+    priority: P2
+    range: [-0.001, 0.001]
+    events: ["uncommanded impulse"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:210"
+  - id: structure.stage_state
+    unit: "enum[docked,undocked,separated,abandoned]"
+    layer: service
+    precision: exact
+    rate_hz: 0
+    on_event: true
+    max_decision_age_ms: 1000
+    priority: P1
+    events: ["irreversible change"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:211"
+      note: >-
+        an event-driven *state*, so it declares a heartbeat: 1000 ms, chosen. The value itself
+        never goes stale in the usual sense — the configuration is monotone and a sample from a
+        minute ago is still a true reading of what the vehicle was — and that is exactly why the
+        age matters, because the hazard is acting on the state *before* the change rather than
+        after it. F-15 is premature staging: separating a stage that has already separated, or
+        venting through a hatch whose state has moved on. A monotone quantity whose published
+        form arrives only on change cannot distinguish "nothing has happened" from "the
+        publisher has stopped", and a fleet cannot tell those apart either.
+  - id: "structure.pyro_continuity_[n]"
+    unit: bool
+    layer: measurement
+    precision: exact
+    rate_hz: 0.2
+    priority: P3
+    range: [true, true]
+    events: ["lost continuity"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:212"
+  - id: structure.relief_valve_state
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    range: [false, false]
+    events: ["unexpected opening"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:213"
+
+crew:
+
+  - id: cw.master_alarm
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["assert", "clear"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:221"
+      note: "an alert exists, without a root cause; the same ECS light may mean glycol pump, water separator or suit fan, and that is a feature"
+  - id: cw.active_lights
+    unit: "list[enum[ECS,RCS,DC_BUS,PROP,GUIDANCE]]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["assert", "clear"]
+    event_class: notification
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:222"
+  - id: "cw.alert_[id]_state"
+    unit: "enum[nominal,asserted,active_unacknowledged,acknowledged,clearing,latched,cleared]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["assert", "clear", "latch"]
+    event_class: alarm
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:393-445's alert lifecycle, adopted at simulator-design.md:544-550. It is a
+        channel rather than an internal state because acknowledgement moves it and does not clear
+        it: a fleet that cannot see which alerts are acknowledged cannot distinguish an alarm
+        somebody is working from one nobody has noticed.
+  - id: "cw.decision_output_[alert]"
+    unit: "enum[NONE,ADVISORY_ONLY,CREW_ACTION_REQUIRED,REQUEST_SAFE_ACTION]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P1
+    events: ["any transition away from NONE"]
+    event_class: notification
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:470-474, published as a channel because the caution/warning system's output
+        is advisory and an agent has to be able to tell an advisory from a request. `NONE` is the
+        value the design's summary omits (corpus-review.md §8) and it is the one that keeps an
+        ordinary state from reading as an advisory.
+  - id: cw.acknowledged
+    unit: "list[alarm_id]"
+    layer: service
+    precision: exact
+    rate_hz: 0
+    on_event: true
+    max_decision_age_ms: 2000
+    priority: P1
+    events: ["acknowledged", "cleared"]
+    event_class: alarm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:223"
+      note: >-
+        acknowledgement is not a clear predicate (crew_diode.md:433), and it declares a 2000 ms
+        heartbeat for the same reason `structure.stage_state` does: the list changes only when a
+        person presses a button, so its published form is silent by default. Without a heartbeat
+        the `ack_is_not_clear` guard cannot tell an unacknowledged alarm from a publisher that
+        has stopped, and the two want opposite responses — one is a crew who have not looked at
+        the panel, the other is a panel that is no longer reporting.
+  - id: controls.switches
+    unit: "map[switch_id,enum]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:224"
+      note: "crew-only surface; the GM reads it, agents observe it"
+  - id: controls.breakers
+    unit: "map[breaker_id,enum[in,out,tripped]]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P3
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:225"
+  - id: crew.available
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 0.2
+    priority: P4
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226"
+  - id: crew.workload
+    unit: "enum[low,medium,high]"
+    layer: estimate
+    precision: exact
+    rate_hz: 0.1
+    priority: P4
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:227"
+      note: "coarse on purpose; no synthetic psychology"
+  - id: "crew.location_[id]"
+    unit: "enum[csm_commander,csm_navigator,csm_lower_equipment_bay,lm_commander,lm_pilot,tunnel,surface_eva]"
+    layer: service
+    precision: exact
+    rate_hz: 0.05
+    on_event: true
+    priority: P4
+    provenance:
+      basis: chosen
+      reason: >-
+        apollo publishes what a crew member can *do* (`crew.available`, :226) and how loaded
+        they are (`crew.workload`, :227) and never where they are; but `crew_positions` in this
+        file makes the position the third argument of the perception function
+        (`simulator-design.md:392-403`, D-06), so who is at which station is the index into the
+        bound rather than decoration. Without it a fleet cannot tell whether a report came from
+        the seat with the cabin panel or from the tunnel, and that distinction is most of what a
+        crew report means. The enum's members are exactly the `crew_positions` ids, which the
+        linter enforces, because a position nobody can be in and a person with no position are
+        the same defect seen from two sides. Rate is on-event and slow: a crew member moves
+        between modules a few times an hour, and the channel exists to make a report's geometry
+        resolvable rather than to track motion
+
+# --------------------------------------------------------------------------------------
+# Mission-level state. apollo publishes four fields of it inside every frame — `seq`,
+# `met_s`, `phase` and the `quality` map (apollo_diode.md:600-627) — and the phase is the
+# one every verb's `allowed_phases` is written against, so it is odd that it had no entry
+# in this registry: thirteen domains gate on a quantity with no published form.
+#
+# `mission_diode.md` supplies the half that was missing. C-22 fixed the phase *set* and the
+# phase *durations*; it said nothing about the execution posture, and the posture is the
+# axis an abort lives on. The document's state machine (:300-347) is INIT, SAFE, STANDBY,
+# PREPARE, EXECUTE, HOLD, RECOVERY, COMPLETE, ABORTING, ABORTED, and two of its invariants
+# are the reason the axis has to exist at all:
+#
+#   Invariant E: AbortLatched => no hazardous action is permitted.
+#   Invariant J: ABORTED is terminal; it never returns to EXECUTE without a new mission.
+#
+# Invariant J is the one that bites. A vehicle whose only terminal states are "the phase
+# ladder ran out" has no way to say *this mission is over and did not succeed* — and a
+# post-abort vehicle that looks like a vehicle between phases is a vehicle a fleet will try
+# to fly again.
+# --------------------------------------------------------------------------------------
+
+mission:
+
+  - id: mission.met_s
+    unit: s
+    layer: service
+    precision: 0.001
+    rate_hz: 1
+    priority: P2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:605"
+      note: >-
+        mission elapsed time from `met_epoch_utc`, which is the only clock the vehicle's own
+        results are stamped with (apollo_diode.md:227, diode-contract.md:226-228). It is
+        published as a number rather than as a formatted string because every timestamp in the
+        record is derived from it, and a formatted time is a presentation of a quantity rather
+        than the quantity.
+  - id: mission.phase
+    unit: "enum[translunar_coast,lunar_orbit,descent,surface,ascent_rendezvous,lunar_orbit_docked,transearth_coast,entry]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P0
+    max_decision_age_ms: 1000
+    events: ["phase change"]
+    event_class: frame
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:609"
+      note: >-
+        apollo's `phase` field, whose value set was authored in `mission.yaml` (C-22). P0 and
+        explicitly aged because the phase is a term in the authorization predicate of *every*
+        verb on the vehicle: `allowed_phases` is checked at effect time, so a stale phase is
+        not a stale reading, it is an action taken in the wrong part of the mission. The
+        members are the phase ids verbatim, and the linter refuses a mismatch — the same
+        discipline the crew station vocabulary gets, for the same reason.
+  - id: mission.phase_entry_seq
+    unit: count
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    provenance:
+      basis: historical
+      source: "mission_diode.md:214 — `mission.phase_entry_seq`, a state entry sequence"
+      note: >-
+        which entry into the current phase this is, so that a fleet returning after a telemetry
+        gap can tell "still in descent" from "left descent and came back". The document's
+        requirement (:168) is that a returning agent must distinguish state evolution from a
+        static snapshot, and a phase name alone cannot: the LM leaves `lunar_orbit` for
+        `descent` once, but a mission that has been held and resumed has re-entered phases, and
+        a bare enum reads the same either way.
+  - id: mission.posture
+    unit: "enum[init,safe,standby,prepare,execute,hold,recovery,complete,aborting,aborted]"
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P0
+    max_decision_age_ms: 1000
+    events: ["posture change"]
+    event_class: notification
+    provenance:
+      basis: historical
+      source: "mission_diode.md:300-347 — the formal mission state machine S = {INIT, SAFE, STANDBY, PREPARE, EXECUTE, HOLD, RECOVERY, COMPLETE, ABORTING, ABORTED}"
+      note: >-
+        where the mission is in its *execution* rather than in its timeline. The two axes are
+        independent on purpose: `phase` says the vehicle is in descent, `posture` says whether
+        the mission is executing, held, aborting or over, and a descent that has been held for
+        a fault is a different situation from one that is running — which a phase enum cannot
+        express and a fleet must be able to see. `complete` and `aborted` are both terminal and
+        they are different states on purpose (mission_diode.md:309): a vehicle that succeeded
+        and a vehicle that was abandoned have the same hardware and opposite meanings.
+  - id: mission.posture_entry_seq
+    unit: count
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P2
+    provenance:
+      basis: historical
+      source: "mission_diode.md:214, generalised from the phase entry sequence to the posture"
+      note: "how many times the mission has changed posture, which is how a hold-and-resume cycle becomes visible rather than invisible."
+  - id: mission.abort_latched
+    unit: bool
+    layer: service
+    precision: exact
+    rate_hz: 1
+    on_event: true
+    priority: P0
+    max_decision_age_ms: 1000
+    events: ["abort latched"]
+    event_class: realised_by
+    event_thresholds: [emergency_assert]
+    provenance:
+      basis: historical
+      source: "mission_diode.md:215 and :1303 — `safety.abort_latched`, and invariant E: AbortLatched => no hazardous action is permitted"
+      note: >-
+        latched, published, and dominant. Invariant E makes it the one condition that overrides
+        every other transition, and the point of publishing it is that a fleet which cannot see
+        the latch will read every subsequent refusal as a fault in the vehicle rather than as
+        the vehicle protecting itself. It is deliberately *not* clearable through any agent
+        verb: the abort latch is set by the safety kernel and cleared by a new mission, which
+        is invariant J and the reason `abort_latched` is not in any command's argument schema.
+
+# --------------------------------------------------------------------------------------
+# The GM/crew sensor. Crew are a query-capable instrument, and their reply is bounded by
+# what a person standing in a module with specific readouts could perceive — not by what
+# the GM knows (simulator-design.md:392-403). `perceivable` lists the channels a crew
+# member in that position can honestly report on; it is the missing third argument of
+# review-findings.md #4's perception function, and the design's claim that crew_diode
+# supplies it is wrong (corpus-review.md §8, conflict register D-06).
+# --------------------------------------------------------------------------------------
+crew_positions:
+
+  # The channel-level perception bound: which published channels a crew member standing in a
+  # position could read out loud. The *display* contract is richer — panels, displayed
+  # precisions, procedures — and lives in `domains/crew/components.yaml#display_contract`,
+  # whose readouts the linter cross-checks against these lists. Two artifacts on purpose:
+  # this one says what is perceptible, that one says what an instrument in front of a person
+  # actually shows, and the difference between them is where a leak in a crew line would hide.
+
+  - id: csm_commander
+    perceivable: [eclss.cabin_pressure_psia, eclss.cabin_temp_c, eclss.co2_pp_mmhg,
+                  eclss.pp_o2_mmhg, eclss.suit_loop_flow_cfm, structure.cabin_dp_psi,
+                  cw.master_alarm, cw.active_lights, controls.switches, controls.breakers,
+                  power.dc_bus_a_v, power.bus_tie_state, structure.hatch_state]
+    not_perceivable: [thermal.avionics_plate_c, thermal.comm_amp_c, prop.chamber_pressure_pct,
+                      power.load_margin_w, eclss.lm_cabin_pressure_psia]
+    note: >-
+      the left seat, with the main display panel and the cabin controls in reach. The cabin
+      temperature here is the **CSM's** — `eclss.cabin_temp_c` and `eclss.lm_cabin_temp_c` are
+      two channels because they are two compartments, and a crew member reads the one they are
+      sitting in. Can hear a
+      bang, smell a smell, feel a draught, notice frost on a panel; can read the bus voltage
+      off the panel and cannot read a coldplate temperature at all.
+  - id: csm_navigator
+    perceivable: [gnc.guidance_mode, "gnc.attitude_q[0..3]", gnc.body_rate_xyz_deg_s,
+                  gnc.nav_position_sigma_m, gnc.radar_altitude_m, avionics.computer_mode,
+                  avionics.program_alarm_code, cw.master_alarm, cw.active_lights,
+                  controls.switches, controls.breakers]
+    not_perceivable: [eclss.cabin_pressure_psia, thermal.avionics_plate_c,
+                      prop.chamber_pressure_pct, power.battery_soc_pct]
+    note: >-
+      the right seat, with the guidance and navigation displays. `apollo_diode.md:1044` makes
+      the LM pilot an engineering officer monitoring both spacecraft, and on this vehicle the
+      right seat is the one that can see the state vector and cannot see the cabin.
+  - id: csm_lower_equipment_bay
+    perceivable: [controls.breakers, controls.switches, power.dc_bus_a_v, power.dc_bus_b_v,
+                  "power.lcl_[n]_state", cw.active_lights, structure.hatch_state]
+    not_perceivable: [gnc.guidance_mode, eclss.co2_pp_mmhg, thermal.comm_amp_c,
+                      comm.snr_db]
+    note: >-
+      below the floor, where the breakers are. A crew member here can act on the electrical
+      system directly and cannot see any of the displays the other two seats are reading —
+      which is the geometry that makes a two-person diagnosis different from a one-person one.
+  - id: lm_commander
+    perceivable: [eclss.lm_cabin_pressure_psia, eclss.lm_cabin_temp_c, eclss.lm_co2_pp_mmhg,
+                  eclss.lm_pp_o2_mmhg, eclss.suit_loop_flow_cfm, structure.hatch_state,
+                  structure.docking_latches, cw.master_alarm, cw.active_lights,
+                  controls.switches, controls.breakers, prop.dps_throttle_pct,
+                  prop.chamber_pressure_pct, gnc.radar_altitude_m, structure.accel_xyz_g]
+    not_perceivable: [power.dc_bus_a_v, thermal.comm_amp_c, prop.pressurant_pressure_psi,
+                      eclss.cabin_pressure_psia]
+    note: >-
+      the LM commander's position: the descent and landing displays. Apollo 11's commander flew
+      the final approach by hand with the radar and the throttle in front of him, and the
+      not-perceivable list is the important half — the CSM's cabin pressure is another
+      vehicle's.
+  - id: lm_pilot
+    perceivable: [eclss.lm_cabin_pressure_psia, eclss.lm_co2_pp_mmhg, eclss.suit_loop_flow_cfm,
+                  gnc.nav_position_sigma_m, gnc.radar_range_rate_m_s,
+                  avionics.exec_margin_pct, avionics.program_alarm_code, cw.master_alarm,
+                  cw.active_lights, controls.switches]
+    not_perceivable: [structure.accel_xyz_g, prop.dps_throttle_pct, power.dc_bus_a_v,
+                      comm.snr_db]
+    note: >-
+      the LM pilot's position: systems and navigation, callouts to the commander, and no access
+      to the flight controls. `apollo_diode.md:1044` is explicit that the pilot kept the
+      commander informed about systems status and navigational information.
+  - id: tunnel
+    perceivable: [structure.hatch_state, structure.docking_latches, structure.cabin_dp_psi,
+                  cw.active_lights]
+    not_perceivable: [thermal.coolant_supply_c, power.battery_soc_pct, eclss.co2_pp_mmhg]
+    note: >-
+      a transit position, not a station: nothing is readable here that is not a discrete, and a
+      crew member in the tunnel is a sensor with almost no coverage exactly when they are
+      between two vehicles.
+  - id: surface_eva
+    perceivable: [eclss.suit_loop_flow_cfm, cw.master_alarm, structure.hatch_state,
+                  structure.accel_xyz_g]
+    not_perceivable: [eclss.lm_cabin_pressure_psia, thermal.coolant_supply_c,
+                      prop.chamber_pressure_pct, comm.snr_db]
+    note: >-
+      outside, on a suit, with no displays at all. The suit's own flow and the alarm light are
+      the entire instrumentation, and everything else the crew member reports is a human
+      observation — which is the coverage that no channel on this vehicle provides.
+
+open_debts:
+
+  - "A channel template's instantiations are inferred rather than declared. `ChannelIndex` compiles `thermal.zone_[id]_t_c` to a regex whose wildcard is unbounded, so `thermal.zone_1_true_t_c` resolves to it — the wildcard absorbs `1_true` and the literal `_t_c` then matches. The same over-permissiveness makes `power.lcl_1_old_state` resolve to `power.lcl_[n]_state`, which means every \"is this a registered channel?\" check in the linter is weaker than it reads. Bounding the wildcard is not the fix and cannot be: `res.recon_[resource]_kg` has to match `water_cooling`, so a placeholder may contain underscores, and then `[id]` matching `1_true` is indistinguishable from `[id]` matching `csm_cabin`. What would fix it is each registry entry naming the values its placeholders take — which turns a template from a pattern into an enumeration, and is a decision about the registry's shape rather than a patch. Found by a `not_published` entry that was correctly withheld and wrongly reported as registered."
+
+  - "Precision and rate for every channel marked chosen or derived must be confirmed against the plant once it exists; apollo's values are adopted verbatim and need no confirmation."
+  - "No channel yet carries the crew's own speech; whether dialogue is a channel at all is D-07 and is John's call."
+  - "gnc.position_xyz_km and gnc.velocity_xyz_m_s are published at 2 Hz with 0.01 km precision, but the initial state they start from is not set: mission.yaml owes a parking-orbit or post-TLI position and velocity in EARTH_J2000, and a perilune for the descent phase."
+  - "structure.docking_latches is declared a count; it needs the actual latch count per docking interface or the F-15 and rendezvous chains cannot distinguish a partial dock from a full one."

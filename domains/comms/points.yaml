@@ -1,0 +1,179 @@
+# domains/comms/points.yaml — the link, and the difference between quiet and broken.
+#
+# ## The one distinction this file is organised around
+#
+# A communications fault and a communications *condition* produce the same observation from the
+# ground: nothing arrives. `apollo_diode.md:903` says the vehicle goes behind the Moon every
+# revolution and comes back, and `:901` says a degraded link must actually choose what arrives
+# rather than announcing itself. So the domain publishes three separable facts and refuses to
+# merge them:
+#
+#   `comm.blackout_state`   the geometry says the link should be down, and it is not a fault
+#   `comm.snr_db`           the link exists and is thin
+#   `comm.carrier_lock`     the receiver can hear the vehicle and cannot read it
+#
+# A fleet that sees only the first has to trust the vehicle's ephemeris. One that sees only the
+# second cannot tell a fading link from an occulted one. The three together are what a
+# communications decision actually needs, and the domain's first design rule is that **a planned
+# blackout raises no alarm** — an alarm every orbit is how a fleet learns to ignore alarms, which
+# is the failure F-11's third order depends on.
+
+domain: comms
+points:
+
+  # ------------------------------------------------------------------------------------
+  # apollo's eight, verbatim in name, unit, precision, rate and event.
+  # ------------------------------------------------------------------------------------
+
+  - channel: comm.link_mode
+    from: comm_mode
+    layer: service
+    derivation: "which link the vehicle is using: S-band high or low rate, VHF, or none"
+    note: >-
+      apollo's "loss/change" event. `vhf` is in the enum for a reason worth stating: it is the
+      LM-to-CSM and EVA channel, so a vehicle in VHF can talk to the other spacecraft and not to
+      Earth. During a descent that is the difference between a crew talking to each other and a
+      crew talking to anybody else, and it is invisible in a boolean.
+
+  - channel: comm.carrier_lock
+    from: carrier_lock
+    layer: measurement
+    derivation: "whether the receiver has acquired the carrier"
+    note: >-
+      apollo's "lock loss" event. It is a *different fact* from having a usable link — a carrier
+      locks at an SNR far too low to carry data — so this channel and `comm.snr_db` together
+      separate "the receiver has lost the vehicle" from "the receiver can hear it and cannot read
+      it". Those want opposite responses: the first is a pointing or power problem on the
+      vehicle, the second is a bandwidth problem on both ends.
+
+  - channel: comm.hga_pointing_error_deg
+    from: antenna_pointing
+    layer: estimate
+    derivation: "the residual pointing error after the gimbal compensates"
+    note: >-
+      apollo's channel, whose "0-2 **Sim** good link" range and ">2 warning; scan limit" events
+      are adopted. The residual rather than the raw attitude error, and the distinction is what
+      makes a gimbal failure diagnosable: `E-DYN-GEOM` says a degree of attitude error is a
+      degree of boresight error, and this says how much of it is left once the mechanism has
+      done its work. With the corrected 9.4-degree beam (`vehicle.yaml#comms.antennas`), 2
+      degrees is 0.54 dB down — a *pointing* warning rather than a link warning, which is exactly
+      what apollo's two-sided wording says.
+
+  - channel: comm.snr_db
+    from: link_snr
+    layer: estimate
+    derivation: "the link's signal-to-noise ratio at the receiver"
+    note: >-
+      apollo's band is 8-30 dB with "<8 degraded" and "<3 loss". Three edges land on the state
+      behind this channel — a sagging bus (`E-BUS-COMM`), a hot amplifier (`E-PLATE-COMM`) and
+      pointing loss (`E-GEOM-LINK`) — and the channel deliberately does not say which, because
+      one number cannot: the attribution needs `power.dc_bus_a_v`, `thermal.comm_amp_c` and
+      `comm.hga_pointing_error_deg`, all of which are published beside it.
+
+  - channel: comm.telemetry_rate_bps
+    from: telemetry_rate
+    layer: service
+    derivation: "the rate the publisher has been commanded to send"
+    note: >-
+      apollo's two profiles, 1,600 and 51,200 bit/s, and its "mode change" event. Commanded, not
+      achieved — the achieved rate is visible only as `comm.rx_frame_loss_pct`, and the gap
+      between the two is the domain's bandwidth story. A fleet that reads this as the arriving
+      rate will believe it is receiving at 51.2 kbit/s while most frames are being dropped.
+
+  - channel: comm.rx_frame_loss_pct
+    from: frame_loss
+    layer: estimate
+    derivation: "the fraction of frames the receiver did not get"
+    note: >-
+      apollo's band 0-0.5 % and its ">2 %" event. It is the *achieved* half of the pair above,
+      and the event's value is high because a frame loss above 2 % is not a thin link — it is a
+      link that is dropping content, which is the condition `apollo_diode.md:901` insists must be
+      real rather than flagged.
+
+  - channel: comm.antenna
+    from: antenna_selection
+    layer: service
+    derivation: "which antenna is selected"
+    note: >-
+      apollo's enum with its "unexpected switch" event, and the four members are the four
+      `vehicle.yaml#comms.antennas` declares — the linter refuses the mismatch. The channel is
+      worth publishing because the members are 26.7 dB and 2 dB apart: an antenna change is a
+      25 dB step in the link budget, and a fleet that cannot see which antenna is selected cannot
+      attribute an outage that the selection itself caused.
+
+  - channel: comm.tx_power_w
+    from: tx_power
+    layer: measurement
+    derivation: "the transmitter's DC input power"
+    note: >-
+      apollo's "low output" and "high draw" events, and the two point in opposite directions on
+      purpose. A low RF output at a normal DC draw is a failing final amplifier; a normal output
+      at a high DC draw is an amplifier that has become a load, which is the closing mechanism of
+      the flagship cycle. One channel carrying both is what makes a cycle visible as a single
+      number going the wrong way in two dimensions at once.
+
+  # ------------------------------------------------------------------------------------
+  # The two the blackout needs.
+  # ------------------------------------------------------------------------------------
+
+  - channel: comm.blackout_state
+    from: blackout
+    layer: service
+    derivation: "whether the Moon is between the vehicle and Earth"
+    note: >-
+      `occulted` is planned, published, and **deliberately not alarmed**. The geometry is derived
+      — the Moon occults the Earth whenever the vehicle is within `arcsin(R_moon / r_orbit)` of
+      the anti-Earth direction, which at a 100 km circular orbit is a 71.0-degree half-angle and
+      46.5 minutes of each 117.8-minute revolution — and the figure is worth stating because it
+      is the one place a derived number can be checked against an operational one: Apollo's
+      loss-of-signal was about 45 minutes per revolution. A fleet that can see this channel knows
+      that a silent vehicle behind the Moon is a vehicle that is working, which is the single
+      most useful thing this domain publishes.
+
+  - channel: comm.recorder_fill_pct
+    from: recorder
+    layer: estimate
+    derivation: "how much of the on-board record is held and not yet transmitted"
+    note: >-
+      apollo's property that telemetry "could be routed/stored through other links and later
+      replayed" (`:903`), made a stock. It is what turns a blackout from a data loss into a data
+      delay, and it is also where a fleet's own choices become visible: bandwidth spent on
+      channels it does not need fills the recorder, and this is the number that says so. The
+      failure it makes observable is the interesting one — a recorder that fills forces the
+      vehicle to choose what to forget, which is the same triage a degraded link demands, one
+      step later.
+
+not_published:
+
+  - channel: comm.degraded
+    why: >-
+      `apollo_diode.md:901` forbids it in terms: "do not merely set `comm.degraded=true` while
+      delivering every telemetry field normally." A degraded flag is the *appearance* of a
+      constraint without the constraint, and publishing it beside an undegraded stream would let
+      a fleet believe it had lost information it still had — the same class of error as a frozen
+      value that reads as fresh. What is published instead is what actually happened: the chosen
+      rate, the achieved frame loss, and the recorder's fill.
+
+  - channel: comm.earth_elevation_deg
+    why: >-
+      the geometry behind `comm.blackout_state`, and it is withheld for the same reason the
+      station vocabulary is published as positions rather than as coordinates: a fleet that could
+      compute the occultation itself would not need the state channel, and the state channel is
+      the vehicle's *statement* that it knows where it is. An elevation also invites a fleet to
+      predict the link rather than observe it, which is the opposite of what the domain is for.
+
+  - channel: comm.link_budget_db
+    why: >-
+      the sum of transmit power, antenna gain, pointing loss, range loss and receiver threshold.
+      It is the number the domain computes and it is not published because publishing it would
+      publish the *conclusion*: design.md §8 refuses to hand a fleet a diagnosis, and a link
+      budget is a diagnosis of an SNR. The terms are all observable — `comm.tx_power_w`,
+      `comm.antenna`, `comm.hga_pointing_error_deg` — and the arithmetic is the fleet's.
+
+  - channel: comm.rx_frame_[n]_contents
+    why: >-
+      which frames were lost. A frame loss percentage is the operational fact; a list of missing
+      frame numbers is a maintenance log, and it would let a fleet reconstruct what it missed
+      from the vehicle rather than noticing that it missed it. The exception the vehicle does
+      make is the *sequence gap*, which is visible in the ring itself (D-01) and is the honest
+      form of the same information.

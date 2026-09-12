@@ -1,0 +1,172 @@
+# domains/consumables/commands.yaml — the four verbs this domain keeps, and the fourteen it
+# declines.
+#
+# ## What is declined, and why it is the most consequential decision in the domain
+#
+# `consumables_diode.md:1002-1021` offers fourteen agent-facing verbs, four of which are the
+# claims lifecycle: `RESERVE_RESOURCE`, `RELEASE_RESERVATION`, `REQUEST_ALLOCATION`,
+# `RELEASE_ALLOCATION`. `simulator-design.md:254-257` declines them, and the reasoning is the
+# spine of the whole experiment: reservations are a **deconfliction primitive**, and
+# `design.md` §8 refuses to supply one. Ten agents flying one vehicle have to invent
+# deconfliction; a vehicle that hands them a reservation table has answered the mission's first
+# question for them.
+#
+# The declined verbs are listed below with their reasons, because a decline that is not written
+# down is a decline somebody re-proposes in three months.
+#
+# ## What survives, and why each is safe
+#
+# The three that survive are safe for three different reasons, and the reasons are the useful
+# part: `set_reserve_policy` only ever *tightens* the caller's own ceiling (monotone, so it
+# cannot be used to take a resource from anyone); `request_reconciliation` asks the trusted
+# service to re-derive a number the service already owns (a read, dressed as a verb);
+# and `set_o2_source` / `set_absorber_path` are ordinary vehicle controls that route a flow
+# rather than allocate one.
+
+domain: consumables
+commands:
+  - verb: set_reserve_policy
+    argument_schema:
+      resource: {type: enum, values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main,
+                                    prop_rcs, pressurant_he, absorber_capacity]}
+      floor_kg: {type: number, minimum: 0}
+      note: {type: string, optional: true, max_length: 200}
+    authority: A1
+    gate: {kind: preference, variable: reserve_floor_<resource>_enable}
+    interlocks: none - reviewed
+    conflict_domain: res.<resource>.policy
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 600
+    help: >-
+      Set your own reserve floor for a resource. The service keeps its own floor underneath
+      yours and the effective floor is the higher of the two, so this verb can only ever make
+      the caller more conservative. `apollo_diode.md:55` says reserve policies should remain
+      agent-created, and this is the narrowest reading of that: a floor is a commitment about
+      the caller's own future spending, not a claim on a quantity, and no other agent can see
+      it or be bound by it.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:55"
+      note: "the corpus's own position is that reserve policies should remain agent-created; the min(agent, operator) monotonicity in diode-contract.md:143-144 is what makes it safe to allow"
+
+  - verb: request_reconciliation
+    argument_schema:
+      resource: {type: enum, values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main,
+                                    prop_rcs, pressurant_he, absorber_capacity, all]}
+    authority: A0
+    gate: {kind: preference, variable: recon_request_enable}
+    interlocks: none - reviewed
+    conflict_domain: res.<resource>.recon
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Ask the trusted service to re-derive the ledger and publish a fresh residual. It changes
+      no physical quantity and grants nothing: the service recomputes its own accounting and
+      says what it now believes. An agent that suspects a leak can ask for a reconciliation,
+      and the answer is a number rather than a permission.
+    provenance:
+      basis: apollo
+      ref: "consumables_diode.md:1020"
+      note: "the corpus's own REQUEST_RECONCILIATION, which survives the claims decline because it allocates nothing. It is the verb that makes the ledger pair usable: without it, a residual only updates on the service's own cadence"
+
+  - verb: set_o2_source
+    argument_schema:
+      vehicle: {type: enum, values: [csm, lm]}
+      source: {type: enum, values: [primary, surge, isolated]}
+      flow: {type: enum, values: [off, low, nominal, high]}
+    authority: A2
+    gate: {kind: preference, variable: o2_<vehicle>_<source>_enable}
+    interlocks: [eclss.cabin_pressure_caution, o2_reserve_10]
+    conflict_domain: res.<vehicle>.o2_source
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Select an oxygen source and a flow band. A flow band rather than a rate because the
+      regulator owns the rate; what an agent chooses is which tank the regulator draws from,
+      and a vehicle that has to reason about its own reserve should be able to say "spend this
+      tank first".
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: "apollo's set_o2_source; the flow band is added because the cabin regulator's mode is a separate control and a source with no flow control cannot be conserved against a leak"
+
+  # `set_absorber_path` used to live here. It moved to `domains/eclss/` in round 6, and the
+  # reason is the distinction that runs through the vehicle: **consumables owns the stock and
+  # ECLSS owns the air.** The beds' capacity is a resource — consumed, floored, planned against
+  # — but the path is a routing decision about cabin air, and a resource domain with an opinion
+  # about ducting is how one verb ends up with two implementations.
+
+declined:
+
+  - verb: reserve_resource
+    corpus: "consumables_diode.md:1008"
+    why: >-
+      it is a claim on a quantity, and a published claim table is a deconfliction primitive.
+      The mission is to find out whether ten agents invent one; handing them the vehicle's own
+      would answer the question instead of asking it.
+  - verb: release_reservation
+    corpus: "consumables_diode.md:1009"
+    why: "the inverse of a declined verb is a declined verb"
+  - verb: request_allocation
+    corpus: "consumables_diode.md:1010"
+    why: "an allocation is a granted claim — the same primitive, one state further along"
+  - verb: release_allocation
+    corpus: "consumables_diode.md:1011"
+    why: "as above"
+  - verb: request_transfer
+    corpus: "consumables_diode.md:1012"
+    why: >-
+      a cross-vehicle resource transfer is a real thing on this vehicle (the LM is the lifeboat
+      and the CSM has the oxygen), and it is declined here because the *transport* between the
+      two vehicles is a docking-and-plumbing question rather than an accounting one. When it
+      lands it belongs to the structure domain's hatch and docking verbs, not to a resource
+      verb that moves a number between two tanks that are not connected.
+  - verb: request_replenishment
+    corpus: "consumables_diode.md:1013"
+    why: "there is nobody to ask. The vehicle has no supplier, and a verb addressed to a ground crew that does not exist would be a channel to a human the experiment does not have"
+  - verb: set_agent_budget_cap
+    corpus: "consumables_diode.md:1018"
+    why: >-
+      kept in spirit and renamed: `set_reserve_policy` is the same monotone ceiling-narrowing
+      move, expressed against a resource rather than against a spending allowance. Two verbs
+      for one idea is how a dictionary ends up with eight names for one object.
+  - verb: request_load_shed
+    corpus: "consumables_diode.md:1019"
+    why: "load shedding is the power domain's; a resource verb that shed a load would be a second, uncoordinated path to the same state"
+  - verb: request_data_purge
+    corpus: "consumables_diode.md:1020"
+    why: "the recorder is the operator's, not the fleet's, and a purge verb would be the one command that could destroy the record"
+  - verb: set_telemetry_profile
+    corpus: "consumables_diode.md:1021"
+    why: "a publisher-level verb listed per-domain by every spec that mentions it, which is how one verb acquires six argument schemas (vocabulary V-06)"
+  - verb: cancel_pending_resource_action
+    corpus: "consumables_diode.md:1022"
+    why: >-
+      subsumed by the command lifecycle: `CONFLICT_SUPERSEDED`, `EXPIRED` and `INHIBITED` are
+      refusals the executive already produces, and a verb that duplicates the lifecycle is a
+      verb that can disagree with it
+  - verb: ack_resource_event
+    corpus: "consumables_diode.md:1023"
+    why: "acknowledgement is not a resource action and the caution/warning domain owns it. More to the point, `crew_diode.md:433` makes acknowledgement not a clear predicate, so an ack verb here would imply an authority it does not have"
+  - verb: submit_plan_demand
+    corpus: "consumables_diode.md:1024"
+    why: >-
+      this is the interesting decline. A non-authoritative future-demand submission is *not* a
+      claim — it grants nothing and reserves nothing — and it would let the service tell a
+      fleet whether a plan is feasible. It is declined for now because a shared demand register
+      is a coordination artifact by another name: an agent could read the register and learn
+      what its siblings intend, which is exactly the information the world declines to supply.
+      If a future condition wants to test whether the fleet invents that register, this is the
+      verb to restore.

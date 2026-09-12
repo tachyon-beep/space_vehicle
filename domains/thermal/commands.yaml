@@ -1,0 +1,157 @@
+# domains/thermal/commands.yaml — the thermal verbs.
+#
+# apollo's four (`apollo_diode.md:239`: `set_coolant_pump`, `set_coolant_loop`,
+# `set_radiator_bypass`, `set_evaporator_feed`) plus `set_heater`, which apollo does not list
+# and which `thermal_diode.md:191-207` makes the TCS's main actuation — heater banks are how a
+# thermal subsystem actually holds a zone.
+#
+# **What is deliberately not here is as important as what is.** There is no verb that acts on
+# the radiator: `simulator-design.md:158` makes passive hardware "observable objects with no
+# command interface", and a radiator is the paradigm case. Its temperature and its rejection
+# are published, and nothing an agent can command touches it directly. What an agent can do is
+# change what reaches it — flow, bypass, evaporator feed — or change the vehicle's attitude,
+# which is an RCS verb and a thermal decision made somewhere else. That indirection is the
+# point: a crew that wants more rejection has to reason about a chain, not throw a switch.
+
+domain: thermal
+commands:
+  - verb: set_coolant_pump
+    argument_schema:
+      loop: {type: enum, values: [loop_primary, loop_secondary, loop_lm]}
+      pump: {type: enum, values: [pump_1, pump_2, pump_lm]}
+      state: {type: enum, values: [on, off]}
+    authority: A2
+    gate: {kind: preference, variable: pump_<pump>_enable}
+    interlocks: [pump_no_flow, coolant_supply_high]
+    conflict_domain: thermal.<loop>.pump
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Start or stop a coolant pump. Stopping the last running pump on a loop is refused by the
+      interlock rather than by a count of running pumps: the vehicle knows whether flow is
+      present, and it does not need to trust a bookkeeping number to know that stopping the
+      only pump is a bad idea.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:239"
+      note: "apollo's set_coolant_pump. thermal_diode.md:391-395 offers SELECT_PUMP_STRING, which is a longer way to say the same thing and is declined — the pump identity is an argument, not a separate verb"
+
+  - verb: set_coolant_loop
+    argument_schema:
+      loop: {type: enum, values: [loop_primary, loop_secondary, loop_lm]}
+      mode: {type: enum, values: [primary, secondary, series, isolated]}
+    authority: A2
+    gate: {kind: preference, variable: loop_<loop>_mode_enable}
+    interlocks: [pump_no_flow]
+    conflict_domain: thermal.<loop>.mode
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Select the active loop or put two in series. Series operation is the cold-case
+      configuration: it raises the rejection temperature and lowers the flow, which is a trade
+      an agent may want to make and a mistake an agent may want to make.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:239"
+
+  - verb: set_radiator_bypass
+    argument_schema:
+      loop: {type: enum, values: [loop_primary, loop_secondary]}
+      state: {type: enum, values: [radiator, bypass]}
+    authority: A2
+    gate: {kind: preference, variable: bypass_<loop>_enable}
+    interlocks: [coolant_supply_high, coolant_supply_low]
+    conflict_domain: thermal.<loop>.bypass
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Route the loop through the radiator or around it. `bypass` is how a cold vehicle warms
+      up and how a warm one stops warming; the interlock refuses a bypass that would take the
+      supply temperature past either end of its band, so the valve cannot be used to defeat
+      the loop's own limits.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:239"
+      note: "the only thermal actuator with a fast, large and reversible effect, which makes it the one an agent will reach for first and the one most worth an interlock"
+
+  - verb: set_evaporator_feed
+    argument_schema:
+      vehicle: {type: enum, values: [csm, lm]}
+      state: {type: enum, values: [on, off]}
+    authority: A2
+    gate: {kind: preference, variable: evaporator_<vehicle>_enable}
+    interlocks: [coolant_supply_high, res.cooling_water_reserve]
+    conflict_domain: thermal.<vehicle>.evaporator
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Feed the evaporator. It rejects about 2.3 kW and pays for it in water — roughly 3.4 kg
+      per hour at full rate, derived from the latent heat of vaporisation rather than
+      published, because no source gives the rate. This is the verb that converts a thermal
+      problem into a consumables problem, and the interlock is the water stock rather than the
+      temperature, because an evaporator with a dry feed is worse than a hot loop.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:239"
+      note: "apollo lists set_evaporator_feed and thermal_diode.md has NO counterpart — the evaporator/sublimator is absent from its actuator inventory (:189-207), which lists TEC, cryocooler and PCM instead. On this vehicle it is the difference between a hot CSM and a dead crew, so the gap is filled from apollo rather than from thermal"
+
+  - verb: set_heater
+    argument_schema:
+      bank: {type: enum, values: [heater_bank_csm, heater_bank_lm]}
+      zone: {type: enum, values: [csm_cabin, csm_avionics_bay, csm_service_bay, lm_cabin,
+                                lm_descent_bay]}
+      duty: {type: integer, range: [0, 100], unit: "%"}
+    authority: A2
+    gate: {kind: preference, variable: heater_<bank>_enable}
+    interlocks: [heater_stuck_on, thermal_no_progress]
+    conflict_domain: thermal.<zone>.heater
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Set a heater bank's duty for a zone. Declarative and repeatable, which matters more here
+      than anywhere else: a heater command that lost its acknowledgement and was re-asserted
+      as an increment would cook a zone, and a duty that is set rather than adjusted cannot.
+      Duty is capped by the bank's rating and by the zone's own upper limit — a heater asked
+      for full duty in an already-hot zone gets the limit, not the request.
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:191-207 makes heater banks the TCS's main actuation and its :780-797 interlocks include heater-stuck-on requiring upstream isolation; apollo has no heater verb, so this one is authored and the two interlocks are thermal_diode's"
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: set_radiator
+    why: >-
+      a radiator is passive hardware with no command interface (simulator-design.md:158). The
+      only way to change its rejection is to change the loop that feeds it or the attitude that
+      illuminates it, and both of those are verbs that already exist in other domains. A verb
+      that commanded a radiator directly would delete the F-13 chain by giving the fleet a
+      switch where the vehicle has physics.
+  - verb: set_thermal_limit
+    why: >-
+      thresholds are versioned profile data and an agent selects a revision, never a value
+      (D-05, thermal_diode.md:823-826). This is the one domain where that rule is not
+      abstract: a fleet that could widen its own zone limits could turn a thermal failure into
+      a green board.

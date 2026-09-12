@@ -1,0 +1,248 @@
+# domains/gnc/points.yaml — where the vehicle is, and how well it knows.
+#
+# ## Two families, and the gap between them is the domain
+#
+# The eleven apollo channels split cleanly, and the split is the whole content of this file:
+#
+#   the *estimate*   `gnc.position_xyz_km`, `gnc.velocity_xyz_m_s`, `gnc.attitude_q[0..3]`,
+#                    `gnc.nav_position_sigma_m`, `gnc.nav_velocity_sigma_m_s`
+#   the *instruments* `gnc.imu_alignment_error_deg`, `gnc.radar_altitude_m`,
+#                    `gnc.radar_range_rate_m_s`
+#
+# The truth is published nowhere. That is not a deference to the corpus — `apollo_diode.md:743`
+# asks for a rigid-body integration and `:117` publishes the state — it is `design.md` §8 and the
+# whole point of the window: a fleet that could read where the vehicle *is* would skip every
+# inference this domain exists to support. What a fleet gets is what a flight director gets: an
+# estimate, an uncertainty, and the instruments it came from.
+#
+# ## The one thing apollo's list cannot say
+#
+# A covariance and a rejection reason describe *quantities*. Neither can say whether the vehicle
+# is navigating, coasting on gyros, or lost — and those are three different vehicles with three
+# different correct responses. `gnc_diode.md:666-691` supplies the missing ladder and its own
+# summary of why it matters is the best sentence in the document: **"a high covariance can
+# therefore be an operational state transition, not merely a number in telemetry."** So
+# `gnc.nav_integrity` is published alongside the sigma rather than instead of it, at P0, and
+# `gnc.coast_elapsed_s` is the clock on its most dangerous rung.
+
+domain: gnc
+points:
+
+  # ------------------------------------------------------------------------------------
+  # The estimate. Every one of apollo's, at apollo's precision and rate.
+  # ------------------------------------------------------------------------------------
+
+  - channel: "gnc.attitude_q[0..3]"
+    from: nav_solution
+    layer: estimate
+    derivation: "the estimated attitude, as a unit quaternion rotating BODY into the reference frame"
+    note: >-
+      apollo's channel, and the component order is `[w,x,y,z]` with the rotation direction
+      `attitude_ref_from_body` (`vehicle.yaml#conventions`, from `gnc_diode.md:405-406`). Apollo
+      publishes the array and fixes neither, which is why the conventions live in the
+      configuration rather than in a channel: `unit: dimensionless` can say what a quaternion is
+      not, and cannot say which component is first. Two agents disagreeing about that are both
+      right about the physics and produce different vehicles.
+
+  - channel: gnc.body_rate_xyz_deg_s
+    from: body_rate
+    layer: measurement
+    derivation: "the estimated body rates, resolved in BODY"
+    note: >-
+      apollo's channel with apollo's 0.001 deg/s precision, and the resolution frame is declared
+      for the same reason the quaternion order is: a rate with no frame is not a vector. It is
+      simultaneously the *truth* state (the vehicle really is rotating) and an estimate (the gyro
+      reports it), and the two differ by exactly `gnc.gyro_bias_xyz_deg_s` — which is why the bias
+      is published beside it rather than kept as filter state.
+
+  - channel: gnc.position_xyz_km
+    from: nav_solution
+    layer: estimate
+    derivation: "the estimated position in EARTH_J2000, at 0.01 km"
+    note: >-
+      apollo's precision is 0.01 km — ten metres — against `gnc.nav_position_sigma_m`'s 1 m
+      resolution, and the mismatch is informative rather than sloppy: the published position is
+      *less* precise than its own uncertainty, because a position at ten-metre precision is what a
+      fleet reasons with and the sigma is what tells it how much the number is worth. A vehicle
+      that published its position to the metre would be inviting a fleet to plan against a
+      precision it does not have.
+
+  - channel: gnc.velocity_xyz_m_s
+    from: nav_solution
+    layer: estimate
+    derivation: "the estimated velocity in EARTH_J2000"
+    note: >-
+      the channel a burn's Δv is measured against, and the reason `prop.accumulated_dv_m_s` and
+      this are different quantities: one is what the engine delivered and the other is what the
+      vehicle did. A burn whose accumulated Δv is right and whose velocity change is not is a burn
+      with a mass error; the reverse is a burn with a guidance error, and only the pair separates
+      them.
+
+  - channel: gnc.nav_position_sigma_m
+    from: nav_covariance
+    layer: estimate
+    derivation: "the position block's uncertainty, as a 1-sigma radius"
+    note: >-
+      apollo's channel, and F-10's first clue: navigation uncertainty growing is how an IMU
+      degradation becomes visible. What it cannot say on its own is *why* it is growing, and the
+      three reasons want different responses — a sensor that stopped contributing
+      (`gnc.estimator_rejection_reason`), a platform that has drifted
+      (`gnc.imu_alignment_error_deg`), or a vehicle that has been coasting long enough for the
+      growth to be arithmetic (`gnc.coast_elapsed_s`).
+
+  - channel: gnc.nav_velocity_sigma_m_s
+    from: nav_covariance
+    layer: estimate
+    derivation: "the velocity block's uncertainty, as a 1-sigma"
+    note: >-
+      the second diagonal of the same matrix, published separately because the two grow at
+      different rates and the difference is diagnostic: a vehicle with a growing position sigma
+      and a flat velocity sigma is integrating a velocity it trusts — which is what a
+      gravity-model mismatch looks like, and is not a sensor problem at all.
+
+  - channel: gnc.imu_alignment_error_deg
+    from: imu_platform
+    layer: estimate
+    derivation: "the angle between where the platform believes it is pointing and where it is"
+    note: >-
+      apollo's channel and F-10's third observable. It is the vehicle's statement about an
+      *instrument* rather than about itself, and the distinction matters at exactly one moment:
+      before a burn. A misaligned platform produces a Δv in the wrong direction, and a fleet that
+      reads a growing alignment error as an attitude problem will command an attitude correction
+      against a measurement that is itself the fault.
+
+  - channel: gnc.radar_altitude_m
+    from: radar
+    layer: measurement
+    derivation: "the landing radar's range to the surface"
+    note: >-
+      apollo's channel at 0.5 m, and the vehicle's only absolute *range* measurement — which makes
+      it the one source that can take the estimator out of `coasting` during a descent.
+      `apollo_diode.md:1044` has the LM pilot calling navigational information to the commander
+      during the final approach, so this channel's precision is set by what a person reads aloud
+      rather than by what the instrument resolves.
+
+  - channel: gnc.radar_range_rate_m_s
+    from: radar
+    layer: measurement
+    derivation: "the landing radar's closing rate"
+    note: >-
+      the radar's second output, and the one a landing is actually flown on: altitude says where
+      the surface is and range rate says whether the descent is going to work. Apollo 11's
+      commander took over manually in the last minutes, and what he had was these two numbers and
+      a throttle.
+
+  - channel: gnc.guidance_mode
+    from: guidance_mode
+    layer: service
+    derivation: "which guidance program is producing a reference"
+    note: >-
+      apollo's six modes. `free_drift` appears in both this enum and `rcs.mode`'s and means
+      different things in each — no guidance reference here, no attitude hold there — so a fleet
+      that collapses them will misread a planned coast as a control failure. The two are
+      published separately for that reason and neither is derivable from the other.
+
+  - channel: gnc.estimator_rejection_reason
+    from: nav_covariance
+    layer: service
+    derivation: "why the filter declined the last measurement it was offered"
+    note: >-
+      apollo's enum, and the channel that separates "the sensor is bad" from "the filter is
+      ignoring a good sensor". `innovation` is the interesting member: a rejected measurement
+      whose innovation was too large is either an outlier or a real disagreement, and the vehicle
+      will not choose for the fleet — `domains/avionics/`'s k-of-m `innovation_window` is what
+      eventually decides.
+
+  # ------------------------------------------------------------------------------------
+  # The ladder and its clock.
+  # ------------------------------------------------------------------------------------
+
+  - channel: gnc.nav_integrity
+    from: nav_integrity
+    layer: service
+    derivation: "whether the vehicle is navigating, degraded, coasting on gyros, or lost"
+    note: >-
+      five values, and the whole reason the domain publishes a state rather than only a number.
+      `coasting` earns its place: no absolute update, the attitude right, the rates right, the
+      sigma growing slowly, and nothing that says how much time is left. A fleet on a coasting
+      vehicle is on a clock it cannot see without this channel, and during a powered descent that
+      clock is the mission.
+
+  - channel: "gnc.gyro_bias_xyz_deg_s"
+    from: gyro_bias
+    layer: estimate
+    derivation: "the estimated gyro bias"
+    note: >-
+      the quantity that separates the two ways a rate measurement can be wrong. A *growing* bias
+      estimate is an instrument drifting; a *steady* one is a vehicle that has been calibrated.
+      It matters most in the state this domain adds, because a coasting vehicle's only measurement
+      is the gyro — a bias that was tolerable beside star sightings is not tolerable without them,
+      and this channel is how a fleet sees the difference before the sigma does.
+
+  - channel: "gnc.coast_elapsed_s"
+    from: nav_integrity
+    layer: estimate
+    derivation: "time since the last absolute navigation update"
+    note: >-
+      the clock on `coasting`, published because the inference a fleet would otherwise make is
+      precisely the one it gets wrong. A coasting vehicle looks completely normal; the only thing
+      that says how long it has is a number nobody can compute from the other channels. Apollo 13
+      flew a large part of a mission on a platform that had not been aligned since a burn, and
+      elapsed time was the fact that governed what the crew could still do.
+
+  - channel: gnc.maneuver_state
+    from: maneuver_state
+    layer: service
+    derivation: "where the current maneuver is in its own lifecycle"
+    note: >-
+      the fourth state machine, published because `plan_valid` and `plan_invalid` answer a
+      question no other channel can: whether the trajectory is flyable at all. A burn requested
+      and not flyable is a different situation from one that is merely waiting, and the difference
+      is invisible in the propulsion domain's engine states — which is exactly why the maneuver
+      needs its own channel rather than being folded into one of them.
+
+  - channel: gnc.trajectory_residual_m
+    from: maneuver_state
+    layer: estimate
+    derivation: "how far the achieved state is from the planned one at the end of a maneuver"
+    note: >-
+      the vehicle's only channel that reports an *outcome* rather than a condition. The document's
+      two exits from `verifying` are "terminal tolerances pass" and "correctable residual", so the
+      residual is what decides whether a burn is finished or needs another one — and it is the
+      difference between a mission with margin left and one that is spending it.
+
+not_published:
+
+  - channel: "gnc.true_state"
+    why: >-
+      where the vehicle actually is. `apollo_diode.md:743` asks for a rigid-body 6-DOF
+      integration and the plant has it; a fleet gets the estimate, the uncertainty and the
+      instruments, which is what a flight director gets. Publishing truth here would delete the
+      domain: every channel above is a statement about how well the vehicle knows something, and
+      a fleet holding both numbers would never have to reason about the second.
+
+  - channel: "gnc.filter_gain_K"
+    why: >-
+      the Kalman gain. It is the filter's internal weighting and it is not a diagnosis: a large
+      gain means the filter is trusting the measurement, which is either correct (the measurement
+      is good) or dangerous (the measurement is an outlier and the filter has not noticed). The
+      published facts are the covariance, the rejection reason and the innovation test's verdict —
+      which are the three things a fleet can reason *with*, rather than the matrix that produced
+      them.
+
+  - channel: "gnc.gravity_model_coefficients"
+    why: >-
+      the force model. `apollo_diode.md:743` asks for Earth and Moon gravity, `mission.yaml`
+      records that the initial state does not close as an Earth-centred conic, and the model that
+      would close it is a patched-conic or a numerically integrated ephemeris — a *design*
+      decision the vehicle has not made (`mission.yaml#initial_state`). Publishing coefficients
+      before choosing the model would be publishing an answer to a question that is still open,
+      and the question is open in the one place where being wrong ends the mission.
+
+  - channel: "gnc.maneuver_plan_segment"
+    why: >-
+      the quintic's coefficients for the loaded maneuver. They are deterministic and derivable
+      from the boundary conditions a fleet supplies to `load_burn`, so publishing them would be
+      publishing arithmetic — and worse, it would invite a fleet to check the vehicle's trajectory
+      against its own instead of watching where the vehicle went. The residual is published; the
+      plan is the fleet's own request.

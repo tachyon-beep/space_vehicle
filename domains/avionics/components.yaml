@@ -1,0 +1,608 @@
+# domains/avionics/components.yaml — the instrument layer, and the diagnostics that watch it.
+#
+# ## Why this domain survived a hostile review
+#
+# `corpus-review.md` §1 dismisses `avionics_diode.md` in one line: "an **aircraft** avionics ICD
+# template: ARINC 429/664, GNSS, elevons, DO-178C. Its one durable contribution is seven
+# sensor-diagnostic functions." The dismissal of the *vehicle* is right — C-15 prunes the GNSS,
+# the aerosurfaces and the ARINC buses the same way it prunes reaction wheels, because
+# `apollo_diode.md:52` gives this vehicle an IMU, star sightings and radar and nothing else.
+#
+# The dismissal of the functions was too quick. There are **nine**, at `:371-509`, and they are
+# the most reusable code in the corpus. Three of them close gaps nothing else in sixteen
+# thousand lines closes:
+#
+# - **`sensor_health` (`:371-388`) is a quality-assignment function with the right signature.**
+#   `simulator-design.md:496-508` requires quality to be assigned by a function that cannot see
+#   the simulator's fault state, and `plant.md` makes that a contract clause. The document's
+#   version takes `(sample, now_mono)` and reads `is_finite`, the engineering range, the sample
+#   age and a bit-failure flag — four properties of the *sample*, none of them a property of the
+#   world. It is the only concrete function in the corpus that satisfies the rule, and this
+#   domain adopts it verbatim as `quality_assignment` below.
+# - **`cusum_rule` (`:420-428`) is the vehicle's only sub-precision drift detector.** `plant.md`
+#   §4 states the requirement in its strongest form — the nominal cabin leak is 0.023 kg/h,
+#   *below* `eclss.leak_rate_g_s`'s own 0.01 g/s quantum, and it "must still happen". No
+#   threshold can see that leak and no rate-of-change test can either, because each sample is
+#   smaller than the resolution of the instrument producing it. A cumulative sum against an
+#   allowance with a decision threshold can, and it is the reason `avionics.drift_statistic_[group]`
+#   exists as a published channel rather than an internal number.
+# - **`authorize_command` (`:486-509`) has an ordering argument, not just a list.** Ten `require`
+#   calls in a deliberate order, ending with the two clauses that only apply to irreversible
+#   actions: a valid prepare token, and `TIME_UNTRUSTED` — the clock must be *synchronised*
+#   before an irreversible command may execute, because a time-tagged one-shot whose deadline is
+#   measured against a drifted clock is a one-shot with an unknown deadline. That term is not in
+#   `mission_diode.md`'s eight-term predicate and it is not in any domain's registry, so it is
+#   added here as `requires_time_sync` on the structure domain's two irreversible verbs.
+#
+# ## The alignment this domain had to make: seven functions, three return types
+#
+# The functions return three different *kinds* of thing and the corpus's habit of flattening
+# them is what `design.md:211-214` exists to prevent:
+#
+#   GOOD / SUSPECT / STALE / SATURATED / OUT_OF_RANGE / INVALID   a quality code, per sample
+#   fault                                                          a conclusion, per instrument
+#   DRIFT_DETECTED / CRITICAL_PENDING / TRANSIENT                  a condition, per monitor
+#
+# `sensor_health` returns `FAULT` from the same function that returns `SUSPECT`, and `FAULT` is
+# refused as a quality code by the linter and by `design.md`. So the function is split at the
+# point where its two halves have different epistemic kinds: `quality_assignment` produces the
+# code that travels on the frame, and the trip-count conclusion becomes
+# `avionics.sensor_health_[class]`. The linter checks both halves — that every quality the rule
+# table can emit is canonical, and that the signature names no fault-state parameter.
+#
+# ## The domain's thesis, in apollo's words
+#
+# F-14's note (`coupling.yaml`) is the whole domain:
+#
+#   "the failure that attacks the experiment rather than the mission; the publisher must show
+#    age and dropout, **never a frozen value that reads as fresh**"
+#
+# A dead instrument that publishes its last value looks exactly like a healthy one. Every
+# mechanism in this file exists to make that difference visible before a fleet acts on it:
+# `avionics.oldest_sample_age_ms` is the aggregate, the per-point quality code is the local one,
+# and AVI-02 is the fault they exist to catch.
+#
+# And on the aggregate a fleet might want instead: `apollo_diode.md:184-186` answers it
+# explicitly — "it is therefore historically faithful to give your agents heterogeneous
+# observations rather than a synthesized single health score." That closes the open question
+# `mission.yaml` recorded when `mission_diode.md` asked for `health.overall` and
+# `health.confidence`.
+
+domain: avionics
+
+# 1 Hz: the instrument layer's published cadence. The diagnostics themselves run at the rate of
+# the sample they watch — the innovation test at the estimator's rate, the CUSUM at the rate of
+# the quantity it accumulates — so this is the rate of the *conclusions*, which is what the
+# registry publishes.
+natural_rate_hz: 1
+
+reads: [bus_a, coldplate_t, instrumentation, avionics_compute, command_executive]
+writes: [instrumentation, avionics_compute]
+
+# --------------------------------------------------------------------------------------
+# The quality-assignment function. The most load-bearing declaration in the domain, because
+# `simulator-design.md:496-508` makes "quality is assigned by a function that cannot see the
+# fault state" a contract clause and nothing in the corpus implemented it.
+#
+# Adopted from `avionics_diode.md:371-388` with one structural change: the document's function
+# returns GOOD, SUSPECT or FAULT, and FAULT is not a quality. The trip-count conclusion is
+# therefore declared separately, below, and the quality rules cover only the per-sample codes.
+# --------------------------------------------------------------------------------------
+quality_assignment:
+
+  signature: "(sample, now_mono) -> quality"
+  parameters: [sample, now_mono]
+  forbidden_parameters: [fault_state, injected, expected_value, simulator_truth, ground_truth]
+  forbidden_note: >-
+    the rule is mechanical and the linter enforces it: a parameter named here may not appear in
+    `parameters`. A function that could read the simulator's fault state would assign SUSPECT
+    because the *simulator* knows a component is broken, which is the leak
+    `simulator-design.md:496-508` closes. A silently biased sensor stays GOOD — that is not a
+    defect of the function, it is the point of it, and `simulator-design.md:383-385` says the
+    same thing about a crew member who reports cold.
+  adopted_from: "avionics_diode.md:371-388"
+  provenance:
+    basis: historical
+    source: "avionics_diode.md:371-388 — `sensor_health(s, now_mono)`, whose first four clauses are finite, in-range, fresh and not bit-failed"
+
+  rules:
+    - condition: "not finite (NaN or infinity)"
+      quality: INVALID
+      provenance:
+        basis: historical
+        source: "avionics_diode.md:374 — `s.is_finite`"
+    - condition: "value pinned at eng_min or eng_max"
+      quality: SATURATED
+      provenance:
+        basis: chosen
+        reason: >-
+          the document's range test cannot tell a reading that is *outside* its range from one
+          that is *pinned at a limit*, and vocabulary §5 makes the distinction load-bearing:
+          SATURATED "carries an inequality, not a value: publish 300.0 + SATURATED, never the
+          hidden 750" (`apollo_diode.md:215`). A pinned sensor is reporting a limit, not a
+          measurement, and the two want opposite responses — an out-of-range value may be real
+          and a saturated one never is
+    - condition: "outside [eng_min, eng_max], not pinned"
+      quality: OUT_OF_RANGE
+      provenance:
+        basis: historical
+        source: "avionics_diode.md:375 — `s.eng_min <= s.value <= s.eng_max`"
+    - condition: "now_mono - sample_mono > the point's max_decision_age_ms"
+      quality: STALE
+      provenance:
+        basis: historical
+        source: "avionics_diode.md:376 — `(now_mono - s.sample_mono) <= s.stale_limit`"
+        note: >-
+          the staleness limit is the point's own `max_decision_age_ms` from `channels.yaml`,
+          not a second number invented here. One quantity, one declaration, and the rule that
+          derives it (one publish period) is in the registry's header
+    - condition: "redundancy disagreement, or a rate of change the model cannot produce"
+      quality: SUSPECT
+      provenance:
+        basis: historical
+        source: "avionics_diode.md:390-411 and vocabulary §5 — the two mechanisms allowed to assign SUSPECT are a real diagnostic objecting, and both are diagnostics rather than faults"
+        note: >-
+          SUSPECT is the only code a *conclusion* can set, and it is one-way in the sense that
+          matters: nothing in this table can produce GOOD for a sample a diagnostic has
+          objected to, and no rule can produce SUSPECT from the value alone
+    - condition: "otherwise"
+      quality: GOOD
+
+  conclusions:
+    - rule: "bad_count >= trip_count"
+      conclusion: fault
+      channel: "avionics.sensor_health_[class]"
+      provenance:
+        basis: historical
+        source: "avionics_diode.md:380-386 — the trip counter that separates a transient from a failure"
+        note: >-
+          the debounce is the whole reason this is a separate object: one implausible sample is
+          a glitch, `trip_count` of them in a row is an instrument. Collapsing the two into one
+          SUSPECT-then-FAULT quality code is what makes a quality vocabulary unable to say
+          "this reading is doubtful" without also saying "this instrument is dead"
+
+  not_a_quality:
+    note: >-
+      the codes this domain may *never* assign, and why each one is not a quality. Recorded
+      because the corpus's five quality vocabularies contain all of them (§5 of the review), and
+      a domain that adopts one by accident forks the dictionary.
+    codes:
+      - {code: FAULT, why: "a conclusion about an instrument, not a property of a sample; it is `avionics.sensor_health_[class]`"}
+      - {code: ESTIMATED, why: "a kind, not a quality — `eclss_diode.md:289` against `:64`"}
+      - {code: DEGRADED, why: "a subsystem mode"}
+      - {code: TEST_INJECTED, why: "the frame carries `injected: true`; a test injection is distinguishable from a fault without being announced as a quality"}
+      - {code: DRIFT_DETECTED, why: "a condition of a monitor, and it is `avionics.drift_state_[group]`"}
+      - {code: CRITICAL_PENDING, why: "a dwell state inside the power rule, and it is the power domain's `bus_a_undervoltage` hysteresis"}
+      - {code: TRANSIENT, why: "an actuator that has not yet reached its settle deadline is not mistrusted evidence; it is evidence about a mechanism in motion"}
+
+# --------------------------------------------------------------------------------------
+# The diagnostic inventory: nine functions, what each watches, and which channel each one's
+# result reaches. Declared as data so that "seven sensor-diagnostic functions" is a checkable
+# claim rather than a sentence in a review — the linter refuses an entry that names no rule, no
+# output channel, or a channel that is not in the registry.
+# --------------------------------------------------------------------------------------
+diagnostics:
+
+  - id: quality_assignment
+    rule: "(sample, now_mono) -> quality, by the rule table above"
+    watches: [any published point]
+    outputs: ["the per-sample quality code on the frame"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:371-388"
+
+  - id: redundant_vote
+    rule: "median of the healthy members, isolate any member further than max(abs_tol, sigma_factor * sigma) for trip_cycles consecutive samples; degraded below two healthy members"
+    watches: ["groups of redundant sensors: the two cabin pressure sensors, the two bus voltmeters"]
+    outputs: [avionics.redundancy_disagreement, "avionics.sensor_health_[class]"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:390-411"
+      note: >-
+        the absolute tolerance *and* the sigma-scaled one is the detail worth keeping: a fixed
+        tolerance is wrong for a tight sensor and a sigma-scaled one is wrong for a sensor whose
+        sigma is itself suspect, so the vote takes the larger. Below two healthy members the
+        function stops voting rather than voting with one — a median of one is a measurement
+        wearing a vote's clothes
+
+  - id: innovation_test
+    rule: "normalized innovation squared nu' S^-1 nu against a warn and a trip threshold, with a k-of-m history before declaring SUSPECT"
+    watches: [gnc.estimator_rejection_reason, gnc.nav_position_sigma_m]
+    outputs: [gnc.estimator_rejection_reason, "avionics.sensor_health_[class]"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:413-418"
+      note: >-
+        the k-of-m history is the part that costs nothing and prevents the most: a single large
+        innovation is a bad measurement, and *k* of the last *m* is a sensor that has stopped
+        agreeing with the filter. F-10's first clue is `gnc.nav_position_sigma_m` growing, and
+        this is the rule that decides whether the growth is the IMU or the navigation solution
+
+  - id: cusum_drift
+    rule: "two accumulators, pos = max(0, pos + z - k) and neg = min(0, neg + z + k), with a decision threshold h; DRIFT_DETECTED when either crosses"
+    watches: ["the four monitored groups below"]
+    outputs: ["avionics.drift_statistic_[group]", "avionics.drift_state_[group]"]
+    monitored_groups:
+      - group: cabin_leak
+        statistic: "eclss.cabin_pressure_psia minus the pressure the ECLSS mass balance predicts"
+        why: "the nominal leak is 0.023 kg/h, below the leak channel's own 0.01 g/s quantum; this is the only detector on the vehicle that can see it (plant.md §4, F-06)"
+      - group: o2_ledger
+        statistic: "res.o2_remaining_kg minus the oxygen the fuel cells and the crew should have consumed"
+        why: "the same shape as the cabin leak and a different consumer; the fuel-cell reactant rate is UNCONFIGURED, so this monitor is also how the vehicle would discover that its own figure is wrong — which is a model error, not a fault, and the domain says so rather than alarming"
+      - group: rcs_ledger
+        statistic: "rcs.propellant_remaining_pct against the impulse-derived expectation"
+        why: "RCS-08's leak and RCS-04's low thrust push this the same way, and separating them needs a third source; the CUSUM's job is to say *when* the drift began, which is the fact that separates a leak from a model error"
+      - group: bus_source
+        statistic: "power.dc_bus_a_v against the voltage the commanded load implies"
+        why: "E-FC-BUS and E-BAT-BUS are both UNCONFIGURED (C-01), so a slow source-resistance rise has no threshold to cross; the drift statistic crosses before the threshold does, and it can do it while every sample is inside the band"
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428"
+      note: >-
+        the allowance k and the decision threshold h are UNCONFIGURED and stay that way: k is
+        the drift the vehicle is willing to call normal, which is a statement about the mission's
+        tolerance rather than about the instrument, and h is the false-alarm rate someone has to
+        choose. What is *not* owed is the mechanism, and the mechanism is what the corpus was
+        missing
+
+  - id: actuator_tracking
+    rule: "|command - feedback| against a warn and a critical error, after the command's settle deadline; TRANSIENT before it"
+    watches: ["rcs.thruster_[n]_valve", "prop.chamber_pressure_pct", "structure.relief_valve_state"]
+    outputs: ["rcs.thruster_[n]_health", "prop.chamber_pressure_pct"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:430-441"
+      note: >-
+        the settle deadline is the only interesting line: without it, every command is a fault
+        for the first tick, because a valve that was told to open has not opened yet. RCS-05
+        states the same requirement from the other side ("past transit time") and this is the
+        shared implementation of it. Declared here rather than duplicated into each actuator
+        domain because it is one rule, and two implementations of one rule is how two domains
+        come to disagree about whether a valve is late
+
+  - id: power_rule
+    rule: "critical band with a dwell before shedding, warn band without; CRITICAL_PENDING while the dwell runs"
+    watches: [power.dc_bus_a_v, power.dc_bus_b_v]
+    outputs: [power.load_shed_class]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:443-455"
+      note: >-
+        adopted by the power domain as `bus_a_undervoltage` and its shed tiers, and recorded here
+        because the *pending* state is the document's contribution: a bus below the critical
+        level for less than the dwell is a sag, and announcing it as a shed teaches a fleet to
+        distrust the ladder. Not implemented as a second monitor — one rule, one home
+
+  - id: thermal_rule
+    rule: "critical above, warn above, with a hysteresis band on the way down"
+    watches: ["thermal.zone_[id]_t_c", thermal.avionics_plate_c, thermal.comm_amp_c,
+              power.battery_temp_c]
+    outputs: ["thermal.zone_[id]_t_c"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:457-466"
+      note: "the thermal domain's thresholds are this rule with apollo's numbers; the linter already refuses an inverted hysteresis, which is the failure this function's third clause prevents"
+
+  - id: time_health
+    rule: "UNSYNC when the source is invalid, DEGRADED when the offset or the uncertainty exceeds its limit, else SYNC"
+    watches: [avionics.clock_offset_ms]
+    outputs: [avionics.time_sync_state]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:474-483"
+      note: >-
+        three returns and not two, because "no time reference" and "a time reference that has
+        drifted" want different responses: the first is a vehicle that cannot time-tag anything,
+        the second is a vehicle whose timestamps are wrong by a known-ish amount. The
+        uncertainty term is the one that matters for this vehicle — `apollo_diode.md:526` makes
+        the one-way light time 1.3 s, so a clock synchronised against Earth is synchronised
+        against a signal that left 1.3 s ago, and a time_health that ignored uncertainty would
+        call that SYNC
+
+  - id: command_authorization
+    rule: "ten ordered require() clauses, ending with the two that apply only to irreversible commands: a valid prepare token, and a SYNC clock"
+    watches: [command_executive]
+    outputs: ["the refusal_reason on the result block (D-02)"]
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:486-509"
+      note: >-
+        the ordering comment in the document is "order is intentional. No actuator-side effect
+        can occur before all gates" — and the order is cheap-to-expensive: schema, auth, replay,
+        duplicate, time, authorization, rate, range, mode, interlocks. What this vehicle takes
+        from it is the last two clauses, because the other eight are already V-02's chain and
+        every domain's interlock list. `TIME_UNTRUSTED` is the one that is genuinely absent
+        elsewhere, and it is now `requires_time_sync` on the two irreversible verbs
+
+# --------------------------------------------------------------------------------------
+# State.
+# --------------------------------------------------------------------------------------
+state:
+
+  - id: instrumentation_power
+    node: instrumentation
+    method: algebraic
+    unit: W
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:182"
+      note: >-
+        `avionics.instrumentation_power_w` with apollo's events "excessive/zero". E-BUS-INST is
+        the edge and F-14 is the chain, and the reason this is a *state* rather than a
+        pass-through is the second event: zero instrumentation power is the failure that
+        destroys the evidence rather than the hardware (`apollo_diode.md:342`). A vehicle that
+        loses its instruments does not lose the mission; it loses the ability to explain what
+        happened to it, which on this vehicle is the experiment
+
+  - id: compute_margin
+    node: avionics_compute
+    method: algebraic
+    unit: "%"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:177"
+      note: >-
+        `avionics.exec_margin_pct` with apollo's "<10" event. Two edges land on this node and
+        they are the flagship cascade's two halves: E-BUS-GNC brings a sagging bus (below the
+        contactor-hold threshold the guidance platform drops out) and E-PLATE-CRITICAL brings a
+        hot coldplate (>50 C, `apollo_diode.md:105`). The margin is where they meet, and it is
+        why the domain publishes one number rather than two: the computer does not care which
+        one is taking its headroom
+
+  - id: computer_mode
+    node: internal
+    method: discrete
+    unit: "enum[idle,run,standby,failed]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:176"
+      note: >-
+        apollo's enum and its "restart/mode change" event, with a five-second dwell (chosen):
+        the mode is commanded, so it is a machine rather than a comparator, and a guidance
+        computer that can be re-commanded five times a second is one whose mode cannot be read
+        out of a log. `failed` is in the enum rather than being an absence, because a computer
+        that has stopped is a state the vehicle must be able to report — an agent that sees the
+        mode channel go quiet cannot tell a restart from a telemetry fault, and this domain
+        exists to make that difference visible
+
+  - id: sensor_health
+    node: internal
+    method: discrete
+    unit: "map[class,enum[good,suspect,fault]]"
+    hysteresis:
+      assert: 3
+      clear: 1
+      dwell_ms: 0
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:380-386 — `bad_count` incremented on an implausible sample, reset on a plausible one, and compared against `trip_count`"
+      note: >-
+        a *counted* debounce rather than a timed one, which is why `dwell_ms` is zero and the
+        two trip values carry the whole mechanism: three consecutive implausible samples to
+        condemn, one plausible sample to forgive. A timed dwell would be wrong for a class whose
+        sample rate varies by two orders of magnitude across the vehicle — the bus voltmeters
+        publish at 10 Hz and the reconciliation residuals at 0.2 Hz, so "200 ms of bad samples"
+        means twenty samples on one and none on the other. `assert: 3` and `clear: 1` are the
+        document's trip semantics made declarative
+
+  - id: redundancy_vote
+    node: internal
+    method: discrete
+    unit: "map[group,enum[good,degraded,isolated]]"
+    dwell:
+      min_on_s: 10
+      min_off_s: 10
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:390-411 — `redundant_vote`"
+      note: >-
+        `degraded` is the value the whole function is built to reach: fewer than two healthy
+        members means the vote has stopped being a vote, and the vehicle says so instead of
+        publishing a median of one. Ten seconds of dwell (chosen) because the vote's own trip
+        counter already debounces per sample, and this is the debounce on the *verdict* changing
+
+  - id: sample_age
+    node: internal
+    method: algebraic
+    unit: ms
+    provenance:
+      basis: chosen
+      reason: >-
+        the producer of `avionics.oldest_sample_age_ms`, which has been a registered channel
+        with no producer since the registry was written. F-14's note is the specification: the
+        publisher "must show age and dropout, never a frozen value that reads as fresh". The
+        aggregate is the *oldest* sample across the active set rather than the mean or the
+        newest, because the question it answers is "is any part of this picture old" — and a
+        mean would let one dead channel hide behind twenty live ones, which is precisely the
+        failure mode. It is also the input the executive's freshness guard reads: invariant D
+        was declared last round with nothing producing the evidence it depends on
+
+  - id: clock_offset
+    node: internal
+    method: algebraic
+    unit: ms
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:183"
+      note: >-
+        `avionics.clock_offset_ms`, "near 0", with a ">100" event. Both are apollo's. The
+        vehicle's clock is its own and every record is stamped from it (`apollo_diode.md:227`),
+        so an offset is a statement about how much the vehicle trusts its own timestamps rather
+        than about a link — and a fleet reading a MET that is 100 ms wrong is a fleet whose
+        decision-latency measure is 100 ms wrong
+
+  - id: time_health
+    node: internal
+    method: discrete
+    unit: "enum[sync,degraded,unsync]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:474-483 — `time_health`; and :496-508 for the gate it feeds"
+      note: >-
+        the verdict that gates an irreversible command. Five-second dwell (chosen) in both
+        directions, and the reason it is symmetric here where most dwells are not: going *into*
+        unsync must be debounced because a single missed sync message is not a lost clock, and
+        coming *out* of it must be debounced because claiming a trusted clock one sample after
+        regaining a reference is exactly when the clock is least trustworthy
+
+  - id: bias_accumulator
+    node: internal
+    method: stock
+    unit: "map[group,N*s]"
+    quantum: 1e-06
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428 — `state.pos = max(0.0, state.pos + z - allowance_k)` and the mirrored negative accumulator"
+      note: >-
+        the vehicle's second Bresenham accumulator and the reason `plant.md` §4's insistence on
+        exact fixed-point arithmetic was not over-engineering. A CUSUM is a *sum over hours* of
+        differences that are individually below the instrument's resolution: the cabin-leak
+        monitor accumulates 0.023 kg/h for eight days, which is 4.4 kg through a pressure
+        channel whose own quantum is 0.01 psia. In floating point the accumulator acquires a
+        drift of its own, and it acquires it in the same direction as the thing it is looking
+        for — a detector that manufactures its own signal. The quantum is the smallest
+        representable increment of the normalized statistic
+
+  - id: innovation_window
+    node: internal
+    method: discrete
+    unit: "enum[good,suspect,fault]"
+    hysteresis:
+      assert: 2
+      clear: 1
+      dwell_ms: 0
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:413-418 — `k_of_m_history`, and the two thresholds that separate a warn from a trip"
+      note: >-
+        the k-of-m rule as a latched comparator: two of the last m innovations over the warn
+        threshold reach `suspect`, one sample back under it clears. The statistic itself is
+        normalized innovation squared, which needs the covariance inverse and therefore GNC's
+        filter — and that filter has now landed, so this state is advanceable rather than merely
+        declared. `domains/gnc/components.yaml#estimator` supplies the shape it needs: a 15-state
+        error vector, `S = H P- H^T + R`, and a Joseph-form update chosen because 34.56 million
+        covariance updates over an eight-day run is exactly the regime where the asymmetric form
+        drifts. The debt is closed; the two domains now share one innovation test, which is the
+        right number of them
+
+  - id: actuator_tracking
+    node: internal
+    method: discrete
+    unit: "enum[good,transient,suspect,fault]"
+    dwell:
+      min_on_s: 1
+      min_off_s: 1
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:430-441 — `actuator_tracking`"
+      note: >-
+        the shared implementation of a rule that two domains need and neither should own. RCS-05
+        is a valve whose commanded and sensed states disagree past the transit time; the
+        propulsion domain's `thrust_discrepancy` is the same rule on a chamber pressure.
+        `transient` is the value that makes it usable: before the command's settle deadline the
+        disagreement is *expected*, and a monitor without that state alarms on every command
+
+  - id: frame_sync
+    node: internal
+    method: discrete
+    unit: bool
+    dwell:
+      min_on_s: 2
+      min_off_s: 2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:180"
+      note: >-
+        apollo's `avionics.telemetry_frame_sync`, "true" nominal, with a "sync loss" event. The
+        frame sync is the vehicle's statement that the telemetry stream is coherent rather than
+        interleaved, and it matters most in the case this domain exists for: F-14's dropout
+        arrives as a loss of frame sync before it arrives as a missing channel, so the sync bit
+        is the *earliest* evidence that the picture is about to become unreliable
+
+  - id: sensor_bus_errors
+    node: internal
+    method: stock
+    unit: count
+    quantum: 1
+    min_flow_per_s: 1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:181"
+      note: >-
+        `avionics.sensor_bus_errors_s`, nominal zero, with apollo's ">0" event — the strictest
+        event in the catalogue, and deliberately so: a sensor bus is a digital link with error
+        detection, so a single error rate is evidence of a degrading harness rather than noise.
+        The quantum is one error, and the smallest representable *rate* is therefore one per
+        second at this domain's 1 Hz: an event count cannot be subdivided, so the accumulator
+        holds whole errors and `min_flow_per_s: 1` is that arithmetic identity rather than a
+        claim about the bus. Zero stays a legal value and the common one — a dead zone is where
+        a *nonzero* flow vanishes into rounding, and nothing here rounds
+
+# --------------------------------------------------------------------------------------
+# Components: what the instrument layer is made of.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: guidance_computer
+    kind: state
+    class: computer
+    exec_margin_pct: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        apollo's `exec_margin_pct` is ">20 **Sim**" with a "<10" event, and *Sim* is
+        `apollo_diode.md:42`'s marker for a recommended baseline that is not an assertion about
+        Apollo. The vehicle adopts the event and declines to invent the throughput figure behind
+        it: this is a simulation of a 1960s guidance computer whose instruction timing nobody
+        has published, and a margin against an invented budget is a number that would move every
+        threshold derived from it
+
+  - id: imu
+    kind: state
+    class: inertial_reference
+    alignment_error_deg: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:123, :178"
+      note: >-
+        the platform, its power (`avionics.imu_power`), and the "unexpected loss" event. The
+        alignment error is owed to `domains/gnc/`: apollo publishes
+        `gnc.imu_alignment_error_deg` and F-10's second observable, and neither the drift rate
+        nor the alignment budget is in any source reached
+
+  - id: sensor_bus
+    kind: discrete
+    class: bus
+    error_budget_per_s: 0
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:181"
+      note: "apollo's nominal is zero errors per second and its event fires on any, so the budget is apollo's own number rather than a chosen one."
+
+  - id: telemetry_publisher
+    kind: state
+    class: publisher
+    frame_rate_hz: 1
+    provenance:
+      basis: chosen
+      reason: >-
+        the publisher, which is the component F-14 attacks and the one nothing else in the
+        domain is about. Its frame rate is the registry's slowest published rate rather than the
+        fastest, because the age it reports is the *oldest* sample in the frame: a publisher
+        that emits a coherent frame at the rate of its slowest member is honest, and one that
+        emits at 10 Hz while half its values are seconds old is the frozen-value failure wearing
+        a fresh timestamp
+
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  - "`exec_margin_pct` has apollo's event and no budget behind it: the guidance computer's instruction timing is not published for this vehicle, so the margin is measured against a figure that does not exist yet."
+  - "The IMU's drift rate and alignment budget. `domains/gnc/` has landed and carries them as its own debt: F-10's first observable is `gnc.imu_alignment_error_deg`, and the CUSUM's `bus_source` group needs the same kind of figure for the electrical source. Both domains are waiting on the same two unpublished instrument constants, which is why they are recorded once — in the domain that owns the instrument."
+  - "`bias_accumulator`'s allowance k and decision threshold h, per monitored group. k is a statement about the mission's tolerance for drift and h is a false-alarm rate; neither is an instrument property and neither is in the corpus."
+  - "The 277 analogue channels `apollo_diode.md:184-186` describes are not enumerated. The registry publishes aggregated points per class, which is a fidelity decision: 277 raw channels would be a log rather than evidence, and a fleet reasoning about them would be reading a wiring diagram instead of a vehicle."

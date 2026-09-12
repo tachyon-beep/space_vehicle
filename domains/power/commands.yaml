@@ -1,0 +1,187 @@
+# domains/power/commands.yaml — the verbs this domain accepts.
+#
+# Lowercase snake case, apollo's own vocabulary (apollo_diode.md:237), because the dictionary
+# cannot key two dialects and apollo's is the one that belongs to this vehicle (vocabulary
+# V-06, conflict C-16). Everything here is `electrical_diode.md`'s verb list re-spelled and,
+# where it disagreed with apollo, re-anchored.
+#
+# **Gates and interlocks are separate fields, and both are required** (D-03). A gate is an
+# agent-writable preference: the agent may close it on itself and may never open it wider than
+# the operator allows. An interlock is service-owned state that no file an agent can write
+# reaches. `min(agent, operator)` holds for the first and not at all for the second, and the
+# conformance probe cannot tell them apart unless the vehicle declares which is which.
+#
+# `interlocks: none` has to be written deliberately. That is the difference between "we
+# reviewed this and found no interlock" and "we forgot", and only one of those is a decision.
+
+domain: power
+commands:
+  - verb: set_source
+    argument_schema:
+      source: {type: enum, values: [fc_1, fc_2, fc_3, battery_csm_1, battery_csm_2, battery_csm_3,
+                                  battery_lm_descent_1, battery_lm_descent_2,
+                                  battery_lm_descent_3, battery_lm_descent_4,
+                                  battery_lm_ascent_1, battery_lm_ascent_2]}
+      state: {type: enum, values: [on, off]}
+    authority: A2
+    gate: {kind: preference, variable: source_<source>_enable}
+    interlocks: [bus_a_undervoltage, load_margin_negative]
+    conflict_domain: power.source_<id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: "connect or disconnect a generating source. Declarative and repeatable; disconnecting the last source on a bus is refused by the interlock, not by a count."
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:237"
+      note: "apollo's `set_source`; electrical_diode.md:395-411 supplies the same verb and a longer argument list, which is declined — the load and breaker inventory lives in components.yaml, not in the verb"
+
+  - verb: set_bus_tie
+    argument_schema:
+      tie: {type: enum, values: [csm_tie_ab]}
+      state: {type: enum, values: [open, closed, auto]}
+    authority: A2
+    gate: {kind: preference, variable: tie_auto_enable}
+    interlocks: [tie_dv_limit]
+    conflict_domain: power.tie_ab
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Close or open the bus tie. `auto` hands the decision to the service, which closes only
+      when the two buses are within 1 V and no ground fault is active. Closing a tie into a
+      fault couples the healthy bus to the failed one, so the interlock is evaluated at the
+      moment of effect and not at submission.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:79, :237"
+      note: "apollo publishes bus_tie_state and lists set_bus_tie; electrical_diode.md:880 supplies the 1 V condition, re-anchored to apollo's bus band"
+
+  - verb: set_battery_contactor
+    argument_schema:
+      battery: {type: enum, values: [battery_csm_1, battery_csm_2, battery_csm_3,
+                                   battery_lm_descent_1, battery_lm_descent_2,
+                                   battery_lm_descent_3, battery_lm_descent_4,
+                                   battery_lm_ascent_1, battery_lm_ascent_2]}
+      state: {type: enum, values: [on, off]}
+    authority: A2
+    gate: {kind: preference, variable: contactor_<battery>_enable}
+    interlocks: [load_margin_negative]
+    conflict_domain: power.contactor_<id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: "connect or disconnect a battery. The CSM's entry batteries are the last resort after the fuel cells; the LM's are its only source."
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:237"
+
+  - verb: set_load
+    argument_schema:
+      # Enumerated, not described. This read `[any id in components.yaml#loads]` until the
+      # gate-variable expansion ran: the mirror publishes one `load_<load>_enable` per
+      # instantiation, and a description instantiates to nothing. The values below are
+      # components.yaml#loads verbatim, which is what the sentence was pointing at.
+      load:
+        type: enum
+        values: [
+          csm_sband_transceiver,
+          csm_sband_power_amplifier,
+          csm_suit_fan,
+          csm_cabin_fan,
+          csm_co2_scrubber,
+          csm_imu,
+          csm_guidance_computer,
+          csm_instrumentation,
+          csm_coolant_pump_1,
+          csm_coolant_pump_2,
+          csm_heaters,
+          csm_rcs_heaters,
+          csm_comm_heaters,
+          csm_lighting,
+          lm_sband_transmitter,
+          lm_sband_high_power,
+          lm_cabin_fan,
+          lm_suit_fan,
+          lm_co2_scrubber,
+          lm_guidance_computer,
+          lm_landing_radar,
+          lm_instrumentation,
+          lm_heaters,
+          lm_rcs_heaters,
+          lm_lighting,
+        ]
+      state: {type: enum, values: [on, off]}
+      priority: {type: enum, values: [P0, P1, P2, P3], optional: true}
+    authority: A2
+    gate: {kind: preference, variable: load_<load>_enable}
+    interlocks: [lcl_overcurrent]
+    conflict_domain: power.load_<id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Energise or de-energise a load. Turning on a load with a large inrush on a sagging bus
+      is how a thermal problem becomes an electrical one; the interlock refuses it when the
+      margin is already negative, and does not refuse it merely because the margin is thin.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:237"
+      note: "apollo's `set_load`, with the priority argument added so that a shed ladder can be redefined by the fleet rather than only by the profile — a P3 load an agent decides is critical is a decision worth observing"
+
+  - verb: set_breaker
+    argument_schema:
+      # Enumerated, not described, for the same reason as `set_load`. Two components carry
+      # `class: protection` in the registry, and `lcl` is the one whose instances are
+      # per-channel (`power.lcl_[n]_state`) rather than per-component — so this refuses a
+      # specific LCL and the gate is per component class. A per-channel breaker argument
+      # would need per-channel entries in components.yaml rather than a longer list here.
+      breaker: {type: enum, values: [csm_tie_ab, lcl]}
+      state: {type: enum, values: [in, out, reset]}
+    authority: A2
+    gate: {kind: preference, variable: breaker_<breaker>_enable}
+    interlocks: [lcl_overcurrent]
+    conflict_domain: power.breaker_<id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Open, close or reset a protection device. `reset` clears a latched LCL; it does not
+      clear the fault, and a load that trips twice inside the recovery dwell will latch again
+      on the next attempt.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:237"
+      note: "apollo lists set_breaker; electrical_diode.md:621 has SET_BUS_TIE and no breaker verb at all, which is one of the places its verb list is thinner than the vehicle"
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: set_inverter
+    why: >-
+      apollo_diode.md:82 mentions AC-bus changes and electrical_diode.md:226 models a
+      115 VAC 400 Hz inverter, but this vehicle publishes no AC channel, so the verb would
+      have no observable effect. A verb that cannot be verified is worse than an absent verb:
+      an agent that issues it learns nothing and concludes the vehicle ignored it.
+  - verb: set_telemetry_profile
+    why: >-
+      It is a window-level verb rather than a power-domain one and lives with the publisher;
+      every spec that lists it lists it per-domain, which is how one verb ends up with six
+      argument schemas.

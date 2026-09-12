@@ -1,0 +1,228 @@
+# domains/comms/commands.yaml — five verbs, and the one that starts a cascade.
+#
+# ## The verb that is not an actuator verb and behaves like one
+#
+# `set_power_amplifier` adds 36 W to the bus and quadruples the RF output. `apollo_diode.md:1140`
+# and `:1158` are explicit about what that means: the amplifier is the **trigger** of the
+# degraded chain and never its root cause. It does not fail — it *exposes*. A marginal glycol
+# pump, a contactor with less margin than the paperwork said, a battery that was colder than
+# anyone thought: all of them are fine until 36 W arrives, and then the chain runs pump → coolant
+# → coldplate → amplifier and closes back on the bus as extra load
+# (`coupling.yaml#C-AMP-BUS-PUMP`, a declared cycle with a one-tick back-edge).
+#
+# So this verb carries the argument the propulsion domain's `start_burn` carries — an effect-time
+# guard, a phase gate, a real reason for A2 — and one thing `start_burn` does not need: the
+# amplifier's *own* temperature is one of the cycle's members, which is why its interlock list
+# includes the thermal threshold and not only the electrical ones.
+#
+# ## The verb that spends the fleet's own eyes
+#
+# `set_telemetry_profile` chooses how much of the vehicle the fleet gets to see, and
+# `apollo_diode.md:901` is the reason it is a verb rather than a setting: a degraded link must
+# actually have to choose. It is A1 — a fleet in trouble must be able to shed its own bandwidth
+# without asking — and it is bounded by an operator ceiling, because a fleet that could widen its
+# own ceiling would be allocating the operator's link to itself (`rcs_dode.md:366` says the same
+# of `SET_TELEMETRY_PROFILE`).
+#
+# The two refusals below are the domain's other half: `set_antenna_gain` and
+# `force_telemetry_throughput` are the two ways a fleet could make the link appear better than it
+# is. Neither is in any spec — they are this vehicle's, and they are refused because a
+# communications domain that could be told to lie about its own capacity would make every frame
+# loss a matter of opinion.
+
+domain: comms
+commands:
+
+  - verb: set_comm_mode
+    argument_schema:
+      mode: {type: enum, values: [sband_high, sband_low, vhf, none]}
+    authority: A1
+    gate: {kind: preference, variable: comm_mode_<mode>_enable}
+    interlocks: none - reviewed
+    conflict_domain: comms.mode
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Choose the link: S-band high rate, S-band low rate, VHF, or nothing. `vhf` is not a
+      fallback for the Earth link — it is the LM-to-CSM and EVA channel — so selecting it during a
+      descent is a decision to talk to the other spacecraft, and selecting `none` is a decision to
+      stop transmitting, which is a legitimate way to stop filling a recorder with data nobody
+      will read. No interlock on review: the mode is reversible, the antenna and the transmitter
+      are the components that carry the load, and a mode change that is refused because a link is
+      degraded would prevent the fallback that exists for exactly that case.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243"
+      note: >-
+        apollo's verb, with `comm.link_mode`'s four values. `communcations_diode.md` supplies no
+        counterpart at all (C-14) — its `UNSPECIFIED` register does not even name an antenna
+
+  - verb: select_antenna
+    argument_schema:
+      antenna: {type: enum, values: [high_gain, omni_a, omni_b, sband_steerable]}
+    authority: A1
+    gate: {kind: preference, variable: antenna_<antenna>_enable}
+    interlocks: none - reviewed
+    conflict_domain: comms.antenna
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Choose which of the four antennas carries the link. The members are 26.7 dB and 2 dB apart,
+      so this is a 25 dB decision: the high gain needs pointing and carries 51.2 kbit/s, and the
+      omnis need nothing and carry very little. `omnib` is a separate argument value from `omni_a`
+      rather than one "omni" option because the second one is the reason antenna selection has a
+      safety-relevant alternative at all — a stuck switch, a failed feed, and the vehicle still
+      has a link. Thirty seconds of queue age because the selection is what a fleet reaches for
+      when the link is already bad, and a stale one applies a 25 dB change to a link that has
+      moved on.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243"
+      note: >-
+        apollo's verb; the four members are `vehicle.yaml#comms.antennas`, and the linter refuses
+        a mismatch with `comm.antenna`'s enum. `sband_steerable` is the LM's, declared with both
+        of its figures owed rather than invented
+
+  - verb: point_hga
+    argument_schema:
+      target: {type: enum, values: [earth, moon_limb, csm, inertial, stow]}
+      mode: {type: enum, values: [auto, manual], optional: true}
+      slew_rate_deg_s: {type: number, optional: true, minimum: 0}
+    authority: A1
+    gate: {kind: preference, variable: hga_point_<target>_enable}
+    interlocks: none - reviewed
+    conflict_domain: comms.hga_pointing
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Point the high-gain antenna. `earth` is the nominal target and `auto` is the nominal mode —
+      the gimbal tracks the Earth from the vehicle's own ephemeris — so the verb exists for the
+      cases where the vehicle is wrong about where it is: `moon_limb` looks along the lunar
+      horizon when the attitude estimate is in doubt, `csm` points at the other spacecraft during
+      a rendezvous, `inertial` holds an inertial direction when nothing else is trusted, and
+      `stow` gets the dish out of the way before a maneuver that would otherwise drive it into a
+      limit. The four non-nominal targets are the domain's answer to F-11: an antenna that cannot
+      find Earth because the *vehicle* is lost is not an antenna fault, and a fleet needs a way to
+      point it at something it does know.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243"
+      note: >-
+        apollo's verb, with the target list authored — apollo names `point_hga` and no arguments,
+        and the five targets are the ones this vehicle's geometry supports. `stow` is the one that
+        is not a pointing decision and exists because the HGA is steerable and a maneuver can
+        drive it to its scan limit
+
+  - verb: set_power_amplifier
+    argument_schema:
+      state: {type: enum, values: [on, off]}
+      transmitter: {type: enum, values: [sband_power_amplifier, lm_sband], optional: true}
+    authority: A2
+    gate: {kind: preference, variable: power_amplifier_<transmitter>_enable}
+    interlocks: [power.bus_a_undervoltage, power.load_margin_low, thermal.comm_amp_high,
+                 tx_power_high]
+    conflict_domain: comms.amplifier
+    allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Switch the power amplifier on or off. It is a 36 W step on the bus and a 4x RF gain, and
+      the interlock list is the interesting part: two electrical guards, one thermal, and one on
+      the transmitter's own draw. `comm_amp_high` is a *thermal* threshold in an electrical verb's
+      list, and it is there because the amplifier is a member of the cycle it can start — a hot
+      amplifier draws more current for the same output, and that current returns to the bus that
+      is already sagging. A2 rather than A1 for the same reason `start_burn` is: this verb can
+      begin a cascade with nothing wrong anywhere, and apollo's own chronology is explicit that
+      the amplifier is the trigger and never the root fault. The phase list excludes `descent` and
+      `entry`: during a powered descent the link is already on the LM's own transmitter, and
+      switching an amplifier to get more bandwidth is a trade nobody should be making with the
+      ground coming up.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:243, :157, :1140"
+      note: >-
+        apollo's verb and its two DC figures. `coupling.yaml#E-AMP-LOAD` is the edge it drives,
+        closed at 0.0357 A per watt when `domains/comms/` landed, and F-03 is the chain it
+        triggers
+
+  - verb: set_telemetry_profile
+    argument_schema:
+      profile: {type: enum, values: [emergency, low, normal, high, burst]}
+      channels: {type: array, items: string, optional: true,
+                 note: "channel classes to include; bounded by the profile's ceiling"}
+      duration_s: {type: number, optional: true, minimum: 0, maximum: 3600}
+    authority: A1
+    gate: {kind: preference, variable: telemetry_profile_<profile>_enable}
+    interlocks: none - reviewed
+    conflict_domain: comms.telemetry_profile
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 10
+    help: >-
+      Choose how much of the vehicle the fleet gets to see. Five profiles, apollo's own, from
+      `emergency` — event and alarm channels plus essential power, ECLSS and GNC, and no
+      engineering channels at all — to `burst`, which is temporary, high-rate and expensive. The
+      ceiling is the operator's and `channels` narrows a profile and can never widen one, the same
+      monotone move `set_reserve_policy` makes in the consumables domain. Ten seconds of queue age
+      because this verb is what a fleet reaches for when the link has just got worse, and a stale
+      profile change applies a bandwidth decision to a link that has moved on. `duration_s` is
+      what makes `burst` a burst: a high-rate profile with no expiry is a permanent reduction in
+      the margin for everything else, and a fleet should have to say how long it wants it.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:885-903"
+      note: >-
+        apollo's five profiles and its rule at `:901` — "the simulator should actually have to
+        choose which data arrives". This is the vehicle's only verb whose effect is on the fleet's
+        own observation, and `domains/consumables/` declined the same verb name for exactly that
+        reason: one publisher-level verb listed per-domain by every spec that mentions it is how
+        one verb acquires six argument schemas (vocabulary V-06), so it lives in the domain whose
+        resource it spends
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: set_antenna_gain
+    why: >-
+      the gain is a property of the dish, not a setting. A verb that could change it would let a
+      fleet improve its link by asserting that the antenna is better than it is, and nothing
+      downstream could detect it — `comm.snr_db` would agree with the assertion, because the
+      assertion would be an input to it. `vehicle.yaml#comms.antennas` carries the gains and they
+      are the two sourced figures in this domain; the derived beamwidths follow from them by the
+      gain-beamwidth product, which is a physical identity rather than a preference.
+
+  - verb: force_telemetry_throughput
+    why: >-
+      the same move one level up: a verb that could tell the publisher to send more than the link
+      carries. It is the direct negation of `apollo_diode.md:901`, and its failure mode is the one
+      the sentence names — content that is *claimed* to have arrived. A fleet with this verb would
+      never have to choose what to drop, and the choice is the experiment.
+
+  - verb: clear_blackout_state
+    why: >-
+      refused because `comm.blackout_state` is not a flag, it is a geometric fact. A verb that
+      could set it would let a fleet declare that the Moon is not there, and the consequence is
+      precise: it would defeat the `gated_by` clause on `snr_loss` and `carrier_lock_loss`, so the
+      vehicle would alarm on its own orbit — which is the failure the gate exists to prevent. The
+      state is derived from the vehicle's own position and Earth's, and the way to change it is to
+      change where the vehicle is.

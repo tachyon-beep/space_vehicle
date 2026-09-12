@@ -1,0 +1,587 @@
+# domains/power/components.yaml — what the electrical system is made of, and what the
+# scheduler needs to know to advance it.
+#
+# The design's build order (simulator-design.md:113) is "dictionary + linter, then a spike on
+# electrical → thermal → consumables". This is the first domain. It is deliberately the
+# hardest one to get wrong and the easiest to check: the topology is simple, the physics is
+# algebraic except for one stock and two lags, and `electrical_diode.md` supplies a
+# load-shed ladder that had to be **re-anchored** before it could be used (conflict
+# register C-01 — its tiers sit up to 2 V below the point apollo calls an event).
+#
+# The vehicle has two separate electrical systems, and the separation is the point. The CSM
+# runs on three fuel cells fed from the cryogenic O2 inventory; the LM runs on batteries
+# alone and its power is a countdown rather than a budget. That is what makes the Apollo-13
+# reconfiguration — move the load to the LM — a resource decision rather than a mode change,
+# and it is why `lm_bus` and `csm_bus` do not share a bus tie.
+
+domain: power
+natural_rate_hz: 50
+
+# Reads and writes are node ids from coupling.yaml. Domains do not call each other
+# (plant.md §2); these declarations are what the scheduler orders.
+reads: [o2_csm, h2_csm]
+writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state]
+
+# --------------------------------------------------------------------------------------
+# State. Each entry names its integrator class from plant.md §3, and the class decides what
+# parameters are owed. The linter refuses a `lag` with no time constant, a `stock` with no
+# quantum, and a latched `discrete` with no hysteresis.
+# --------------------------------------------------------------------------------------
+state:
+  - id: fuel_cell_power_w
+    method: algebraic
+    node: fuel_cell
+    unit: W
+    note: >-
+      The cell's output is a function of reactant availability and load, solved to
+      consistency each tick rather than integrated. The reactant draw is exact
+      stoichiometry charged to the O2 and H2 stocks, so the electricity is not free.
+    provenance:
+      basis: chosen
+      reason: "the cell's output is determined by reactant availability and load within a tick, so it is solved rather than integrated; no source models a cell on a timescale this plant resolves"
+
+  - id: source_converter_v
+    method: lag
+    node: fuel_cell
+    unit: V
+    tau_s: UNCONFIGURED
+    note: >-
+      Converter regulation lags its setpoint. electrical_diode.md:248 gives a 1.2 kW
+      converter with a >=94 % efficiency but no time constant — and its 24-32 V envelope is
+      re-anchored to apollo's 27.0-30.5 V band (C-01), so the parameter is owed rather than
+      inherited.
+    provenance:
+      basis: chosen
+      reason: "a regulated converter is a first-order lag by construction; electrical_diode.md:248 gives its rating and efficiency but no time constant, so the class is chosen and the parameter is owed"
+
+  - id: bus_a_v
+    method: algebraic
+    node: bus_a
+    unit: V
+    note: >-
+      The nodal solve. Bus voltage is a function of source EMF, source internal resistance,
+      tie state and total load; there is no bus capacitance to integrate, and that choice is
+      load-bearing — review-findings.md #5 makes the whole 50 Hz verdict conditional on the
+      electrical network being algebraic. If this becomes an ODE with real capacitance the
+      verdict inverts and the requirement becomes 1-10 kHz.
+    provenance:
+      basis: chosen
+      reason: "review-findings.md #5 makes the entire 50 Hz verdict conditional on the electrical network being algebraic rather than an ODE with bus capacitance; recording that here means a later change to this line has to argue with the review"
+
+  - id: bus_b_v
+    method: algebraic
+    node: bus_b
+    unit: V
+    note: second bus, cross-supported through the tie
+    provenance:
+      basis: chosen
+      reason: "as bus_a_v: the second bus is the same nodal solve over a different source and load set"
+
+  - id: battery_charge_j
+    method: stock
+    node: battery_energy
+    unit: J
+    quantum: 1.0
+    min_flow_per_s: UNCONFIGURED
+    note: >-
+      The one conserved quantity in the domain, and the reason the LM is a countdown. The
+      quantum is 1 J, which is far below any real battery flow, so the dead zone is not a
+      risk here — `min_flow_per_s` is declared unset rather than guessed because the check
+      that uses it is the one that matters for the consumables stocks.
+    provenance:
+      basis: historical
+      source: "the capacities are published (NR, PSR: 40 Ah entry batteries, 400 Ah LM descent, 296 Ah LM ascent); that the charge is a conserved stock rather than a voltage-dependent model is chosen, because a first-order relaxation model would need parameters no source gives"
+
+  - id: battery_thermal_state
+    node: internal
+    method: lag
+    unit: degC
+    tau_s: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:104"
+      note: >-
+        the battery's temperature, and the state this domain was publishing without: the linter's
+        `from` check found `power.battery_temp_c` naming a state that exists nowhere, while
+        `battery_overtemp` and `battery_thermal_runaway_rate` — two thresholds — watch that
+        channel. A threshold on a channel with no producer is the same defect as an alarm with no
+        threshold, arriving from the other side. A lag because a battery is a lumped thermal mass,
+        and the time constant is owed: `thermal_diode.md:965` declares every thermal constant
+        unspecified, and a battery pack's is no exception
+
+  - id: bus_tie_closed
+    method: discrete
+    node: bus_tie
+    unit: "enum[open,closed,tripped]"
+    dwell: {min_on_s: 0.2, min_off_s: 0.2}
+    note: >-
+      The tie may close only when the two buses are within 1 V, and it latches open on a ground
+      fault. Closing a tie into a fault couples the healthy bus to the failed one
+      (apollo_diode.md:340). This was a `bool` with a numeric comparator, and the state's own
+      provenance note said why that could not work: apollo publishes open/closed/tripped and
+      makes an unintended trip an *event*, which is only meaningful if the position is latched —
+      and a boolean has no third value to latch into. The vehicle could trip its tie and had no
+      way to say so, which is the same fault as a regulator position it cannot report, arriving
+      through a type rather than a vocabulary. The 1 V interlock is not restated here: it is
+      `power.tie_dv_limit`, a declared threshold on `power.dc_bus_a_v`, and a state that
+      re-implemented it would be a second source of truth for one limit
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:79"
+      note: "apollo publishes bus_tie_state as open/closed/tripped and makes an unintended trip an event, which is only meaningful if the position is latched rather than compared"
+
+  - id: lcl_tripped
+    method: discrete
+    node: internal
+    unit: "map[load_id,enum[closed,tripped,retrying,latched]]"
+    hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}
+    note: >-
+      One controlled reclose and then latch (electrical_diode.md:254, :888-901). The
+      reclose-then-latch shape is the whole reason this is a latched discrete with hysteresis
+      rather than a comparison: a load that trips on a transient must come back, and one that
+      trips twice inside the recovery dwell must not.
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:254 supplies one controlled reclose then latch; a latched discrete with hysteresis is the only representation in which reclose-then-latch is expressible at all"
+
+  - id: load_shed_class
+    method: discrete
+    node: load_shed_state
+    unit: "enum[none,P3,P2,P1,P0]"
+    hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}
+    note: >-
+      The ladder's position. Its hysteresis values are volts on bus A and are shadowed by the
+      four bus thresholds in profiles.yaml, which carry the per-tier dwells; this entry exists
+      so the state itself is latched and cannot oscillate between tiers within a tick.
+    provenance:
+      basis: chosen
+      reason: "the ladder position is a mode, not a measurement, so it is latched; its hysteresis values are volts on bus A and are shadowed by the four bus thresholds, which carry the per-tier dwells"
+
+  - id: bus_a_load_w
+    method: algebraic
+    node: internal
+    unit: W
+    note: sum of the enabled loads, recomputed every tick rather than tracked
+    provenance:
+      basis: chosen
+      reason: "a derived sum recomputed each tick, never tracked: tracking it would make the electrical network stateful and reintroduce the integration the algebraic class exists to avoid"
+# --------------------------------------------------------------------------------------
+# Components. `kind` follows coupling.yaml's node kinds; the electrical network's members are
+# sources, storage, distribution and protection.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: fc_1
+    kind: flow
+    class: source
+    vehicle: csm
+    rated_w: 1420
+    bus_v: [27, 31]
+    note: "one of three fuel-cell modules (vehicle.yaml#electrical)"
+    provenance:
+      basis: historical
+      source: "TN D-7142: three modules of 563-1,420 W each at 27-31 V dc"
+  - id: fc_2
+    kind: flow
+    class: source
+    vehicle: csm
+    rated_w: 1420
+    bus_v: [27, 31]
+    provenance:
+      basis: historical
+      source: "as fc_1"
+  - id: fc_3
+    kind: flow
+    class: source
+    vehicle: csm
+    rated_w: 1420
+    bus_v: [27, 31]
+    provenance:
+      basis: historical
+      source: "as fc_1"
+  - id: battery_csm_1
+    kind: stock
+    class: storage
+    vehicle: csm
+    ah: 40
+    v_nominal: 28
+    chemistry: "silver-oxide/zinc"
+    provenance:
+      basis: historical
+      source: "NR and PSR: 3 x 40 Ah entry batteries, 20 cells, 37.2 V open circuit, 27 V minimum loaded"
+  - id: battery_csm_2
+    kind: stock
+    class: storage
+    vehicle: csm
+    ah: 40
+    v_nominal: 28
+    chemistry: "silver-oxide/zinc"
+    provenance:
+      basis: historical
+      source: "as battery_csm_1"
+  - id: battery_csm_3
+    kind: stock
+    class: storage
+    vehicle: csm
+    ah: 40
+    v_nominal: 28
+    chemistry: "silver-oxide/zinc"
+    provenance:
+      basis: historical
+      source: "as battery_csm_1"
+  - id: battery_lm_descent_1
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 400
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "NR and PSR: 4 x 400 Ah descent batteries on Apollo 11; they delivered 1,055 Ah of a nominal 1,600 Ah"
+  - id: battery_lm_descent_2
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 400
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "as battery_lm_descent_1"
+  - id: battery_lm_descent_3
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 400
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "as battery_lm_descent_1"
+  - id: battery_lm_descent_4
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 400
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "as battery_lm_descent_1"
+  - id: battery_lm_ascent_1
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 296
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "NR: 2 x 296 Ah ascent batteries, 50 A for 5.9 h"
+  - id: battery_lm_ascent_2
+    kind: stock
+    class: storage
+    vehicle: lm
+    ah: 296
+    v_nominal: 28
+    provenance:
+      basis: historical
+      source: "as battery_lm_ascent_1"
+  - id: csm_bus_a
+    kind: state
+    class: bus
+    vehicle: csm
+    v_band: [27.0, 30.5]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:73"
+      note: "the band is apollo's, not electrical_diode.md:251's 24-32 V; C-01"
+  - id: csm_bus_b
+    kind: state
+    class: bus
+    vehicle: csm
+    v_band: [27.0, 30.5]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:74"
+  - id: lm_bus
+    kind: state
+    class: bus
+    vehicle: lm
+    v_band: [26.0, 31.0]
+    provenance:
+      basis: chosen
+      reason: "the LM ran a single 28 V bus with no second source; the band is chosen because no source gives an LM bus envelope, and it is deliberately narrower than the CSM's so a shared threshold cannot be reused by accident"
+  - id: csm_tie_ab
+    kind: discrete
+    class: protection
+    vehicle: csm
+    normally: open
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:79"
+      note: "apollo publishes bus_tie_state as open/closed/tripped and makes an unintended trip an event"
+  - id: lcl
+    kind: discrete
+    class: protection
+    per: load
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:254: a solid-state current-limiting switch per load, 110-125 % limit and >200 % hard short in <=2 ms. Apollo had mechanical breakers plus the PDU; a per-load LCL is the modelling choice that makes an overloaded load distinguishable from a failed bus"
+
+# --------------------------------------------------------------------------------------
+# The load inventory. The corpus has none: electrical_diode.md:216-224 names eight loads for
+# a twelve-domain vehicle, and no source publishes CSM or LM total loads in watts. So this is
+# authored, anchored wherever a figure exists and marked otherwise.
+#
+# `demand_w` is the steady draw and `inrush_w` the starting transient, because the starting
+# transient is what makes a marginal bus drop a pump — the flagship chain of the experiment.
+# The four classes are the shed order: P0 is survival, protection, control and telemetry; P3
+# is discretionary.
+# --------------------------------------------------------------------------------------
+loads:
+
+  # --- CSM ------------------------------------------------------------------------------
+  - id: csm_sband_transceiver
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 36
+    inrush_w: 36
+    class: P1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:157"
+      note: "36 W input for the basic S-band transceiver"
+  - id: csm_sband_power_amplifier
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 72
+    inrush_w: 72
+    class: P2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:157"
+      note: "72 W with the power amplifier. This is the load whose switch-on exposes a marginal pump (apollo_diode.md:1140): it is never the root fault and always the trigger"
+  - id: csm_suit_fan
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 85
+    inrush_w: 130
+    class: P0
+    provenance:
+      basis: historical
+      source: "NR: CSM suit fan 85 W"
+  - id: csm_cabin_fan
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 60
+    inrush_w: 95
+    class: P1
+    provenance:
+      basis: chosen
+      reason: "no published CSM cabin-fan figure found; scaled from the LM cabin fan's 62 W (NR) because the two perform the same job on a similar volume"
+  - id: csm_co2_scrubber
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 80
+    inrush_w: 110
+    class: P0
+    provenance:
+      basis: chosen
+      reason: "a LiOH bed needs a blower and no source gives its draw; P0 because losing it is a life-support failure on a timescale of hours, not minutes"
+  - id: csm_imu
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 90
+    inrush_w: 90
+    class: P1
+    provenance:
+      basis: chosen
+      reason: "the inertial platform is on the bus that must not sag; a platform that drops out costs an alignment, which costs mission time and propellant"
+  - id: csm_guidance_computer
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 150
+    inrush_w: 150
+    class: P1
+    provenance:
+      basis: chosen
+      reason: "apollo_diode.md:177 publishes exec_margin_pct with a <10 event, so the computer's own budget is observable; its draw is not published"
+  - id: csm_instrumentation
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 120
+    inrush_w: 120
+    class: P2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:182"
+      note: "apollo publishes avionics.instrumentation_power_w with an excessive/zero event; the magnitude is chosen"
+  - id: csm_coolant_pump_1
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 250
+    inrush_w: 420
+    class: P1
+    provenance:
+      basis: chosen
+      reason: "THE load of the flagship chain. Its inrush is 1.68x its demand because that ratio is what makes a sagging bus drop the pump and start the thermal cascade; the absolute figure is chosen to sit where a 27 V bus with a 0.05 ohm source impedance crosses the contactor-hold threshold under a 72 W step"
+  - id: csm_coolant_pump_2
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 250
+    inrush_w: 420
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "the redundant pump, deliberately one class lower so that shedding the second pump is a decision with a thermal consequence rather than a free choice"
+  - id: csm_heaters
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 300
+    inrush_w: 300
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:191-207 has heater banks as the TCS's main actuation; the bank draw is chosen so that heater load and pump load are comparable, which is what makes a cold vehicle and a shed vehicle the same problem"
+  - id: csm_rcs_heaters
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 80
+    inrush_w: 80
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "hypergolic RCS plumbing is heater-protected; no figure published"
+  - id: csm_comm_heaters
+    vehicle: csm
+    bus: csm_bus_a
+    demand_w: 50
+    inrush_w: 50
+    class: P3
+    provenance:
+      basis: chosen
+      reason: "P3 because a cold transmitter degrades gracefully and a cold propellant line does not"
+  - id: csm_lighting
+    vehicle: csm
+    bus: csm_bus_b
+    demand_w: 100
+    inrush_w: 100
+    class: P3
+    provenance:
+      basis: chosen
+      reason: "discretionary by definition, and the first thing a crew sheds"
+
+  # --- LM -------------------------------------------------------------------------------
+  - id: lm_sband_transmitter
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 20
+    inrush_w: 20
+    class: P1
+    provenance:
+      basis: historical
+      source: "PSR: LM S-band 0.75 W low power; the 20 W is the chosen dc input from vehicle.yaml#comms"
+  - id: lm_sband_high_power
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 90
+    inrush_w: 90
+    class: P2
+    provenance:
+      basis: historical
+      source: "PSR: LM S-band 18.6 W high power; 90 W is the chosen dc input"
+  - id: lm_cabin_fan
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 62
+    inrush_w: 95
+    class: P0
+    provenance:
+      basis: historical
+      source: "NR: LM cabin fan 62 W average"
+  - id: lm_suit_fan
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 85
+    inrush_w: 130
+    class: P0
+    provenance:
+      basis: historical
+      source: "NR: suit fan 85 W"
+  - id: lm_co2_scrubber
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 80
+    inrush_w: 110
+    class: P0
+    provenance:
+      basis: chosen
+      reason: "as csm_co2_scrubber; on the LM this is the load Apollo 13's improvisation was about"
+  - id: lm_guidance_computer
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 150
+    inrush_w: 150
+    class: P1
+    provenance:
+      basis: chosen
+      reason: "the LM guidance computer; no published draw found"
+  - id: lm_landing_radar
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 120
+    inrush_w: 120
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "landing radar is only needed from PDI to touchdown, so it is a phase-scoped load and a natural thing to find switched off at the wrong moment"
+  - id: lm_instrumentation
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 100
+    inrush_w: 100
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "as csm_instrumentation"
+  - id: lm_heaters
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 200
+    inrush_w: 200
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "as csm_heaters, scaled down for the smaller cabin"
+  - id: lm_rcs_heaters
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 60
+    inrush_w: 60
+    class: P2
+    provenance:
+      basis: chosen
+      reason: "as csm_rcs_heaters"
+  - id: lm_lighting
+    vehicle: lm
+    bus: lm_bus
+    demand_w: 40
+    inrush_w: 40
+    class: P3
+    provenance:
+      basis: chosen
+      reason: "as csm_lighting"
+
+# --------------------------------------------------------------------------------------
+# Load total, and the one check on it that has a published anchor.
+# --------------------------------------------------------------------------------------
+load_budget:
+
+  csm_total_demand_w: 1723
+  lm_total_demand_w: 1007
+  provenance:
+    basis: derived
+    relation: >-
+      CSM demand sums to 1,723 W against the 2,020 W average load implied by Apollo 11's
+      393 kWh over 195 h (vehicle.yaml#electrical) — the 297 W difference is battery charging,
+      transients and the loads Apollo carried that this inventory does not model. LM demand
+      sums to 1,007 W against an 81 A peak during powered descent, about 2,300 W, which is the
+      radar and computer at full tilt plus the descent-engine valve load.
+    source: "A11: 393 kWh over 195 h at an average 68.7 A on a 29.4 V CM bus; LM peak 81 A during PDI"

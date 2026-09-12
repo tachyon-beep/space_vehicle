@@ -1,0 +1,643 @@
+# vehicle.yaml — the globals: mass, configuration, frames, propulsion, loads, zones.
+#
+# This is the file the corpus does not contain. `corpus-review.md` §3 established that by
+# grep: `apollo_diode.md` has no mass, no inertia, no centre of mass, no thrust, no Isp and
+# no mission duration — `mass` appears only as a thing to be hidden (:36) or depleted
+# (:743) — and `rcs_diode.md:119-121` confirms each absence from the other side, naming what
+# it blocks. So the numbers below are `historical` (published figures about the real
+# vehicle, each with a source) or `derived` from them or `chosen` to make the simulation
+# run. None is `apollo`, because apollo has none of them.
+#
+# SOURCES. Values marked A11 come from the Apollo 11 Mission Report (NASA MSC-00171,
+# https://ntrs.nasa.gov/api/citations/19710015566/downloads/19710015566.pdf), which is
+# flight-measured rather than design. PSR is the Apollo Program Summary Report (JSC-09423,
+# https://ntrs.nasa.gov/citations/19750013242); NR is the Apollo Spacecraft News Reference
+# and the LM News Reference (https://archive.org/details/apollo-spacecraft-news-reference-1968,
+# https://archive.org/details/apollo-lunar-module-news-reference-1971); SP4029 is Apollo by
+# the Numbers (NASA SP-2000-4029). Two warnings carried from that pass:
+#
+#   * the Rockwell press-kit SM dry mass of 13,475 lb does NOT close against flown weights —
+#     with the SPS and RCS loads it gives 55,613 lb for a CSM that weighed 63,473 lb
+#     *including* a 12,200 lb command module. The SM inert mass implied by flight residuals
+#     is 8,700-9,000 lb, and that is what is used here. Design and flight figures are not
+#     interchangeable, and the press kit is a design figure.
+#   * the widely repeated LM descent-engine Isp of 311 s traces only to Wikipedia. The NASA
+#     end-of-duty-cycle design requirement is 305 s, and 305 s is what this vehicle uses.
+#
+# A word on what this vehicle is. It is Apollo-*shaped*, not Apollo. `apollo_diode.md:1206`
+# warns against matching the historical labels closely enough that an agent can shortcut the
+# diagnosis by recognising the mission, so the masses, thrusts and loads below are the real
+# ones — they are what make an inference correct or incorrect — while the mission profile and
+# the failure schedule are this vehicle's own.
+#
+# Units are SI internally (conflict register C-17); imperial appears in comments beside the
+# conversion, because losing the original is how a unit error becomes unfindable.
+
+schema_version: 1
+source: docs/deep_research/apollo_diode.md
+vocabulary: docs/deep_research/integration/reconciliation/02-canonical-vocabulary.md
+
+# --------------------------------------------------------------------------------------
+# Frames and conventions. `gnc_diode.md:382` states the rule this block exists for: "no vector
+# is valid without a declared frame", and it goes further than a frame list — it fixes four
+# conventions that a vehicle can get silently wrong, because every one of them is a *convention*
+# rather than a quantity. Two agents can disagree about a quaternion's component order while
+# both being right about the physics, and nothing downstream would report the disagreement: the
+# attitude would simply be wrong, in a way that looks like a control problem.
+#
+# So the four conventions are declared once, here, and `domains/gnc/` is what enforces them:
+#
+#   quaternion order      [w,x,y,z]. gnc_diode.md:405 fixes it explicitly, and it is the single
+#                         most consequential line in the document — apollo publishes
+#                         `gnc.attitude_q[0..3]` (apollo_diode.md:117) and says nothing about
+#                         which component is first
+#   rotation direction    `attitude_ref_from_body` rotates a vector from BODY into the named
+#                         reference frame (gnc_diode.md:406). The opposite convention is equally
+#                         common and differs by conjugation, i.e. by the sign of the rotation
+#   angular velocity      identifies which frame rotates relative to which, and in which frame
+#                         the components are resolved (gnc_diode.md:407). A rate with no
+#                         resolution frame is not a vector
+#   covariance units      documented per block rather than behind one generic unit
+#                         (gnc_diode.md:408) — this vehicle's 15-state error vector has five
+#                         3-vectors with five different units
+#
+# Mission time is monotonic and cannot jump backward (`gnc_diode.md:409`). That is a property of
+# `mission.met_s` rather than of a frame, and it is recorded here because it is the convention a
+# clock correction is most likely to violate: `avionics.clock_offset_ms` may be corrected, and
+# MET may not.
+# --------------------------------------------------------------------------------------
+conventions:
+  units: SI
+  quaternion_order: "[w,x,y,z]"
+  quaternion_direction: "attitude_ref_from_body — rotates a coordinate vector from BODY into the named reference frame"
+  angular_velocity: "the frame rotating relative to the frame it is measured against, resolved in the vehicle's BODY frame unless a channel says otherwise"
+  covariance_units: "per block, not one generic unit: position m^2, velocity (m/s)^2, attitude rad^2, accelerometer bias (m/s^2)^2, gyro bias (rad/s)^2"
+  mission_time: "monotonic, and it cannot jump backward"
+  provenance:
+    basis: historical
+    source: "gnc_diode.md:382-409 — the frame registry fields, the four scalar conventions, and the monotonicity rule"
+
+frames:
+  - id: EARTH_J2000
+    origin: earth_centre
+    axes: j2000
+    central_body: earth
+    rotating_or_inertial: inertial
+    orientation_parent: none
+    revision: 1
+    provenance:
+      basis: chosen
+      reason: "the inertial frame for cislunar integration; apollo_diode.md:743 asks for Earth/Moon gravity in a rigid-body 6-DOF model and names no frame"
+  - id: MOON_J2000
+    origin: moon_centre
+    axes: j2000
+    central_body: moon
+    rotating_or_inertial: inertial
+    orientation_parent: none
+    revision: 1
+    provenance:
+      basis: chosen
+      reason: "gnc_diode.md:1175 uses this exact string as an illustrative frame_id and never defines it; this gives it a definition and a revision"
+  - id: LVLH
+    origin: vehicle
+    axes: "local vertical, local horizontal"
+    central_body: mission-dependent
+    rotating_or_inertial: rotating
+    orientation_parent: EARTH_J2000 while Earth-referenced, MOON_J2000 while lunar
+    revision: 1
+    provenance:
+      basis: chosen
+      reason: "the frame a crew or a flight director reasons in; landing-radar work is natural here"
+  - id: BODY
+    origin: vehicle
+    axes: "body axes"
+    central_body: none
+    rotating_or_inertial: rotating
+    orientation_parent: "the reference frame named by attitude_ref_from_body"
+    revision: 1
+    provenance:
+      basis: chosen
+      reason: "attitude_q is body-with-respect-to-reference (apollo_diode.md:117)"
+  - id: HGA_BORESIGHT
+    origin: vehicle
+    axes: "high-gain antenna boresight"
+    central_body: none
+    rotating_or_inertial: rotating
+    orientation_parent: BODY
+    revision: 1
+    provenance:
+      basis: chosen
+      reason: "comm.hga_pointing_error_deg needs a frame to be an angle in, and the antenna's own is the only one that makes the number meaningful"
+
+environment:
+
+  - id: gravity_moon
+    value: 1.62
+    unit: "m/s2"
+    provenance:
+      basis: historical
+      source: "standard lunar surface gravity"
+  - id: moon_mean_radius_km
+    value: 1737.4
+    unit: km
+    provenance:
+      basis: historical
+      source: "the figure that makes gnc_diode.md:1175-1177 wrong: its example position has |r| = 1723.3 km, i.e. 14.1 km below this radius"
+  - id: gravity_earth_mu
+    value: 3.986004418e14
+    unit: "m3/s2"
+    provenance:
+      basis: historical
+      source: "IERS conventional value"
+  - id: gravity_moon_mu
+    value: 4.9028e12
+    unit: "m3/s2"
+    provenance:
+      basis: historical
+      source: "standard lunar gravitational parameter"
+  - id: solar_flux_1au
+    value: 1361
+    unit: "W/m2"
+    provenance:
+      basis: historical
+      source: "standard total solar irradiance; drives radiator and coldplate balance"
+  - id: lunar_surface_albedo
+    value: 0.12
+    unit: "-"
+    provenance:
+      basis: historical
+      source: "mean lunar albedo; a surface-phase thermal input"
+  - id: earth_moon_light_time_s
+    value: 1.3
+    unit: s
+    provenance:
+      basis: historical
+      source: "one-way light time; apollo_diode.md:526 makes the link delay a simulation setting of approximately 1-2 s one way, which brackets this"
+  - id: tick_hz
+    value: 50
+    unit: Hz
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:24, :1084"
+      note: "conflict register C-07: gnc 100 Hz, rcs 100 Hz and events 200 Hz all lose; gnc_diode.md:1672 concedes the 50 Hz baseline remains valid and is not normative for GNC, so a GNC inner loop is sub-stepped rather than the plant re-rated"
+
+# --------------------------------------------------------------------------------------
+# Configurations. `structure.stage_state` indexes into these, and a transition between them
+# is irreversible and arm/commit protected (apollo_diode.md:211, :476-509).
+# The linter sums every breakdown and refuses a mismatch. It is the one invariant checkable
+# with no plant, and it is what catches a vehicle quietly changing mass between two files
+# that both look right on their own.
+# --------------------------------------------------------------------------------------
+configurations:
+
+  - id: csm_lm_docked
+    name: "CSM and LM docked: the translunar and lunar-orbit configuration"
+    crew_aboard: 3
+    crew_in: csm
+    mass_kg: 44085
+    mass_breakdown_total_kg: 44085
+    mass_breakdown:
+      csm_cm_at_entry: 5487
+      csm_sm_inert: 4037
+      csm_sps_propellant: 18508
+      csm_sm_rcs_propellant: 608
+      csm_cm_rcs_propellant: 112
+      csm_residual_and_stores: 55
+      lm_descent_stage_dry: 1996
+      lm_descent_propellant: 8248
+      lm_ascent_stage_dry: 2132
+      lm_ascent_propellant: 2376
+      lm_rcs_propellant: 288
+      lm_consumables: 238
+    provenance:
+      basis: derived
+      relation: "CSM at TLI (28,807 kg) plus LM at separation for landing (15,278 kg); each side's own breakdown sums to its share and the linter checks both"
+      source: "A11 Tbl B-I; PSR App C-I"
+
+  - id: csm_alone
+    name: "CSM alone after the LM is jettisoned"
+    crew_aboard: 3
+    crew_in: csm
+    mass_kg: 28807
+    mass_breakdown_total_kg: 28807
+    mass_breakdown:
+      csm_cm_at_entry: 5487
+      csm_sm_inert: 4037
+      csm_sps_propellant: 18508
+      csm_sm_rcs_propellant: 608
+      csm_cm_rcs_propellant: 112
+      csm_residual_and_stores: 55
+    provenance:
+      basis: historical
+      source: "A11: CSM at TLI 63,473 lb; PSR App C-I: 63,508 lb = 28,807 kg. CM at entry 12,096 lb = 5,487 kg; SM inert 8,700-9,000 lb implied by flight residuals = 4,037 kg"
+
+  - id: lm_alone_descent
+    name: "LM alone with its descent stage, after undocking"
+    crew_aboard: 2
+    crew_in: lm
+    mass_kg: 15278
+    mass_breakdown_total_kg: 15278
+    mass_breakdown:
+      lm_descent_stage_dry: 1996
+      lm_descent_propellant: 8248
+      lm_ascent_stage_dry: 2132
+      lm_ascent_propellant: 2376
+      lm_rcs_propellant: 288
+      lm_consumables: 238
+    provenance:
+      basis: historical
+      source: "A11 Tbl B-I: LM at separation for landing 33,683.5 lb = 15,278 kg; descent propellant 18,184 lb = 8,248 kg (Tbl 9-XIII); ascent propellant 5,238 lb = 2,376 kg (Tbl 9-XIV); RCS 634 lb = 288 kg (Tbl 9-XV). The stage dry masses are implied by the stage totals, not published"
+
+  - id: lm_ascent_stage
+    name: "LM ascent stage alone after the descent stage is left on the surface"
+    crew_aboard: 2
+    crew_in: lm
+    mass_kg: 4888
+    mass_breakdown_total_kg: 4888
+    mass_breakdown:
+      lm_ascent_stage_dry: 2132
+      lm_ascent_propellant: 2376
+      lm_rcs_propellant: 288
+      lm_consumables: 92
+    provenance:
+      basis: historical
+      source: "PSR App C-I: LM ascent stage at liftoff 10,777 lb = 4,888 kg; at jettison 5,463 lb = 2,478 kg, the difference being the ascent propellant burned"
+
+# --------------------------------------------------------------------------------------
+# Propulsion. Loads are flight-measured. The linter flies each engine's burns in phase order
+# against its tank and reports the reserve — see check_propulsion, which has to be
+# sequential because LOI leaves from the 44-tonne docked stack and TEI from an 18-tonne CSM.
+# --------------------------------------------------------------------------------------
+propulsion:
+
+  sps:
+    name: "Service Propulsion System"
+    engine: AJ10-137
+    thrust_n: 91188
+    isp_s: 314.5
+    chamber_pressure_psia: 100
+    throttleable: false
+    qualified_restarts: 50
+    propellant: "N2O4 / Aerozine 50, hypergolic, restartable"
+    pressurant: "helium, 3,600 psia nominal, regulated to 186 psia, engine inlet 165 psia"
+    mass_kg: 18508
+    provenance:
+      basis: historical
+      source: "A11 Tbl 8-X: 40,803 lb loaded (15,712 fuel + 25,091 oxidiser) = 18,508 kg. Thrust 20,500 lbf = 91,188 N (derived: no newton figure is published). Isp 314.5 s and chamber pressure 100 psia from the AJ10-137 report. Qualified for 50 restarts; Apollo 11 made 5 firings totalling 531.9 s"
+  lm_dps:
+    name: "LM Descent Propulsion System"
+    thrust_max_n: 43192
+    thrust_min_n: 4671
+    throttle_ratio: 10
+    isp_s: 305
+    chamber_pressure_psia: 103.4
+    propellant: "N2O4 / Aerozine 50 (2:1), supercritical helium pressurisation regulated to 245 +/- 3 psia"
+    mass_kg: 8248
+    provenance:
+      basis: historical
+      source: "NR and the DPS experience report: 9,710 lbf operating maximum, 1,050 lbf minimum, 10:1 range, with 65-92.5 % a NON-OPERATING region. Isp 305 s is the NASA end-of-duty-cycle design requirement; the 311 s commonly quoted traces only to Wikipedia. Load 18,184 lb = 8,248 kg from A11 Tbl 9-XIII"
+  lm_aps:
+    name: "LM Ascent Propulsion System"
+    thrust_n: 15569
+    isp_s: 309.4
+    chamber_pressure_psia: 122.6
+    throttleable: false
+    propellant: "N2O4 / Aerozine 50, fixed thrust, no throttle"
+    mass_kg: 2376
+    provenance:
+      basis: historical
+      source: "NR and A11 Tbl 9-XII: 3,500 lbf nominal (3,464 predicted / 3,439 measured) = 15,569 N; Isp 309.4 predicted, 308.8 measured; load 5,238 lb = 2,376 kg (Tbl 9-XIV). The ascent engine cannot throttle, which is why an ascent commit is a single irreversible act"
+  rcs_sm:
+    name: "Service Module reaction control"
+    thrusters: 16
+    thrust_n: 445
+    isp_s: 290
+    propellant: "MMH / N2O4"
+    mass_kg: 608
+    minimum_impulse_bit_ns: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "NR: 16 x 100 lbf in 4 quads; load 1,340 lb = 608 kg from A11 Tbl 8-XI. A minimum impulse bit is genuinely not published: a search of the mission report, the summary report and both news references returned zero hits for any impulse-bit or minimum-firing figure"
+  rcs_cm:
+    name: "Command Module reaction control"
+    thrusters: 12
+    thrust_n: 445
+    isp_s: 290
+    propellant: "MMH / N2O4"
+    mass_kg: 112
+    provenance:
+      basis: historical
+      source: "NR: two systems of six thrusters; load 245.9 lb = 112 kg from A11 Tbl 8-XI"
+  rcs_lm:
+    name: "LM reaction control"
+    thrusters: 16
+    thrust_n: 445
+    isp_s: 290
+    propellant: "Aerozine 50 / N2O4 (2:1)"
+    mass_kg: 288
+    minimum_impulse_bit_ns: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "NR: 16 x 100 lbf in 4 clusters of 4; load 634 lb = 288 kg from A11 Tbl 9-XV. apollo_diode.md:143 notes the LM flew thousands of short firings, which is why pulse accounting matters here more than thrust"
+
+# --------------------------------------------------------------------------------------
+# Consumables: the loads the mission starts with. `res.*` is `mission dependent` in apollo
+# (:193-200), so these are the values that make the ledger a real game rather than a
+# placeholder — and the reason `res.time_to_limit_s` can be a number.
+# --------------------------------------------------------------------------------------
+consumables:
+
+  csm:
+    o2_kg: 279
+    h2_kg: 24.5
+    water_potable_kg: 14
+    water_cooling_kg: 13
+    provenance:
+      basis: historical
+      source: "A11 Tbl 8-XII: 615.0 lb O2 (300.5 + 314.5) = 279 kg and 54.1 lb H2 = 24.5 kg loaded; Tbl 8-XIII: 31.7 lb potable + 28 lb waste water loaded. The fuel cells produce a further 315 lb = 143 kg of water, which is why potable water here is a production-and-consumption problem rather than a tank"
+  lm:
+    o2_kg: 24.1
+    water_kg: 137
+    provenance:
+      basis: historical
+      source: "A11 Tbl 9-XVI: 53.2 lb O2 = 24.1 kg (48.2 descent + 5.0 ascent); Tbl 9-XVII: 302.3 lb water = 137 kg (217.5 descent + 84.8 ascent)"
+  metabolic:
+    o2_kg_per_crew_day: 0.91
+    co2_kg_per_crew_day: 0.91
+    water_kg_per_crew_day: 2.27
+    food_kg_per_crew_day: 0.45
+    provenance:
+      basis: historical
+      source: "NR glossary planning rates for a 154 lb man: in about 2 lb O2, 5 lb water and 1 lb food per day; out about 2 lb CO2 and 6 lb water/urea/minerals. apollo_diode.md:754 requires metabolic O2 and CO2 as *rates* — an input, not a model of a person"
+  leak:
+    cabin_leak_kg_per_h_flight: 0.023
+    cabin_leak_kg_per_h_spec: 0.091
+    provenance:
+      basis: historical
+      source: "A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification. Worth stating for the plant: 0.023 kg/h is 0.0064 g/s, BELOW the 0.01 g/s published precision of eclss.leak_rate_g_s. A nominal leak is therefore invisible to the instrument and only a growing one is detectable — the fixed-point dead zone of review-findings.md #1, present in the vehicle itself rather than introduced by the integrator"
+  co2_removal:
+    lm_primary_man_hours: 41
+    lm_secondary_man_hours: 78
+    lm_spares: 6
+    csm_element_man_hours: 72
+    provenance:
+      basis: historical
+      source: "NR and PSR: LM primary cartridge 41 man-hours, secondary 78 man-hours, 6 spares; CSM LiOH elements on a nominal 72 man-hour rotation with the caution at 7.6 mmHg. No kg-CO2-per-canister figure is published anywhere reachable, so capacity is modelled in MAN-HOURS — which is also the denominator eclss.absorber_capacity_pct never had (corpus-review.md §6)"
+
+# --------------------------------------------------------------------------------------
+# Thermal. `thermal_diode.md:965` declares every thermal constant UNSPECIFIED and refuses to
+# infer them, so the loop parameters here come from the ECS reports and the node heat
+# capacities remain the largest single debt in the vehicle.
+# --------------------------------------------------------------------------------------
+thermal:
+
+loops:
+
+    - id: primary
+      fluid: "62.5 % ethylene glycol / 37.5 % water"
+      flow_l_min: [1.3, 1.7]
+      supply_c: [2.8, 7.2]
+      return_c: [5, 15]
+      evaporator_outlet_c: 5.3
+      radiator_inlet_c: [22.8, 23.9]
+      evaporator_actuation_c: 9.4
+      loop_volume_l: 25
+      provenance:
+        basis: historical
+        source: "TN D-6718 and NR ch.14: primary loop 200 lb/hr, about 1.44 L/min of glycol-water and inside apollo's own 1.3-1.7 L/min band; mixed supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range, radiator inlet 73-75 F, evaporator actuating above 49 F. Total coolant mass is NOT published — only a 1 gal reservoir — so loop_volume_l is chosen"
+    - id: secondary
+      fluid: "65 % water / 35 % inhibited ethylene glycol (LM loop)"
+      flow_l_min: [1.5, 1.9]
+      supply_c: [1.7, 12]
+      return_c: [8, 20]
+      coolant_mass_kg: 11.3
+      provenance:
+        basis: historical
+        source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F = -1.7 to 48.9 C"
+radiators:
+
+    - id: csm_radiator
+      panels: 2
+      area_m2: 9.1
+      rejection_w_per_panel: 1294
+      provenance:
+        basis: historical
+        source: "NR and TN D-6718: two panels of about 49 sq ft each, about 4,415 Btu/hr per panel = 1,294 W"
+    - id: csm_evaporator
+      rejection_w: 2345
+      provenance:
+        basis: historical
+        source: "NR: about 8,000 Btu/hr = 2,345 W; the evaporator consumes water, which is why water_cooling is a scored resource"
+    - id: lm_sublimator
+      rejection_w: UNCONFIGURED
+      water_consumption_kg_per_h: UNCONFIGURED
+      provenance:
+        basis: historical
+        source: "the LM sublimator's water consumption rate is NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented: this is half of the thermal water budget"
+zones:
+
+    - id: csm_cabin
+      limit_c: [10, 30]
+      regulated: true
+      dwell_min_s: 30
+      volume_m3: 5.9
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:89"
+        note: "cabin_temp_c events are <10 and >30; NR gives 210 cu ft habitable = 5.9 m3 at 5 psia. Paired thresholds with a minimum dwell are mandatory for a regulated zone (thermal_diode.md:131)"
+    - id: csm_avionics_bay
+      limit_c: [10, 50]
+      regulated: true
+      dwell_min_s: 30
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:105"
+        note: "avionics_plate_c event is >50"
+    - id: csm_service_bay
+      limit_c: [-20, 60]
+      regulated: false
+      provenance:
+        basis: chosen
+        reason: "unregulated in this model; its temperature matters through the propellant and pressurant it contains, which is where the F-09 frozen-line chain lives"
+    - id: lm_cabin
+      limit_c: [10, 32]
+      regulated: true
+      dwell_min_s: 30
+      volume_m3: 6.7
+      provenance:
+        basis: historical
+        source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3 at about 5 psia, roughly 160 cu ft habitable. The limits mirror the CSM cabin's because no source distinguishes them"
+    - id: lm_descent_bay
+      limit_c: [-30, 50]
+      regulated: false
+      provenance:
+        basis: chosen
+        reason: "the descent stage is exposed and unregulated; its thermal state is what the frozen-line chain needs"
+    - id: radiator_loop
+      limit_c: [null, null]
+      regulated: false
+      provenance:
+        basis: chosen
+        reason: "the radiator is an observable with no command interface (simulator-design.md:158): a rejection curve, not a limit"
+
+# --------------------------------------------------------------------------------------
+# Communications. The domain no specification covers — `communcations_diode.md` contains
+# zero occurrences of snr, antenna, pointing, carrier or S-band (conflict register C-14) —
+# so this is authored from apollo_diode.md:161-168, :786-790 and the news references.}}
+#
+# One correction worth its own lines: apollo_diode.md:157 gives "36 W input for the basic
+# S-band transceiver and 72 W input for the S-band power amplifier". Those are ELECTRICAL
+# input powers; the RF outputs are 2.8 W and 11.2 W. Modelling 36 W as radiated power would
+# overstate the link by an order of magnitude while understating the electrical load by the
+# same factor — and the two errors do not cancel, because they appear in different equations.
+# --------------------------------------------------------------------------------------
+comms:
+
+  transmitters:
+    - id: sband_transceiver
+      dc_w: 36
+      rf_w: 2.8
+      provenance:
+        basis: historical
+        source: "apollo_diode.md:157 for the 36 W input; NR ch.18 for the 2.8 W RF output as built, against 5 W in the 1965 SP-87 design"
+    - id: sband_power_amplifier
+      dc_w: 72
+      rf_w: 11.2
+      provenance:
+        basis: historical
+        source: "apollo_diode.md:157 for the 72 W input, NR ch.18 for 11.2 W RF. The 36 W electrical step when this switches on is the triggering load of the degraded chain (apollo_diode.md:1140)"
+    - id: lm_sband_low
+      dc_w: 20
+      rf_w: 0.75
+      provenance:
+        basis: historical
+        source: "PSR: LM S-band 0.75 W low power. The dc_w figure is chosen: no LM transmitter input-power figure was found"
+    - id: lm_sband_high
+      dc_w: 90
+      rf_w: 18.6
+      provenance:
+        basis: historical
+        source: "PSR: LM S-band 18.6 W high power. The dc_w figure is chosen, as above"
+  antennas:
+    - id: high_gain
+      gain_db: 26.7
+      beamwidth_deg: 9.4
+      steerable: true
+      beams:
+        - {id: wide, gain_db: 9.2, beamwidth_deg: 70.4}
+        - {id: medium, gain_db: 20.7, beamwidth_deg: 18.7}
+        - {id: narrow, gain_db: 26.7, beamwidth_deg: 9.4}
+      provenance:
+        basis: historical
+        source: "NR ch.18: four 31-inch parabolas plus an 11-inch horn, transmit gain 9.2/20.7/26.7 dB in wide/medium/narrow beam. The narrow-beam 26.7 dB figure is the one a pointing-error channel is meaningful against"
+        note: >-
+          the gains are sourced and the beamwidths are **derived**, because the first version of
+          this entry carried `beamwidth_deg: 1.0` and that number is not physically possible
+          beside a 26.7 dB gain. Any aperture antenna obeys the gain-beamwidth product
+          `G = 41253 / theta^2` with theta in degrees, so 26.7 dB (467.7 linear) is a 9.4 deg
+          beam — a 1.0 deg beam would need 46 dB. The error was invisible until `domains/comms/`
+          landed, because the beamwidth is what the pointing-error channel and `E-GEOM-LINK` both
+          scale against, and it is the *corrected* figure that makes apollo's own threshold
+          coherent: `apollo_diode.md:163` calls 0-2 deg a good link and warns above 2 deg, and at
+          2 deg off a 9.4 deg beam the quadratic pattern is only 0.54 dB down. Against a 1.0 deg
+          beam the same 2 deg would be 48 dB down, which would make apollo's "good link" range a
+          range in which no link exists
+    - id: omni_a
+      gain_db: 2
+      beamwidth_deg: 180
+      steerable: false
+      provenance:
+        basis: historical
+        source: "NR: four flush omni helices rated 15 W continuous; the individual gain is chosen to a nominal 2 dB"
+        note: "the gain-beamwidth product is meaningless this close to isotropic (it would give 161 deg), so the nominal 180 is kept rather than derived."
+    - id: omni_b
+      gain_db: 2
+      beamwidth_deg: 180
+      steerable: false
+      provenance:
+        basis: historical
+        source: "the second of the four flush omnis, so an antenna selection has a safety-relevant alternative"
+    - id: sband_steerable
+      gain_db: UNCONFIGURED
+      beamwidth_deg: UNCONFIGURED
+      steerable: true
+      vehicle: lm
+      provenance:
+        basis: UNCONFIGURED
+        note: >-
+          the LM's steerable S-band antenna, and the fourth member of the `comm.antenna` enum
+          (`apollo_diode.md:164`) that this block did not declare — the linter now refuses that
+          mismatch, the same discipline the phase and posture vocabularies get. Neither its gain
+          nor its beamwidth is published in any source reached: the LM's S-band is documented by
+          *power* (0.75 W low, 18.6 W high, `transmitters` below) and the antenna itself only as
+          steerable. Both values are owed rather than picked, because a gain invented here would
+          propagate into `E-GEOM-LINK` and from there into every SNR a fleet ever reads
+  rates:
+    - id: low
+      bps: 1600
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:7, :165"
+    - id: high
+      bps: 51200
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:7, :165"
+  vhf:
+    lm_channel_a_mhz: 296.8
+    lm_channel_b_mhz: 259.7
+    csm_transceiver_w: 5
+    provenance:
+
+# --------------------------------------------------------------------------------------
+# Electrical. The fuel-cell reactant rate is the figure that ties the O2 inventory to the
+# bus; apollo_diode.md:780-784 calls that coupling particularly important and it is the spine
+# of the crisis chain.
+# --------------------------------------------------------------------------------------
+electrical:
+
+  fuel_cells:
+    modules: 3
+    power_w_each: 1420
+    bus_v: [27, 31]
+    reactant_sustain_flow_kg_per_h: {o2: 4.72, h2: 0.46}
+    provenance:
+      basis: historical
+      source: "TN D-7142 and NR: three modules at 563-1,420 W each, 27-31 V dc, cryogenic O2 and H2. NR p.110 gives tank-sustain flows of 10.4 lb O2/hr and 1.02 lb H2/hr total = 4.72 and 0.46 kg/h. Apollo 11 produced about 393 kWh over 195 h at an average 68.7 A on a 29.4 V CM bus, a 2.02 kW average load (derived). A kg-per-kWh reactant figure is NOT published"
+  batteries:
+    csm_entry:
+      count: 3
+      ah: 40
+      chemistry: "silver-oxide/zinc"
+      open_circuit_v: 37.2
+      min_loaded_v: 27
+      mass_kg_each: 12.7
+      provenance:
+        basis: historical
+        source: "NR and PSR: 3 x 40 Ah rated, 20 cells, 28 lb each. From Apollo 14 the SM carried a 400 Ah (12 kWh) auxiliary battery — the change Apollo 13 forced"
+    lm_ascent:
+      count: 2
+      ah: 296
+      v: 28
+      mass_kg_each: 56.7
+      provenance:
+        basis: historical
+        source: "NR: 2 x 296 Ah at 28 V, 50 A for 5.9 h, 125 lb each"
+    lm_descent:
+      count: 4
+      ah: 400
+      v: 28
+      mass_kg_each: 61.2
+      provenance:
+        basis: historical
+        source: "NR and PSR: 4 x 400 Ah on Apollo 11, 5 x 415 Ah from Apollo 15, 135 lb each. Apollo 11's descent batteries delivered 1,055 Ah of a nominal 1,600 Ah"
+    note: "The LM has no fuel cells; its batteries are the sole power source (PSR, NR equipment list). That is what makes LM power a countdown rather than a budget, and it is the constraint that turns the crisis posture into a resource-allocation problem."
+open_debts:
+
+  - "Inertia tensor and centre of mass per configuration. The Apollo 11 mission report tabulates c.g. and inertia per mission phase, but the axis datum lives in the CSM/LM Operational Data Book (SNA-8-D-027), which is not reachable, so the tabulated values cannot be converted to physical offsets. rcs_diode.md:119-121 names both as Unknown and says what they block: attitude gains, achievable angular acceleration, the allocator, the thruster torque-arm matrix. Until they exist E-RCS-DYN is UNCONFIGURED and the vehicle cannot tumble."
+  - "Node heat capacities and conductances for the six thermal zones. thermal_diode.md:965 declares every thermal constant UNSPECIFIED and refuses to infer them; without them the thermal edges have no tau and the thermal domain cannot be integrated. This is the largest single debt in the vehicle."
+  - "LM sublimator rejection capacity and water consumption rate: genuinely unpublished, and it is half of the thermal water budget."
+  - "Minimum impulse bit and minimum qualified firing time for all three RCS systems: not published in any source reached. The 4 ms figure in rcs_diode.md:91 is a Voyager anecdote its own text flags as hardware-specific, so it is not adopted. `domains/rcs/` bounds the consequence instead of filling the hole: rcs_diode.md:800-825's residual accumulator preserves mean delivered impulse whatever the constant is, so the error is unbounded in *phase* and zero in *mean* — and RCS-11 names the one case that is not benign, where the accumulator grows and the thruster silently stops complying."
+  - "Thruster geometry for the forty-four RCS thrusters: each unit thrust direction and lever arm from the centre of mass. rcs_diode.md:685-693 builds the allocator's wrench matrix B from them, so without them E-GNC-RCS has no sensitivity, the allocator cannot select jets, and the deadband has no derivation."
+  - "Fuel-cell reactant consumption per kWh: not published. The sustain-flow figure here is a standby rate rather than a per-kilowatt rate, so the O2-to-power coupling cannot yet be closed exactly."
+  - "Retrograde and ullage motor behaviour, and the LM descent engine's 65-92.5 % non-operating region: both named in the sources and neither yet modelled. The non-operating region matters because it makes a throttle command between 65 % and 92.5 % impossible rather than merely unwise."

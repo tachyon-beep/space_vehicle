@@ -1,0 +1,218 @@
+# domains/eclss/commands.yaml — the life-support verbs.
+#
+# apollo's four (``set_o2_source``, ``set_cabin_regulator``, ``set_suit_loop``, ``set_suit_fan``,
+# ``set_absorber_path``, ``set_vent_valve``) with two of them reassigned, because the corpus and
+# the design between them left the ownership ambiguous and an ambiguous verb is a verb two
+# domains implement differently.
+#
+# ## The reassignment, and why it is the useful part of this file
+#
+# `set_absorber_path` was written into `domains/consumables/` in round 4. It belongs here. The
+# reason is the distinction that runs through the whole vehicle: **consumables owns the stock and
+# ECLSS owns the air.** The absorber's capacity is a resource — it is consumed, it has a
+# reserve floor, and an agent plans against it — but the *path* is a routing decision about cabin
+# air, and the verb that makes it belongs to the domain that models the air. Leaving it in
+# consumables would have meant a resource domain with an opinion about ducting.
+#
+# `set_o2_source` stays in consumables for the mirror-image reason: which tank to spend is a
+# resource decision, and this domain's `set_o2_flow` decides how fast to spend it. Two verbs, two
+# questions, and a fleet that has to think about which one it is asking.
+
+domain: eclss
+commands:
+  - verb: set_o2_flow
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      flow:
+        type: enum
+        values: [off, low, nominal, high]
+    authority: A2
+    gate:
+      kind: preference
+      variable: o2_flow_<vehicle>_enable
+    interlocks: [cabin_pressure_high, o2_supply_low, ppo2_fire_risk]
+    conflict_domain: eclss.<vehicle>.o2_flow
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Set the rate at which oxygen enters the cabin. A band rather than a rate because the
+      regulator owns the rate; what an agent chooses is how hard the system works to hold the
+      cabin, and the difference matters most during a leak — the fastest setting is the right
+      answer for a leak and the wrong one for a fire.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: "apollo lists set_o2_source; the flow band is split out here because source selection is a resource decision that lives in the consumables domain and delivery rate is an atmosphere decision that lives here"
+
+  - verb: set_cabin_regulator
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      mode:
+        type: enum
+        values: [closed, primary, emergency, isolated]
+    authority: A2
+    gate:
+      kind: preference
+      variable: regulator_<vehicle>_mode_enable
+    interlocks: [cabin_pressure_emergency, ppo2_fire_risk]
+    conflict_domain: eclss.<vehicle>.regulator
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Select the cabin pressure regulator. `emergency` holds the cabin above 3.5 psia for as long
+      as the supply lasts, which is a deliberate trade of oxygen for minutes; `isolated` closes
+      the cabin to its supply, which is the right answer to a supply-side contamination and the
+      wrong answer to a leak.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:84, :95"
+      note: "apollo's three modes plus closed. The emergency regulator's published job — keeping the cabin above 3.5 psia long enough to don suits — is the clearest statement in the corpus of what a life-support verb is for"
+
+  - verb: set_absorber_path
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      path:
+        type: enum
+        values: [primary, secondary, both, bypass]
+    authority: A2
+    gate:
+      kind: preference
+      variable: absorber_<vehicle>_<path>_enable
+    interlocks: [co2_absorber_low, co2_caution]
+    conflict_domain: eclss.<vehicle>.absorber
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Route cabin air through a lithium-hydroxide path. With capacity denominated in man-hours
+      (vehicle.yaml#consumables) spending the secondary cartridge before the primary is a real
+      choice with a real cost — and one a fleet may regret, which is the kind of decision this
+      vehicle exists to present.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: "MOVED here from the consumables domain in round 6. Consumables owns the stock; ECLSS owns the air. A resource domain with an opinion about ducting is how one verb ends up with two argument schemas."
+
+  - verb: set_suit_loop
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      loop:
+        type: enum
+        values: [cabin, suit, mixed]
+    authority: A2
+    gate:
+      kind: preference
+      variable: suit_loop_<vehicle>_enable
+    interlocks: [suit_loop_flow_low, cabin_pressure_emergency]
+    conflict_domain: eclss.<vehicle>.suit_loop
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Select whether the atmosphere circuit serves the cabin or the suits. It is the verb a crew
+      reach for during a decompression and it has a thirty-second queue age rather than sixty,
+      because the sequence — close the regulator, go to suit loop, don suits — is the one
+      procedure on this vehicle whose timing is measured in seconds.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: "apollo's set_suit_loop and set_suit_fan"
+
+  - verb: set_suit_fan
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      state:
+        type: enum
+        values: [on, off]
+    authority: A2
+    gate:
+      kind: preference
+      variable: suit_fan_<vehicle>_enable
+    interlocks: [suit_loop_flow_low]
+    conflict_domain: eclss.<vehicle>.suit_fan
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Run the suit-circuit fan. It is an 85 W load on a bus that may be sagging, so switching it
+      on during a power emergency is a decision with both an atmosphere and an electrical
+      consequence — and the two domains disagree about which matters more.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: "the fan is also a real electrical load (vehicle.yaml#electrical's csm_suit_fan at 85 W), which makes this the cleanest example on the vehicle of one command with consequences in two domains"
+
+  - verb: set_vent_valve
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      state:
+        type: enum
+        values: [closed, vent, repress]
+    authority: A2
+    gate:
+      kind: preference
+      variable: vent_<vehicle>_enable
+    interlocks: [cabin_pressure_emergency, structure.hatch_open_with_pressure]
+    conflict_domain: eclss.<vehicle>.vent
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 10
+    help: >-
+      Vent or repressurise the cabin. Ten seconds of queue age, the shortest on the vehicle for a
+      configuration verb: an open vent is a decision whose whole consequence arrives inside the
+      time a stale command would take to land.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: >-
+        apollo lists set_vent_valve. It is modelled here even though repressurisation and
+        depressurisation are a declared gap in the atmosphere model, because a verb the fleet can
+        issue and the vehicle cannot honour is a worse artifact than a verb with an unmodelled
+        consequence — and the gap is written down in components.yaml#open_debts.
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+  - verb: set_absorber_capacity
+    why: >-
+      the beds hold what they hold. A verb that replenished them would be a verb that created
+      matter, and the interesting question — how long can the surface stay be extended — is
+      answered by how much capacity the vehicle brought.
+  - verb: set_cabin_pressure
+    why: >-
+      there is no such control on a real vehicle and there should not be one here. The cabin's
+      pressure is what the regulator's mode and the leak rate make it; a verb that set it
+      directly would delete the leak from the causality and leave only the display.

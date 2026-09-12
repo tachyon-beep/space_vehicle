@@ -1,0 +1,106 @@
+# domains/consumables/points.yaml — what the resource model publishes, and why the ledger is
+# three channels rather than one number.
+#
+# The organising rule of this file is `consumables_diode.md:55-65`: an accounting model
+# predicts, an instrument observes, and the difference between them **is the measurement**. So
+# every stock that has both publishes both, plus the residual, and a stock that has only one
+# publishes only one and says so. A residual computed against the ledger itself would always
+# read zero, which looks exactly like perfect agreement and is exactly the opposite.
+
+domain: consumables
+points:
+  - channel: res.o2_remaining_kg
+    from: o2_csm_kg
+    layer: estimate
+    derivation: "the observer's inference from tank pressure and temperature, not the ledger"
+    note: >-
+      apollo marks the whole `res.*` family as inferred rather than measured
+      (`apollo_diode.md:189-200`), and the reason is historical: an Apollo quantity had to be
+      inferred from pressure and temperature behaviour rather than read from a mass sensor.
+      Publishing the tank's true contents here would delete the inference the experiment is
+      built on.
+  - channel: res.h2_remaining_kg
+    from: h2_csm_kg
+    layer: estimate
+    derivation: "as o2_remaining_kg, from the hydrogen tank's pressure and temperature"
+  - channel: res.water_potable_kg
+    from: water_potable_kg
+    layer: estimate
+    derivation: "tank quantity where a sensor exists, and the ledger alone where it does not"
+    note: "apollo's own annotation for this channel is 'I/A depending sensor' — the honest description of a resource that may have no instrument at all"
+  - channel: res.water_cooling_kg
+    from: water_cooling_kg
+    layer: estimate
+    derivation: "as water_potable_kg; the evaporator's feed tank"
+  - channel: res.main_propellant_kg
+    from: prop_main_kg
+    layer: estimate
+    derivation: "inferred from tank pressure and temperature"
+    note: "the residual on this channel is the highest-value number in the vehicle: a main propellant ledger that has drifted from its sensor is either a leak, a burn that did not happen, or an accounting error, and telling those apart is the work"
+  - channel: res.rcs_propellant_kg
+    from: prop_rcs_kg
+    layer: estimate
+    derivation: "inferred from feed pressure and accumulated impulse"
+  - channel: res.battery_energy_wh
+    from: battery_energy
+    layer: estimate
+    derivation: "the power domain's battery stock, published here as a resource so that one time-to-limit covers every consumable"
+    note: "read from the power domain, not owned by this one. The state-to-node contract makes that explicit: `battery_energy` is in this domain's `reads`, not its `writes`."
+  - channel: "res.ledger_[resource]_kg"
+    from: prop_main_kg
+    layer: estimate
+    derivation: "the accounting model's own prediction: opening balance, plus production, minus every charged draw, minus declared loss"
+    note: >-
+      Published as its own channel because the residual is only evidence if both of its terms
+      are visible. An agent that sees a residual without the ledger cannot tell whether the
+      tank is lower than expected or the expectation is wrong.
+  - channel: "res.recon_[resource]_kg"
+    from: prop_main_kg
+    layer: estimate
+    derivation: "observed minus ledger"
+    note: >-
+      The residual, published as evidence and never reconciled silently. It is how a slow leak
+      first becomes visible — the leak is far below any sensor's precision long before it is
+      above any threshold, and the ledger is the only thing with the resolution to notice.
+      A `RECONCILIATION_MISMATCH` event fires when it exceeds the resource's tolerance.
+  - channel: "res.status_[resource]"
+    from: prop_main_kg
+    layer: service
+    derivation: "the resource's state machine position: NORMAL, WATCH, RESTRICTED, CRITICAL, EXHAUSTED, UNKNOWN or UNCONFIGURED"
+    note: >-
+      `UNCONFIGURED` is the fail-safe state, and it is the corpus's own idea
+      (`consumables_diode.md:284`): a missing limit or missing evidence must not resolve to a
+      fabricated typical value. It is the same rule as `thermal_diode.md:31`, arrived at
+      independently in a different domain, which is the strongest evidence in the corpus that
+      the rule is right.
+  - channel: res.time_to_limit_s
+    from: prop_main_kg
+    layer: estimate
+    inputs: [res.o2_remaining_kg, res.water_potable_kg, res.battery_energy_wh, res.main_propellant_kg]
+    derivation: "the minimum over every stock of (usable quantity / current net consumption rate), and null for any stock that is not depleting"
+    note: >-
+      Apollo's `res.time_to_limit_s` at 0.1 Hz, and the single most useful inferred quantity in
+      the vehicle. `consumables_diode.md:641-647` adds the rule that makes it honest: a
+      non-depleting resource returns **null rather than infinity**, because a large number
+      gets compared and a null cannot.
+
+not_published:
+
+  - channel: ["res.reserved_[resource]_kg", "res.allocated_[resource]_kg", "res.committed_[resource]_kg", "res.available_to_new_[resource]_kg"]
+    why: >-
+      DELIBERATELY ABSENT, and this is the most important line in the file. D-04 declines the
+      claims lifecycle because reservations are a deconfliction primitive the world must not
+      supply (simulator-design.md:254-257, design.md §8). The corpus's schema makes all four
+      of them *required* fields, and `available_to_new` is the aggregate every other agent's
+      claims leave behind — publishing it would hand the fleet, through the back door, exactly
+      the coordination mechanism the mission exists to make them invent. Declining the feature
+      without stripping the fields would have been a decline in name only.
+  - channel: "res.true_[resource]_kg"
+    why: "hidden truth by definition; the ledger pair exists so that the difference between belief and measurement is the observable, not so that the truth can be read"
+  - channel: "res.forecast_[resource]_kg"
+    why: >-
+      the forecast at a planning horizon is a real quantity in the corpus
+      (`consumables_diode.md:279`), and it is deliberately not published yet: with the
+      consumption rates for the fuel cell and the pressurant regulator still unset, a forecast
+      would be a number derived from an unset number wearing the authority of a channel.
+      Declared for later rather than published hollow.

@@ -1,0 +1,3366 @@
+#!/usr/bin/env python3
+"""The vehicle linter: the thing that says whether the vehicle definition composes.
+
+Why this exists
+---------------
+A vehicle definition assembled from twelve documents that disagree is not a
+configuration file, it is a negotiation. `simulator-design.md:141-150` specifies what
+the linter must refuse a build for; `thermal_diode.md:1013` specifies it for one domain
+and `thermal_diode.md:29` states the rule that generalises: *a value that is needed and
+unset fails the build, loudly, naming what wants it.* The point is not to validate a
+schema. The point is that you do not enumerate what the simulator needs up front — you
+add a domain, run the linter, and it tells you what you now owe it. The config is a
+conversation with the linter, not a form.
+
+What it refuses
+---------------
+  * a value that is needed and unset            (reported as DEBT, fatal under --strict)
+  * a name that is not in the canonical vocabulary   (V-01 .. V-08)
+  * a channel referenced but not registered
+  * a channel registered twice, or under another domain's prefix
+  * an edge, cycle or chain that refers to something that does not exist
+  * a cycle that does not say which edge is the back-edge, or that carries a delay
+    without declaring one
+  * a conservation edge whose two ends are in different dimensions
+  * a `chosen` value with no reason, or a `derived` value with no inputs
+  * a `conserve`-class edge that is not one of the kinds the scheduler knows how to run
+
+Exit codes
+----------
+  0  composes, or has debts and was not run --strict
+  1  refused: something is wrong, not merely missing
+  2  --strict and there are unfilled debts
+  3  the vehicle directory or a file could not be read
+
+Usage
+-----
+    python3 tools/check_vehicle.py                 # report
+    python3 tools/check_vehicle.py --strict        # fail on debt too (CI, and before a run)
+    python3 tools/check_vehicle.py --dir ../vehicle
+
+The reasoning lives in comments rather than in a separate document, matching the
+convention of the operator-side services this project already has.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import re
+import sys
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - exercised only where PyYAML is absent
+    sys.stderr.write(
+        "check_vehicle.py needs PyYAML to read the vehicle definition.\n"
+        "It is deliberately not a dependency of the operator-side services.\n"
+    )
+    raise SystemExit(3) from None
+
+# --------------------------------------------------------------------------------------
+# The canonical vocabulary. These are the only values a domain may use, and they are
+# duplicated here from reconciliation/02-canonical-vocabulary.md on purpose: the linter
+# has to be able to refuse a build without a document parser, and a vocabulary that lives
+# in one place is a vocabulary that gets forked.
+# --------------------------------------------------------------------------------------
+DOMAINS = {
+    "power",
+    "eclss",
+    "thermal",
+    "gnc",
+    "propulsion",
+    "rcs",
+    "comms",
+    "consumables",
+    "avionics",
+    "structure",
+    "crew",
+    "mission",
+}
+# A domain's name and its channel prefix are different namespaces on purpose: apollo's
+# twelve operational domains are the names (apollo_diode.md:20), and the channel prefixes
+# are the abbreviations its catalogue actually uses. Declaring the mapping here is what
+# stops `propulsion` and `prop` from becoming two domains, which is how the corpus ended up
+# with eight names for one uplink.
+DOMAIN_PREFIX = {
+    "power": "power",
+    "eclss": "eclss",
+    "thermal": "thermal",
+    "gnc": "gnc",
+    "propulsion": "prop",
+    "rcs": "rcs",
+    "comms": "comm",
+    "consumables": "res",
+    "avionics": "avionics",
+    "structure": "structure",
+    "crew": "cw",
+    "mission": "mission",
+}
+# The crew domain spans three id prefixes because apollo's own table names them that way
+# (apollo_diode.md:224-227): crew-facing controls and crew state are not `cw.*` channels.
+SECTION_EXTRA_PREFIXES = {"crew": ("controls.", "crew.")}
+# The inverse of DOMAIN_PREFIX, so a reference into another domain can be qualified by either
+# name. `thermal.pump_dry_run` in the vocabulary's own example is a directory name; a channel
+# prefix is what an agent reading the telemetry would have in front of it.
+PREFIX_DOMAIN = {prefix: domain for domain, prefix in DOMAIN_PREFIX.items()}
+# `executive` and `window` are not operational domains, but they are real nodes: the
+# command executive is the only edge class originating outside the plant, and the window
+# is a sink that is never read back.
+NON_DOMAIN_NODE_DOMAINS = {"executive", "window"}
+NODE_KINDS = {"stock", "flow", "state", "discrete", "service", "sink"}
+EDGE_KINDS = {"conserve", "rate", "algebraic", "lag", "accumulate", "discrete", "delay"}
+
+# `02-canonical-vocabulary.md` §9b's union, and §10 has promised it since it was written: "**a code
+# not in the union** — a quality, kind, severity, lifecycle state or priority that is not one of
+# the above". There was no union for a fault's `kind`, so the field was free text and drifted into
+# eleven values across the 118 entries. `latent` merged into `latent_then_acute` because PWR-05 and
+# PWR-06 are the same welded contactor in two directions and PWR-06's own mechanism text says
+# "unavailable when it is needed"; `continuous` renamed to `sustained` because the six entries
+# behind it do not drift — a hot amplifier is a persistent condition, not a trend — and because
+# `continuous` is already `plant.md` §3's name for an integrator class.
+FAULT_KINDS = {
+    "discrete",
+    "instrument",
+    "continuous_degradation",
+    "latent_then_acute",
+    "sustained",
+    "emergent",
+    "transient",
+    "accounting",
+    "procedural",
+    "environmental",
+}
+# Who acts, and it is the field that decides whether a fault is a decision or a protection. The
+# split is `electrical_diode.md:845`'s: "a local LCL does not ask whether a dead short should be
+# disconnected". A `service` response acts without asking and therefore owes a note saying what it
+# did; an `advisory` one asks, and the note is where the asking is explained when it needs to be.
+FAULT_RESPONSES = {"service", "advisory"}
+
+# `02-canonical-vocabulary.md` §6's ladder, which V-04 fixes: four annunciated levels and one
+# non-annunciated record class. `INFO` is in the union because a record exists; it is not a level a
+# panel lights at, and the distinction is the reason the ladder has five members and four rungs.
+SEVERITIES = {"EMERGENCY", "WARNING", "CAUTION", "ADVISORY", "INFO"}
+# A fault has to say how it can occur at all, and there are exactly three forms in the corpus: a
+# hazard rate over mission time, a probability conditional on a trigger, and a coupling to another
+# condition. The block also carries the fault's *magnitude* — 26 distinct keys across the 118 — and
+# that half is deliberately not a union: a bias walk and a leak rate are different quantities and
+# forcing them into one schema would be a schema about nothing.
+SEEDING_FORMS = ("hazard", "on_demand_p", "coupled_to")
+
+# A domain lands as five files (simulator-design.md:128-134). `components.yaml` also carries
+# the declaration the scheduler reads, so the factoring stays at five rather than growing a
+# sixth file that only the tooling looks at.
+DOMAIN_FILES = (
+    "components.yaml",
+    "points.yaml",
+    "profiles.yaml",
+    "commands.yaml",
+    "fault_policy.yaml",
+)
+# The integrator classes of plant.md §3, chosen by model form rather than by rate. The set
+# grew from six to seven when the first delay element landed: a transport delay is not a
+# lag, and the linter refused the state by name rather than letting it default.
+METHODS = {"algebraic", "lag", "stock", "delay", "dynamics", "discrete", "hazard"}
+# S0 is the service-owned safety kernel; A0..A3 are the agent ladder (vocabulary V-08).
+AUTHORITIES = {"S0", "A0", "A1", "A2", "A3"}
+# The eleven domains the corpus has specifications for, so the linter can name what is still
+# owed rather than silently passing a vehicle with one domain in it.
+EXPECTED_DOMAINS = {
+    "power",
+    "eclss",
+    "thermal",
+    "gnc",
+    "propulsion",
+    "rcs",
+    "comms",
+    "consumables",
+    "avionics",
+    "structure",
+    "crew",
+}
+# Four classes, and a fifth that the design did not anticipate. `historical` exists because
+# the corpus contains no mass, no thrust and no Isp (corpus-review.md §3), so the figures
+# that make this a vehicle at all come from published sources about the real one. Marking
+# them `chosen` would hide that they are checkable; marking them `apollo` would be a lie.
+BASES = {"apollo", "historical", "derived", "chosen", "UNCONFIGURED"}
+LAYERS = {"measurement", "estimate", "service"}
+PRIORITIES = {"P0", "P1", "P2", "P3", "P4", "P5"}
+QUALITY_CODES = {
+    "GOOD",
+    "SUSPECT",
+    "STALE",
+    "SATURATED",
+    "OUT_OF_RANGE",
+    "INVALID",
+    "UNKNOWN",
+    "SUBSTITUTED",
+}
+KINDS = {"MEASUREMENT", "ESTIMATE", "COMMAND_ECHO", "SERVICE_STATE", "SIMULATED"}
+SEVERITIES = {"EMERGENCY", "WARNING", "CAUTION", "ADVISORY", "INFO"}
+
+# Names the corpus uses that this vehicle does not. A domain ported from a spec will
+# arrive speaking one of these; the linter's job is to say so by name rather than let a
+# second dialect into the dictionary. `SUPERSEDED` is absent on purpose: the canonical
+# refusal is CONFLICT_SUPERSEDED, which says who lost and why.
+REJECTED = {
+    "REVALIDATED": "REVALIDATING (transient) — electrical_diode.md:424 makes the same word terminal",
+    "COMPLETED": "SUCCEEDED — gnc_diode.md:1526",
+    "AUTHORIZED": "VALIDATED — electrical_diode.md:424",
+    "AUTHENTICATED": "VALIDATED — rcs_diode.md:406",
+    "ESTIMATED": "not a quality; use kind: ESTIMATE — eclss_diode.md:289 against :64",
+    "DEGRADED": "not a quality; it is a subsystem mode",
+    "FAULT": "not a quality; it is a conclusion (design.md:211-214)",
+    "TEST": "kind: SIMULATED, or injected: true — crew_diode.md / rcs_diode.md:207",
+    "TEST_INJECTED": "kind: SIMULATED, or injected: true — rcs_diode.md:207",
+    "SIMULATED": "not a quality; use kind: SIMULATED — communcations_diode.md:329",
+    "CRITICAL": "EMERGENCY or WARNING — events_diode.md:198, avionics_diode.md:516",
+    "ATT_HOLD": "a target, not a mode — rcs_diode.md:365",
+    "TRACK": "a target, not a mode — rcs_diode.md:365",
+}
+
+# Verbs this vehicle must not have, as patterns rather than as a list of names. `rcs_dode.md:369-380`
+# enumerates the forms that would put an external agent inside the stability or
+# propulsion-safety loop, and the enumeration is not the point — what matters is that no domain can
+# *acquire* one later by writing a plausible-looking verb. The same reasoning as FORBIDDEN_CHANNEL
+# (D-04): declining a capability while permitting its name is a decline in name only. Each pattern
+# carries its reason, because a future author who trips this is about to rediscover why the
+# boundary is where it is.
+FORBIDDEN_VERB = {
+    r"^(fire|pulse|open|close)_(thruster|valve|jet|engine)": (
+        "valve- and thruster-level actuation: `rcs_dode.md:369` and the architectural claim at "
+        "`:9`. An agent that names a thruster and a duration is inside the control loop"
+    ),
+    r"^set_minimum_(pulse|firing|impulse)": (
+        "the qualified minimum firing time is a hardware constant (`rcs_dode.md:375`); a verb that "
+        "set it would let a fleet choose how finely it may command illegal pulses"
+    ),
+    r"^(set|write|force)_(sensor|quality|body_rate|prop_mass|nav_state|attitude_state)": (
+        "measurement integrity: an agent-writable estimate or quality code is a channel through "
+        "which the thing the code exists to withhold can be asserted (`rcs_dode.md:371-373`, "
+        "`simulator-design.md:496-508`)"
+    ),
+    r"^(disable|bypass|override)_(fdir|watchdog|limit|interlock|monitor|plume|keep_out)": (
+        "every FDIR function and hard limit on this vehicle is S0 and none is agent-writable "
+        "(`rcs_dode.md:370`, `:376`, `:380`). A verb that could switch a protection off makes the "
+        "protection's silence ambiguous"
+    ),
+    r"^(write|set)_(controller_)?gain": (
+        "gains are profile data selected by signed ID, never numbers an agent supplies "
+        "(`rcs_dode.md:379`, D-05)"
+    ),
+    r"^clear_fault": (
+        "a latched conclusion is cleared through a recovery-checked verb and never by assertion "
+        "(`rcs_dode.md:374`, `:379`)"
+    ),
+    r"^(request_)?momentum_(dump|unload)": (
+        "no reaction wheels, no CMGs and no magnetorquers on this vehicle (C-15, "
+        "`apollo_diode.md:52`, `:147-153`) — the verb would control nothing"
+    ),
+}
+
+# A partial dimensional map. It covers the units this vehicle actually uses. The check it
+# supports is deliberately conservative: a conserve edge whose ends are in two *known* and
+# *different* dimensions is refused, and anything compound or unknown is skipped with a
+# note, because a linter that cries wolf is a linter that gets bypassed.
+DIMENSION = {
+    "kg": "mass",
+    "g": "mass",
+    "kg_CO2": "mass",
+    "kg/s": "mass_flow",
+    "g/s": "mass_flow",
+    "L/min": "volume_flow",
+    "ft3/min": "volume_flow",
+    "V": "voltage",
+    "A": "current",
+    "W": "power",
+    "J": "energy",
+    "Wh": "energy",
+    "N": "force",
+    "N*s": "impulse",
+    "K": "temperature",
+    "degC": "temperature",
+    "Pa": "pressure",
+    "psi": "pressure",
+    "psia": "pressure",
+    "mmHg": "pressure",
+    "m": "length",
+    "km": "length",
+    "m/s": "speed",
+    "deg": "angle",
+    "deg/s": "angular_rate",
+    "ms": "time",
+    "s": "time",
+    "bit/s": "data_rate",
+    "count/s": "rate",
+    "count": "count",
+    "dB": "ratio",
+    "%": "ratio",
+    "dimensionless": "ratio",
+    "enum": "discrete",
+    "bool": "discrete",
+    "code": "discrete",
+}
+
+# Names the vehicle must never publish. D-04 declines the claims lifecycle because a published
+# reservation is a deconfliction primitive, and `design.md` §8 refuses to supply one: ten agents
+# flying one vehicle have to invent deconfliction, and a vehicle that hands them a reservation
+# table has answered the mission's first question for them. The corpus's own schema makes
+# `reserved`, `allocated`, `committed` and `available_to_new` *required* fields, so declining
+# the feature without forbidding the fields would be a decline in name only. This is the check
+# that keeps it a decline in fact.
+FORBIDDEN_CHANNEL = re.compile(
+    r"\.(reserved|allocated|committed|available_to_new|claim|claims|reservation)(\b|_)"
+)
+
+TEMPLATE = re.compile(r"\[[^\]]*\]")
+
+
+class ChannelIndex:
+    """Resolves a channel name against the registry, templates included.
+
+    `power.lcl_[n]_state` in the registry has to answer for `power.lcl_1_state` in a domain,
+    and `res.recon_[resource]_kg` for `res.recon_o2_kg`. Comparing normalised strings does not
+    do that — it maps the template to `res.recon_[]_kg` and leaves the concrete name alone — so
+    the registry is compiled to patterns instead: every `[...]` becomes a wildcard that must
+    match at least one character. A registry entry with no brackets compiles to itself.
+    """
+
+    def __init__(self, registry: Iterable[str] | dict[str, dict[str, Any]]) -> None:
+        self.rows = registry if isinstance(registry, dict) else {name: {} for name in registry}
+        self.patterns = [self._compile(name) for name in self.rows]
+        # **A known weakness, recorded rather than depended on.** `_compile` turns `[...]` into
+        # `.+?`, which is unbounded, so a template matches names that merely *end* with its literal
+        # tail: `thermal.zone_1_true_t_c` resolves against the registry's `thermal.zone_[id]_t_c`,
+        # with the wildcard absorbing `1_true`. The same over-permissiveness means
+        # `power.lcl_1_old_state` resolves to `power.lcl_[n]_state`'s row, so "is this a registered
+        # channel" is a weaker question than it looks. It was found by a `not_published` entry that
+        # was correctly withheld and wrongly reported as registered. Bounding the wildcard is not
+        # the fix and cannot be: `[resource]` has to match `water_cooling`, so a placeholder may
+        # contain underscores, and then `[id]` matching `1_true` is not distinguishable from
+        # `[id]` matching `csm_cabin`. The real fix is to declare each template's instantiations in
+        # the registry rather than inferring them, which is a decision about the registry's shape
+        # and is recorded where that decision belongs — `channels.yaml`'s own debt list.
+
+    @staticmethod
+    def _compile(channel: str) -> re.Pattern[str]:
+        parts = TEMPLATE.split(channel)
+        return re.compile(".+?".join(re.escape(part) for part in parts))
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and any(p.fullmatch(name) for p in self.patterns)
+
+    def row(self, name: str) -> dict[str, Any] | None:
+        """The registry entry a concrete channel name resolves to, template included.
+
+        `power.lcl_1_current_a` has to answer with `power.lcl_[n]_current_a`'s row, because a
+        domain is allowed to name the concrete point while the registry holds the template.
+        """
+        for row, pattern in zip(self.rows.values(), self.patterns, strict=False):
+            if pattern.fullmatch(name):
+                return row
+        return None
+
+    def normalised(self) -> set[str]:
+        """The template forms, for messages that want to say what the registry does hold."""
+        return {TEMPLATE.sub("[]", p.pattern.replace("\\", "")) for p in self.patterns}
+
+
+class Report:
+    """Collects refusals, debts and notes so the whole build is reported in one pass."""
+
+    def __init__(self) -> None:
+        self.refusals: list[str] = []
+        self.debts: list[str] = []
+        self.notes: list[str] = []
+
+    def refuse(self, where: str, why: str) -> None:
+        self.refusals.append(f"{where}: {why}")
+
+    def debt(self, where: str, why: str) -> None:
+        self.debts.append(f"{where}: {why}")
+
+    def note(self, where: str, why: str) -> None:
+        self.notes.append(f"{where}: {why}")
+
+    def print(self) -> None:
+        for title, rows in (
+            ("REFUSED", self.refusals),
+            ("OWED (a value that is needed and unset)", self.debts),
+            ("notes", self.notes),
+        ):
+            if not rows:
+                continue
+            print(f"\n{title} — {len(rows)}")
+            for row in rows:
+                print(f"  - {row}")
+
+
+def duplicate_keys(text: str) -> list[tuple[int, str]]:
+    """Every mapping key written twice in one mapping, with the line of the second.
+
+    PyYAML accepts a duplicate key and lets the last one win, which makes this the quietest
+    structural fault in the format. It is also the *signature* of the fault this repository has
+    now made three times: a block scalar's content is indented to the same depth as a list item
+    that follows it, so the item is absorbed into the prose, its keys become keys of the entry
+    above it, and where those collide the earlier value is silently replaced. The YAML still
+    parses, the linter still composes, and what was lost is a cycle's back-edge, a point entry, or
+    a threshold's hysteresis.
+
+    Nothing is ever written twice on purpose in these files, so a duplicate is always a fault and
+    the check needs no exceptions. It found 49 of them across five files.
+    """
+    try:
+        document = yaml.compose(text)
+    except yaml.YAMLError:
+        return []  # the parse refusal is `load`'s, and it names the line better
+    found: list[tuple[int, str]] = []
+
+    def walk(node: Any, trail: str = "") -> None:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[str] = set()
+            for key, value in node.value:
+                name = str(key.value)
+                if name in seen:
+                    found.append((key.start_mark.line + 1, f"{trail}.{name}".lstrip(".")))
+                seen.add(name)
+                walk(value, f"{trail}.{name}")
+        elif isinstance(node, yaml.SequenceNode):
+            for index, value in enumerate(node.value):
+                walk(value, f"{trail}[{index}]")
+
+    walk(document)
+    return found
+
+
+def load(path: Path, report: Report) -> dict[str, Any] | None:
+    if not path.exists():
+        report.refuse(path.name, "not present")
+        return None
+    text = path.read_text()
+    for line, trail in duplicate_keys(text):
+        report.refuse(
+            f"{path.name}:{line}",
+            f"writes {trail!r} a second time in the same mapping. The last one wins and the first "
+            "is silently replaced, which is how an absorbed list item destroys the entry above it",
+        )
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:  # a config that does not parse is not a config
+        report.refuse(path.name, f"does not parse: {exc}")
+        return None
+    if not isinstance(data, dict):
+        report.refuse(path.name, "is not a mapping")
+        return None
+    return data
+
+
+def check_basis(where: str, basis: str | None, extra: dict[str, Any], report: Report) -> None:
+    """Every value that matters records where it came from, and a claim needs support.
+
+    This is `simulator-design.md:151-156`'s provenance rule made mechanical: a `chosen`
+    value with no reason is indistinguishable from a guess, a `derived` value with no
+    inputs cannot be re-derived by the linter (so the linter cannot disagree with it), and
+    an `apollo` value with no reference cannot be checked against the corpus.
+    """
+    if basis not in BASES:
+        report.refuse(where, f"provenance basis {basis!r} is not one of {sorted(BASES)}")
+        return
+    if basis == "chosen" and not extra.get("reason"):
+        report.refuse(where, "basis is `chosen` but no reason is given")
+    if basis == "derived" and not (extra.get("inputs") or extra.get("relation")):
+        report.refuse(where, "basis is `derived` but neither inputs nor a relation is given")
+    if basis == "apollo" and not extra.get("ref"):
+        report.refuse(where, "basis is `apollo` but no reference into the corpus is given")
+    if basis == "historical" and not extra.get("source"):
+        report.refuse(where, "basis is `historical` but no external source is given")
+
+
+PLANT_DOMAINS = {
+    "power",
+    "eclss",
+    "thermal",
+    "gnc",
+    "propulsion",
+    "rcs",
+    "comms",
+    "consumables",
+    "avionics",
+    "structure",
+    "crew",
+}
+
+
+def derive_schedule(doc: dict[str, Any], report: Report) -> list[str]:
+    """Derive the total order `plant.md` promises, at the level the physics is written at.
+
+    `plant.md:71-73` promises a deliverable: "Topological order is only partial, so **the linter
+    emits a total order** and the scheduler obeys it: topological sort with a frozen lexicographic
+    tiebreak on domain name." Nothing emitted one, and writing it found that the promise as
+    worded **cannot be kept**.
+
+    The reason is that a domain order is a coarsening of the node graph, and coarsening *creates*
+    cycles that do not exist. `comms -> power -> consumables -> propulsion -> gnc -> comms` is a
+    cycle in the domain projection and there is no node-level path from any of those nodes back to
+    itself: it exists only because `E-AMP-LOAD` leaves `link` and `E-FC-DRAW-O2` leaves
+    `fuel_cell`, and the projection cannot tell that those are different nodes. So a domain-level
+    topological sort is over-constrained — it can report a loop the physics does not have and
+    refuse a schedule that exists.
+
+    The order is therefore derived over **nodes**, with the frozen lexicographic tiebreak on node
+    id, and a domain with states on several nodes appears at several points in it. That is what
+    Gauss-Seidel actually does: the domain is an authoring unit, not a scheduling one.
+
+    Two refusals, and they are different kinds of broken:
+
+      - **a residual node-level cycle**: the declared back-edges do not break every loop, so no
+        total order exists at all. This is what found `C-COMM-BUS` and the hydrogen half of the
+        reactant cycle.
+      - **a declared back-edge that does not close its cycle**: the declaration reads as a decision
+        and changes nothing.
+    """
+    nodes = {str(k): v for k, v in (doc.get("nodes") or {}).items()}
+    edges = {str(e.get("id")): e for e in doc.get("edges") or []}
+    back = {
+        str(cy.get("back_edge"))
+        for cy in doc.get("cycles") or []
+        if cy.get("back_edge") is not None
+    }
+    where = "coupling.yaml"
+
+    for eid, edge in sorted(edges.items()):
+        for end in ("from", "to"):
+            if str(edge.get(end)) not in nodes:
+                report.refuse(
+                    f"{where}:edge {eid}", f"names {end} {edge.get(end)!r}, which is no node"
+                )
+
+    # `command_executive` is the only edge class originating outside the plant and
+    # `published_evidence` is its sink; neither is scheduled.
+    unscheduled = {"command_executive", "published_evidence"}
+    scheduled = [n for n in nodes if n not in unscheduled]
+    # `successors` drives the cycle search; `predecessors` drives the emission, and they are kept
+    # separate because the two loops want opposite directions and one map serving both is how the
+    # order came out **reversed for the whole life of this function**. Kahn's algorithm as written
+    # took nodes with no *successors* first, which is the last element of a topological order, so
+    # every one of the thirty-nine ordering constraints was violated by the order the plant was
+    # ticking in: fuel cells computed after the buses they feed, tanks after the engines that
+    # drain them. Nothing refused it, because the only thing anyone checked was that a cycle was
+    # absent — and a reversed topological order has no cycle either. It is fixed by taking nodes
+    # with no *predecessors* first, and it is held fixed by a test that walks every non-back edge
+    # and asserts the producer comes first.
+    successors: dict[str, set[str]] = {n: set() for n in scheduled}
+    predecessors: dict[str, set[str]] = {n: set() for n in scheduled}
+    for eid, edge in sorted(edges.items()):
+        if eid in back:
+            continue
+        a, b = str(edge.get("from")), str(edge.get("to"))
+        if a in successors and b in successors and a != b:
+            successors[a].add(b)
+            predecessors[b].add(a)
+
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(scheduled, WHITE)
+    path: list[str] = []
+
+    def walk(u: str) -> list[str] | None:
+        colour[u] = GREY
+        path.append(u)
+        for v in sorted(successors.get(u, ())):
+            if colour[v] == GREY:
+                return path[path.index(v) :] + [v]
+            if colour[v] == WHITE:
+                found = walk(v)
+                if found:
+                    return found
+        path.pop()
+        colour[u] = BLACK
+        return None
+
+    for node in sorted(scheduled):
+        if colour[node] == WHITE:
+            loop = walk(node)
+            if loop:
+                report.refuse(
+                    f"{where}:cycles",
+                    "the declared back-edges do not break every loop, so the schedule "
+                    "`plant.md:71` promises does not exist: "
+                    + " -> ".join(loop)
+                    + ". Declare the missing cycle with a back-edge, as `C-COMM-BUS` was",
+                )
+                return []
+
+    # A declared back-edge has to close the loop it is on: its `from` must be reachable from its
+    # `to` through the cycle's other members. A cycle that does not close is a declaration that
+    # reads as a decision and changes nothing.
+    for cycle in doc.get("cycles") or []:
+        cid = str(cycle.get("id"))
+        edge_id = cycle.get("back_edge")
+        if edge_id is None or edge_id not in edges:
+            continue
+        members = [str(m) for m in cycle.get("members") or []]
+        if edge_id not in members:
+            continue  # refused in check_coupling
+        start = str(edges[edge_id].get("to"))
+        target = str(edges[edge_id].get("from"))
+        reachable = {start}
+        changed = True
+        while changed:
+            changed = False
+            for member in members:
+                if member == edge_id or member not in edges:
+                    continue
+                source, sink = str(edges[member].get("from")), str(edges[member].get("to"))
+                if source in reachable and sink not in reachable:
+                    reachable.add(sink)
+                    changed = True
+        if target not in reachable:
+            report.refuse(
+                f"{where}:cycle {cid}",
+                f"names {edge_id!r} as its back-edge, but its other members do not form a path "
+                f"from {start!r} back to {target!r}: the cycle is declared and does not close",
+            )
+
+    # Kahn's algorithm, emitting the *sources* first: a node is ready when every node that must
+    # precede it has been emitted. The tiebreak is the frozen lexicographic one `plant.md:73`
+    # names, applied to the ready set, so the order is a function of the graph alone.
+    order: list[str] = []
+    remaining = {n: set(predecessors[n]) for n in scheduled}
+    while remaining:
+        ready = sorted(n for n, before in remaining.items() if not before)
+        if not ready:
+            break  # unreachable: the cycle check above catches it
+        for node in ready:
+            order.append(node)
+            del remaining[node]
+        for before in remaining.values():
+            before.difference_update(ready)
+    return order
+
+
+def check_channels(doc: dict[str, Any], report: Report) -> dict[str, dict[str, Any]]:
+    """Build the channel registry, and refuse the vocabulary faults it can see."""
+    registry: dict[str, dict[str, Any]] = {}
+    for section, rows in doc.items():
+        if section in {"schema_version", "source", "vocabulary"}:
+            continue
+        if section == "defaults":
+            allowed = set(rows.get("quality_allowed") or [])
+            for code in allowed - QUALITY_CODES:
+                report.refuse("channels.yaml:defaults", f"quality code {code!r} is not canonical")
+            continue
+        if section == "crew_positions":
+            continue
+        if section == "open_debts":
+            for row in rows or []:
+                report.debt("channels.yaml:open_debts", str(row))
+            continue
+        if section not in DOMAINS:
+            report.refuse("channels.yaml", f"section {section!r} is not a canonical domain")
+            continue
+        section_prefix = DOMAIN_PREFIX[section] + "."
+        for row in rows or []:
+            cid = row.get("id")
+            if not cid:
+                report.refuse(f"channels.yaml:{section}", "a row has no id")
+                continue
+            if cid in registry:
+                report.refuse(cid, "registered twice")
+                continue
+            allowed_prefixes = (section_prefix,) + SECTION_EXTRA_PREFIXES.get(section, ())
+            if FORBIDDEN_CHANNEL.search(cid):
+                report.refuse(
+                    cid,
+                    "is a claim quantity. A published reservation, allocation or commitment is "
+                    "a coordination mechanism the world deliberately withholds (D-04, "
+                    "design.md §8); the vehicle may use claims internally and must not publish "
+                    "them",
+                )
+            if not cid.startswith(allowed_prefixes):
+                report.refuse(
+                    cid,
+                    "does not carry one of its section's prefixes "
+                    + " or ".join(repr(p) for p in allowed_prefixes),
+                )
+            registry[cid] = row
+            where = f"channels.yaml:{cid}"
+            for field in ("unit", "layer", "precision", "priority", "rate_hz"):
+                if field not in row:
+                    report.refuse(where, f"missing {field!r}")
+            if row.get("layer") not in LAYERS:
+                report.refuse(where, f"layer {row.get('layer')!r} is not one of {sorted(LAYERS)}")
+            if row.get("priority") not in PRIORITIES:
+                report.refuse(where, f"priority {row.get('priority')!r} is not canonical")
+            prov = row.get("provenance") or {}
+            check_basis(where, prov.get("basis"), prov, report)
+            if prov.get("basis") == "derived" and not row.get("inputs"):
+                report.refuse(where, "provenance says derived but the row lists no inputs")
+            # A rejected name appearing in a *value* position is a dialect leaking in. The
+            # scan is deliberately narrow: a provenance note that quotes a rejected name in
+            # order to reject it is documentation, not a fault, and a linter that flags its
+            # own footnotes is a linter that gets bypassed.
+            values = " ".join(
+                str(row.get(field, "")) for field in ("id", "unit", "layer", "priority")
+            )
+            # An enum's *members* are the domain's own vocabulary; the rejected list is about
+            # scale names that the whole vehicle shares — a lifecycle state, a quality code, an
+            # alert severity. `res.status_[resource]` legitimately carries CRITICAL meaning
+            # "the resource is critically low", which is a different scale from an alert
+            # severity, and a rule that cannot tell them apart is a rule that gets bypassed.
+            # A bare `severity: CRITICAL` is still refused, because it is not inside an enum.
+            scanned = re.sub(r"enum\[[^\]]*\]", "", values)
+            for bad, fix in REJECTED.items():
+                if re.search(rf"\b{re.escape(bad)}\b", scanned):
+                    report.refuse(where, f"uses {bad!r} in a value position; canonical is {fix}")
+    return registry
+
+
+def conserved_dimension(node: dict[str, Any]) -> str | None:
+    """The dimension this node can receive a conservation of, or None if it does not say.
+
+    Most nodes answer this from their unit. Two of them cannot: a cabin holds four gas masses
+    *and* the total pressure they make together, so its unit is the composite `kg + Pa`, and a
+    lookup that returns None for it used to make the conservation check pass by default — which
+    is how `E-ATM-ABSORB` claimed cabin carbon dioxide is conserved into absorbent man-hours.
+    A node that holds several quantities at once therefore names the ones it can receive a
+    conservation of, and a node that names none has not answered the question.
+    """
+    unit = node.get("unit")
+    if unit in DIMENSION:
+        return DIMENSION[unit]
+    declares = node.get("conserves")
+    if isinstance(declares, str) and declares in set(DIMENSION.values()):
+        return declares
+    return None
+
+
+def withheld_channels(root: Path) -> set[str]:
+    """Every channel the domains declare they withhold, by name.
+
+    `points.yaml#not_published` is the vehicle's statement of what it refuses to publish, and the
+    failure chains are the vehicle's statement of what a fleet has to work out. Those two are the
+    same subject from opposite sides, and until now nothing joined them: a chain whose first
+    published clue is a withheld channel is a chain nobody can start on, and the linter would have
+    reported the clue as *registered* and been satisfied. Nothing is wrong with the corpus today —
+    41 withheld channels and not one of them a clue — which is exactly why the join is worth having.
+    """
+    names: set[str] = set()
+    for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        points = load(path / "points.yaml", Report()) or {}
+        for entry in points.get("not_published") or []:
+            listed = entry.get("channel") if isinstance(entry, dict) else entry
+            for name in listed if isinstance(listed, list) else [listed]:
+                if name is not None and "." in str(name):
+                    names.add(str(name))
+    return names
+
+
+def enumerated_values_by_node(root: Path) -> dict[str, set[str]]:
+    """Which enumerated values each coupling node's own states can take.
+
+    A regime keyed on a threshold steps through a *band*; a regime keyed on an enum steps through
+    a *mode*, and the two are different questions. `E-STRUCT-PLATE` is the second kind: the
+    coldplate temperature a vehicle configuration produces is a lookup over
+    `enum[docked, undocked, separated, abandoned]`, and there is no threshold anywhere that could
+    stand in for "the vehicle is undocked". Reading the vocabulary off the driver node's own
+    states is what keeps the table honest — a regime naming a configuration the vehicle cannot be
+    in is exactly the fault the vocabulary checks exist for.
+    """
+    values: dict[str, set[str]] = {}
+    domains_dir = root / "domains"
+    if not domains_dir.is_dir():
+        return values
+    for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+        components = load(path / "components.yaml", Report()) or {}
+        for state in components.get("state") or []:
+            if not isinstance(state, dict):
+                continue
+            node, unit = state.get("node"), str(state.get("unit") or "")
+            match = re.match(r"enum\[([^\]]*)\]", unit)
+            if not node or not match:
+                continue
+            members = {v.strip() for v in match.group(1).split(",") if v.strip()}
+            values.setdefault(str(node), set()).update(members)
+    return values
+
+
+def produced_channels_by_node(
+    root: Path, registry: dict[str, dict[str, Any]]
+) -> dict[str, set[str]]:
+    """Which channels each coupling node can actually produce, via its states.
+
+    A node names physical equipment; a *state* on that node names a number it holds; a
+    `points.yaml` entry turns that state into a published channel. Composing the three is what
+    lets the linter ask the one question a regime table has to answer: *is this coupling keyed on
+    the driver's own quantity, or on something else wearing its name?* `E-BUS-GNC` says avionics
+    power follows bus volts, so the thresholds it steps through must watch a channel that
+    `bus_a`'s own states produce — and `power.dc_bus_a_v` is exactly that, which is why the
+    voltage ladder already written in `domains/power/profiles.yaml` is the right ladder to reuse
+    rather than a second one invented alongside it.
+    """
+    index = ChannelIndex(registry)
+    node_of_state: dict[str, str] = {}
+    domains_dir = root / "domains"
+    if not domains_dir.is_dir():
+        return {}
+    for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+        components = load(path / "components.yaml", Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id") and state.get("node"):
+                node_of_state[str(state["id"])] = str(state["node"])
+    produced: dict[str, set[str]] = {}
+    for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+        points = load(path / "points.yaml", Report()) or {}
+        for point in points.get("points") or []:
+            if not isinstance(point, dict):
+                continue
+            channel, source = point.get("channel"), point.get("from")
+            if not channel or not source:
+                continue
+            row = index.row(str(channel))
+            if row is None:
+                continue
+            node = node_of_state.get(str(source))
+            if node is None:
+                continue
+            for registered, candidate in registry.items():
+                if candidate is row:
+                    produced.setdefault(node, set()).add(registered)
+    return produced
+
+
+def check_coupling(
+    doc: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    report: Report,
+    produced: dict[str, set[str]] | None = None,
+    threshold_point: dict[str, str] | None = None,
+    enum_values: dict[str, set[str]] | None = None,
+    withheld: set[str] | None = None,
+) -> None:
+    nodes = doc.get("nodes") or {}
+    edges = doc.get("edges") or []
+    node_of = dict(nodes)
+    produced = produced or {}
+    threshold_point = threshold_point or {}
+    enum_values = enum_values or {}
+    withheld = withheld or set()
+
+    for name, node in node_of.items():
+        where = f"coupling.yaml:node {name}"
+        if node.get("domain") not in DOMAINS | NON_DOMAIN_NODE_DOMAINS:
+            report.refuse(where, f"domain {node.get('domain')!r} is not canonical")
+        if node.get("kind") not in NODE_KINDS:
+            report.refuse(where, f"kind {node.get('kind')!r} is not one of {sorted(NODE_KINDS)}")
+
+    edge_ids: dict[str, dict[str, Any]] = {}
+    for edge in edges:
+        eid = edge.get("id")
+        if not eid:
+            report.refuse("coupling.yaml:edges", "an edge has no id")
+            continue
+        where = f"coupling.yaml:edge {eid}"
+        if eid in edge_ids:
+            report.refuse(where, "declared twice")
+        edge_ids[eid] = edge
+        for endpoint in ("from", "to"):
+            if edge.get(endpoint) not in node_of:
+                report.refuse(where, f"{endpoint} {edge.get(endpoint)!r} is not a declared node")
+        if edge.get("kind") not in EDGE_KINDS:
+            report.refuse(where, f"kind {edge.get('kind')!r} is not one of {sorted(EDGE_KINDS)}")
+        sens = edge.get("sensitivity") or {}
+        if not sens:
+            report.refuse(where, "has no sensitivity; topology alone excludes nothing (#8)")
+            continue
+        # A *lookup* is not a slope, and eight edges in this file spent their lives asking for a
+        # derivative where the physics is a regime. A consumer's draw does not scale with bus
+        # volts — it is constant inside the 24-32 V envelope and then it stops; that envelope is
+        # already the undervoltage ladder in `domains/power/profiles.yaml`. A `1 per V` load would
+        # grow without bound as the bus sagged, which is the opposite of what a load does. So a
+        # sensitivity is either a scalar or a `regimes:` table, and the two are exclusive.
+        regimes = sens.get("regimes")
+        for field in ("unit", "basis", "at"):
+            if field not in sens:
+                report.refuse(where, f"sensitivity is missing {field!r}")
+        if regimes is not None and "value" in sens:
+            report.refuse(
+                where,
+                "declares both a `value` and a `regimes` table; a lookup is not a slope, so it has "
+                "no derivative to state and the table is the whole answer",
+            )
+        if regimes is None and "value" not in sens:
+            report.refuse(where, "sensitivity is missing 'value'")
+        if regimes is not None:
+            if not isinstance(regimes, list) or not regimes:
+                report.refuse(where, "declares `regimes` that is not a non-empty list")
+            else:
+                driver = edge.get("from")
+                driver_channels = produced.get(str(driver), set())
+                for regime in regimes:
+                    where_regime = f"{where} (regime {regime.get('when')!r})"
+                    if not isinstance(regime, dict) or not regime.get("when"):
+                        report.refuse(where, "has a regime with no `when`")
+                        continue
+                    if not regime.get("response"):
+                        report.refuse(where_regime, "states no `response`")
+                    # A table whose *responses* are unset is still a table with holes in it, and
+                    # the holes have to be reported at the granularity they exist at. One opaque
+                    # "the sensitivity is missing" is how `K per enum` hid the fact that there
+                    # were four separate temperatures owed, one per configuration.
+                    elif regime.get("response") == "UNCONFIGURED":
+                        report.debt(where_regime, str(regime.get("note", "")).strip())
+                    when = str(regime["when"])
+                    if when in ("nominal", "otherwise"):
+                        continue
+                    # An enum key is a *mode* the driver's own states can take; a threshold id is
+                    # a *band* on a quantity the driver produces. Nothing else is a regime.
+                    if when in enum_values.get(str(driver), set()):
+                        continue
+                    # Every other `when` is a threshold id, and the alignment this buys is the
+                    # point: the regimes must step through a ladder that already exists rather
+                    # than a private set of bands invented beside it.
+                    if when not in threshold_point:
+                        report.refuse(
+                            where_regime,
+                            f"names no declared threshold and no value {driver!r}'s own states can "
+                            f"take; a regime is `nominal`, `otherwise`, an id from "
+                            f"domains/*/profiles.yaml, or a member of an enum on the driver node",
+                        )
+                        continue
+                    point = threshold_point[when]
+                    row = ChannelIndex(registry).row(str(point))
+                    watched = {
+                        registered for registered, candidate in registry.items() if candidate is row
+                    }
+                    if produced and watched and not (watched & driver_channels):
+                        report.refuse(
+                            where_regime,
+                            f"steps through {when!r}, which watches {point!r} — a channel "
+                            f"{driver!r} does not produce. A coupling keyed on a quantity its own "
+                            "driver does not carry is a coupling to something else",
+                        )
+        check_basis(where, sens.get("basis"), sens, report)
+        # A `discrete` coupling that leaves physical equipment is a mode selection, and a mode
+        # selection has no derivative. The command paths are the exception and they are a real
+        # one: `E-CMD-*` leave `command_executive`, a `service` node that holds authority rather
+        # than a quantity, and a command arriving one for one is genuinely a unity gain. What is
+        # left is `bus_a -> rcs_valves` and `nav_state -> engine_main` and their like, which are
+        # tables and were declaring units like `enum per m` to say so.
+        from_kind = (node_of.get(str(edge.get("from"))) or {}).get("kind")
+        if edge.get("kind") == "discrete" and from_kind != "service" and regimes is None:
+            report.refuse(
+                where,
+                "is a discrete coupling out of physical equipment and declares no `regimes`; a "
+                "mode selection is a table rather than a sensitivity, and a scalar here would be "
+                "a proportional law the vehicle does not have",
+            )
+        if sens.get("value") == "UNCONFIGURED":
+            report.debt(
+                where, f"{edge.get('from')} -> {edge.get('to')}: {sens.get('note', '')}".strip()
+            )
+        crisis = sens.get("crisis") or {}
+        if crisis and crisis.get("value") == "UNCONFIGURED":
+            report.debt(where, f"crisis point: {crisis.get('note', '')}".strip())
+        # A `derived` sensitivity whose arithmetic the linter cannot evaluate is a value the
+        # linter must take on trust, and the one time it was checked by hand the prose and the
+        # field disagreed by 7 %: `E-RAD-WATER` said 3.8e-7 while its own relation computed
+        # 1/2.45e6 = 4.082e-7. A relation is prose and prose cannot be evaluated — but a
+        # `computation` can, so an edge that states one is re-derived on every run.
+        #
+        # This is the mechanism the rest of the file already uses for the rocket equation and the
+        # transfer ellipse, arriving at the coupling graph. It is opt-in because most relations
+        # are not arithmetic (a DC motor's flow follows its voltage; the coupling is the signal
+        # itself) and pretending otherwise would be worse than the prose.
+        sensitivity = edge.get("sensitivity") or {}
+        computation = sensitivity.get("computation")
+        value = sensitivity.get("value")
+        if computation is not None:
+            if not isinstance(value, (int, float)):
+                report.refuse(
+                    where, "declares a `computation` and no numeric value to check it against"
+                )
+            else:
+                try:
+                    # Only arithmetic over literals: no names, no calls, no attribute access.
+                    if not re.fullmatch(r"[0-9eE+\-*/(). \t]+", str(computation)):
+                        raise ValueError("not a numeric expression")
+                    computed = eval(str(computation), {"__builtins__": {}}, {})  # noqa: S307
+                except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+                    report.refuse(where, f"has a `computation` the linter cannot evaluate: {exc}")
+                else:
+                    if not isinstance(value, (int, float)):
+                        pass
+                    elif abs(computed - float(value)) > abs(float(value)) * 0.01 + 1e-12:
+                        report.refuse(
+                            where,
+                            f"declares {value!r} and its computation {computation!r} gives "
+                            f"{computed:.6g}: a derived value that does not re-derive is a value "
+                            "nobody has checked",
+                        )
+
+        # Conservation is the one invariant a linter can check without a plant.
+        #
+        # It has three ways to pass and each of them used to be a way to pass *vacuously*. The
+        # dimension lookup returned None for six of the node units in this file — `kg + Pa`,
+        # `man_hours`, `m, m/s`, `quat` and the `-` that means "no unit stated" — and the guard
+        # `if a and b` then skipped the check entirely, which is how `E-ATM-ABSORB` spent its
+        # life claiming that cabin carbon dioxide is *conserved* into absorbent man-hours. A
+        # check that cannot run is not a check that passed, so an undecidable conservation edge
+        # is now a refusal and the fix is to stop calling it conservation.
+        if edge.get("kind") == "conserve":
+            from_node = node_of.get(edge.get("from")) or {}
+            to_node = node_of.get(edge.get("to")) or {}
+            from_unit = from_node.get("unit")
+            to_unit = to_node.get("unit")
+            a = conserved_dimension(from_node)
+            b = conserved_dimension(to_node)
+            if a is None or b is None:
+                undecided = [
+                    f"{side} {unit!r}"
+                    for side, unit in (("from", from_unit), ("to", to_unit))
+                    if conserved_dimension(node_of.get(edge.get(side)) or {}) is None
+                ]
+                report.refuse(
+                    where,
+                    "is a conservation edge with no dimension for "
+                    + " and ".join(undecided)
+                    + "; conservation names one quantity travelling, so a composite or unstated "
+                    "unit means this edge is a conversion wearing a conservation label. A node "
+                    "that holds several quantities at once declares which of them it can receive "
+                    "a conservation of, in `conserves:`",
+                )
+            elif a != b:
+                report.refuse(where, f"is a conservation edge between {a} and {b}")
+            # A conserved quantity crosses one for one. A `conserve` edge carrying any other
+            # number is a conversion, and the number is the give-away: `E-PRESS-PROP` declared
+            # "kg prop per kg He", which is a displacement law, not a conservation, and a
+            # bladder pressurant never leaves its tank to be conserved anywhere.
+            elif sens.get("value") == "UNCONFIGURED":
+                report.refuse(
+                    where,
+                    "is a conservation edge with an unconfigured sensitivity; a conserved "
+                    "quantity crosses one for one, so there is nothing to configure — an unset "
+                    "value here means the edge is not a conservation",
+                )
+            elif sens.get("value") != 1.0:
+                report.refuse(
+                    where,
+                    f"is a conservation edge carrying {sens.get('value')!r}; conservation is one "
+                    "for one, and any other ratio is a conversion that should declare `rate`",
+                )
+
+    for cycle in doc.get("cycles") or []:
+        where = f"coupling.yaml:cycle {cycle.get('id')}"
+        members = cycle.get("members") or []
+        for member in members:
+            if member not in edge_ids:
+                report.refuse(where, f"member {member!r} is not a declared edge")
+        back = cycle.get("back_edge")
+        if back is not None and back not in members:
+            report.refuse(where, f"back_edge {back!r} is not one of its members")
+        delay = cycle.get("delay_ticks")
+        if delay is None:
+            report.refuse(where, "does not declare delay_ticks (0 for an algebraic loop)")
+        if back is None and delay:
+            report.refuse(where, "declares a delay but names no back_edge")
+        if back is not None and not delay and not cycle.get("algebraic"):
+            report.refuse(where, f"names back_edge {back!r} but declares delay_ticks 0")
+        # A latched state on a delayed cycle without hysteresis is the relay oscillation
+        # review-findings.md #7 measured: ~1.7 Hz, which an agent reading 2 Hz telemetry
+        # will read as physics.
+        latched = [m for m in members if (edge_ids.get(m) or {}).get("kind") == "discrete"]
+        if (
+            latched
+            and back is not None
+            and not (cycle.get("stability") or {}).get("hysteresis_required")
+        ):
+            report.refuse(
+                where,
+                f"carries latched edges {latched} on a delayed cycle without declaring "
+                "stability.hysteresis_required",
+            )
+
+    index = ChannelIndex(registry)
+
+    # --------------------------------------------------------------------------------------
+    # Nodes that participate in nothing, and stocks that only ever drain.
+    #
+    # Both are the shape of the bug that a *reversed* tick order hid for a round: `battery_energy`
+    # sat in the graph with no forward inbound edge at all and the schedule could not tell, because
+    # a reversed order still contains every node. Every check that asked "is X in the schedule"
+    # passed. These ask the two questions a membership test cannot:
+    #
+    #   **a node with no incident edge is not in the graph**, it is only in the node list. The bus
+    #   tie was in exactly that state — `bus_tie_closed` existed, the edge `E-BUSB-BUSA` existed,
+    #   and that edge's own note said "gated by bus_tie" while `bus_tie` gated nothing, because
+    #   the coupling ran straight from `bus_b` to `bus_a` and bypassed it.
+    #
+    #   **a stock that nothing fills only drains**, and the definition has to say so deliberately
+    #   rather than by omission. Three tanks are legitimately pre-loaded — filled before launch and
+    #   never again — and saying that is different from forgetting it.
+    # --------------------------------------------------------------------------------------
+    back_edge_ids = {
+        str(cy.get("back_edge"))
+        for cy in doc.get("cycles") or []
+        if cy.get("back_edge") is not None
+    }
+    incident: dict[str, list[str]] = {name: [] for name in node_of}
+    forward_into: dict[str, list[str]] = {name: [] for name in node_of}
+    for edge in edges:
+        eid = str(edge.get("id"))
+        for endpoint in ("from", "to"):
+            node = str(edge.get(endpoint))
+            if node in incident and eid not in incident[node]:
+                incident[node].append(eid)
+        target = str(edge.get("to"))
+        if target in forward_into and eid not in back_edge_ids:
+            forward_into[target].append(eid)
+
+    for name, node in sorted(node_of.items()):
+        if not incident[name]:
+            report.refuse(
+                f"coupling.yaml:node {name}",
+                "has no edge in either direction, so it is in the node list and not in the graph. "
+                "A node the schedule orders and nothing reads or writes is a declaration that "
+                "looks like a connection",
+            )
+            continue
+        # Outbound is a different question from inbound and the asymmetry is real: a back-edge
+        # *out* of a stock still drains it, because the stock's own integrator subtracts the flow
+        # the back-edge reads. Only the inbound side has to be forward, because a fill read from
+        # last tick is not a fill. `h2_csm` and `water_cooling` both discharge entirely through
+        # back-edges (`E-H2-FC`, `E-WATER-RAD`) and both are correct.
+        if node.get("kind") == "stock" and not any(str(edge.get("from")) == name for edge in edges):
+            if node.get("accumulates"):
+                report.note(
+                    f"coupling.yaml:node {name}",
+                    f"accumulates and is never drawn: {node['accumulates']}",
+                )
+            else:
+                report.refuse(
+                    f"coupling.yaml:node {name}",
+                    "is a stock with no outbound edge at all, so it only ever accumulates. A "
+                    "resource produced and never drawn is the same defect as one drawn and never "
+                    "produced, and it is the quieter of the two: the fleet watches the quantity "
+                    "rise, and a rising number looks like a healthy number until the mission ends",
+                )
+            continue
+        if node.get("kind") == "stock" and not forward_into[name]:
+            if node.get("preloaded"):
+                report.note(
+                    f"coupling.yaml:node {name}",
+                    f"is pre-loaded and never filled: {node['preloaded']}",
+                )
+            else:
+                report.refuse(
+                    f"coupling.yaml:node {name}",
+                    "is a stock with no inbound edge that is not a back-edge, so it only ever "
+                    "drains — which is what a reversed tick order did to the battery for the "
+                    "whole life of the graph. If the tank is filled before launch and never "
+                    "again, say so in `preloaded:`; a stock nobody fills is a missing producer "
+                    "far more often than it is a design decision",
+                )
+
+    # The graph's own shopping list, and it is counted rather than merely displayed. `channels.yaml`
+    # has had its `open_debts` counted since the section existed while this file's seven were read
+    # by nobody — the same construct behaving two ways in two files, which is how a total stops
+    # meaning anything. The seven here are the substantive ones (thermal time constants, loop
+    # transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the
+    # missing pack-voltage state), so leaving them out of the count understated the debt by the
+    # part that matters most. A debt is a value that is needed and unset, wherever it is written.
+    for row in doc.get("open_debts") or []:
+        report.debt("coupling.yaml:open_debts", str(row))
+
+    for chain in doc.get("failure_chains") or []:
+        cid = chain.get("id", "?")
+        where = f"coupling.yaml:chain {cid}"
+        for field in ("primary", "secondary", "third_order", "first_published_clue"):
+            if not chain.get(field):
+                report.refuse(where, f"has no {field}")
+        clue = chain.get("first_published_clue")
+        if clue and clue not in index:
+            report.refuse(where, f"first clue {clue!r} is not a registered channel")
+        for observed in chain.get("observable_clues") or []:
+            if observed not in index:
+                report.refuse(where, f"clue {observed!r} is not a registered channel")
+        # And the join with §7: a clue has to be something the vehicle is *willing to publish*.
+        # Being registered is not the same claim — `avionics.sensor_[id]_true_value` is registered
+        # nowhere and withheld by name, and the two answers come from two different sections that
+        # nothing had ever compared.
+        for observed in [clue, *(chain.get("observable_clues") or [])]:
+            if observed in withheld:
+                report.refuse(
+                    where,
+                    f"leans on {observed!r} as an observable clue, and that channel is declared "
+                    "`not_published`. A chain whose first clue is hidden truth is a chain no fleet "
+                    "can start on: it would be diagnosable only by the vehicle that already knows",
+                )
+
+
+def check_crew(
+    channels: dict[str, Any], registry: dict[str, dict[str, Any]], report: Report
+) -> None:
+    """The perception bound must name real channels, or it bounds nothing (#4, D-06)."""
+    index = ChannelIndex(registry)
+    positions = channels.get("crew_positions") or []
+    if not positions:
+        report.debt(
+            "channels.yaml:crew_positions", "no crew position is defined, so ask_crew is unbounded"
+        )
+    for pos in positions:
+        where = f"channels.yaml:crew_position {pos.get('id')}"
+        if not pos.get("perceivable"):
+            report.refuse(where, "declares nothing perceivable")
+        for cid in (pos.get("perceivable") or []) + (pos.get("not_perceivable") or []):
+            if cid not in index:
+                report.refuse(where, f"{cid!r} is not a registered channel")
+
+    # The location channel's vocabulary and the position list are one list written twice, and
+    # nothing else compares them. A crew member at a station `crew_positions` does not describe
+    # has no bound; a station nobody can occupy is a display contract for an empty seat. Both
+    # defects are silent — the first makes `ask_crew` answer from nowhere, the second makes a
+    # panel that is never read — so the check runs in both directions.
+    declared = [str(pos.get("id")) for pos in positions]
+    if not declared:
+        return
+    row = registry.get("crew.location_[id]")
+    if row is None:
+        report.refuse(
+            "channels.yaml:crew_positions",
+            "there are crew positions but no `crew.location_[id]` channel, so nothing says "
+            "which position a report came from and the perception bound cannot be applied",
+        )
+        return
+    enum = re.findall(r"enum\[([^\]]*)\]", str(row.get("unit") or ""))
+    listed = [member.strip() for member in enum[0].split(",")] if enum else []
+    for missing in sorted(set(declared) - set(listed)):
+        report.refuse(
+            "channels.yaml:crew.location_[id]",
+            f"omits position {missing!r}: a crew member standing there could not be located, so "
+            "their report could not be bounded",
+        )
+    for extra in sorted(set(listed) - set(declared)):
+        report.refuse(
+            "channels.yaml:crew.location_[id]",
+            f"offers position {extra!r}, which channels.yaml:crew_positions does not describe",
+        )
+
+
+def walk_unset(node: Any, trail: str = "") -> list[str]:
+    """Every `UNCONFIGURED` scalar in a loaded document, with the path that reaches it.
+
+    A debt is only actionable if it names where it lives, so the trail is built as the walk
+    descends: `fault_policy.yaml:seeding.rate_kg_per_h` rather than "something is unset".
+    """
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.extend(walk_unset(value, f"{trail}.{key}" if trail else str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(walk_unset(value, f"{trail}[{index}]"))
+    elif node == "UNCONFIGURED":
+        found.append(trail)
+    return found
+
+
+def check_domain(
+    path: Path,
+    node_ids: set[str],
+    index: ChannelIndex,
+    positions: dict[str, list[str]],
+    report: Report,
+    thresholds_by_domain: dict[str, set[str]] | None = None,
+) -> None:
+    """One `domains/<name>/`, checked against the vocabulary, the graph and the plant contract.
+
+    A domain is where a specification stops being prose. The checks here are the ones that
+    stop a ported spec from arriving in its own dialect, and the ones that catch a domain that
+    looks complete but cannot be integrated: a lag with no time constant, a stock with no
+    quantum, a latched comparator with no hysteresis, a command whose authority nobody
+    declared.
+    """
+    name = path.name
+    docs: dict[str, dict[str, Any]] = {}
+    for filename in DOMAIN_FILES:
+        file = path / filename
+        if not file.exists():
+            report.refuse(f"domains/{name}", f"is missing {filename}")
+            continue
+        loaded = load(file, report)
+        if loaded is not None:
+            docs[filename] = loaded
+
+    components = docs.get("components.yaml") or {}
+    where = f"domains/{name}/components.yaml"
+    if components.get("domain") != name:
+        report.refuse(where, f"declares domain {components.get('domain')!r}, not {name!r}")
+
+    # A domain's own `open_debts` are counted, and this is the third place the same asymmetry has
+    # been found: `channels.yaml`'s four have been counted since the section existed, this file's
+    # eight were counted when the graph's shopping list turned out to be read by nobody, and the
+    # **24 across the eleven domains** were read by nothing at all — not counted, not displayed,
+    # not parsed. The crew domain's own note about EVA was sitting in that set while a fleet
+    # question about EVA went looking for it. A debt is a value that is needed and unset wherever
+    # it is written, and the whole point of the count is that it is fatal under `--strict`; a
+    # paragraph in a file that no tool opens is not a debt, it is a comment with better manners.
+    for row in components.get("open_debts") or []:
+        report.debt(f"domains/{name}/components.yaml:open_debts", str(row))
+    for filename in ("profiles.yaml", "fault_policy.yaml", "points.yaml", "commands.yaml"):
+        for row in (docs.get(filename) or {}).get("open_debts") or []:
+            report.debt(f"domains/{name}/{filename}:open_debts", str(row))
+    if not isinstance(components.get("natural_rate_hz"), (int, float)):
+        report.debt(
+            where,
+            "declares no natural_rate_hz; the scheduler ignores it today and the interface "
+            "has to be right before the scheduler catches up (plant.md §10)",
+        )
+    for direction in ("reads", "writes"):
+        for node in components.get(direction) or []:
+            if node not in node_ids:
+                report.refuse(where, f"{direction} {node!r}, which coupling.yaml does not declare")
+
+    # State: the method decides what parameters are owed, and an owed parameter is a debt with
+    # a name rather than an invented default (thermal_diode.md:29).
+    claimed: dict[str, int] = {}
+    for state in components.get("state") or []:
+        sid = state.get("id", "?")
+        swhere = f"{where}:state {sid}"
+        method = state.get("method")
+        if method not in METHODS:
+            report.refuse(swhere, f"method {method!r} is not one of the six in plant.md §3")
+            continue
+        prov = state.get("provenance") or {}
+        check_basis(swhere, prov.get("basis"), prov, report)
+        # Every state says which coupling node it advances, or says `internal` out loud. A
+        # state that silently backs nothing is a state the scheduler cannot order, and a node
+        # a domain claims to write but never advances is a node that never changes.
+        node = state.get("node")
+        if node is None:
+            report.refuse(swhere, "declares no node; write `node: <id>` or `node: internal`")
+        elif node != "internal":
+            if node not in (components.get("writes") or []):
+                report.refuse(
+                    swhere, f"advances {node!r}, which the domain does not declare it writes"
+                )
+            claimed[node] = claimed.get(node, 0) + 1
+        owed = {
+            "lag": ("tau_s", "has no time constant, so it cannot be advanced"),
+            "stock": ("quantum", "has no quantum, so its conservation cannot be exact"),
+            "delay": ("delay_s", "has no delay, so there is nothing to store"),
+            "hazard": ("lambda_per_h", "has no hazard rate"),
+        }.get(method)
+        # An owed parameter is owed whether it is absent or explicitly declared unset; the
+        # difference is only whether somebody has thought about it yet.
+        if owed and state.get(owed[0]) in (None, "UNCONFIGURED"):
+            report.debt(swhere, owed[1])
+        if method == "stock" and isinstance(state.get("quantum"), (int, float)):
+            quantum = float(state["quantum"])
+            flow = state.get("min_flow_per_s")
+            dt = 1.0 / float(components.get("natural_rate_hz") or 50)
+            if isinstance(flow, (int, float)) and abs(float(flow)) * dt < quantum:
+                report.refuse(
+                    swhere,
+                    f"its smallest flow ({flow}/s over {dt:g} s) is below its quantum "
+                    f"({quantum}), so the stock has a dead zone. plant.md §4: the nominal "
+                    "cabin leak is below the instrument's own precision and must still happen",
+                )
+        if method == "discrete" and not state.get("non_latching"):
+            # A discrete state is protected from chatter in one of two ways, and they are not
+            # interchangeable. A *comparator-driven* latch (a bus undervoltage, a zone limit)
+            # needs hysteresis: a recovery band wider than the change that caused the trip,
+            # because dwell alone leaves the relay oscillation review-findings.md #7 measured
+            # at ~1.7 Hz. A *commanded* state machine (an engine, a valve, a mode) has no
+            # comparator to band — what it needs is minimum on and off times, because a
+            # machine that can be re-commanded every tick is a machine that chatters on
+            # command instead of on noise.
+            if state.get("hysteresis"):
+                hyst = state["hysteresis"]
+                for field in ("assert", "clear", "dwell_ms"):
+                    if hyst.get(field) is None:
+                        report.debt(swhere, f"its hysteresis has no {field!r}")
+            elif state.get("dwell"):
+                dwell = state["dwell"]
+                for field in ("min_on_s", "min_off_s"):
+                    if dwell.get(field) is None:
+                        report.debt(swhere, f"its dwell has no {field!r}")
+            elif state.get("one_way"):
+                # A third protection mechanism, and it is not interchangeable with the other
+                # two. A one-way state cannot chatter because it cannot be re-entered, so it
+                # needs neither a hysteresis band nor a minimum dwell — what it needs is a
+                # guard against being entered *by accident*, which is the arm/commit pattern
+                # `apollo_diode.md:476-509` describes and which nothing else on this vehicle
+                # uses (conflict C-16). A one-way state with no arming requirement is a state
+                # a single misread line can fire.
+                if not state.get("requires_arm"):
+                    report.refuse(
+                        swhere,
+                        "is one-way but declares no arming requirement; an irreversible "
+                        "transition must be arm-protected or a single misread line fires it "
+                        "(apollo_diode.md:167-170)",
+                    )
+            else:
+                report.debt(
+                    swhere,
+                    "is a discrete state with neither hysteresis nor dwell, so nothing stops "
+                    "it chattering; declare one, or `non_latching: true` if it genuinely "
+                    "cannot latch",
+                )
+
+    for node in components.get("writes") or []:
+        if not claimed.get(node):
+            report.refuse(
+                where,
+                f"declares that it writes {node!r} but no state advances it, so the node never "
+                "changes",
+            )
+
+    # Every unset value anywhere in the domain is a debt with a path attached, not only the
+    # ones a state's method happens to require. plant.md §11 generalises
+    # `thermal_diode.md:29` — a value that is needed and unset fails the build, naming what
+    # wants it — and it applies to a radiator's absorbed load as much as to a time constant.
+    for trail in walk_unset(docs):
+        report.debt(f"domains/{name}/{trail}", "is UNCONFIGURED")
+
+    for component in components.get("components") or []:
+        cid = component.get("id", "?")
+        cwhere = f"{where}:component {cid}"
+        if not component.get("kind"):
+            report.refuse(cwhere, "has no kind")
+        prov = component.get("provenance") or {}
+        check_basis(cwhere, prov.get("basis"), prov, report)
+
+    # The quality-assignment function, which is `simulator-design.md:496-508` made checkable.
+    #
+    # The clause is that quality is assigned only by a function that cannot see the simulator's
+    # fault state, and nothing in the corpus implemented it — `corpus-review.md` §6 lists it
+    # among what nobody wrote. `avionics_diode.md:371-388` is a function that satisfies it, and
+    # the two ways to break the property are both mechanical: read a fault-state parameter, or
+    # emit a code that is not a quality. The second is the subtle one — the document's own
+    # function returns FAULT from the same place it returns SUSPECT, and FAULT is refused as a
+    # quality by design.md:211-214.
+    quality = components.get("quality_assignment")
+    if isinstance(quality, dict):
+        qwhere = f"{where}:quality_assignment"
+        params = {str(p) for p in quality.get("parameters") or []}
+        forbidden = {str(p) for p in quality.get("forbidden_parameters") or []}
+        if not params:
+            report.refuse(qwhere, "declares no parameters, so the signature is not a signature")
+        for bad in sorted(params & forbidden):
+            report.refuse(
+                qwhere,
+                f"takes {bad!r} as a parameter: a quality function that can see that cannot "
+                "satisfy simulator-design.md:496-508, and a silently biased sensor would stop "
+                "being GOOD",
+            )
+        if not quality.get("signature"):
+            report.refuse(qwhere, "declares no signature")
+        for rule in quality.get("rules") or []:
+            code = rule.get("quality")
+            if not rule.get("condition"):
+                report.refuse(qwhere, "a rule has no condition")
+            if code not in QUALITY_CODES:
+                report.refuse(
+                    qwhere,
+                    f"a rule emits {code!r}, which is not a canonical quality code. A conclusion "
+                    "belongs in `conclusions`, not in a quality: design.md:211-214 makes that "
+                    "split the difference between withholding a diagnosis and publishing one",
+                )
+        if not quality.get("rules"):
+            report.refuse(qwhere, "declares no rules")
+        if not quality.get("conclusions"):
+            report.refuse(
+                qwhere,
+                "declares no conclusions, so the trip-counter verdict has nowhere to go and a "
+                "quality code would have to carry it",
+            )
+        # `not_a_quality` is documentation and is checked in the opposite direction: every code
+        # listed there must genuinely *not* be a quality, or the list is wrong about the
+        # vocabulary it exists to protect.
+        for entry in quality.get("not_a_quality", {}).get("codes") or []:
+            code = entry.get("code")
+            if not entry.get("why"):
+                report.refuse(qwhere, f"rejects {code!r} without saying why")
+            if code in QUALITY_CODES:
+                report.refuse(
+                    qwhere, f"lists {code!r} as not-a-quality, but it is a canonical quality code"
+                )
+
+    # The diagnostic inventory: a function with no output channel is a function whose result
+    # nobody can see, and a declared output that is not registered is a result that goes nowhere.
+    for diagnostic in components.get("diagnostics") or []:
+        dwhere = f"{where}:diagnostic {diagnostic.get('id')}"
+        for field in ("id", "rule", "watches", "outputs"):
+            if not diagnostic.get(field):
+                report.refuse(dwhere, f"declares no {field}")
+        for output in diagnostic.get("outputs") or []:
+            if isinstance(output, str) and "." in output and output not in index:
+                report.refuse(dwhere, f"produces {output!r}, which is not a registered channel")
+
+    # Points may not invent channels: the registry in channels.yaml is the vocabulary, and a
+    # domain that needs a new one registers it there rather than forking it here.
+    points = docs.get("points.yaml") or {}
+    all_state_ids = {str(s.get("id")) for s in components.get("state") or []}
+    other_state_ids = {
+        str(s.get("id"))
+        for sibling in sorted(p for p in path.parent.iterdir() if p.is_dir() and p != path)
+        for s in (load(sibling / "components.yaml", Report()) or {}).get("state") or []
+    }
+    for point in points.get("points") or []:
+        cid = point.get("channel") if isinstance(point, dict) else point
+        pwhere = f"domains/{name}/points.yaml:{cid}"
+        if not cid:
+            report.refuse(f"domains/{name}/points.yaml", "a point declares no channel")
+        elif cid not in index:
+            report.refuse(pwhere, "is not a registered channel in channels.yaml")
+        # `from` names what the point reads, and it has to be something that exists: a state in
+        # this domain, or a coupling node the domain reads. It is not decoration — the enum
+        # binding above compares a channel's vocabulary with its source's, and a `from` that
+        # resolves to nothing silently skips that comparison. Two of the three failures this
+        # found were exactly that: `power.battery_temp_c` named a state that exists nowhere, and
+        # the crew's switch and breaker channels named *the hatch*, a state in another domain
+        # that has nothing to do with them.
+        source = point.get("from") if isinstance(point, dict) else None
+        if not source or not isinstance(source, str):
+            continue
+        if source in all_state_ids or source in node_ids:
+            continue
+        if source in other_state_ids:
+            report.refuse(
+                pwhere,
+                f"reads {source!r}, which is a state in another domain. A point reads a state it "
+                "owns or a coupling node; reading another domain's state directly bypasses the "
+                "edge that is supposed to carry the value",
+            )
+        else:
+            report.refuse(
+                pwhere,
+                f"reads {source!r}, which is neither a state in this domain nor a coupling node — "
+                "so nothing produces it and the enum binding silently skips this point",
+            )
+
+    # A channel that publishes a discrete state's value must offer the same value set the state
+    # can take, or the vehicle publishes a vocabulary it does not use. This is the same binding
+    # as the phase, posture, crew-station and antenna checks, generalised to every domain: the
+    # point says `from: <state>` and the two `enum[...]` lists have to be one list. It cost
+    # nothing to add because all eleven domains already agreed — which is the point of adding it
+    # now rather than after the first domain that does not.
+    states_by_id = {str(s.get("id")): s for s in components.get("state") or []}
+    for point in points.get("points") or []:
+        if not isinstance(point, dict):
+            continue
+        cid, source = point.get("channel"), point.get("from")
+        state = states_by_id.get(str(source))
+        row = index.row(str(cid)) if cid else None
+        if state is None or row is None:
+            continue
+        chan_enums = re.findall(r"enum\[([^\]]*)\]", str(row.get("unit") or ""))
+        state_enums = re.findall(r"enum\[([^\]]*)\]", str(state.get("unit") or ""))
+        if not chan_enums or not state_enums:
+            # A `bool` state is a two-valued vocabulary like any other, and leaving it out of this
+            # check is the third time in this file that an unhandled *type* made a check pass by
+            # default rather than fail — after the conservation guard's `if a and b` and the six
+            # node units with no dimension. `bus_tie_closed` was `unit: bool` while publishing
+            # `power.bus_tie_state` as `enum[open,closed,tripped]`, so the tie could not represent
+            # `tripped` — the state its own note says it latches into on a ground fault. The
+            # vehicle could be in a condition it was structurally unable to report, which is the
+            # same fault as the regulator position and the stage configuration, arriving through a
+            # hole rather than through a disagreement.
+            if str(state.get("unit") or "") == "bool" and chan_enums:
+                offered = {m.strip() for m in chan_enums[0].split(",")}
+                if len(offered) > 2:
+                    report.refuse(
+                        f"domains/{name}/points.yaml:{cid}",
+                        f"publishes {sorted(offered)} from `{source}`, which is a `bool`: a "
+                        "two-valued state cannot hold a value the channel offers, so the vehicle "
+                        "can be in a condition it cannot report",
+                    )
+            continue
+        chan_members = {m.strip() for m in chan_enums[0].split(",")}
+        state_members = {m.strip() for m in state_enums[0].split(",")}
+        if chan_members == state_members:
+            continue
+        if not chan_members & state_members:
+            # Disjoint vocabularies are a projection rather than a fork: `cw.active_lights`
+            # reports which system lamps are lit, which is derived from the alert lifecycle and
+            # is not the lifecycle's own value set. Worth a note because a *sibling* channel that
+            # looks like a projection may not be one, and no rule can tell without reading it.
+            report.note(
+                f"domains/{name}/points.yaml:{cid}",
+                f"publishes {sorted(chan_members)}, a vocabulary disjoint from `{source}`'s "
+                f"{sorted(state_members)} — treated as a projection of that state rather than a "
+                "republication of it",
+            )
+        else:
+            report.refuse(
+                f"domains/{name}/points.yaml:{cid}",
+                f"publishes {sorted(chan_members)} but `{source}` can take "
+                f"{sorted(state_members)}: the vehicle would report a value its own state cannot "
+                "hold, or hold one it never reports",
+            )
+
+    commands = docs.get("commands.yaml") or {}
+    same_thresholds = (thresholds_by_domain or {}).get(name, set())
+    other_thresholds = thresholds_by_domain or {}
+    for verb in commands.get("commands") or []:
+        vid = verb.get("verb", "?")
+        vwhere = f"domains/{name}/commands.yaml:{vid}"
+        if vid != vid.lower() or not re.fullmatch(r"[a-z][a-z0-9_]*", str(vid)):
+            report.refuse(vwhere, "is not lowercase_snake_case (vocabulary V-06, apollo's style)")
+        # The forbidden forms are refused by *name*, in the registry, so that declining a
+        # capability and forgetting to remove its verb cannot look the same. The declined lists
+        # below are allowed to name them: a refusal with a reason is documentation.
+        for pattern, why in FORBIDDEN_VERB.items():
+            if re.match(pattern, str(vid)):
+                report.refuse(vwhere, f"is a forbidden form: {why}")
+        if verb.get("authority") not in AUTHORITIES:
+            report.refuse(
+                vwhere, f"authority {verb.get('authority')!r} is not one of {sorted(AUTHORITIES)}"
+            )
+        # D-03: a gate is an agent-writable preference, an interlock is service-owned, and the
+        # two must be separately declared or the probe cannot tell them apart.
+        if "gate" not in verb:
+            report.refuse(vwhere, "declares no gate (D-03)")
+        if "interlocks" not in verb:
+            report.refuse(
+                vwhere,
+                "declares no interlocks; write `interlocks: none` deliberately if there are none",
+            )
+        # The argument schema is what `capability.snapshot` publishes so a machine can build a
+        # call (vocabulary §1, `communcations_diode.md:436-452`). Four domains wrote the schema
+        # keys at the verb's own indent under an empty `argument_schema:`, which parses, passes
+        # every other check, and advertises an argument-less verb — a fleet would discover the
+        # bug by calling it wrong.
+        if not isinstance(verb.get("argument_schema"), dict):
+            report.refuse(
+                vwhere,
+                f"argument_schema is {verb.get('argument_schema')!r}, not a mapping; an empty "
+                "schema advertises a verb with no arguments",
+            )
+        # A gate *template* is a name a fleet never sees. `presentation.yaml#mirror` says so and
+        # gives the reason §9's check 5 depends on it: "a refusal that named the template rather
+        # than the instantiation — `reserve_floor_<resource>_enable` instead of
+        # `reserve_floor_water_cooling_enable` — would be a name a fleet cannot act on." So every
+        # placeholder has to be expandable, and the thing that makes it expandable is that it names
+        # an enum argument of its own verb. Ten verbs were not: eight wrote a bare `<id>` where the
+        # argument was `antenna`, `source`, `load`, `breaker`, `battery`, `engine`, `pump`, `hatch`
+        # or `loop`, and two declared their values as a *sentence* — `[any id in
+        # components.yaml#loads]` — which instantiates to nothing at all. Both are refusals now,
+        # because a gate the mirror cannot publish is a closed gate a fleet cannot name.
+        gate = verb.get("gate")
+        if isinstance(gate, dict) and gate.get("variable"):
+            variable = str(gate["variable"])
+            schema = verb.get("argument_schema") or {}
+            for placeholder in re.findall(r"<([^>]+)>", variable):
+                spec = schema.get(placeholder)
+                if not isinstance(spec, dict) or spec.get("type") != "enum":
+                    report.refuse(
+                        vwhere,
+                        f"declares gate {variable!r}, whose placeholder <{placeholder}> names no "
+                        f"enum argument of this verb (it has {sorted(schema)}). The mirror expands "
+                        "the template by name, so a placeholder that names nothing is a gate with "
+                        "no instantiation",
+                    )
+                    continue
+                values = spec.get("values") or []
+                if not values:
+                    report.refuse(
+                        vwhere,
+                        f"declares argument {placeholder!r} as an empty enum, so {variable!r} cannot expand",
+                    )
+                elif len(values) == 1 and isinstance(values[0], str) and " " in values[0]:
+                    report.refuse(
+                        vwhere,
+                        f"declares argument {placeholder!r} by describing its values ({values[0]!r}) "
+                        f"rather than listing them, so {variable!r} has no instantiation and the "
+                        "mirror would publish a gate variable with a sentence in it",
+                    )
+        # `avionics_diode.md:496-508` is the only place in the corpus with an ordering argument
+        # for an authorization chain, and the two clauses it puts last are the two that apply
+        # only to irreversible commands: a valid prepare token, and a *synchronised clock* —
+        # `require(vehicle.time_quality == SYNC, "TIME_UNTRUSTED")`. The reason is specific
+        # rather than ceremonial: an irreversible action with a time-tagged deadline has that
+        # deadline measured against the vehicle's clock, so a drifted clock is a one-shot with an
+        # unknown arming window. `mission_diode.md`'s eight-term predicate has no such term.
+        if verb.get("irreversible") and "requires_time_sync" not in verb:
+            report.refuse(
+                vwhere,
+                "is irreversible but does not say whether it requires a synchronised clock "
+                "(avionics_diode.md:496-508); a time-tagged irreversible action on a drifted "
+                "clock has an unknown deadline",
+            )
+        # An interlock that names nothing is an interlock that is never evaluated, and the
+        # failure is silent in the worst way: the verb declares a guard, the executive looks it
+        # up, finds nothing, and either passes or crashes. Three domains wrote a flat
+        # `other_domain_thing` that resolves nowhere; the vocabulary's own example is dotted
+        # (`thermal.pump_dry_run`), so a bare name means this domain and a qualified name means
+        # that one.
+        interlocks = verb.get("interlocks")
+        if isinstance(interlocks, list):
+            for ref in interlocks:
+                if not isinstance(ref, str):
+                    report.refuse(vwhere, f"interlock {ref!r} is not a name")
+                    continue
+                owner, dot, ref_id = ref.partition(".")
+                # A qualifier is a domain, and a domain answers to both of its names: the
+                # directory it lives in and the channel prefix it publishes under. Requiring
+                # one of them would make `consumables.cooling_water_reserve` and
+                # `res.cooling_water_reserve` a spelling test instead of a lookup.
+                if dot:
+                    owner = PREFIX_DOMAIN.get(owner, owner)
+                if not dot:
+                    if ref not in same_thresholds:
+                        report.refuse(
+                            vwhere,
+                            f"interlock {ref!r} resolves to no threshold in this domain, and it "
+                            "is not qualified with another domain's name",
+                        )
+                elif owner not in DOMAINS:
+                    report.refuse(vwhere, f"interlock {ref!r} names no canonical domain")
+                elif ref_id not in other_thresholds.get(owner, set()):
+                    report.refuse(
+                        vwhere,
+                        f"interlock {ref!r} resolves to no threshold in domains/{owner}/",
+                    )
+
+    # A refusal has to be readable, or declining a verb and forgetting to decline it look the
+    # same. The shape matters because of how this list fails: an entry indented one level too
+    # deep is absorbed into the previous entry's block scalar, so the YAML parses, the verb
+    # disappears, and the file still reads as though it is there. That is how
+    # `set_engine_valve`, `set_thermal_limit`, `set_telemetry_profile` and four consumables
+    # verbs went missing at once — six absent entries in a file that looked complete.
+    # `declined` and `not_implemented` are both in use and both checked; the canonical name is
+    # the vocabulary's, and a second name is a dialect until it is reconciled.
+    registered = {str(v.get("verb")) for v in commands.get("commands") or []}
+    for key in ("not_implemented", "declined"):
+        for refused in commands.get(key) or []:
+            rwhere = f"domains/{name}/commands.yaml:{key}"
+            if not isinstance(refused, dict) or not refused.get("verb"):
+                report.refuse(rwhere, f"an entry names no verb: {refused!r}")
+                continue
+            if not refused.get("why"):
+                report.refuse(f"{rwhere} {refused['verb']}", "gives no reason for the refusal")
+            # A verb cannot be both registered and refused *by the same domain*: the registry
+            # would offer it and the help text would deny it, and which one a fleet believed
+            # would depend on which file it read. Declining a verb another domain owns is
+            # legitimate and is a different statement — "not mine" rather than "not this
+            # vehicle's" — which is why the check is scoped to this domain and not to the vehicle.
+            if str(refused["verb"]) in registered:
+                report.refuse(
+                    f"{rwhere} {refused['verb']}",
+                    "is both registered and declined in this domain, so one file offers the verb "
+                    "and the other denies it",
+                )
+
+    profiles = docs.get("profiles.yaml") or {}
+    for threshold in profiles.get("thresholds") or []:
+        tid = threshold.get("id", "?")
+        twhere = f"domains/{name}/profiles.yaml:{tid}"
+        point = threshold.get("point")
+        if point and point not in index:
+            report.refuse(twhere, f"watches {point!r}, which is not a registered channel")
+        elif point:
+            # Invariant D, made mechanical: a guard whose evidence has no maximum age cannot be
+            # evaluated for staleness, so a hazardous effect could proceed on a reading from an
+            # hour ago and nothing would object. This is the check that would have caught the
+            # registry's own `decision_age_ms` table — nineteen of the fifty channels a
+            # threshold watches publish more slowly than their priority default demanded, so
+            # every one of those guards was unsatisfiable in principle.
+            row = index.row(point) or {}
+            age = decision_age_ms(row)
+            if age is None:
+                report.refuse(
+                    twhere,
+                    f"watches {point!r}, which resolves to no maximum decision age: it "
+                    "publishes only on events and declares no `max_decision_age_ms`, so the "
+                    "guard cannot tell a fresh sample from one that will never arrive "
+                    "(mission_diode.md:1292, invariant D)",
+                )
+            else:
+                rate = row.get("rate_hz")
+                period = 1000.0 / float(rate) if isinstance(rate, (int, float)) and rate else None
+                if period is not None and age < period:
+                    report.refuse(
+                        twhere,
+                        f"watches {point!r}, whose maximum decision age ({age:g} ms) is shorter "
+                        f"than one publish period ({period:g} ms): every sample would be stale "
+                        "on arrival, so the guard can never pass",
+                    )
+        # §10 has promised this since it was written — "**a code not in the union** — a quality,
+        # kind, severity, lifecycle state or priority that is not one of the above" — and `severity`
+        # is the field that decides what a crew actually *sees*. It is declared 138 times and was
+        # read by nothing: the linter's only mentions of the word were in comments. The four
+        # annunciated levels are `02-canonical-vocabulary.md` §6, and `INFO` is the non-annunciated
+        # record class, which "exists only as a **non-annunciated** record class — it never lights a
+        # panel". The data is correct today; nothing was keeping it correct.
+        severity = threshold.get("severity")
+        if severity not in SEVERITIES:
+            report.refuse(
+                twhere,
+                f"declares severity {severity!r}, which is not in the V-04 ladder "
+                f"{sorted(SEVERITIES)} (§6). A severity outside it is an alert that lights at no "
+                "level a crew is trained to read",
+            )
+        comparator = threshold.get("comparator")
+        if comparator not in {"above", "below"}:
+            report.refuse(twhere, f"comparator {comparator!r} is neither 'above' nor 'below'")
+            continue
+        if threshold.get("latched") or threshold.get("hysteresis"):
+            assert_v, clear_v = threshold.get("assert"), threshold.get("clear")
+            if not isinstance(assert_v, (int, float)) or not isinstance(clear_v, (int, float)):
+                report.debt(twhere, "is latched but its assert and clear values are not both set")
+            elif comparator == "above" and clear_v >= assert_v:
+                report.refuse(
+                    twhere,
+                    f"hysteresis is inverted: above-comparator with clear {clear_v} >= assert {assert_v}",
+                )
+            elif comparator == "below" and clear_v <= assert_v:
+                report.refuse(
+                    twhere,
+                    f"hysteresis is inverted: below-comparator with clear {clear_v} <= assert {assert_v}",
+                )
+            for field in ("dwell_assert_ms", "dwell_clear_s"):
+                if threshold.get(field) is None:
+                    report.debt(twhere, f"is latched but declares no {field}")
+
+    # The display contract and the channel registry's perception bound must agree.
+    #
+    # They say different things on purpose: `channels.yaml#crew_positions` says which published
+    # channels are perceptible from a position, and the domain's `display_contract` says what an
+    # instrument in front of a person actually displays, at what precision. A readout listed in
+    # one and absent from the other is a leak in the perception bound — the crew would be
+    # reporting something they cannot see, which is the exact failure `review-findings.md` #4
+    # says cannot be cleaned up retroactively.
+    contract = components.get("display_contract") or {}
+    for position in contract.get("positions") or []:
+        pid = position.get("id")
+        pwhere = f"{where}:display_contract position {pid}"
+        if pid not in positions:
+            report.refuse(pwhere, "is not a declared crew position in channels.yaml")
+            continue
+        allowed = set(positions[pid])
+        for panel in position.get("panels") or []:
+            for readout in panel.get("shows") or []:
+                cid = readout.get("channel") if isinstance(readout, dict) else readout
+                if cid not in index:
+                    report.refuse(
+                        f"{pwhere}/{panel.get('id')}",
+                        f"shows {cid!r}, which is not a registered channel",
+                    )
+                elif cid not in allowed:
+                    report.refuse(
+                        f"{pwhere}/{panel.get('id')}",
+                        f"shows {cid!r}, which this position cannot perceive; the display "
+                        "contract and the perception bound disagree, and the crew would be "
+                        "reporting something they cannot see",
+                    )
+
+    # The station vocabulary is written in three places and must be one list: the bound's
+    # `crew_positions`, the `crew.location_[id]` channel that indexes a report to a station, and
+    # the state that says where a person actually is. The third decides which bound gets applied
+    # at runtime, so a name that exists in only two of them is a station a fleet can be told
+    # about and can never be answered from. The state is found by *shape* — a per-crew-member
+    # enum that overlaps the station list — rather than by id, because a check that goes silent
+    # when somebody renames the state is a check that has already failed once.
+    if name == "crew" and positions:
+        for st in components.get("state") or []:
+            unit = str(st.get("unit") or "")
+            if "crew_id" not in unit:
+                continue
+            enum = re.findall(r"enum\[([^\]]*)\]", unit)
+            listed = [member.strip() for member in enum[0].split(",")] if enum else []
+            if not set(listed) & set(positions):
+                continue  # per-crew-member, but not a station vocabulary
+            for missing in sorted(set(positions) - set(listed)):
+                report.refuse(
+                    f"{where}:state {st.get('id')}",
+                    f"omits station {missing!r}, which the perception bound describes: a crew "
+                    "member standing there would be answered from a bound that does not exist",
+                )
+            for extra in sorted(set(listed) - set(positions)):
+                report.refuse(
+                    f"{where}:state {st.get('id')}",
+                    f"offers station {extra!r}, which channels.yaml:crew_positions does not "
+                    "describe",
+                )
+
+    # A one-way event's `observable` list is the same kind of claim as a fault's `perturbs`:
+    # it says which published channels would reveal that the vehicle became a different
+    # vehicle. An event that names an unregistered channel names an observation nobody can
+    # make, which is how an irreversible action becomes invisible.
+    for event in components.get("one_way_events") or []:
+        ewhere = f"{where}:one_way_event {event.get('id')}"
+        if not event.get("verb"):
+            report.refuse(ewhere, "names no verb that fires it")
+        if event.get("arm_required") is None:
+            report.refuse(ewhere, "does not say whether it needs arming")
+        for cid in event.get("observable") or []:
+            if cid not in index:
+                report.refuse(ewhere, f"observable {cid!r} is not a registered channel")
+
+    # --------------------------------------------------------------------------------------
+    # The truth boundary, which is the one invariant the whole design rests on.
+    #
+    # `plant.md` §7: "The plant owns hidden truth. **The instruments turn `T` into `A`; the
+    # publisher turns `A` into files.**" Every domain's `points.yaml#not_published` is where the
+    # vehicle says by name which truths it is withholding — 44 declarations, and this file did not
+    # read one of them. `presentation.yaml` calls it "where the vehicle says which truths it is
+    # withholding" and the epistemic mapping's `T` rule points at it; nothing checked it. A
+    # channel that is declared hidden *and* registered is truth on the wire, and the declaration
+    # that would have said so was the one nobody read. Nothing leaks today, which is the point:
+    # the corpus happens to be right and there is nothing keeping it right.
+    # --------------------------------------------------------------------------------------
+    withheld = 0
+    descriptive = 0
+    for entry in points.get("not_published") or []:
+        names = entry.get("channel") if isinstance(entry, dict) else entry
+        reason = entry.get("why", "") if isinstance(entry, dict) else ""
+        for withheld_name in names if isinstance(names, list) else [names]:
+            text = str(withheld_name)
+            if "." not in text:
+                # An entry that is a *description* rather than a name — "hidden truth", "a
+                # conclusion", "the battery's true capacity after a derate". It states a category
+                # rather than a channel, so no rule can check it and the count is reported instead
+                # of pretending otherwise.
+                descriptive += 1
+                continue
+            withheld += 1
+            where_np = f"domains/{name}/points.yaml:not_published {text!r}"
+            if not reason:
+                report.refuse(
+                    where_np, "is withheld with no `why`, so nobody can review the choice"
+                )
+            # **Exact keys, not `ChannelIndex`.** The index compiles `[id]` to `.+?`, which is
+            # unbounded, so `thermal.zone_[id]_true_t_c` resolves against the registry's
+            # `thermal.zone_[id]_t_c` — the wildcard absorbs `1_true` and the literal `_t_c` then
+            # matches. That is a false *positive* here and a false *negative* everywhere the index
+            # answers "is this a registered channel": `power.lcl_1_old_state` resolves to
+            # `power.lcl_[n]_state`'s row. A withheld truth has to be named exactly, so this uses
+            # the registry's own keys and the weakness is recorded rather than depended on.
+            if text in index.rows:
+                report.refuse(
+                    where_np,
+                    "is declared withheld and is a registered channel. A hidden truth that is "
+                    "registered is truth on the wire: this is the §7 boundary, and the declaration "
+                    "that says so is the one nothing was reading",
+                )
+    if withheld or descriptive:
+        report.note(
+            f"domains/{name}/points.yaml:not_published",
+            f"withholds {withheld} named channel(s) and {descriptive} described categor"
+            f"{'y' if descriptive == 1 else 'ies'} from the fleet",
+        )
+
+    fault_policy = docs.get("fault_policy.yaml") or {}
+    for fault in fault_policy.get("faults") or []:
+        fid = fault.get("id", "?")
+        fwhere = f"domains/{name}/fault_policy.yaml:{fid}"
+        for field in ("component", "mechanism"):
+            if not fault.get(field):
+                report.refuse(fwhere, f"has no {field}")
+        # review-findings.md #11: an aggregate model is legitimate only if it can produce every
+        # fault signature in its own policy, which requires each fault to name the channels it
+        # perturbs. A fault that perturbs nothing observable is a fault nobody can diagnose.
+        perturbs = fault.get("perturbs") or []
+        if not perturbs:
+            report.refuse(
+                fwhere, "names no published channel it perturbs, so it cannot be diagnosed"
+            )
+        for cid in perturbs:
+            if cid not in index:
+                report.refuse(fwhere, f"perturbs {cid!r}, which is not a registered channel")
+
+        # Everything below was read by nothing until this round, and that is why two schema
+        # dialects and four broken entries lived in the corpus unnoticed. `component`, `mechanism`
+        # and `perturbs` were checked; `kind`, `seeding`, `detection` and `response` — the whole
+        # diagnostic half of all 118 faults — were not. A field no tool reads is a field that
+        # drifts, and these had drifted into eleven kinds, two placements for `response`, and four
+        # faults whose `detection:` was an empty key with its three children left at fault level.
+        kind = fault.get("kind")
+        if kind not in FAULT_KINDS:
+            report.refuse(
+                fwhere,
+                f"declares kind {kind!r}, which is not in the fault-kind union "
+                f"(02-canonical-vocabulary.md §9b): {sorted(FAULT_KINDS)}",
+            )
+        seeding = fault.get("seeding")
+        if not isinstance(seeding, dict) or not any(form in seeding for form in SEEDING_FORMS):
+            report.refuse(
+                fwhere,
+                f"declares seeding {seeding!r}, which names none of {list(SEEDING_FORMS)}; a fault "
+                "that does not say how it can occur cannot be scheduled",
+            )
+        elif "hazard" in seeding and not seeding.get("unit"):
+            report.refuse(
+                fwhere, "seeds on a hazard rate with no `unit`; a rate without a unit is not a rate"
+            )
+        detection = fault.get("detection")
+        if not isinstance(detection, dict):
+            report.refuse(
+                fwhere,
+                f"declares detection {detection!r}, not a mapping. This is the shape an absorbed "
+                "list item leaves behind: an empty `detection:` key with its children at fault "
+                "level, which four faults had",
+            )
+        else:
+            for field in ("evidence", "latency", "false_positive_risk"):
+                if not detection.get(field):
+                    report.refuse(fwhere, f"declares no detection.{field}")
+            # The fork that was repaired this round: 41 faults nested `response` inside
+            # `detection` and 77 put it at fault level, so half the corpus's responses were in a
+            # place the other half did not use. A response is what the vehicle does about the
+            # fault, not part of detecting it.
+            if "response" in detection:
+                report.refuse(
+                    fwhere,
+                    "nests `response` inside `detection`; the response is what the vehicle does "
+                    "about the fault, and 41 faults had it here while 77 had it at fault level",
+                )
+        response = fault.get("response")
+        if not isinstance(response, dict) or response.get("kind") not in FAULT_RESPONSES:
+            report.refuse(
+                fwhere,
+                f"declares response {response!r}; every fault must say whether the service acts "
+                f"without asking or an agent decides, one of {sorted(FAULT_RESPONSES)}",
+            )
+        elif response.get("kind") == "service" and not response.get("note"):
+            report.refuse(
+                fwhere,
+                "has a `service` response and no note. A service response acts without asking "
+                "(electrical_diode.md:845), so the note is the only place its action is stated",
+            )
+
+
+def check_domains(
+    root: Path,
+    registry: dict[str, dict[str, Any]],
+    coupling: dict[str, Any] | None,
+    channels_doc: dict[str, Any] | None,
+    report: Report,
+) -> None:
+    """Every `domains/<name>/` composes, and the linter names the ones still owed."""
+    node_ids = set((coupling or {}).get("nodes") or {})
+    index = ChannelIndex(registry)
+    positions = {
+        p.get("id"): [str(c) for c in (p.get("perceivable") or [])]
+        for p in (channels_doc or {}).get("crew_positions") or []
+    }
+    domains_dir = root / "domains"
+    present: set[str] = set()
+    # A verb's interlocks may name its own thresholds or another domain's, so the whole set is
+    # collected before any domain is checked: `set_vent_valve` refusing to vent while a hatch is
+    # open is a claim about `domains/structure/`, and a check that only saw its own directory
+    # could not tell a cross-domain interlock from a typo.
+    thresholds_by_domain: dict[str, set[str]] = {}
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            profiles = load(path / "profiles.yaml", report) or {}
+            thresholds_by_domain[path.name] = {
+                str(t.get("id")) for t in profiles.get("thresholds") or [] if t.get("id")
+            }
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            present.add(path.name)
+            check_domain(path, node_ids, index, positions, report, thresholds_by_domain)
+    # ----------------------------------------------------------------------------------
+    # Intra-node ordering. A node is advanced by one or more states, and when it is more
+    # than one, *which advances first is a modelling decision that nothing declared*.
+    #
+    # This is not a formality, because the tiebreak actively gets it wrong: the frozen
+    # lexicographic rule sorts `link_snr` before `tx_power`, and transmit power is a term in
+    # the link budget — so the derived order would compute the signal-to-noise ratio from
+    # last tick's power and call it this tick's. Ten nodes are in this position, and silence
+    # about them means the alphabet decides.
+    #
+    # So each node with more than one producing state declares either an order or that it has
+    # none. `independent` is a permitted answer and it is a *claim*: four conserved gas masses
+    # in one compartment genuinely do not care which advances first, three engine state
+    # machines do not either, and saying so is better than an arbitrary list that reads as a
+    # finding.
+    # ----------------------------------------------------------------------------------
+    by_node: dict[str, list[tuple[str, str]]] = {}
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            components = load(path / "components.yaml", Report()) or {}
+            for state in components.get("state") or []:
+                node = str(state.get("node"))
+                if node and node != "internal":
+                    by_node.setdefault(node, []).append((path.name, str(state.get("id"))))
+    node_docs = (coupling or {}).get("nodes") or {}
+    for node, producers in sorted(by_node.items()):
+        if len(producers) < 2:
+            continue
+        where = f"coupling.yaml:node {node}"
+        declared = node_docs.get(node) or {}
+        order = declared.get("state_order")
+        names = sorted(state_id for _, state_id in producers)
+        if order is None:
+            report.refuse(
+                where,
+                f"is advanced by {len(producers)} states ({', '.join(names)}) and declares no "
+                "`state_order`, so the frozen lexicographic tiebreak decides which advances "
+                "first — and for this node that may be the wrong one",
+            )
+            continue
+        if order == "independent":
+            if not declared.get("state_order_note"):
+                report.refuse(
+                    where,
+                    "declares its state order independent without a reason. Independence is a "
+                    "claim about the physics and it needs to be on the record",
+                )
+            else:
+                report.note(
+                    f"coupling.yaml:node {node}", "advances " + ", ".join(names) + " in any order"
+                )
+            continue
+        if not isinstance(order, list):
+            report.refuse(
+                where, f"declares state_order {order!r}, which is neither a list nor 'independent'"
+            )
+            continue
+        if sorted(str(s) for s in order) != names:
+            report.refuse(
+                where,
+                f"declares state_order {sorted(str(s) for s in order)} but the node is advanced "
+                f"by {names}: the list has to be the group, in the order it advances",
+            )
+            continue
+        # The declared order is the group's; report it so the derived schedule can be read.
+        report.note(
+            f"coupling.yaml:node {node}",
+            "advances " + " then ".join(str(s) for s in order),
+        )
+
+    for missing in sorted(EXPECTED_DOMAINS - present):
+        report.debt(
+            f"domains/{missing}",
+            "has no specification yet; the corpus has one and it has not been landed",
+        )
+
+
+def check_vehicle(doc: dict[str, Any], report: Report) -> None:
+    """Mass closure, and the configuration names the mission refers to."""
+    for cfg in doc.get("configurations") or []:
+        where = f"vehicle.yaml:configuration {cfg.get('id')}"
+        if "mass_kg" not in cfg:
+            report.debt(where, "has no mass")
+            continue
+        parts = cfg.get("mass_breakdown") or {}
+        stated = cfg.get("mass_breakdown_total_kg")
+        if parts and stated is not None:
+            numeric = {k: v for k, v in parts.items() if isinstance(v, (int, float))}
+            unset = sorted(k for k, v in parts.items() if not isinstance(v, (int, float)))
+            if unset:
+                report.debt(
+                    where, f"mass breakdown has unset parts {unset}, so it cannot be summed"
+                )
+                continue
+            total = sum(numeric.values())
+            if abs(total - stated) > 1.0:
+                report.refuse(
+                    where,
+                    f"mass breakdown sums to {total:g} kg but the total is stated as {stated:g} kg",
+                )
+
+
+def check_propulsion(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) -> None:
+    """Fly the mission's Δv budget through each tank, in order, and see whether it closes.
+
+    This is the check that stops a trajectory and a tank size drifting apart — the failure
+    mode where a mission looks flyable and is not, and the one that is invisible in either
+    file read alone.
+
+    It has to be sequential rather than a single ratio, because two of this vehicle's burns
+    leave from very different masses and the difference is not a detail: LOI is flown by the
+    44-tonne docked stack and TEI by a CSM that has since lost the LM, so an engine's
+    requirement computed from one mass is wrong by fifteen tonnes. Each burn therefore names
+    the configuration it is flown in, and the linter walks the mission in phase order,
+    subtracting what that engine has already spent.
+
+    What it does not model, stated rather than hidden: non-ideal Isp during thrust build-up
+    and tailoff, and residual propellant that cannot be drawn from a tank. Both make a real
+    vehicle need *more* than this check computes, so a vehicle that passes still has to
+    survive the plant's own accounting — which is the right direction for a pre-flight check
+    to be wrong in.
+    """
+    phases = [p.get("id") for p in (doc.get("phases") or [])]
+    order = {pid: index for index, pid in enumerate(phases)}
+    configs = {c.get("id"): c for c in (vehicle.get("configurations") or [])}
+
+    burns: dict[str, list[dict[str, Any]]] = {}
+    for burn in doc.get("delta_v_budget") or []:
+        where = f"mission.yaml:burn {burn.get('id')}"
+        engine = burn.get("engine")
+        if not engine:
+            report.refuse(where, "names no engine")
+            continue
+        dv = burn.get("dv_m_s")
+        if not isinstance(dv, (int, float)):
+            report.debt(where, "has no dv_m_s")
+            continue
+        prov = burn.get("provenance") or {}
+        check_basis(where, prov.get("basis"), prov, report)
+        # A burn in no phase is a burn before the mission starts; it is allowed only if the
+        # provenance says so, because otherwise it is a burn nobody can ever fly.
+        phase = burn.get("phase")
+        if phase is not None and phase not in order:
+            report.refuse(
+                where, f"is flown in phase {phase!r}, which mission.yaml does not declare"
+            )
+        if engine == "external_sivb":
+            continue
+        cfg = burn.get("configuration")
+        if cfg not in configs:
+            report.refuse(
+                where, f"names configuration {cfg!r}, which vehicle.yaml does not declare"
+            )
+            continue
+        burns.setdefault(engine, []).append(
+            {"id": burn.get("id"), "dv": float(dv), "config": cfg, "sort": order.get(phase, -1)}
+        )
+
+    for name, engine in (vehicle.get("propulsion") or {}).items():
+        where = f"vehicle.yaml:propulsion {name}"
+        engine_burns = sorted(burns.get(name, []), key=lambda b: b["sort"])
+        if not engine_burns:
+            report.note(where, "has no mission burn, so its load is unchecked")
+            continue
+        isp = engine.get("isp_s")
+        tank = engine.get("mass_kg")
+        if not all(isinstance(v, (int, float)) for v in (isp, tank)):
+            report.debt(where, "cannot be checked: isp_s and mass_kg are not both set")
+            continue
+        ve = float(isp) * 9.80665
+        spent = 0.0
+        for burn in engine_burns:
+            wet = float(configs[burn["config"]]["mass_kg"]) - spent
+            if wet <= 0:
+                report.refuse(
+                    where, f"{burn['id']} starts from a negative mass; the budget is impossible"
+                )
+                break
+            spent += wet * (1.0 - pow(2.718281828459045, -burn["dv"] / ve))
+        else:
+            reserve = 100.0 * (float(tank) / spent - 1.0) if spent else float("inf")
+            if float(tank) < spent * 0.98:
+                report.refuse(
+                    where,
+                    f"cannot fly the budget: the mission needs {spent:,.0f} kg through this "
+                    f"tank at Isp {isp:g} s and it holds {tank:,g} kg",
+                )
+            else:
+                report.note(
+                    where,
+                    f"closes: the mission spends {spent:,.0f} kg of {tank:,g} kg "
+                    f"({reserve:.1f} % reserve)",
+                )
+
+
+def decision_age_ms(row: dict[str, Any]) -> float | None:
+    """The maximum age at which a channel may still be the basis of a decision.
+
+    `mission_diode.md:1227-1262` supplies the calculation and the per-guard manifest; the
+    rule the vehicle adopted is the one in `channels.yaml`'s header — **one publish period**,
+    because a value older than one period is a value the publisher was obliged to refresh and
+    did not. A channel may declare its own value, which is how an event-driven channel (no
+    period at all) becomes usable as a decision input, and how a channel whose *service*
+    evaluates it faster than it publishes can say so.
+
+    Returning `None` means the executive cannot tell a fresh sample from one that will never
+    arrive, which for a threshold's point is a refusal rather than a debt: `mission_diode.md`'s
+    invariant D makes a hazardous effect on stale evidence a safety failure, and a guard with
+    no age cannot be evaluated for staleness at all.
+    """
+    declared = row.get("max_decision_age_ms")
+    if isinstance(declared, (int, float)):
+        return float(declared)
+    rate = row.get("rate_hz")
+    if isinstance(rate, (int, float)) and rate > 0:
+        return 1000.0 / float(rate)
+    return None
+
+
+def check_event_classes(
+    root: Path,
+    registry: dict[str, dict[str, Any]],
+    report: Report,
+    all_threshold_ids: set[str] | None = None,
+) -> None:
+    """Every declared event says what kind it is, and the kind is checkable.
+
+    `channels.yaml`'s `events` field is **apollo's prose** — "stuck-on/off signature", "<8
+    degraded", "any non-null" — and the thresholds are the machine-readable form of the same
+    promises. Nothing joined them, and the audit that did found **53 of 118 channels declaring
+    events that no threshold watched**. A dictionary that promises an alarm the vehicle does not
+    raise is worse than one that promises nothing, because a fleet reads the promise and waits.
+
+    Not all 53 were holes. Some events are publications rather than alarms — a phase change, a
+    mode change, an "unexpected" condition the vehicle cannot recognise because only the fleet
+    knows what it expected. So each channel with events declares `event_class`, and the class is
+    a claim the linter can hold:
+
+      - **alarm** — the vehicle raises a C&W alert, so *something must watch it*. The threshold
+        is on this channel, because an alarm on a quantity is a comparison against that quantity.
+      - **notification** — published when it changes and not alerted. Requires `on_event: true`,
+        since a notification with no cadence is a notification nobody gets.
+      - **frame** — carried in the envelope's own fields rather than as a value in `values`.
+    """
+    index = ChannelIndex(registry)
+    all_threshold_ids = all_threshold_ids or set()
+    watched: set[str] = set()
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            profiles = load(path / "profiles.yaml", Report()) or {}
+            for threshold in profiles.get("thresholds") or []:
+                all_threshold_ids.add(str(threshold.get("id")))
+                point = threshold.get("point")
+                if not point:
+                    continue
+                row = index.row(str(point))
+                if row is None:
+                    continue
+                for cid, candidate in registry.items():
+                    if candidate is row:
+                        watched.add(cid)
+    frame_fields = (
+        {
+            str((f or {}).get("name"))
+            for f in (load(root / "presentation.yaml", Report()) or {})
+            .get("frame", {})
+            .get("fields", [])
+        }
+        if (root / "presentation.yaml").exists()
+        else set()
+    )
+
+    for cid, row in sorted(registry.items()):
+        events = row.get("events")
+        kind = row.get("event_class")
+        if not events:
+            if kind:
+                report.refuse(
+                    f"channels.yaml:{cid}",
+                    f"declares event_class {kind!r} and no events. A class with nothing to classify "
+                    "is a field somebody filled in because it was there",
+                )
+            continue
+        if not kind:
+            report.refuse(
+                f"channels.yaml:{cid}",
+                f"declares {len(events)} event(s) and no `event_class`. Whether an event is an "
+                "alarm, a publication or an envelope field is what decides whether anything has "
+                "to implement it, and leaving it unsaid is how 53 promises went unkept",
+            )
+            continue
+        if kind not in {"alarm", "notification", "frame", "realised_by"}:
+            report.refuse(f"channels.yaml:{cid}", f"declares event_class {kind!r}")
+            continue
+        # `realised_by` is the commonest class and the one worth having: an event on one channel
+        # is often implemented by a threshold on *another* channel that measures the same
+        # quantity from a different domain's side. `eclss.cabin_temp_c` and
+        # `thermal.zone_[id]_t_c` are one cabin temperature seen twice, and the thermal domain's
+        # `csm_cabin_low`/`csm_cabin_high` are what keep the ECLSS channel's promise. Naming the
+        # threshold makes the claim checkable rather than plausible.
+        if kind == "realised_by":
+            named = row.get("event_thresholds") or []
+            if not named:
+                report.refuse(
+                    f"channels.yaml:{cid}",
+                    "is classed `realised_by` and names no `event_thresholds`, so the claim that "
+                    "something implements it is unverifiable",
+                )
+            for tid in named:
+                if str(tid) not in all_threshold_ids:
+                    report.refuse(
+                        f"channels.yaml:{cid}",
+                        f"names {tid!r} as the threshold that realises it, and no domain declares "
+                        "a threshold by that id",
+                    )
+        if kind == "alarm" and cid not in watched:
+            report.refuse(
+                f"channels.yaml:{cid}",
+                f"declares event_class 'alarm' and no threshold watches it: the dictionary "
+                f"promises {events!r} and the vehicle raises nothing. Either add the threshold or "
+                "classify the event as a notification",
+            )
+        if kind == "notification" and not row.get("on_event"):
+            report.refuse(
+                f"channels.yaml:{cid}",
+                "is a notification and declares no `on_event`, so it is published on a cadence "
+                "rather than when it changes — which is not what a notification is",
+            )
+        if kind == "frame" and cid.split(".", 1)[-1] not in frame_fields:
+            report.refuse(
+                f"channels.yaml:{cid}",
+                f"is classed as a frame field and {cid.split('.', 1)[-1]!r} is not one of "
+                "presentation.yaml#frame's fields",
+            )
+
+
+def check_producers(
+    root: Path,
+    registry: dict[str, dict[str, Any]],
+    presentation: dict[str, Any],
+    report: Report,
+) -> None:
+    """Every registered channel must have a declared source, or the vehicle publishes nothing.
+
+    This is the check whose absence let 27 channels sit in the registry with no producer at all.
+    A channel that no domain publishes and no frame field carries is not a missing feature: it is
+    a threshold watching a value nobody computes, a crew position told it can read a gauge that
+    does not exist, and a failure chain whose first clue is a number that is never emitted. None
+    of those shows up anywhere else, because every other check runs from the name *to* the
+    registry and this is the one that runs back.
+
+    Three kinds of source are legitimate, and they are different kinds:
+
+      - **a domain point** — `domains/<name>/points.yaml#points[].channel`, resolved through the
+        registry's own templates so `res.recon_o2_kg` answers for `res.recon_[resource]_kg`.
+      - **a frame field** — `presentation.yaml#frame.fields`, which is how apollo's `phase` and
+        `met_s` reach a fleet without being anybody's domain point.
+      - **the plant's own envelope** — `presentation.yaml#plant_published`, for the mission
+        channels the plant computes and no domain owns.
+    """
+    index = ChannelIndex(registry)
+    covered: set[str] = set()
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            points = load(path / "points.yaml", Report()) or {}
+            for point in points.get("points") or []:
+                cid = point.get("channel") if isinstance(point, dict) else point
+                if not cid:
+                    continue
+                row = index.row(str(cid))
+                if row is not None:
+                    for registered, candidate in registry.items():
+                        if candidate is row:
+                            covered.add(registered)
+    for field in (presentation.get("frame") or {}).get("fields") or []:
+        name = str((field or {}).get("name"))
+        for registered in registry:
+            if registered == f"mission.{name}" or registered.endswith(f".{name}"):
+                covered.add(registered)
+    for entry in presentation.get("plant_published") or []:
+        cid = entry.get("channel") if isinstance(entry, dict) else entry
+        if cid:
+            row = index.row(str(cid))
+            if row is None:
+                report.refuse(
+                    "presentation.yaml:plant_published",
+                    f"names {cid!r}, which is not a registered channel",
+                )
+            else:
+                for registered, candidate in registry.items():
+                    if candidate is row:
+                        covered.add(registered)
+    for cid in sorted(set(registry) - covered):
+        report.refuse(
+            f"channels.yaml:{cid}",
+            "is registered and nothing publishes it: no domain point, no frame field, and no "
+            "entry in presentation.yaml#plant_published. A channel with no producer is a "
+            "threshold watching a number nobody computes",
+        )
+
+
+def check_presentation(
+    doc: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    verbs: dict[str, dict[str, Any]],
+    report: Report,
+) -> None:
+    """The vehicle's side of the frozen window: what the fleet is told, and in which file.
+
+    `presentation.yaml` exists because nothing did. The registries define what the vehicle knows
+    and this defines what a fleet can see, and the gap between them is where a vehicle satisfying
+    nothing of `docs/diode-contract.md` would hide: 145 channels with no statement of which appear
+    in `state.json` and which in the ring, and 58 verbs whose gate variables §3 requires to be
+    published and which were collected nowhere.
+
+    What the linter can hold is the part that is a *count* or a *set*: the mirror's bound, the
+    cadence classes' membership against the registry's own rates, the frame's field list. The parts
+    that are prose — why a service state is layer A — are argued in the file and cannot be checked,
+    which is the honest division.
+    """
+    where = "presentation.yaml"
+    if not doc:
+        report.debt(
+            where,
+            "is absent, so nothing says which of the registry's channels reach the fleet or in "
+            "which file — the vehicle's side of the frozen window is undeclared",
+        )
+        return
+
+    # 1. The contract this file claims to satisfy has to be the frozen one.
+    if doc.get("contract_status") != "frozen":
+        report.refuse(
+            f"{where}:contract_status",
+            f"declares {doc.get('contract_status')!r}; `docs/diode-contract.md` is frozen and a "
+            "vehicle claiming otherwise would be free to drift from the window it must meet",
+        )
+
+    # 2. Every kind in the registry's `layer` field must map to a contract layer. An unmapped kind
+    #    is a channel whose epistemic status the publisher cannot state.
+    mapping = (doc.get("epistemic_layers") or {}).get("mapping") or {}
+    for kind in sorted(LAYERS):
+        if kind not in mapping:
+            report.refuse(
+                f"{where}:epistemic_layers.mapping",
+                f"does not map the registry's {kind!r} kind onto a contract layer, so a channel of "
+                "that kind cannot be published with an epistemic status",
+            )
+    for kind, layer in sorted(mapping.items()):
+        if layer not in {"A", "I", "T"}:
+            report.refuse(
+                f"{where}:epistemic_layers.mapping",
+                f"maps {kind!r} to {layer!r}, which is not one of A, I or T",
+            )
+        if layer == "T":
+            report.refuse(
+                f"{where}:epistemic_layers.mapping",
+                f"maps {kind!r} to T: `docs/diode-contract.md:202` publishes truth never, and every "
+                "domain's `not_published` section is where the vehicle says so by name",
+            )
+
+    # 3. The mirror's bound. `state.json` is rewritten every cycle, so its membership is a cost
+    #    paid at the ring's cadence and the bound is what makes growth a decision.
+    mirror = doc.get("mirror") or {}
+    members = [
+        cid
+        for cid, row in registry.items()
+        if row.get("layer") == "service" and row.get("priority") in {"P0", "P1"}
+    ]
+    declared_count = mirror.get("member_count")
+    if declared_count != len(members):
+        report.refuse(
+            f"{where}:mirror.member_count",
+            f"declares {declared_count!r} but the registry has {len(members)} service channels at "
+            "P0/P1, which is the set the mirror's own rule derives",
+        )
+    bound = mirror.get("bound")
+    if not isinstance(bound, int):
+        report.refuse(f"{where}:mirror.bound", "declares no bound")
+    elif len(members) > bound:
+        report.refuse(
+            f"{where}:mirror.bound",
+            f"the mirror would carry {len(members)} members against a bound of {bound}: "
+            "`state.json` is rewritten every cycle, so every member is a cost at the ring's cadence",
+        )
+
+    # 4. Every verb must declare exactly one gate *variable*, because §9's check 5 is "a closed
+    #    gate is refused by name, and its variable is published". A gate written as a string has no
+    #    name to publish.
+    gate_vars = set()
+    for vid, verb in sorted(verbs.items()):
+        gate = verb.get("gate")
+        if isinstance(gate, dict) and gate.get("variable"):
+            gate_vars.add(str(gate["variable"]))
+        elif isinstance(gate, str):
+            report.refuse(
+                f"domains/*/commands.yaml:{vid}",
+                f"declares a gate as a string ({gate!r}); the contract publishes gate *variables* "
+                "and a string has no name to publish",
+            )
+    if not gate_vars:
+        report.debt(f"{where}:mirror.vehicle_keys", "no gate variable is published anywhere")
+
+    # 5. The frame's fields.
+    frame_fields = {
+        f.get("name") for f in (doc.get("frame") or {}).get("fields") or [] if isinstance(f, dict)
+    }
+    for required in (
+        "schema",
+        "seq",
+        "boot_id",
+        "met_s",
+        "sensor_time_s",
+        "publish_time_s",
+        "state_revision",
+        "values",
+        "quality",
+        "phase",
+        "vehicle",
+    ):
+        if required not in frame_fields:
+            report.refuse(
+                f"{where}:frame.fields",
+                f"has no {required!r} field. A ring that cannot be sequenced, aged or attributed is "
+                "a ring a fleet has to guess about",
+            )
+
+    # 6. The cadence classes must account for every channel and match the rates the registry
+    #    actually declares. A summary that disagrees with its source is worse than no summary.
+    classes = (doc.get("ring") or {}).get("cadence_classes") or []
+    counted = {c.get("class"): c.get("members") for c in classes if isinstance(c, dict)}
+    actual: dict[str, int] = dict.fromkeys(counted, 0)
+    for row in registry.values():
+        rate = row.get("rate_hz") or 0
+        if rate == 0:
+            bucket = "event"
+        elif rate >= 5:
+            bucket = "fast"
+        elif rate >= 1:
+            bucket = "control"
+        elif rate >= 0.5:
+            bucket = "slow"
+        else:
+            bucket = "resource"
+        if bucket in actual:
+            actual[bucket] += 1
+    for name in sorted(counted):
+        if counted[name] != actual.get(name):
+            report.refuse(
+                f"{where}:ring.cadence_classes.{name}",
+                f"claims {counted[name]} members but the registry has {actual.get(name)} channels "
+                "in that cadence class",
+            )
+    total = (doc.get("ring") or {}).get("members_total")
+    if total != len(registry):
+        report.refuse(
+            f"{where}:ring.members_total",
+            f"claims {total} channels against a registry of {len(registry)}",
+        )
+    report.note(
+        where,
+        f"the fleet's view is declared: {len(members)} mirrored, {len(registry)} in the ring over "
+        f"{len(classes)} cadence classes, {len(frame_fields)} frame fields, {len(gate_vars)} gate "
+        "variables published",
+    )
+
+
+def check_trajectory(doc: dict[str, Any], report: Report) -> None:
+    """Re-derive the patched-conic elements, because a state vector is checkable arithmetic.
+
+    `mission.yaml#initial_state` was the vehicle's largest single debt for several rounds: the
+    published geometry does not close as an Earth-centred conic, so the state vector was declared
+    UNCONFIGURED with the constraint set recorded beside it. Solving that constraint is arithmetic
+    rather than design — Kepler's equation and vis-viva, the same two relations the propulsion
+    check uses for the rocket equation — so the linter can hold the answer to it. What it cannot
+    check is the part that needs a datum nobody has, and the debt says which part that is.
+
+    The check also carries conflict C-24's disposition: the published post-injection speed is
+    *slower than a Hohmann transfer*, so it cannot arrive at the Moon at any transit time, and the
+    linter refuses an initial state whose speed cannot reach the arrival radius. That is the check
+    that would have caught the published figure in the first place.
+    """
+    state = doc.get("initial_state") or {}
+    orbit = state.get("earth_parking_orbit") or {}
+    elements = state.get("osculating_elements")
+    if not elements:
+        report.debt(
+            "mission.yaml:initial_state",
+            "declares no osculating elements, so nothing says where the vehicle starts",
+        )
+        return
+    where = "mission.yaml:initial_state.osculating_elements"
+    mu = 398600.4418
+    radius_earth = 6378.137
+    perigee = orbit.get("perigee_altitude_km")
+    apogee = orbit.get("apogee_altitude_km")
+    if not all(isinstance(v, (int, float)) for v in (perigee, apogee)):
+        report.debt(where, "cannot be re-derived: the parking orbit's altitudes are unset")
+        return
+    r_p = radius_earth + (float(perigee) + float(apogee)) / 2
+    a = elements.get("semi_major_axis_km")
+    e = elements.get("eccentricity")
+    speed = elements.get("speed_at_cutoff_m_s")
+    arrival_h = elements.get("arrival_at_moon_h")
+    if not all(isinstance(v, (int, float)) for v in (a, e, speed, arrival_h)):
+        report.debt(
+            where, "cannot be re-derived: a, e, the cutoff speed or the arrival time is unset"
+        )
+        return
+    a, e, speed, arrival_h = float(a), float(e), float(speed), float(arrival_h)
+
+    # 1. e = 1 - r_p/a. One determination, so the two published numbers must agree with it.
+    e_derived = 1.0 - r_p / a
+    if abs(e_derived - e) > 1e-4:
+        report.refuse(
+            where,
+            f"declares e = {e:g} but 1 - r_p/a = {e_derived:.6f}; the parking-orbit radius and "
+            "the semi-major axis determine the eccentricity and there is no third degree of "
+            "freedom to spend on a disagreement",
+        )
+    # 2. vis-viva at cutoff.
+    v_derived = math.sqrt(mu * (2.0 / r_p - 1.0 / a)) * 1000.0  # km/s -> m/s
+    if abs(v_derived - speed) > 1.0:
+        report.refuse(
+            where,
+            f"declares a cutoff speed of {speed:g} m/s but vis-viva gives {v_derived:.1f} m/s",
+        )
+    # 3. the speed must actually reach the arrival radius — conflict C-24 made mechanical.
+    r_arrival = 384400.0
+    apogee_r = a * (1.0 + e)
+    if apogee_r < r_arrival:
+        report.refuse(
+            where,
+            f"its apogee is {apogee_r:,.0f} km and the Moon is at {r_arrival:,.0f} km: this "
+            "trajectory cannot arrive at any transit time, however long. The published "
+            "post-injection speed is 93.8 m/s slower than a minimum-energy Hohmann transfer "
+            "(conflict C-24)",
+        )
+    # 4. and the arrival time must be the one the phase ladder prices.
+    phases = {str(p.get("id")): p for p in doc.get("phases") or []}
+    coast = phases.get("translunar_coast") or {}
+    if isinstance(coast.get("duration_h"), (int, float)):
+        ladder_h = float(coast["duration_h"])
+        if abs(ladder_h - arrival_h) > 0.05:
+            report.refuse(
+                where,
+                f"arrives at {arrival_h:g} h but the translunar coast phase is {ladder_h:g} h: "
+                "the element was solved from the ladder, so a disagreement means one of them moved",
+            )
+        # 5. Kepler's equation, solved the same way the element was.
+        lo, hi = r_p + 1.0, 1.0e7
+        target = 2.0 * math.pi * math.sqrt(a**3 / mu)  # full period, for the bisection bound
+        if target <= 0:
+            report.refuse(where, "has a non-positive transfer period")
+        else:
+            lo, hi = 1.0, 1.0e8
+            for _ in range(200):
+                mid = (lo + hi) / 2
+                ecc = 1.0 - r_p / mid
+                ratio = (1.0 - r_arrival / mid) / ecc
+                ecc_anom = math.acos(max(-1.0, min(1.0, ratio)))
+                t = (ecc_anom - ecc * math.sin(ecc_anom)) / math.sqrt(mu / mid**3)
+                if t > ladder_h * 3600.0:
+                    lo = mid
+                else:
+                    hi = mid
+            a_solved = (lo + hi) / 2
+            if abs(a_solved - a) / a > 2e-3:
+                report.refuse(
+                    where,
+                    f"declares a = {a:,.0f} km but Kepler's equation puts the Moon's mean "
+                    f"distance at {ladder_h:g} h from a = {a_solved:,.0f} km",
+                )
+    report.note(
+        where,
+        f"re-derived: a = {a:,.0f} km, e = {e:.6f}, apogee {apogee_r:,.0f} km, cutoff "
+        f"{speed:g} m/s, arriving at {arrival_h:g} h",
+    )
+
+
+def check_scenario_postures(doc: dict[str, Any], report: Report) -> None:
+    """The difficulty scaling has to be *scale-invariant in the class*, or it cannot be applied.
+
+    `apollo_diode.md:370-374` gives three postures and `mission.yaml` declares them. Each row has a
+    critical hazard, a noncritical hazard and a demand-failure probability, and the corpus's 118
+    fault policies declare a bare `hazard` with no class — 39 sitting exactly on one of the two
+    baselines and **19 sitting between them** (`COM-09` at 1e-4 is 5x critical and 0.5x
+    noncritical). A posture whose two hazard columns moved by different factors would therefore make
+    a fault's new rate depend on a class the fault does not declare, and a third of the corpus would
+    be unscalable.
+
+    It works today only because both columns move x5 at `degraded` and x10 at `crisis` — which is
+    a property of these numbers and not a rule anybody wrote down, so it is a rule now. This is the
+    fourth time in this folder that something was true by coincidence and the fix was to say it.
+    """
+    postures = doc.get("scenario_postures") or []
+    if not postures:
+        report.refuse("mission.yaml:scenario_postures", "declares no postures, so nothing scales")
+        return
+    base = next((p for p in postures if p.get("id") == "nominal"), None)
+    if base is None:
+        report.refuse(
+            "mission.yaml:scenario_postures",
+            "declares no `nominal` posture, and every other row is a scaling *of* the baseline "
+            "apollo gives — without it there is no divisor",
+        )
+        return
+    for field in ("critical_hazard_per_h", "noncritical_hazard_per_h", "failure_on_demand_p"):
+        value = base.get(field)
+        if not isinstance(value, (int, float)) or value <= 0:
+            report.refuse(
+                "mission.yaml:scenario_postures.nominal", f"declares {field} as {value!r}"
+            )
+    for posture in postures:
+        where = f"mission.yaml:scenario_postures.{posture.get('id')}"
+        if not posture.get("seeded_faults"):
+            report.refuse(where, "does not say which faults it seeds")
+        if not posture.get("gm_disposition"):
+            report.refuse(where, "declares no `gm_disposition`")
+        for field in ("critical_hazard_per_h", "noncritical_hazard_per_h", "failure_on_demand_p"):
+            value = posture.get(field)
+            if not isinstance(value, (int, float)) or value <= 0:
+                report.refuse(where, f"declares {field} as {value!r}")
+        if posture is base:
+            continue
+        critical = posture["critical_hazard_per_h"] / base["critical_hazard_per_h"]
+        noncritical = posture["noncritical_hazard_per_h"] / base["noncritical_hazard_per_h"]
+        if abs(critical - noncritical) > 1e-9:
+            report.refuse(
+                where,
+                f"scales its critical hazard by x{critical:g} and its noncritical hazard by "
+                f"x{noncritical:g}. The fault policies declare a bare `hazard` and no class, and "
+                "19 of the 58 sit between the two baselines, so a class-dependent factor leaves a "
+                "third of the corpus unscalable. Move both columns together or give the faults a "
+                "class",
+            )
+
+
+def check_mission(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) -> None:
+    """Phase durations must close, and every phase must name a real configuration."""
+    phases = doc.get("phases") or []
+    if not phases:
+        report.refuse("mission.yaml", "declares no phases")
+        return
+    known = {c.get("id") for c in (vehicle.get("configurations") or [])}
+    durations = 0.0
+    seen: set[str] = set()
+    for phase in phases:
+        pid = phase.get("id", "?")
+        where = f"mission.yaml:phase {pid}"
+        if pid in seen:
+            report.refuse(where, "declared twice")
+        seen.add(pid)
+        hours = phase.get("duration_h")
+        if hours is None:
+            report.debt(where, "has no duration, so MET cannot be computed")
+        else:
+            durations += float(hours)
+        for cfg in phase.get("configurations") or []:
+            if cfg not in known:
+                report.refuse(
+                    where, f"names configuration {cfg!r} which vehicle.yaml does not declare"
+                )
+        # A phase used to carry `allowed_verbs` as the inverse of the verbs' `allowed_phases`.
+        # By the time eight domains had landed the two lists disagreed in 197 places, and the
+        # phase side was the weaker claim: it cannot know whether a verb's guards are
+        # satisfiable, and `state.json`'s capability snapshot publishes the authoritative answer
+        # at runtime anyway. Deleted rather than synchronised, so a return is a regression.
+        if phase.get("allowed_verbs") is not None:
+            report.refuse(
+                where,
+                "declares `allowed_verbs`, which is a second source of truth for a relation the "
+                "verb registry already owns; the derived view is "
+                "`tools/check_vehicle.py --phases`",
+            )
+        for field in ("entry", "exit"):
+            if not phase.get(field):
+                report.note(where, f"has no {field} condition")
+    total = doc.get("total_duration_h")
+    if total is not None and abs(durations - float(total)) > 0.51:
+        report.refuse(
+            "mission.yaml",
+            f"phase durations sum to {durations:g} h but total_duration_h is {total:g} h",
+        )
+    if doc.get("met_epoch_utc") is None:
+        report.debt(
+            "mission.yaml", "met_epoch_utc is unset, so every timestamp is relative to nothing"
+        )
+    if not (doc.get("crew") or {}).get("size"):
+        report.debt("mission.yaml", "crew size is unset, so metabolic loads cannot be computed")
+    if doc.get("postures") is None:
+        report.debt(
+            "mission.yaml",
+            "declares no execution postures, so the mission has no way to say it is held, "
+            "aborting or over — the phase ladder alone cannot distinguish an abandoned mission "
+            "from a successful one (mission_diode.md:300-347, invariant J)",
+        )
+
+
+def check_crew_bindings(
+    mission: dict[str, Any],
+    vehicle: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    report: Report,
+    station_ids: set[str] | None = None,
+) -> None:
+    """The crew are described twice, in two files, and nothing had ever compared the two.
+
+    `mission.yaml#crew` is a personnel model — `size`, `surface_party`, and one entry per person
+    with `location_phase_default` and `goes_to_surface`. `vehicle.yaml#configurations` is a hardware
+    model — `crew_aboard` and `crew_in` per configuration. Both are right, they overlap on every
+    question a fleet can ask, and **all five fields were read by nothing**: not by a tool, not by
+    the other file, not by a sentence in any document. Four checks, each of which is a way the two
+    could disagree while both looking complete.
+    """
+    crew = mission.get("crew") or {}
+    positions = crew.get("positions") or []
+    configurations = vehicle.get("configurations") or []
+    if not positions or not configurations:
+        report.debt(
+            "mission.yaml#crew",
+            "no crew positions or no vehicle configurations, so the two crew models cannot be "
+            "compared at all",
+        )
+        return
+
+    size = crew.get("size")
+    if not isinstance(size, int):
+        report.refuse("mission.yaml#crew", f"declares size {size!r}, not an integer")
+    surface_party = crew.get("surface_party")
+    to_surface = [p for p in positions if p.get("goes_to_surface")]
+    if not isinstance(surface_party, int):
+        report.refuse("mission.yaml#crew", f"declares surface_party {surface_party!r}")
+    elif surface_party != len(to_surface):
+        report.refuse(
+            "mission.yaml#crew",
+            f"declares surface_party {surface_party} and {len(to_surface)} position(s) carry "
+            f"`goes_to_surface: true` ({[p.get('id') for p in to_surface]}). The party that lands "
+            "is the party the LM carries, so the two numbers are one number",
+        )
+    aboard = [c.get("crew_aboard") for c in configurations if isinstance(c.get("crew_aboard"), int)]
+    if isinstance(size, int) and aboard and max(aboard) != size:
+        report.refuse(
+            "mission.yaml#crew",
+            f"declares size {size} and the largest `crew_aboard` across vehicle.yaml's "
+            f"configurations is {max(aboard)}. A crew size no configuration can hold is a number "
+            "nobody is standing in",
+        )
+    # Where a crew member is when nothing else says. **The field names a vehicle, not a station**,
+    # and the distinction is the point of checking it: `location_phase_default: csm` is answered
+    # against `crew_in`'s vocabulary (`csm`, `lm`), while `channels.yaml#crew_positions` names
+    # *stations* (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`,
+    # `lm_pilot`, `tunnel`, `surface_eva`). A vehicle can hold three people at three stations, so
+    # "which vehicle" is a question this field can answer and "which station" is one it cannot —
+    # and `ask_crew`'s perception bound is per *station*. The mapping from a person to their
+    # station is therefore undeclared, which is recorded in `open_debts` rather than invented here.
+    vehicles = {str(c.get("crew_in")) for c in configurations if isinstance(c.get("crew_in"), str)}
+    for person in positions:
+        where = f"mission.yaml#crew.position {person.get('id')}"
+        default = person.get("location_phase_default")
+        if default is not None and default not in vehicles:
+            report.refuse(
+                where,
+                f"declares location_phase_default {default!r}, which is not a vehicle any "
+                f"configuration carries crew in ({sorted(vehicles)})",
+            )
+        if person.get("goes_to_surface") is None:
+            report.refuse(where, "does not say whether this crew member goes to the surface")
+    # And a configuration has to say *which vehicle* the crew are in, in a term the positions use.
+    # `crew_in` has to be a term the *station* vocabulary already uses as a prefix, or the two
+    # namings of the same place never meet. Without this the check is circular: `crew_in` is
+    # validated against `location_phase_default` and that against `crew_in`, so a configuration
+    # saying the crew are in a `cockpit` would agree with a mission saying the same and neither
+    # would be a station anybody can be asked a question from.
+    prefixes = {str(s).split("_")[0] for s in (station_ids or set())}
+    for config in configurations:
+        aboard_in = config.get("crew_in")
+        if not aboard_in:
+            report.refuse(
+                f"vehicle.yaml:configuration {config.get('id')}",
+                "names no `crew_in`, so a crew member aboard it cannot be placed at a station",
+            )
+        elif prefixes and str(aboard_in) not in prefixes:
+            report.refuse(
+                f"vehicle.yaml:configuration {config.get('id')}",
+                f"carries crew in {aboard_in!r}, which is not the prefix of any station in "
+                f"`channels.yaml#crew_positions` ({sorted(prefixes)})",
+            )
+
+    # --------------------------------------------------------------------------------------
+    # Where each person *is*, which is a different question from which vehicle they are in.
+    #
+    # `location_phase_default` answers "csm" and a station is `csm_commander` or `csm_navigator`
+    # or `csm_lower_equipment_bay` — three different panel sets and three different `cannot_see`
+    # lists, which is what `ask_crew`'s perception bound is computed from. Until this map existed
+    # the corpus named three crew and three CSM stations and never said who sat where, so a
+    # question asked from "csm" was a question asked from nowhere. The map is `chosen`, with the
+    # reasoning in the file, because the corpus gives the geometry and not the assignment.
+    # --------------------------------------------------------------------------------------
+    stations = station_ids or set()
+    for person in positions:
+        where = f"mission.yaml#crew.position {person.get('id')}"
+        declared = person.get("stations")
+        if not isinstance(declared, dict) or not declared:
+            report.refuse(
+                where,
+                "declares no `stations` map, so this crew member cannot be placed at a station "
+                "and `ask_crew`'s perception bound has nothing to bound against",
+            )
+            continue
+        for vehicle, station in declared.items():
+            if vehicle not in vehicles:
+                report.refuse(
+                    where,
+                    f"declares a station in {vehicle!r}, which is not a vehicle any configuration "
+                    f"carries crew in ({sorted(vehicles)})",
+                )
+            if stations and station not in stations:
+                report.refuse(
+                    where,
+                    f"declares station {station!r}, which is not in "
+                    "`channels.yaml#crew_positions` — so it names a place with no panels and no "
+                    "perception bound",
+                )
+        # A crew member who does not go to the surface has no station in the LM, and one who does
+        # has both. Either way the map covers exactly the vehicles they can be in.
+        if person.get("goes_to_surface") and "lm" in vehicles and "lm" not in declared:
+            report.refuse(
+                where,
+                "goes to the surface and declares no LM station, so the phase that matters most "
+                "for this person is the one they cannot be placed in",
+            )
+        if not person.get("goes_to_surface") and "lm" in declared:
+            report.refuse(
+                where,
+                f"does not go to the surface and declares an LM station ({declared['lm']!r}); a "
+                "station in a vehicle this crew member never boards is a place they can be asked "
+                "a question from but never are",
+            )
+    # Two people cannot occupy one seat, and a map that put them there would give two crew the
+    # same perception bound while the corpus insists the stations differ.
+    for vehicle in sorted(vehicles):
+        seats: dict[str, list[str]] = {}
+        for person in positions:
+            station = (person.get("stations") or {}).get(vehicle)
+            if station:
+                seats.setdefault(str(station), []).append(str(person.get("id")))
+        for station, occupants in sorted(seats.items()):
+            if len(occupants) > 1:
+                report.refuse(
+                    "mission.yaml#crew",
+                    f"seats {occupants} in {vehicle!r} station {station!r}. `crew_positions` gives "
+                    "each station its own panels and its own `cannot_see` list, so two crew at one "
+                    "station would be two people with one perception bound",
+                )
+
+    # The finding this check was written for, reported rather than refused because the fix is a
+    # decision rather than a repair. `descent` and `surface` name only LM configurations, so no
+    # configuration in those phases can hold the CSM pilot — while her own note in this same file
+    # says she is "alone in the CSM for the surface phase". The two readings of `configurations`
+    # (the configurations a phase passes *through* versus the vehicles *present* in it) give
+    # different answers here and the corpus never says which it means.
+    by_id = {c.get("id"): c for c in configurations}
+    for phase in mission.get("phases") or []:
+        vehicles = {
+            str(by_id[name].get("crew_in"))
+            for name in phase.get("configurations") or []
+            if name in by_id and by_id[name].get("crew_in")
+        }
+        missing = sorted(
+            {
+                str(person.get("location_phase_default"))
+                for person in positions
+                if person.get("location_phase_default") not in vehicles
+            }
+        )
+        if missing:
+            report.debt(
+                f"mission.yaml:phase {phase.get('id')}",
+                f"names no configuration holding {missing}, so a crew member whose default station "
+                "is there cannot be placed in this phase",
+            )
+
+
+def check_mission_bindings(
+    channels: dict[str, Any],
+    mission: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    report: Report,
+    vehicle: dict[str, Any] | None = None,
+) -> None:
+    """The mission file and the channel registry describe one machine, so they must agree.
+
+    Each binding here is a place where two files could drift apart with nothing to object.
+    `mission.phase` is the value set every verb's `allowed_phases` is written against, so an
+    enum that does not match `mission.yaml`'s phases means the phase gate compares a command
+    against a vocabulary the mission never uses — and it would compare equal to nothing, which
+    reads as "wrong phase" for every command in every phase. The same for the posture. And the
+    freshness manifest is a set of claims about channels and ages, which is exactly the kind of
+    claim that goes silently wrong when a publish rate changes.
+    """
+    index = ChannelIndex(registry)
+    audit = channels.get("mission") or []
+    rows = {row.get("id"): row for row in audit if isinstance(row, dict)}
+    # A channel that enumerates hardware has to enumerate the hardware the vehicle declares.
+    # `comm.antenna`'s four members are `vehicle.yaml#comms.antennas`; a member that no entry
+    # declares is an antenna a fleet can select and the vehicle does not have, which is the same
+    # defect the phase and posture vocabularies are checked for and is worth one more table.
+    for section, key, source in (
+        (channels.get("comms") or [], "comm.antenna", (vehicle or {}).get("comms") or {}),
+    ):
+        declared = [str(a.get("id")) for a in (source.get("antennas") or [])]
+        if not declared:
+            continue
+        for row in section:
+            if not isinstance(row, dict) or row.get("id") != key:
+                continue
+            enum = re.findall(r"enum\[([^\]]*)\]", str(row.get("unit") or ""))
+            listed = [member.strip() for member in enum[0].split(",")] if enum else []
+            for missing in sorted(set(declared) - set(listed)):
+                report.refuse(
+                    f"channels.yaml:{key}",
+                    f"cannot select {missing!r}, which vehicle.yaml declares as an antenna",
+                )
+            for extra in sorted(set(listed) - set(declared)):
+                report.refuse(
+                    f"channels.yaml:{key}",
+                    f"offers {extra!r}, which vehicle.yaml does not declare as an antenna",
+                )
+
+    for cid, expected in (
+        ("mission.phase", [str(p.get("id")) for p in mission.get("phases") or []]),
+        ("mission.posture", [str(p.get("id")) for p in mission.get("postures") or []]),
+    ):
+        row = rows.get(cid)
+        if row is None:
+            report.debt(f"channels.yaml:{cid}", "is not registered")
+            continue
+        enum = re.findall(r"enum\[([^\]]*)\]", str(row.get("unit") or ""))
+        listed = [member.strip() for member in enum[0].split(",")] if enum else []
+        for missing in sorted(set(expected) - set(listed)):
+            report.refuse(
+                f"channels.yaml:{cid}",
+                f"omits {missing!r}, which mission.yaml declares: the gate would compare "
+                "against a value the mission never takes",
+            )
+        for extra in sorted(set(listed) - set(expected)):
+            report.refuse(
+                f"channels.yaml:{cid}", f"offers {extra!r}, which mission.yaml does not declare"
+            )
+
+    # The freshness manifest. `mission_diode.md:1241-1262` requires it to be machine-readable
+    # and to generate both runtime checks and verification tests; what the linter adds is the
+    # part that matters — refusing a requirement the vehicle cannot meet, because a guard
+    # demanding evidence fresher than the publisher publishes never passes, and a transition
+    # that can never fire is a mission that can never run.
+    for entry in mission.get("transition_evidence") or []:
+        where = f"mission.yaml:transition {entry.get('transition')!r}"
+        if not entry.get("guard"):
+            report.refuse(where, "names no guard")
+        for cid, requirement in (entry.get("requires") or {}).items():
+            if cid not in index:
+                report.refuse(where, f"requires {cid!r}, which is not a registered channel")
+                continue
+            row = index.row(cid) or {}
+            if not (requirement or {}).get("why"):
+                report.refuse(f"{where}/{cid}", "gives no reason for the freshness requirement")
+            age = (requirement or {}).get("max_age_ms")
+            if not isinstance(age, (int, float)):
+                report.refuse(f"{where}/{cid}", "declares no max_age_ms")
+                continue
+            resolved = decision_age_ms(row)
+            if resolved is None:
+                report.refuse(
+                    f"{where}/{cid}",
+                    "names a channel with no resolvable decision age, so the requirement cannot "
+                    "be met by any publisher",
+                )
+            elif age < resolved:
+                report.refuse(
+                    f"{where}/{cid}",
+                    f"requires evidence no older than {age:g} ms, but the channel's own maximum "
+                    f"decision age is {resolved:g} ms: every sample would already be too old, so "
+                    "the transition could never fire",
+                )
+
+
+def order_report(root: Path, schedule: list[str], coupling: dict[str, Any], report: Report) -> None:
+    """Print the derived tick order, node by node, with the states that advance each one.
+
+    This is the artifact `plant.md:71` promises and the one an implementer needs: the total order
+    over nodes, and within each node the order the states advance in. Both are derived — the node
+    order from `coupling.yaml`'s edges minus the declared back-edges, the intra-node order from
+    each node's `state_order` — so neither can drift from the configuration that produces it.
+    """
+    by_node: dict[str, list[tuple[str, str]]] = {}
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            components = load(path / "components.yaml", Report()) or {}
+            for state in components.get("state") or []:
+                node = str(state.get("node"))
+                if node and node != "internal":
+                    by_node.setdefault(node, []).append((path.name, str(state.get("id"))))
+    nodes = coupling.get("nodes") or {}
+    print(f"--- tick order: {len(schedule)} nodes (dependencies first) ---")
+    for index, node in enumerate(schedule, start=1):
+        declared = (nodes.get(node) or {}).get("state_order")
+        producers = by_node.get(node) or []
+        if isinstance(declared, list):
+            ordered = [str(s) for s in declared]
+        elif declared == "independent":
+            ordered = [sid for _, sid in sorted(producers)]
+        else:
+            ordered = [sid for _, sid in sorted(producers)]
+        domain = (nodes.get(node) or {}).get("domain", "?")
+        # A node with one producing state has nothing to order; only a group needs a declaration.
+        suffix = (
+            "  [order undeclared]"
+            if len(producers) > 1
+            and declared not in ("independent",)
+            and not isinstance(declared, list)
+            else ""
+        )
+        label = "  [independent]" if declared == "independent" else suffix
+        print(f"{index:3d}. {node:20s} ({domain}){label}")
+        for state_id in ordered:
+            print(f"       {state_id}")
+    internal = sum(
+        1
+        for path in sorted((root / "domains").iterdir())
+        if path.is_dir()
+        for state in (load(path / "components.yaml", Report()) or {}).get("state") or []
+        if state.get("node") == "internal"
+    )
+    print(f"\n{internal} further states are internal to a domain and are advanced with it.")
+
+
+def phases_report(
+    root: Path, mission: dict[str, Any], registry_by_verb: dict[str, dict[str, Any]]
+) -> None:
+    """Print, per phase, the verbs the registry allows — derived, never authored.
+
+    `mission.yaml` used to carry the inverse of this relation as `allowed_verbs` on each phase,
+    and by the time eight domains had landed the two lists disagreed in 197 places. A phase
+    cannot be authoritative about what its verbs permit, because permission lives on the verb
+    (`apollo_diode.md:439`), and a fleet is told the answer at runtime by the capability snapshot
+    in `state.json` anyway (vocabulary §1). What this mode is for is the *author*: it is the view
+    the deleted field was trying to provide, and it cannot drift because it is computed.
+    """
+    order = [str(p.get("id")) for p in mission.get("phases") or []]
+    print("--- verbs by phase (derived from domains/*/commands.yaml) ---")
+    for pid in order:
+        rows = [
+            (verb, row)
+            for verb, row in sorted(registry_by_verb.items())
+            if pid in (row.get("allowed_phases") or [])
+        ]
+        print(f"\n{pid}: {len(rows)} verb(s)")
+        for verb, row in rows:
+            flags = []
+            if row.get("irreversible"):
+                flags.append("irreversible")
+            if row.get("execution_class") == "deferred":
+                flags.append("deferred")
+            suffix = f"  [{', '.join(flags)}]" if flags else ""
+            print(f"    {row.get('authority', '?'):3s} {verb}{suffix}")
+    undeclared = sorted(
+        verb for verb, row in registry_by_verb.items() if not (row.get("allowed_phases") or [])
+    )
+    if undeclared:
+        print(f"\nverbs allowed in no phase: {', '.join(undeclared)}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check that the vehicle definition composes.")
+    parser.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent))
+    parser.add_argument("--strict", action="store_true", help="treat unfilled debts as failures")
+    parser.add_argument(
+        "--phases",
+        action="store_true",
+        help="also print the verb-by-phase view derived from the command registries",
+    )
+    parser.add_argument(
+        "--order",
+        action="store_true",
+        help="also print the derived tick order, node by node, with the states at each",
+    )
+    args = parser.parse_args(argv)
+
+    root = Path(args.dir)
+    if not root.is_dir():
+        sys.stderr.write(f"not a directory: {root}\n")
+        return 3
+
+    report = Report()
+    presentation = load(root / "presentation.yaml", report)
+    channels = load(root / "channels.yaml", report)
+    coupling = load(root / "coupling.yaml", report)
+    vehicle = load(root / "vehicle.yaml", report)
+    mission = load(root / "mission.yaml", report)
+
+    registry: dict[str, dict[str, Any]] = {}
+    if channels is not None:
+        registry = check_channels(channels, report)
+        check_crew(channels, registry, report)
+    schedule: list[str] = []
+    if coupling is not None:
+        # A regime table steps through thresholds that already exist, so the linter has to know
+        # which ones there are and what each watches before it can check a single regime.
+        threshold_point: dict[str, str] = {}
+        domains_dir = root / "domains"
+        if domains_dir.is_dir():
+            for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+                profiles = load(path / "profiles.yaml", Report()) or {}
+                for threshold in profiles.get("thresholds") or []:
+                    if threshold.get("id") and threshold.get("point"):
+                        threshold_point[str(threshold["id"])] = str(threshold["point"])
+        check_coupling(
+            coupling,
+            registry,
+            report,
+            produced=produced_channels_by_node(root, registry),
+            threshold_point=threshold_point,
+            enum_values=enumerated_values_by_node(root),
+            withheld=withheld_channels(root),
+        )
+        schedule = derive_schedule(coupling, report)
+    check_domains(root, registry, coupling, channels, report)
+    if vehicle is not None:
+        check_vehicle(vehicle, report)
+        if mission is not None:
+            check_mission(mission, vehicle, report)
+            check_scenario_postures(mission, report)
+            if channels is not None:
+                check_mission_bindings(channels, mission, registry, report, vehicle)
+                check_crew_bindings(
+                    mission,
+                    vehicle,
+                    registry,
+                    report,
+                    {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
+                )
+            check_propulsion(mission, vehicle, report)
+            check_trajectory(mission, report)
+    # The fleets' view: collected from every registry, because a gate variable is declared on a
+    # verb and published in `state.json`, and nothing else in the tool joins the two.
+    all_verbs: dict[str, dict[str, Any]] = {}
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            commands = load(path / "commands.yaml", Report()) or {}
+            for verb in commands.get("commands") or []:
+                all_verbs[str(verb.get("verb"))] = verb
+    check_presentation(presentation or {}, registry, all_verbs, report)
+    if channels is not None:
+        check_producers(root, registry, presentation or {}, report)
+        check_event_classes(root, registry, report)
+
+    if schedule:
+        # Reported before the print so it appears in the report, and it is a note rather than a
+        # refusal because the schedule's *existence* is what is checked, not its content: the
+        # order is derived, so there is nothing for a human to agree with.
+        report.note(
+            "coupling.yaml:schedule",
+            f"the node schedule is {len(schedule)} nodes; the last eight are "
+            + " -> ".join(schedule[-8:]),
+        )
+    report.print()
+    if args.order and coupling is not None:
+        order_report(root, schedule, coupling, report)
+    if args.phases and mission is not None:
+        verbs: dict[str, dict[str, Any]] = {}
+        domains_dir = root / "domains"
+        if domains_dir.is_dir():
+            for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+                commands = load(path / "commands.yaml", Report()) or {}
+                for verb in commands.get("commands") or []:
+                    verbs[str(verb.get("verb"))] = verb
+        phases_report(root, mission, verbs)
+    print(
+        f"\n{len(registry)} channels, "
+        f"{len((coupling or {}).get('edges') or [])} edges, "
+        f"{len((coupling or {}).get('failure_chains') or [])} failure chains, "
+        f"{len((mission or {}).get('phases') or [])} mission phases."
+    )
+    if report.refusals:
+        print(f"\nREFUSED: {len(report.refusals)} fault(s) must be fixed.")
+        return 1
+    if report.debts:
+        print(f"\nCOMPOSES, with {len(report.debts)} declared debt(s).")
+        return 2 if args.strict else 0
+    print("\nCOMPOSES clean.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

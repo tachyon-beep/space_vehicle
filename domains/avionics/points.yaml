@@ -1,0 +1,219 @@
+# domains/avionics/points.yaml — what the instrument layer says about itself.
+#
+# ## The distinction this file is organised around
+#
+# A quality code and a health conclusion are not the same kind of statement, and the corpus's
+# habit of merging them is what `design.md:211-214` refuses. The vehicle publishes both, side by
+# side and separately:
+#
+#   `quality` on the frame         how much to trust *this sample*: assigned by
+#                                  `components.yaml#quality_assignment`, which cannot see the
+#                                  fault state, and which leaves a silently biased sensor GOOD
+#   `avionics.sensor_health_[class]`  what the vehicle has *concluded* about an instrument,
+#                                  after `trip_count` consecutive implausible samples
+#
+# A fleet that is handed only the second has been handed a diagnosis. A fleet that is handed
+# only the first cannot tell a glitch from a dead instrument. It gets both, and neither one is
+# ever presented as the other.
+#
+# ## The channel that makes a frozen value visible
+#
+# F-14's note is the domain's specification: "the publisher must show age and dropout, never a
+# frozen value that reads as fresh". `avionics.oldest_sample_age_ms` is the aggregate answer and
+# the per-point quality code is the local one — and the reason both exist is that a dead
+# instrument publishing its last value is *indistinguishable from a healthy one* by value alone.
+# Every channel below is either a reading, an age, or a conclusion drawn from comparing the two.
+
+domain: avionics
+points:
+
+  # ------------------------------------------------------------------------------------
+  # apollo's eight. Identifiers, units, precisions, rates and events verbatim.
+  # ------------------------------------------------------------------------------------
+
+  - channel: avionics.computer_mode
+    from: computer_mode
+    layer: service
+    derivation: "the guidance computer's commanded mode"
+    note: >-
+      apollo's "restart/mode change" event, and `failed` is a value rather than a silence. The
+      distinction matters more than it looks: a computer that has stopped and a channel that has
+      stopped are the same observation on a mirror, and an agent that cannot tell them apart
+      will spend a crisis deciding whether to reset a computer or a publisher.
+
+  - channel: avionics.exec_margin_pct
+    from: compute_margin
+    layer: estimate
+    derivation: "spare computer throughput against the current task set"
+    note: >-
+      apollo's ">20 Sim" nominal and its "<10" event. Two chains land here — a sagging bus
+      (`E-BUS-GNC`) and a hot coldplate (`E-PLATE-CRITICAL`) — and the channel deliberately does
+      not say which: the computer's headroom is one quantity, and attributing a loss of it is
+      the diagnosis the fleet is supposed to make.
+
+  - channel: avionics.program_alarm_code
+    from: computer_mode
+    layer: service
+    derivation: "the code the guidance program raised, or null"
+    note: >-
+      apollo's event is "any non-null", which is the strictest form in the catalogue and correct
+      for this channel: a program alarm is the computer saying it has stopped understanding its
+      situation, and the code is the *only* thing that distinguishes one from another. Apollo
+      11's 1202 and 1201 are the historical case — the same class of alarm, two different
+      responses, and a vehicle that published "an alarm" rather than the code would have made
+      the difference invisible.
+
+  - channel: avionics.imu_power
+    from: instrumentation_power
+    layer: service
+    derivation: "whether the inertial platform is powered"
+    note: >-
+      apollo's "unexpected loss" event. It is a boolean on a channel whose real content is that
+      the platform's power is *separately* reported from the platform's data — the loss of one
+      and the loss of the other are different faults, and F-10 begins with the data degrading
+      rather than the power failing.
+
+  - channel: avionics.telemetry_frame_sync
+    from: frame_sync
+    layer: measurement
+    derivation: "whether the published frames are coherent rather than interleaved"
+    note: >-
+      apollo's "sync loss" event. The earliest evidence in F-14: a dropout arrives as a loss of
+      frame coherence before it arrives as a missing channel, because the missing channel is
+      missing *from a frame that still claims to be complete*.
+
+  - channel: avionics.sensor_bus_errors_s
+    from: sensor_bus_errors
+    layer: measurement
+    derivation: "detected errors per second on the sensor bus"
+    note: >-
+      apollo's nominal is zero and its event fires on ">0" — the strictest threshold on the
+      vehicle. Justified by what a bus is: a digital link with error detection, where a nonzero
+      rate is a degrading harness rather than noise. A fleet that treats it as a noise figure
+      will miss the harness and attribute the resulting bad samples to the sensors.
+
+  - channel: avionics.instrumentation_power_w
+    from: instrumentation_power
+    layer: measurement
+    derivation: "power drawn by the instrument set"
+    note: >-
+      apollo's events "excessive/zero", and F-14's first clue. Zero is the failure that costs
+      the experiment rather than the mission (`apollo_diode.md:342`), and it is the one fault on
+      this vehicle whose *consequence* is the loss of the evidence needed to diagnose it — which
+      is why the domain's answer is age and dropout rather than a fault code.
+
+  - channel: avionics.clock_offset_ms
+    from: clock_offset
+    layer: estimate
+    derivation: "the vehicle clock's offset from its reference"
+    note: >-
+      apollo's "near 0" and its ">100" event. The number, without the verdict — the verdict is
+      `avionics.time_sync_state`, and the two are separate because the offset is what a fleet
+      reasons with and the verdict is what gates a command.
+
+  # ------------------------------------------------------------------------------------
+  # The diagnostics' evidence.
+  # ------------------------------------------------------------------------------------
+
+  - channel: "avionics.sensor_health_[class]"
+    from: sensor_health
+    layer: service
+    derivation: "the vehicle's conclusion about each class of instrument, after the trip counter"
+    note: >-
+      a conclusion and never a quality code (`design.md:211-214`; the linter refuses `FAULT` as
+      a quality). Per class rather than per sensor for a stated reason: apollo's instrumentation
+      had 277 analogue channels, and 277 health flags is a log rather than evidence. What a
+      fleet can act on is "the pressure instruments are suspect", and the count behind it is
+      `avionics.redundancy_disagreement`.
+
+  - channel: avionics.redundancy_disagreement
+    from: redundancy_vote
+    layer: service
+    derivation: "how many redundant members are currently outside the vote's tolerance"
+    note: >-
+      the fastest way to discover that two sensors have parted company, and the evidence behind
+      the only two mechanisms allowed to assign `SUSPECT`. It is a count rather than a boolean
+      because one disagreement is a sensor to watch and two is a vote that has stopped working.
+
+  - channel: avionics.oldest_sample_age_ms
+    from: sample_age
+    layer: estimate
+    derivation: "the age of the oldest sample in the current published set"
+    note: >-
+      the *oldest*, deliberately: the question it answers is "is any part of this picture old",
+      and a mean would let one dead channel hide behind twenty live ones. It is the same number
+      the executive's freshness guard reads, which makes it the one channel on the vehicle that
+      is both published evidence and an input to the vehicle's own protection — and the reason
+      `channels.yaml` gives every other point a `max_decision_age_ms` is so that this one has
+      something to be the aggregate *of*.
+
+  - channel: avionics.time_sync_state
+    from: time_health
+    layer: service
+    derivation: "whether the vehicle's clock is synchronised, drifted, or has no reference"
+    note: >-
+      three values, not two, and the middle one is the useful case: a reference that has drifted
+      is a vehicle whose timestamps are wrong by a knowable amount, and a vehicle with no
+      reference cannot time-tag anything at all. `avionics_diode.md:496-508` gates irreversible
+      commands on this being `sync`, because a one-shot whose deadline is measured against a
+      drifted clock is a one-shot with an unknown deadline.
+
+  - channel: "avionics.drift_statistic_[group]"
+    from: bias_accumulator
+    layer: estimate
+    derivation: "the accumulated evidence of a systematic bias in one monitored group"
+    note: >-
+      the vehicle's only detector for a drift smaller than the resolution of the instrument
+      reporting it. `plant.md` §4 requires exactly that capability — the nominal cabin leak is
+      below `eclss.leak_rate_g_s`'s own quantum "and must still happen" — and no threshold can
+      provide it. Published rather than internal because a statistic that accumulates is
+      *evidence in progress*: a fleet that watches it can see a drift forming while every
+      individual sample is still inside the band, which is the difference between diagnosing a
+      leak on the day it starts and diagnosing it on the day it becomes visible.
+
+  - channel: "avionics.drift_state_[group]"
+    from: bias_accumulator
+    layer: service
+    derivation: "whether the drift statistic has crossed its decision threshold"
+    note: >-
+      latched, and the latch is not cleared by resetting the statistic: the property being
+      reported — a systematic bias — does not become untrue because somebody zeroed the
+      accumulator. The two channels together are how a fleet tells "the instrument has drifted"
+      from "the vehicle's model of the instrument has drifted", the question
+      `simulator-design.md:379-386` says a quality code must never answer.
+
+not_published:
+
+  - channel: "avionics.sensor_[id]_true_value"
+    why: >-
+      hidden truth, and on this vehicle it is the most tempting leak in the corpus: a fleet that
+      could read the true value of a sensor would skip every diagnostic in this domain. What is
+      published is the sample, its quality, the vehicle's conclusion about the class, and the
+      consistency of the redundancy group — which is everything a competent engineer has.
+
+  - channel: "avionics.health_overall"
+    why: >-
+      a synthesized single health score, and `apollo_diode.md:184-186` refuses it in terms:
+      "historically faithful to give your agents heterogeneous observations rather than a
+      synthesized single health score." `mission_diode.md:380-383` asks for `health.overall` and
+      `health.confidence` as guard terms, and this is the vehicle declining to supply them —
+      which closes a debt `mission.yaml` recorded rather than leaving it open. The argument is
+      not only historical: a scalar health would be a diagnosis (design.md §8 refuses to publish
+      those), it would be un-derivable from the published channels without a weighting nobody
+      could disagree with, and it would let a fleet stop looking at the twenty readings that
+      produced it.
+
+  - channel: "avionics.cusum_[group]_allowance"
+    why: >-
+      `k`, the drift the vehicle is willing to call normal. It is published as an *internal*
+      configuration value and not as a channel because it is not a measurement: it is a
+      statement about the mission's tolerance, and a fleet that could read it would start
+      reasoning about the detector instead of about the vehicle. The statistic and the verdict
+      are published, which is what a diagnosis needs.
+
+  - channel: "avionics.sensor_bus_raw_errors"
+    why: >-
+      per-word error detail. The count is published and the addresses are not: a fleet needs to
+      know that a harness is degrading, not which word of which frame failed — the second is a
+      maintenance log, and publishing it would invite reasoning about the bus fabric instead of
+      about the instruments it carries.

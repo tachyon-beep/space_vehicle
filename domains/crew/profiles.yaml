@@ -1,0 +1,190 @@
+# domains/crew/profiles.yaml — the caution/warning thresholds, and the rules that stop an
+# alarm from lying.
+#
+# ## Why this file's thresholds are about *rules* rather than about limits
+#
+# Every other domain's profiles are physical limits: a voltage, a pressure, a temperature. This
+# domain's are **semantics**, because a caution/warning system's failure mode is not that it
+# misses a limit — every other domain's thresholds do that — but that it says something untrue.
+# An alarm that clears while its condition persists, or that is silenced by a stale reading, or
+# that a fleet can turn off, is worse than no alarm: it teaches the crew to distrust the panel.
+#
+# So the entries below are mostly about what may **not** satisfy a predicate, and they are all
+# service-owned. `crew_diode.md:433` states the carrying rule: stale, missing, invalid or unknown
+# evidence never satisfies a clear predicate — "sensor disappeared" is not "hazard disappeared".
+
+domain: crew
+profiles:
+  - id: default
+    revision: 1
+    description: "the alerting semantics, from crew_diode.md's lifecycle and apollo's panel categories"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:382-445 for the four levels, the lifecycle and the overlays;
+        apollo_diode.md:221-229 for the master alarm without a root cause and the panel
+        categories. The dwells are chosen against each source domain's own sampling rate, which
+        is why they are stated per level rather than once.
+
+thresholds:
+  # --- the levels. Four, from crew_diode.md:382-387, and they are a *ladder* rather than a set:
+  #     each is a statement about how long a crew has, not about how bad the number is.
+  - id: advisory_assert
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 5000
+    dwell_clear_s: 30
+    latched: false
+    severity: ADVISORY
+    point_units: "lifecycle position, where 0 is nominal and 1 is asserted"
+    provenance:
+      basis: historical
+      source: "crew_diode.md:387: situation-awareness information, no immediate cue, audio optional by configuration"
+  - id: caution_assert
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: historical
+      source: "crew_diode.md:386: abnormal, timely action, greater response margin. Latches because a caution that has been seen and not acted on is different from one that has just appeared."
+  - id: warning_assert
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 500
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: historical
+      source: "crew_diode.md:385: safety-critical abnormal, prompt action. Half-second assert dwell: at this level the cost of a false positive is a crew looking at a panel, and the cost of a late one is measured in the mission."
+  - id: emergency_assert
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 10
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:384: immediate awareness or action. No assert dwell at all — the only
+        threshold in the vehicle besides the cabin-pressure emergency with none, and for the same
+        reason: at this level the debounce is the hazard.
+
+  # --- the rules that stop an alarm from lying. These are not limits on a channel; they are
+  #     predicates over the alert's *evidence*, and they are the domain's real content.
+  - id: stale_cannot_clear
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "a predicate, not a magnitude: it fires when a clear is attempted on stale evidence"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:433 and the design's §8: evidence-staleness is carried up into alerting.
+        A clear whose supporting reading is older than that point's `max_decision_age_us` is
+        refused, and the alert stays active — which is the mechanism, not the sentiment.
+  - id: invalid_cannot_clear
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "a predicate"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:433: "sensor disappeared" is not "hazard disappeared". An INVALID or UNKNOWN
+        reading cannot satisfy a clear predicate at any level, which is the rule that makes the
+        instrument layer's epistemics survive all the way up into alerting.
+  - id: overlay_cannot_clear_safety
+    point: "cw.alert_[id]_state"
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "a predicate"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:393-445: suppress, inhibit and shelve are overlays and never cross semantics
+        with acknowledgement. None of the three may clear a safety-relevant alert; they change
+        what is *annunciated*, not what is true.
+  - id: ack_is_not_clear
+    point: "cw.acknowledged"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "a predicate"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:433 by construction: acknowledgement records that a person has seen the
+        alert, and nothing about the condition. A system in which acknowledging an alarm clears it
+        is a system that rewards looking away.
+
+  # --- nuisance-alert control. A storm of alerts is a first-class design concern rather than an
+  #     inconvenience, and it matters most in exactly the cascade the crisis posture produces.
+  - id: alert_storm
+    point: cw.master_alarm
+    comparator: above
+    assert: 8
+    clear: 3
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: CAUTION
+    point_units: "simultaneously active alerts"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:369-371's nuisance-alert requirement, with the rule that grouping and
+        correlation must not suppress independent safety-significant conditions. Eight at once is
+        chosen as the point where a panel stops being readable; the alert is itself an alert, and
+        it says the fleet has an aggregation problem rather than a fault.
+
+profile_selection:
+  selectable_by: A1
+  note: >-
+    An agent may select a profile and may never edit one (D-05). The consequence here is
+    sharper than elsewhere: a fleet that could edit these could make its own alarms un-clearable
+    or, worse, clearable on stale evidence — and the second is a way to turn a failing vehicle
+    into a quiet one.
+  alternatives:
+    - id: sensitive
+      revision: 1
+      description: "every dwell halved, for a fleet that would rather see an alarm early than rarely"
+      factor: 0.5
+      provenance:
+        basis: chosen
+        reason: "the factor only shortens dwells, so the profile can add alarms and cannot remove them — which is the monotonic direction, since a false alarm costs attention and a missing one costs the mission"

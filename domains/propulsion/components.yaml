@@ -1,0 +1,238 @@
+# domains/propulsion/components.yaml — the engines, their sequencing, and the two gaps apollo
+# does not fill.
+#
+# ## What this domain is for
+#
+# Propulsion is where the mission's Δv budget stops being a number in `mission.yaml` and starts
+# being spent. It owns the one class of action that is large, fast and irreversible, and it is
+# the domain where `apollo_diode.md:141`'s `prop.accumulated_dv_m_s` finally has a producer —
+# conflict register C-12 records that `main_propulsion_diode.md` cuts off on duration, plan or
+# GNC request and has **no** Δv cutoff path at all, so that channel would have had nothing
+# behind it.
+#
+# ## The two gaps, stated rather than filled
+#
+# 1. **There is no throttle-to-thrust law.** `main_propulsion_diode.md:36` refuses thrust,
+#    pressure, mixture ratio, impulse bit, valve transit and tank capacity as non-universal, and
+#    it is right to. What this vehicle has instead is thrust *measured* — 91,188 N from 20,500
+#    lbf, and an Isp — plus a throttle *command*, and the relation between them is a curve
+#    nobody published. `thrust_curve` below declares its shape and leaves its coefficients
+#    unset, because a linear interpolation between two endpoints is a claim about combustion
+#    that this vehicle has no evidence for.
+# 2. **The pressurant regulator has no transfer function.** `apollo_diode.md:139` gives
+#    `pressurant_pressure_psi` as "vehicle dependent" and the F-09 trapped-line chain needs the
+#    regulator's behaviour to be a model. It is declared unset, which means CNS-10 and PRP-03
+#    are seeded against a component whose dynamics are owed.
+
+domain: propulsion
+
+# Valve transit is "typically 0.1 to several seconds" (apollo_diode.md:521) and the thrust
+# response tail is of the same order, so the plant constant here is about a second. The
+# 500-1000 Hz acquisition figure in main_propulsion_diode.md:547 is a flight-software
+# scheduling period, not a time constant (review-findings.md #5), and it does not bind an
+# integrator.
+natural_rate_hz: 10
+
+reads: [prop_main, pressurant_he, nav_state, structure_config]
+writes: [engine_main, thrust_main]
+
+state:
+  - id: sps_state
+    node: engine_main
+    method: discrete
+    unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
+    dwell: {min_on_s: 0.5, min_off_s: 5}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:134-141"
+      note: "apollo publishes prop.main_armed and a chamber-pressure channel with a <90 % event after ignition, which is a state machine with an armed state whether or not the corpus draws it. The dwell times are chosen from the SPS's 750 s total burn capability over 50 qualified restarts: a five-second floor between burns is what keeps a fleet from spending its restart budget in a minute"
+
+  - id: dps_state
+    node: engine_main
+    method: discrete
+    unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
+    dwell: {min_on_s: 2, min_off_s: 5}
+    provenance:
+      basis: historical
+      source: "the DPS experience report and NR: the descent engine is throttleable and its operating band has a non-operating region, so its state machine has a throttle state as well as a run state. The two-second minimum on time is chosen against the 10:1 throttle range: below it the engine is still in its start transient and no commanded throttle means anything"
+
+  - id: aps_state
+    node: engine_main
+    method: discrete
+    unit: "enum[off,armed,ignition,mainstage,shutdown,failed]"
+    dwell: {min_on_s: 0.5, min_off_s: 0}
+    provenance:
+      basis: historical
+      source: "the ascent engine cannot throttle and is not restartable in any operational sense, so its state machine has no throttle state and its minimum off time is zero — there is nothing to protect by waiting, because a second attempt is not a thing that happens"
+
+  - id: thrust_main_n
+    node: thrust_main
+    method: lag
+    unit: N
+    tau_s: 0.5
+    provenance:
+      basis: chosen
+      reason: "thrust build-up and tailoff. apollo_diode.md:521 gives valve and motor mechanical transit as 'typically 0.1 to several seconds', and half a second sits inside that: long enough that a one-tick command cannot produce instant thrust, short enough that a burn's shape is dominated by its commanded duration rather than by its rise"
+
+  - id: dps_throttle_pct
+    node: internal
+    method: lag
+    unit: "%"
+    tau_s: 1.0
+    provenance:
+      basis: chosen
+      reason: "the throttle actuator's response. It is a separate state from the engine's thrust because the actuator can be commanded somewhere the engine cannot operate, and that distinction is the whole content of the 65-92.5 % non-operating region"
+
+  - id: chamber_pressure_pct
+    node: internal
+    method: lag
+    unit: "% nominal"
+    tau_s: 0.3
+    provenance:
+      basis: chosen
+      reason: "chamber pressure follows thrust with the chamber's own filling time; faster than the valve because the chamber is small. apollo_diode.md:135 publishes it at 10 Hz with a 0.1 % precision, which is a fast channel and needs a fast state behind it"
+
+  - id: feed_pressure_pct
+    node: internal
+    method: lag
+    unit: "% nominal"
+    tau_s: 0.2
+    provenance:
+      basis: chosen
+      reason: "feed pressure is downstream of the regulator and upstream of the injector, so it responds fastest of the three. It is the channel the F-08 stuck-sensor chain turns on, and a state slower than the sensor would make a stuck sensor undetectable by rate"
+
+  - id: pressurant_pressure_psi
+    node: internal
+    method: lag
+    unit: psi
+    tau_s: 5
+    provenance:
+      basis: UNCONFIGURED
+      note: "the regulator's transfer function is not published for either vehicle; apollo_diode.md:139 marks the channel vehicle-dependent. The five-second constant is a placeholder in shape only and the magnitudes are owed — PRP-03 is seeded against this and cannot be evaluated until they exist"
+
+  - id: accumulated_dv_m_s
+    node: internal
+    method: dynamics
+    unit: m/s
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:141"
+      note: "an integrated state that is not conserved, which is what the `dynamics` class is for: position and velocity are the same kind of thing. It is integrated here rather than in GNC because the cutoff has to be available to the engine's own state machine at the moment of effect — a cutoff that waits for the guidance cycle is a cutoff that overruns"
+
+  - id: sps_burn_count
+    node: internal
+    method: discrete
+    unit: count
+    non_latching: true
+    provenance:
+      basis: historical
+      source: "the AJ10-137 qualified for 50 restarts. Declared `non_latching` because a counter is not a latch: it is advanced by a burn-start event rather than by a comparator, and giving it hysteresis would be a category error the linter is right to ask about"
+
+components:
+
+  - id: sps
+    kind: discrete
+    class: engine
+    vehicle: csm
+    engine: AJ10-137
+    thrust_n: 91188
+    isp_s: 314.5
+    throttleable: false
+    qualified_restarts: 50
+    provenance:
+      basis: historical
+      source: "20,500 lbf = 91,188 N; Isp 314.5 s; 100 psia chamber; qualified for 50 restarts, of which Apollo 11 used 5"
+  - id: dps
+    kind: discrete
+    class: engine
+    vehicle: lm
+    thrust_max_n: 43192
+    thrust_min_n: 4671
+    throttle_ratio: 10
+    isp_s: 305
+    operating_band_pct: [10.5, 92.5]
+    non_operating_band_pct: [65, 92.5]
+    provenance:
+      basis: historical
+      source: "the DPS experience report: 9,710 lbf operating maximum and 1,050 lbf minimum, 10:1 range, with 65-92.5 % a NON-OPERATING region. Isp 305 s is the NASA end-of-duty-cycle requirement; the 311 s in circulation traces only to Wikipedia"
+  - id: aps
+    kind: discrete
+    class: engine
+    vehicle: lm
+    thrust_n: 15569
+    isp_s: 309.4
+    throttleable: false
+    provenance:
+      basis: historical
+      source: "3,500 lbf nominal (3,464 predicted, 3,439 measured) = 15,569 N; Isp 309.4 predicted"
+  - id: feed_valve_sps
+    kind: discrete
+    class: valve
+    transit_s: 0.5
+    provenance:
+      basis: chosen
+      reason: "apollo_diode.md:521 gives valve transit as 'typically 0.1 to several seconds' with no per-valve figure; half a second is inside the published range and is the same order as the thrust response it drives"
+  - id: feed_valve_dps
+    kind: discrete
+    class: valve
+    transit_s: 0.5
+    provenance:
+      basis: chosen
+      reason: "as feed_valve_sps"
+  - id: pressurant_regulator
+    kind: flow
+    class: regulator
+    provenance:
+      basis: UNCONFIGURED
+      note: "the helium regulator's outlet characteristic is unpublished; SPS bottles run 3,600 psia regulated to 186 with an engine inlet of 165 (NR, AJ10 report), which fixes the endpoints and not the behaviour between them"
+  - id: dps_throttle_actuator
+    kind: discrete
+    class: actuator
+    band_pct: [10.5, 92.5]
+    non_operating_pct: [65, 92.5]
+    provenance:
+      basis: historical
+      source: "as dps. The actuator's *band* is what the interlock checks; a command inside the non-operating region is impossible rather than unwise, which is a distinction only a published band can carry"
+
+# --------------------------------------------------------------------------------------
+# The throttle-to-thrust relation, declared in shape and unset in value.
+# --------------------------------------------------------------------------------------
+thrust_curve:
+
+  shape: "piecewise; monotone within each operating segment; zero outside the operating band"
+  segments:
+    - band_pct: [10.5, 65]
+      model: "monotone, curvature unknown"
+      coefficients: UNCONFIGURED
+    - band_pct: [65, 92.5]
+      model: "non-operating: thrust is undefined because the engine is not designed to run here"
+      coefficients: null
+    - band_pct: [92.5, 100]
+      model: "operating maximum at 92.5 % of the throttle scale, above which the command saturates"
+      coefficients: UNCONFIGURED
+  provenance:
+    basis: UNCONFIGURED
+    note: >-
+      This is the honest centre of the domain. main_propulsion_diode.md:36 refuses to state a
+      thrust law and it is right to: a linear interpolation between the 1,050 lbf minimum and
+      the 9,710 lbf maximum would be a claim about combustion that nobody has made. What the
+      vehicle *can* do without the law is everything the mission actually needs from a burn
+      model: commanded versus estimated thrust (apollo's own two channels), a chamber-pressure
+      consequence, a duration, an accumulated delta-v, and a cutoff. The law matters for
+      fidelity of the achieved delta-v, and the 65-92.5 % region matters more than the curve —
+      because a command inside it is impossible rather than merely inaccurate.
+
+      # --------------------------------------------------------------------------------------
+      # Burn capability accounting. `mission.yaml` budgets the delta-v; this is what the vehicle
+      # checks before accepting a burn.
+      # --------------------------------------------------------------------------------------
+capability:
+
+  sps_total_burn_s: 750
+  sps_restarts_qualified: 50
+  dps_total_burn_s: UNCONFIGURED
+  note: >-
+    The SPS's 750 s of total burn capability is a budget the mission spends, and Apollo 11
+    spent 531.9 s of it. That makes "can we fix this with a burn" a question with a number
+    behind it rather than a question with an attitude behind it, which is the whole reason the
+    figure is here. The DPS's equivalent is unpublished.

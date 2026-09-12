@@ -1,0 +1,361 @@
+# domains/comms/components.yaml — the link as an operational resource.
+#
+# ## Why this domain is authored rather than extracted
+#
+# Conflict C-14: `communcations_diode.md` contains **no communications subsystem**. `snr`,
+# `antenna`, `pointing`, `carrier` and `S-band` occur zero times in it; its own open-parameter
+# register is 33 rows of `UNSPECIFIED`. It is a secure-transport specification for the diode
+# itself, and it was not wasted — it produced D-01 (the two one-way channels) and D-02 (the
+# structured result block) — but it is a different document wearing the domain's name.
+#
+# So the domain is authored from `apollo_diode.md:161-168` (eight channels), `:786-790` (the
+# attitude → pointing → SNR coupling), `:243` (five verbs), `:885-903` (five telemetry profiles
+# and the rule that a degraded link must actually choose what arrives), and
+# `vehicle.yaml#comms` (the antennas, rates, transmitters and VHF figures already sourced from
+# the Apollo 11 references). That is a complete bill of materials, which is why this is the one
+# "authored" domain that is not an act of invention.
+#
+# ## The domain's thesis: the fleet's view is a resource it allocates
+#
+# `apollo_diode.md:901` is the sentence the whole domain is built around:
+#
+#   "When communications degrade, the simulator should actually have to choose which data
+#    arrives. Do not merely set `comm.degraded=true` while delivering every telemetry field
+#    normally."
+#
+# Every other domain on this vehicle models a quantity. This one models a *constraint on
+# observation*, and it is the only place where the experiment's epistemology has a bandwidth.
+# Three consequences follow, and each is a state below:
+#
+#   - the link's capacity is finite and the publisher must satisfy it by **dropping content**,
+#     not by flagging itself degraded — `E-LINK-TEL` is declared `one_way: true` for exactly
+#     this reason, and the telemetry profile is the verb that chooses;
+#   - a blackout is **planned** (`comm.blackout_state`), so the vehicle records and replays
+#     rather than losing, and the recorder's fill is a published stock;
+#   - the amplifier is a **load**, not just a transmitter: 36 W bare and 72 W with the power
+#     amplifier, which makes `set_power_amplifier` a command that can start the flagship cascade
+#     with nothing wrong anywhere (`E-AMP-LOAD`, F-03).
+#
+# ## The edge that was a contradiction
+#
+# `E-DYN-GEOM` carried `value: UNCONFIGURED` beside `relation: "the coupling is the signal
+# itself; one unit in, one unit out"`. An identity relation has a value and it is 1.0 — three
+# sibling edges with the same relation already said so. It is fixed, and what the fix makes
+# visible is that the edge and the channel are different quantities: the edge is the geometry
+# (one degree of attitude is one degree of boresight error for a body-mounted antenna) and
+# `comm.hga_pointing_error_deg` is the *residual* after the gimbal compensates. Collapsing them
+# would have made a gimbal failure indistinguishable from a vehicle pointing the wrong way.
+
+domain: comms
+
+# 1 Hz: the rate of the link's published state. The RF layer has no meaningful faster cadence on
+# a vehicle whose slowest physical process is a 9.4-degree beam crossing a 2-degree error band.
+natural_rate_hz: 1
+
+reads: [bus_a, coldplate_t, vehicle_dynamics, command_executive]
+writes: [link, antenna_geometry]
+
+# --------------------------------------------------------------------------------------
+# What the link is made of. All of it is already in `vehicle.yaml#comms`; these entries are
+# the domain's view of it, and they exist so that a threshold or a fault can name the object
+# it is about.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: hga
+    kind: state
+    class: antenna
+    gain_db: 26.7
+    beamwidth_deg: 9.4
+    steerable: true
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#comms.antennas.high_gain — NR ch.18's four 31-inch parabolas with 9.2/20.7/26.7 dB wide/medium/narrow feeds"
+      note: >-
+        the beamwidth was 1.0 in the first version of `vehicle.yaml` and is 9.4 here because the
+        gain-beamwidth product says so: `G = 41253 / theta^2`, so 26.7 dB is a 9.4-degree beam and
+        a 1.0-degree beam would need 46 dB. The corrected figure is what makes apollo's own
+        threshold coherent — 0-2 degrees is a good link (`apollo_diode.md:163`) only if 2 degrees
+        off boresight is a fraction of a dB down, and against a 1-degree beam it would be 48 dB
+        down, which is a range in which no link exists. This is the domain that surfaced it
+        because the beamwidth is what the pointing channel and `E-GEOM-LINK` scale against
+
+  - id: omni
+    kind: state
+    class: antenna
+    gain_db: 2
+    count: 4
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#comms.antennas.omni_a/b — four flush omni helices rated 15 W continuous"
+      note: >-
+        the antennas that work when nothing else does, and the reason the domain has four of them
+        rather than one: an omni needs no pointing, so it is the link a vehicle keeps while it is
+        not sure which way it is facing. What it cannot do is carry 51.2 kbit/s, and that trade is
+        the domain's central operational fact — `select_antenna` is a choice between knowing
+        where you are pointing and being able to send much
+
+  - id: sband_transceiver
+    kind: flow
+    class: transmitter
+    dc_w: 36
+    rf_w: 2.8
+    provenance:
+      basis: historical
+      source: "apollo_diode.md:157 (36 W input) and NR ch.18 (2.8 W RF as built, against 5 W in the 1965 SP-87 design)"
+      note: >-
+        the load that is always there when the link is up. `E-AMP-LOAD` converts its DC input to
+        bus current at 1/28 A per W, so this transmitter is 1.29 A whenever it is on and the
+        amplifier is another 1.29 A — and the *step* between them is what F-03 depends on
+
+  - id: sband_power_amplifier
+    kind: flow
+    class: transmitter
+    dc_w: 72
+    rf_w: 11.2
+    provenance:
+      basis: historical
+      source: "apollo_diode.md:157 (72 W input) and NR ch.18 (11.2 W RF)"
+      note: >-
+        a 36 W electrical step and a 4x RF gain, and the one component on this vehicle whose
+        *operation* is a hazard. `apollo_diode.md:1140` and `:1158` make it the trigger of the
+        degraded chain and explicitly not its root cause: the amplifier does not fail, it
+        *exposes* — a marginal pump, a weak contactor, a bus with less margin than anybody
+        thought. That asymmetry is why switching it on is an operator decision with a phase
+        argument rather than a housekeeping detail
+
+  - id: lm_sband
+    kind: flow
+    class: transmitter
+    low_dc_w: 20
+    high_dc_w: 90
+    rf_w_low: 0.75
+    rf_w_high: 18.6
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#comms.transmitters.lm_sband_low/high — PSR's 0.75 W and 18.6 W RF figures, with the DC inputs chosen because no LM transmitter input-power figure was found"
+      note: >-
+        the LM's own link, and the one that matters during the descent, the surface and the
+        ascent. Its two power levels are a 70 W step in DC terms, which is 2.5 A, and it is the
+        reason the LM's electrical margin during a powered descent is coupled to a communications
+        decision
+
+  - id: recorder
+    kind: stock
+    class: storage
+    capacity: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903"
+      note: >-
+        the on-board record. Apollo could "record telemetry via the CSM, and later retransmit
+        stored information", which is what makes a lunar occultation an operational condition
+        rather than a data loss. Capacity is owed and matters: it is the bound on how long a
+        blackout can last before the vehicle starts choosing what to forget, and nobody has
+        published a figure for either spacecraft's recorder in the sources reached
+
+  - id: gimbal
+    kind: discrete
+    class: pointing
+    slew_rate_deg_s: UNCONFIGURED
+    range_deg: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the mechanism that keeps a 9.4-degree beam on Earth while the vehicle rotates underneath
+        it, and the component F-11 fails. Both parameters are owed: no source reached gives the
+        Apollo HGA's gimbal range or rate, and the two together are what decide whether a pointing
+        error is a control problem (the gimbal has not caught up) or an attitude problem (the
+        vehicle is not where it thinks). `comm.hga_pointing_error_deg` is the observation and
+        these two are the explanation
+
+# --------------------------------------------------------------------------------------
+# State. Ten, and the split between them is the domain's argument: a link that is *sending*
+# badly, a link that is *not sending*, and a link that is *not supposed to be*.
+# --------------------------------------------------------------------------------------
+state:
+
+  - id: link_snr
+    node: link
+    method: algebraic
+    unit: dB
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:164"
+      note: >-
+        `comm.snr_db` with apollo's band 8-30 dB and its two events, "<8 degraded" and "<3 loss".
+        The state is *algebraic* rather than dynamic because the link budget closes in one tick:
+        transmit power, antenna gain, pointing loss, range and the receiver's threshold are all
+        known at the same instant, and a lag on a quantity with no memory would invent a
+        transient the physics does not have. Three edges land on `link` — E-BUS-COMM (a sagging
+        bus), E-PLATE-COMM (a hot amplifier) and E-GEOM-LINK (pointing loss) — and this state is
+        where they meet, which is why it is one number rather than three
+
+  - id: tx_power
+    node: link
+    method: algebraic
+    unit: W
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:168, :157"
+      note: >-
+        `comm.tx_power_w` with apollo's events "low output" and "high draw", and the two events
+        point in opposite directions on purpose. A low *RF* output with a normal DC draw is a
+        failing final amplifier; a normal output with a high DC draw is an amplifier that has
+        become a load — which is the closing mechanism of the flagship cycle, where "a hot
+        amplifier draws more current for the same output, which returns to the bus as extra
+        load" (`coupling.yaml#C-AMP-BUS-PUMP`). One channel carrying both is what makes that
+        cycle visible as a single number going the wrong way in two dimensions
+
+  - id: antenna_pointing
+    node: antenna_geometry
+    method: algebraic
+    unit: deg
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:163, :786-790"
+      note: >-
+        `comm.hga_pointing_error_deg`, whose "0-2 **Sim** good link" range and ">2 warning; scan
+        limit" events are apollo's. The value is the *residual* after the gimbal compensates, and
+        that is the whole distinction between this state and `E-DYN-GEOM`: the edge is 1 deg per
+        deg of attitude error and this is what is left of it once the gimbal has done its work.
+        A gimbal that has reached its range limit and an attitude that has run away both produce
+        a growing error here, and separating them needs `gnc.attitude_q[0..3]` and the gimbal's
+        own state
+
+  - id: antenna_selection
+    node: internal
+    method: discrete
+    unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
+    dwell:
+      min_on_s: 10
+      min_off_s: 10
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:167"
+      note: >-
+        apollo's enum with its "unexpected switch" event, and the four members are exactly the
+        antennas `vehicle.yaml#comms.antennas` declares — the linter refuses a mismatch, the same
+        discipline the phase, posture and crew-station vocabularies get. Ten seconds of dwell
+        (chosen) because the members are 26.7 dB and 2 dB apart: a selection that can be
+        re-commanded every tick is one whose outage a fleet cannot attribute, since the antenna
+        changed twice while the link was down
+
+  - id: comm_mode
+    node: internal
+    method: discrete
+    unit: "enum[sband_high,sband_low,vhf,none]"
+    dwell:
+      min_on_s: 10
+      min_off_s: 10
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:161"
+      note: >-
+        `comm.link_mode` with apollo's "loss/change" event. `vhf` is not a fallback for the
+        Earth link and the enum says so by including it: it is the LM-to-CSM and EVA channel
+        (`vehicle.yaml#comms.vhf`, 296.8 and 259.7 MHz), so a vehicle in `vhf` can talk to the
+        other spacecraft and not to Earth — a distinction that matters enormously during a
+        descent and is invisible in a single "comms is up" boolean
+
+  - id: carrier_lock
+    node: internal
+    method: discrete
+    unit: bool
+    dwell:
+      min_on_s: 2
+      min_off_s: 2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:162"
+      note: >-
+        apollo's `comm.carrier_lock`, "true nominal", with a "lock loss" event. The receiver's
+        statement that it has found the signal, which is a *different* fact from having a usable
+        link: a carrier can lock at an SNR far too low to carry data, so this channel and
+        `comm.snr_db` together separate "the receiver has lost the vehicle" from "the receiver
+        can hear it and cannot read it". Two seconds of dwell in both directions because lock
+        acquisition is a search rather than an instant, and a lock bit that flickered on every
+        acquisition would make every pointing maneuver look like a comms fault
+
+  - id: telemetry_rate
+    node: internal
+    method: discrete
+    unit: bit/s
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:165"
+      note: >-
+        `comm.telemetry_rate_bps` with apollo's two Apollo-inspired profiles, 1,600 and 51,200
+        bit/s, and its "mode change" event. Commanded rather than measured, which is why it is a
+        machine with a dwell: the rate is what the publisher has chosen to send, and the
+        *achieved* rate is a different quantity visible only as frame loss. The two together are
+        the domain's bandwidth story, and a fleet that reads the commanded rate as the achieved
+        one will believe it is receiving at 51.2 kbit/s while most of the frames are being
+        dropped
+
+  - id: frame_loss
+    node: internal
+    method: stock
+    unit: "%"
+    quantum: 0.01
+    min_flow_per_s: 0.01
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:166"
+      note: >-
+        `comm.rx_frame_loss_pct`, apollo's band 0-0.5 % and its ">2 %" event. A stock because
+        frames are counted and the fraction is a ratio of two integers, which is exactly the case
+        `plant.md` §4's Bresenham accumulator exists for: a loss rate computed in floating point
+        over four hours of frames drifts against the frame counters it is supposed to be a ratio
+        of, and the drift is in the direction of the thing being measured
+
+  - id: blackout
+    node: internal
+    method: discrete
+    unit: "enum[clear,occulted]"
+    dwell:
+      min_on_s: 60
+      min_off_s: 60
+    provenance:
+      basis: derived
+      relation: "the Moon occults the Earth when the angle between the vehicle->Moon-centre and vehicle->Earth directions is less than arcsin(R_moon / r_orbit). At a 100 km circular lunar orbit that is arcsin(1737.4/1837.4) = 71.0 deg half-angle, so 39.5 % of each revolution; over a 117.8 min period that is 46.5 min"
+      note: >-
+        `apollo_diode.md:903`'s property, made geometric. The derivation is worth checking
+        against the historical figure because it is the only place in this vehicle where a
+        derived number can be tested against an operational one: Apollo's loss-of-signal was
+        about 45 minutes per revolution, and the derivation gives 46.5 — the difference being
+        the orbit's eccentricity and the Earth's own 1.8-degree disc, both of which shorten the
+        blackout slightly. Sixty seconds of dwell in both directions (chosen) because the
+        transition is a geometric event with a soft edge: the link does not stop at an instant,
+        it fades through the limb, and a state that flipped on the first dropped frame would
+        report the antenna's noise as the Moon's shadow
+
+  - id: recorder
+    node: internal
+    method: stock
+    unit: "%"
+    quantum: 0.1
+    min_flow_per_s: 0.1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903"
+      note: >-
+        `comm.recorder_fill_pct`. The reason the blackout is survivable, and the reason the
+        domain has a *stock* rather than a flag: the vehicle stores what it cannot send, so a
+        blackout converts a telemetry gap into a telemetry delay. Its capacity is the bound on
+        how long that works, and `vehicle.yaml#comms` does not have the figure — recorded as a
+        debt rather than filled in, because the interesting failure is the one where the
+        recorder fills and the vehicle must start choosing what to forget. That choice is the
+        same one `apollo_diode.md:901` demands of a degraded link, arriving from the other side
+
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  - "Recorder capacity, in the units `comm.recorder_fill_pct` is a percentage of. Not published for either spacecraft in the sources reached, and it is the bound on how long a blackout can last before the vehicle chooses what to forget."
+  - "Gimbal range and slew rate. Both owed, and both needed to separate a pointing error the gimbal can still fix from one it cannot — which is the difference between `point_hga` being a control action and being a message nobody can act on."
+  - "`E-BUS-COMM`'s dB per volt, and `E-PLATE-COMM`'s dB per kelvin. Both need the amplifier's gain-versus-supply and gain-versus-temperature curves, which are not published. They stay UNCONFIGURED and they are the two edges that make the flagship cycle quantitative rather than qualitative."
+  - "The LM steerable S-band antenna's gain and beamwidth (`vehicle.yaml#comms.antennas.sband_steerable`). Owed rather than picked, because a gain invented there propagates into `E-GEOM-LINK` and from there into every SNR a fleet ever reads."
+  - "The link budget's constant terms: the receiver threshold, the range loss at lunar distance, and the CSM/LM relay geometry during the docked and rendezvous phases. `comm.snr_db`'s 8-30 dB band is apollo's and is a *range*, not a budget — the derivation that would turn transmit power, antenna gain and range into an SNR is the one piece of this domain that is physics rather than configuration."

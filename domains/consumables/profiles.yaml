@@ -1,0 +1,290 @@
+# domains/consumables/profiles.yaml — reserve floors, and the one threshold this domain must
+# not invent.
+#
+# ## The tolerance that cannot be a constant
+#
+# `consumables_diode.md:852`: "No universal numerical tolerance is appropriate." It is right,
+# and for a reason worth stating precisely: the reconciliation tolerance has to exceed the
+# *observation's* uncertainty, and the observation for main propellant is a pressure inference
+# while the observation for water may not exist at all. One number would be too tight for the
+# first and meaningless for the second.
+#
+# So the per-resource tolerances are declared unset. This is the single place in the whole
+# artifact where the honest answer is "we do not have this": every other threshold has either a
+# published value or a derivable one, and a tolerance does not, because it depends on a sensor
+# model that does not exist yet. Inventing one would make `Δ_recon` fire constantly — and a
+# residual that cries wolf is a residual the fleet learns to ignore, which costs the experiment
+# its most sensitive instrument.
+#
+# ## Reserve floors are not the same as the alert thresholds
+#
+# An alert threshold says "look at this". A reserve floor says "you may not spend below this",
+# and it is enforced by the executive rather than published. `apollo_diode.md:55` is explicit
+# that consumables reserve policies "should remain agent-created" — so the floors below are the
+# service's defaults, and `set_reserve_policy` lets an agent tighten its own.
+
+domain: consumables
+profiles:
+  - id: default
+    revision: 1
+    description: "the service's reserve floors, from apollo's own threshold events where it has them"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:77, :140, :151, :193-200"
+      note: "apollo gives 20/10/5 % for main propellant, 25/10 % for RCS propellant and <30/<15 % for battery state of charge; where it gives nothing, the same class of value is used and the reason is stated"
+
+thresholds:
+
+  # --- main propellant: apollo's own three-level ladder -----------------------------------
+  - id: prop_reserve_20
+    point: prop.propellant_remaining_pct
+    comparator: below
+    assert: 20
+    clear: 25
+    dwell_assert_ms: 5000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    reserve_floor: 20
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:140"
+      note: "apollo's threshold is 20/10/5 %; the 5-point recovery gap is chosen so that a settling quantity gauge cannot chatter across the floor"
+  - id: prop_reserve_10
+    point: prop.propellant_remaining_pct
+    comparator: below
+    assert: 10
+    clear: 15
+    dwell_assert_ms: 2000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    reserve_floor: 10
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:140"
+  - id: prop_reserve_5
+    point: prop.propellant_remaining_pct
+    comparator: below
+    assert: 5
+    clear: 10
+    dwell_assert_ms: 1000
+    dwell_clear_s: 300
+    latched: true
+    severity: EMERGENCY
+    reserve_floor: 5
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:140"
+      note: "at 5 % the remaining propellant is a contingency rather than a budget, and the recovery gap is deliberately wider than the band between 5 and 10 so that a vehicle cannot oscillate between two emergency levels"
+
+  # --- RCS propellant: apollo's two-level ladder ------------------------------------------
+  - id: rcs_reserve_25
+    point: rcs.propellant_remaining_pct
+    comparator: below
+    assert: 25
+    clear: 30
+    dwell_assert_ms: 5000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    reserve_floor: 25
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151"
+  - id: rcs_reserve_10
+    point: rcs.propellant_remaining_pct
+    comparator: below
+    assert: 10
+    clear: 15
+    dwell_assert_ms: 2000
+    dwell_clear_s: 300
+    latched: true
+    severity: EMERGENCY
+    reserve_floor: 10
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151"
+      note: "the RCS budget is what attitude control and every manoeuvre's ullage burn come out of, so its emergency level is set at the point where the vehicle can still hold an attitude for a return"
+
+  # --- oxygen, water and the absorber: the same class, chosen ------------------------------
+  - id: o2_reserve_20
+    point: res.o2_remaining_kg
+    comparator: below
+    assert: 55.8
+    clear: 69.8
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: CAUTION
+    reserve_floor: 55.8
+    point_units: "kg: 20 % of the 279 kg CSM load"
+    provenance:
+      basis: derived
+      relation: "apollo gives no O2 reserve percentage; 20 % of the loaded 279 kg is used because apollo uses exactly that figure for main propellant, and the two are the same kind of reserve"
+      source: "vehicle.yaml#consumables for the 279 kg load"
+  - id: o2_reserve_10
+    point: res.o2_remaining_kg
+    comparator: below
+    assert: 27.9
+    clear: 41.9
+    dwell_assert_ms: 5000
+    dwell_clear_s: 600
+    latched: true
+    severity: EMERGENCY
+    reserve_floor: 27.9
+    point_units: "kg: 10 % of the CSM load"
+    provenance:
+      basis: derived
+      relation: "as above, at apollo's second propellant level"
+  - id: water_reserve_20
+    point: res.water_potable_kg
+    comparator: below
+    assert: 2.8
+    clear: 4.2
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: CAUTION
+    reserve_floor: 2.8
+    point_units: "kg: 20 % of the 14 kg potable load, which is small because the fuel cells produce 143 kg more"
+    provenance:
+      basis: derived
+      relation: "20 % of the loaded potable water, with the production term in the ledger rather than in the floor. Apollo 13 is the case this threshold exists for: the LM's water had to stretch far beyond its planned period, and a floor that ignored fuel-cell production would have been wrong from the start"
+  - id: cooling_water_reserve
+    point: res.water_cooling_kg
+    comparator: below
+    assert: 2.6
+    clear: 3.9
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: CAUTION
+    reserve_floor: 2.6
+    point_units: "kg: 20 % of the 13 kg CSM cooling-water load"
+    provenance:
+      basis: derived
+      relation: "20 % of the loaded cooling water, at the same fraction apollo uses for main propellant and this file uses for oxygen and potable water"
+      note: >-
+        the threshold the thermal domain's `set_evaporator_feed` needs and did not have. The
+        evaporative loop is the one consumer that spends water *as* its actuator —
+        `vehicle.yaml#thermal` has the evaporator rejecting 2,345 W by consuming water — so a
+        feed command with no water floor is a command that can run the loop dry to hold a
+        temperature, which is a trade no service should be allowed to make silently. It is a
+        separate threshold from the potable floor because they are separate tanks with separate
+        consumers, and one number for both would fire on the wrong one
+  - id: absorber_reserve_20
+    point: eclss.absorber_capacity_pct
+    comparator: below
+    assert: 20
+    clear: 30
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: WARNING
+    reserve_floor: 20
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:93"
+      note: "apollo's absorber event is <20 % with a predicted breakthrough inside an hour. With the capacity denominated in man-hours (vehicle.yaml#consumables) this threshold is finally well defined, which it was not when the denominator was unnamed"
+  - id: battery_reserve_30
+    point: power.battery_soc_pct
+    comparator: below
+    assert: 30
+    clear: 40
+    dwell_assert_ms: 1000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    reserve_floor: 30
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:77"
+      note: "duplicated from the power domain on purpose: the same physical limit is an electrical protection there and a resource floor here, and an agent planning in resource terms should not have to translate"
+
+  # --- reconciliation: the tolerance that cannot be a constant ---------------------------
+  - id: recon_mismatch_main_propellant
+    point: "res.recon_main_propellant_kg"
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 60000
+    dwell_clear_s: 600
+    latched: true
+    severity: WARNING
+    point_units: "kg of |observed - ledger|"
+    provenance:
+      basis: UNCONFIGURED
+      note: "the tolerance must exceed the pressure-inference uncertainty for a cryogenic tank, which depends on a sensor model that does not exist yet. consumables_diode.md:852 forbids a universal value and this is why: too tight and the residual cries wolf, too loose and the slow leak it exists to catch is invisible"
+  - id: recon_mismatch_o2
+    point: "res.recon_o2_kg"
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 60000
+    dwell_clear_s: 600
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: UNCONFIGURED
+      note: "as above"
+
+  - id: h2_reserve_20
+    point: res.h2_remaining_kg
+    comparator: below
+    assert: 4.9
+    clear: 6.1
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: CAUTION
+    reserve_floor: 4.9
+    point_units: "kg: 20 % of the 24.5 kg CSM hydrogen load"
+    provenance:
+      basis: derived
+      relation: "20 % of the loaded hydrogen, at the same fraction apollo uses for main propellant and this file uses for oxygen, potable water and cooling water"
+      note: >-
+        the fourth of the four consumables that share a reserve fraction, and it was missing: the
+        audit found `res.h2_remaining_kg` declaring a "reserve threshold" event with no threshold
+        behind it. Hydrogen is the fuel cell's other reactant, so a hydrogen reserve is a *power*
+        reserve — the cell stops when either gas runs out, and the oxygen floor alone would let a
+        fleet believe it had power when it had oxygen
+
+  - id: time_to_limit_low
+    point: res.time_to_limit_s
+    comparator: below
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 5000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    point_units: "s, against the configured planning horizon"
+    provenance:
+      basis: chosen
+      reason: >-
+        the horizon is the mission's rather than the vehicle's — it is how far ahead a fleet is
+        expected to plan, and C-23 records why the number cannot be invented: `consumables_diode.md`
+        published a `time_to_critical_ms` of 4,870 s where its own inputs imply 8.13e6, a factor of
+        1,670, and that is what a forecast looks like when nobody derives it. The linter re-derives
+        forecasts and refuses a mismatch (C-23), and this threshold is where the *published*
+        forecast raises an alarm rather than only being checkable
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    An agent may select a profile and may never edit one (D-05). `set_reserve_policy` is a
+    different thing and is not profile editing: it tightens the caller's own ceiling, which is
+    the one direction the `min(agent, operator)` rule allows, and it is how apollo's
+    "reserve policies should remain agent-created" (`apollo_diode.md:55`) is realised without
+    handing anyone a writable limit.
+alternatives:
+
+    - id: prudent
+      revision: 1
+      description: "every reserve floor raised by a third, for a fleet that wants to arrive with margin"
+      factor: 1.33
+      provenance:
+        basis: chosen
+        reason: "a floor can only be raised by choice and never lowered below the service's own, so this profile is monotonically safe"

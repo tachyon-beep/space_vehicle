@@ -1,0 +1,249 @@
+# domains/rcs/points.yaml — what the attitude-control service reports about itself.
+#
+# apollo's seven points (`apollo_diode.md:147-153`) are all *about the thrusters*: what the valves
+# are doing, what the feed pressure is, how much propellant is left, how much impulse has been
+# spent. They answer "what is the RCS doing".
+#
+# They cannot answer the question a fleet in trouble actually has, which is "can it still do what
+# I am about to ask". That is a different question with different evidence — the allocator's
+# residual, the remaining authority margin, the residual impulse that was requested and not yet
+# delivered — and `rcs_dode.md:722-727` requires all of it to be published for one reason: the
+# mission layer must be able to tell "my target moved" from "this vehicle cannot reach it".
+# Those two produce the same attitude error and want opposite responses.
+#
+# So the domain publishes two families, and the split is the point of the file.
+
+domain: rcs
+points:
+
+  # ------------------------------------------------------------------------------------
+  # apollo's seven. Named verbatim, published at apollo's rates and precisions.
+  # ------------------------------------------------------------------------------------
+
+  - channel: rcs.mode
+    from: mode
+    layer: service
+    derivation: "which authority the attitude loop is under: the service, the crew, or nobody"
+    note: >-
+      apollo's three modes with apollo's "unexpected mode" event, and vocabulary §4's ruling that
+      ATT_HOLD and TRACK are not among them — they are arguments to `set_attitude_target`. The
+      distinction is not pedantry: a *mode* says who is flying, and an agent that reads a mode
+      as a target will believe the vehicle is holding an attitude it has been told to hold,
+      which is a request and not a report.
+
+  - channel: "rcs.quad_[a-d]_feed_pressure_pct"
+    from: feed_pressure
+    layer: measurement
+    derivation: "each quad's feed pressure as a percentage of nominal"
+    note: >-
+      apollo's channel and apollo's units, per vocabulary §3: `rcs_dode.md:242` publishes
+      `rcs.feed.<id>.pressure_abs` in Pa and the mapping is explicit that Pa absolute is rejected
+      for this vehicle (C-17). The percentage is the better instrument anyway — the question a
+      feed pressure answers is "is there enough pressure to fire", which is a ratio to a
+      qualification figure, not an absolute.
+
+  - channel: "rcs.thruster_[n]_valve"
+    from: thruster_valve
+    layer: service
+    derivation: "the commanded position of each thruster valve"
+    note: >-
+      apollo's "stuck-on/off signature" event, and the channel whose *kind* matters most on this
+      vehicle: it is COMMAND_ECHO, not a measurement. A valve that is commanded closed and is
+      passing propellant reads identically to a valve that is closed, and F-04's whole difficulty
+      is that the first evidence of a stuck-on thruster is not here at all — it is a body rate,
+      in another domain, that nobody commanded.
+
+  - channel: "rcs.thruster_[n]_pressure_switch"
+    from: thruster_thrust
+    layer: measurement
+    derivation: "whether each thruster's chamber pressure switch indicates firing"
+    note: >-
+      the corroborating sensor, and the one whose *failure* is a scenario (F-05). apollo's event
+      is "disagrees with acceleration" — the switch is never believed alone, which is
+      `apollo_diode.md:333` and `rcs_dode.md:944` saying the same thing from two directions.
+
+  - channel: rcs.propellant_sigma_pct
+    from: propellant_estimate
+    layer: estimate
+    derivation: "the uncertainty on the impulse-derived propellant estimate"
+    note: >-
+      published as its own point rather than as a tolerance on the percentage, which is vocabulary
+      §3's decision and `rcs_dode.md:246`'s original: `rcs_dode.md:1063` judges the reserve
+      "minus uncertainty/reserve", so 12 % remaining means one thing at +-1 % and another at
+      +-8 %. The linter's producer check is what found it missing: the channel was registered, a
+      threshold watched it (`rcs_propellant_uncertainty_high`), a fault perturbed it (RCS-08) and
+      no domain published it.
+
+  - channel: rcs.propellant_remaining_pct
+    from: propellant_estimate
+    layer: estimate
+    derivation: "propellant inferred from integrated impulse rather than measured"
+    note: >-
+      apollo's channel with apollo's 25 % and 10 % events. It is an estimate and the model is a
+      *specific* one — mass inferred from total impulse — which is what makes it comparable
+      against the consumables ledger's independent figure. The two disagree for more than one
+      reason and the domain says so rather than letting a fleet read a leak into a wrong Isp.
+
+  - channel: rcs.total_impulse_ns
+    from: impulse_total
+    layer: estimate
+    derivation: "the monotonic integral of delivered impulse"
+    note: >-
+      apollo's, with its "excessive use rate" event. Checkable against the published load: the
+      three systems can produce at most 1.729e6, 3.185e5 and 8.191e5 N*s respectively
+      (`components.yaml#capability.impulse_capacity`), so this channel has a ceiling and a
+      fleet that watches it can price what it is spending.
+
+  - channel: rcs.deadband_deg
+    from: deadband_latch
+    layer: measurement
+    derivation: "the width of the phase-plane band the controller is currently running"
+    note: >-
+      apollo's channel with apollo's "configuration change" event, and vocabulary §4 keeps both
+      it and the verb that moves it. It is published because it is the *visible consequence* of
+      a profile change: a fleet that narrows a deadband to tighten pointing pays in valve
+      cycles, and the number that changed is public even though the gains that produced it are
+      not.
+
+  # ------------------------------------------------------------------------------------
+  # The service's own evidence. Not in apollo, because apollo's model of the RCS is a set of
+  # valves and this vehicle's is a service that answers requests.
+  # ------------------------------------------------------------------------------------
+
+  - channel: rcs.safety_state
+    from: safety_state
+    layer: service
+    derivation: "how degraded the attitude-control service is, on its own safety ladder"
+    note: >-
+      the first thing a fleet should read and the easiest to misread. `fault_safe` is not an
+      instruction to stop and not a report that the vehicle is quiescent — `rcs_dode.md:889` is
+      explicit that a passive no-fire state may be *less* safe than rate damping, which is why
+      the ladder's last rung still fires. An agent that treats safe-mode entry as "the vehicle
+      has stopped" will stand down at the moment it is most needed.
+
+  - channel: rcs.attitude_error_deg
+    from: attitude_error
+    layer: estimate
+    derivation: "the rotation between the commanded target and the estimated attitude"
+    note: >-
+      the measurement that turns a target into an observation. It cannot by itself separate a
+      moved target from an unreachable one — that is what the allocation channels below are for
+      — but without it a fleet has only its own request echoed back, and a request is not
+      evidence that anything happened.
+
+  - channel: rcs.allocation_status
+    from: allocation_status
+    layer: service
+    derivation: "whether the last requested wrench was met, met with reduced margin, or not met"
+    note: >-
+      `constrained` is the value worth having and the one a boolean would delete: the request
+      was granted, the actuator set is smaller than the design assumes, and nothing has failed
+      yet. It is the band between the allocator's assert and clear boundaries, so it is not a
+      debounce state — it is a real regime, and the regime a fleet is in for most of a degraded
+      mission.
+
+  - channel: rcs.allocation_residual
+    from: allocation_status
+    layer: estimate
+    derivation: "the weighted wrench the allocator could not deliver, as a fraction of the request"
+    note: >-
+      the residual of `rcs_dode.md:230`'s six-vector reduced to the scalar its own feasibility
+      test compares (`:1055`). Publishing the scalar and not the vector is a decision: the
+      allocator's per-axis shortfall is its internal state, and what the mission layer can act
+      on is *how far short* it fell, which is one number.
+
+  - channel: rcs.control_authority_margin
+    from: authority_margin
+    layer: estimate
+    derivation: "how much of the commandable wrench set is still reachable, normalized"
+    note: >-
+      the attitude-control analogue of a propellant gauge, and the only channel here that
+      degrades *before* a request fails. `rcs_dode.md:889` makes its loss one of the safe-hold
+      triggers, and F-05 is the reason it is worth publishing: the pressure-switch failure costs
+      no authority at all, and this is the channel that shows a fleet spending authority it did
+      not have to spend.
+
+  - channel: "rcs.thruster_[n]_health"
+    from: thruster_valve
+    layer: service
+    derivation: "the FDIR conclusion for each thruster, after corroboration"
+    note: >-
+      a conclusion, not a quality code, and the distinction is the whole of `design.md:211-214`:
+      the vehicle publishes what it has concluded and never what it suspects about itself. The
+      ladder is `ok -> suspect -> failed_off|failed_on`, and the middle rung is load-bearing —
+      `rcs_dode.md:949` puts a single discrepant pressure switch at `suspect` and requires
+      corroboration before `failed_off`, because the alternative is a fleet isolating healthy
+      thrusters on one sensor's word.
+
+  - channel: "rcs.thruster_[n]_pulse_width_us"
+    from: pulse_width
+    layer: service
+    derivation: "the width of the last pulse the generator committed to"
+    note: >-
+      published per pulse with a zero rate, because the interesting fact is not a rate at all:
+      it is whether the widths being requested are legal. A fleet that can see 20 ms pulses
+      arriving on a thruster it asked to fire for 4 ms has found a real problem, and there is no
+      other channel on the vehicle from which that follows.
+
+  - channel: "rcs.thruster_[n]_impulse_ns"
+    from: thruster_thrust
+    layer: estimate
+    derivation: "the impulse each thruster is estimated to have delivered"
+    note: >-
+      per-thruster, because `rcs.total_impulse_ns` cannot show a single derated thruster: one
+      of sixteen moving slightly less than it should is invisible in a total that sixteen others
+      are also moving. The low-thrust fault is defined as a systematic shortfall against this
+      (`rcs_dode.md:950`), so the channel is the fault's definition rather than its decoration.
+
+  - channel: "rcs.thruster_[n]_residual_ns"
+    from: pulse_residual
+    layer: service
+    derivation: "the impulse that has been requested and not yet delivered, held in the accumulator"
+    note: >-
+      the vehicle's most informative small channel. Zero or near-zero means the pulse generator
+      is keeping up with the controller; a residual that rises and *stays* means the generator is
+      refusing pulses as illegally short, which is a thruster that has stopped firing without
+      anything failing — no valve fault, no switch disagreement, no health conclusion. It exists
+      because the minimum qualified firing time is the one RCS constant nobody published, and an
+      unknown that produces a failure needs a channel that can see the failure.
+
+not_published:
+
+  - channel: "rcs.thruster_[n]_true_state"
+    why: >-
+      hidden truth. What is published is the commanded valve position, the pressure switch, the
+      estimated impulse and a conclusion drawn from them; the physical state of a thruster is a
+      thing the vehicle infers, and a fleet that could read it would skip the inference F-04 and
+      F-05 exist to test.
+
+  - channel: "rcs.allocation_wrench_[6]"
+    why: >-
+      the allocator's desired, achieved and residual six-vectors (`rcs_dode.md:716-722`) are its
+      internal representation. The scalar residual and the status are published because they are
+      what the mission layer acts on; the vector is the allocator's own state and publishing it
+      would be publishing one quantity at two levels of abstraction and inviting a fleet to
+      re-derive a decision the service already made.
+
+  - channel: "rcs.thruster_[n]_valve_temperature_c"
+    why: >-
+      the duty limit is real and the sensor is not: no source reached gives a valve or catalyst
+      bed temperature limit for the 100 lbf thruster, and a temperature channel with no limit is
+      a number a fleet will invent a limit for. The duty protection is modelled as a commanded
+      constraint (`t_max_on` and cooldown in the generator) rather than as a measurement, which
+      is also how `rcs_dode.md:811` describes it.
+
+  - channel: "rcs.control_gain_[term]"
+    why: >-
+      `rcs_dode.md:662` supports several controller families (quaternion PD/PID, phase plane,
+      rate damp) and `:678` says ordinary agents select *signed profile IDs* rather than
+      modifying gains. Publishing gains would invite a fleet to tune a stability loop through an
+      observation channel, which is the one thing `simulator-design.md` and `rcs_dode.md:89`
+      both rule out: external agents never close the stability-critical loop.
+
+  - channel: "rcs.remaining_dv_m_s"
+    why: >-
+      tempting and wrong. The RCS load can be priced in Δv (`capability.impulse_capacity`), but
+      publishing a translation budget would be publishing an *allocation* — the vehicle would be
+      telling a fleet how much of the propellant is for translation, and that decision is the
+      mission's. The published facts are the load, the impulse spent and the authority margin;
+      the arithmetic is the fleet's.

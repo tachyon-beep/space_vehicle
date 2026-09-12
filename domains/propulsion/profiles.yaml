@@ -1,0 +1,241 @@
+# domains/propulsion/profiles.yaml — engine limits, cutoff guards, and the interlock nobody else
+# has.
+#
+# ## The interlock that is unique to this domain
+#
+# `dps_throttle_band` refuses a throttle command inside 65-92.5 %. Every other interlock in the
+# vehicle protects against a *consequence* — a sagging bus, an overheated zone, a dry tank.
+# This one protects against a command that is **meaningless**: the engine is not designed to run
+# there, so the throttle will do something, and what it does is not what the number says. An
+# agent that commands 80 % and gets thrust is not being lied to by the vehicle; it is being lied
+# to by its own model, and the refusal is the correction.
+#
+# ## Cutoff guards are not alarms
+#
+# The three `*_cutoff_guard` entries are evaluated at the moment a burn is *requested*, not
+# published as alerts. They are the reason the executive revalidates at the moment of effect:
+# a burn armed at 22 % propellant and started at 8 % has to be refused at the start, not at the
+# arming, and a guard that fired when the burn was queued would be protecting the wrong moment.
+
+domain: propulsion
+profiles:
+  - id: default
+    revision: 1
+    description: "engine and feed limits, from apollo's own channel events"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:134-141"
+      note: "the channel events are apollo's: <90 % chamber pressure after ignition, <90 % feed pressure, phase-specific pressurant limits, and a >5 % commanded-versus-estimated discrepancy. The dwells and recovery bands are chosen against the engine's own time constants"
+
+thresholds:
+
+  # --- chamber pressure: the fastest evidence that a burn is wrong -------------------------
+  - id: chamber_pressure_low
+    point: prop.chamber_pressure_pct
+    comparator: below
+    assert: 90
+    clear: 94
+    dwell_assert_ms: 500
+    dwell_clear_s: 2
+    latched: true
+    severity: WARNING
+    gated_by: "the engine's state is ignition or mainstage"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:135"
+      note: "apollo's event is <90 after ignition. The 500 ms assert dwell is one thrust time constant: a chamber that dips for a tenth of a second during a start transient is not a failing engine, and a chamber that sits low for half a second is"
+  - id: chamber_pressure_decay
+    point: prop.chamber_pressure_pct
+    comparator: above
+    assert: 5
+    clear: 2
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: WARNING
+    point_units: "% per second"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:135"
+      note: "apollo's event includes 'decay' as well as the level. The rate channel catches a failing injector before the level does, which is the same logic as the thermal domain's fast-rise watch and the reason both domains need a rate threshold as well as a level one"
+
+  # --- feed pressure, and the discrepancy that is the real alarm ---------------------------
+  - id: feed_pressure_low
+    point: prop.feed_pressure_pct
+    comparator: below
+    assert: 90
+    clear: 94
+    dwell_assert_ms: 500
+    dwell_clear_s: 2
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:138"
+  - id: thrust_discrepancy
+    point: prop.thrust_pct_estimated
+    comparator: below
+    assert: -5
+    clear: -2
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: WARNING
+    point_units: "% deviation of estimated thrust from commanded, signed"
+    gated_by: "a burn is in progress"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:137"
+      note: "apollo's event is a >5 % discrepancy between commanded and estimated. It is expressed here as a signed deviation below the command because an *over*-performing engine is a different fault from an under-performing one, and an absolute-value threshold would hide which. The 3-point recovery gap is chosen so that a burn whose estimate settles does not clear and re-trip"
+
+  # --- the throttle band that is not an alarm but an impossibility -------------------------
+  - id: dps_throttle_band
+    point: prop.dps_throttle_pct
+    comparator: above
+    assert: 65
+    clear: 60
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "% commanded throttle, in the 65-92.5 % non-operating region"
+    provenance:
+      basis: historical
+      source: "the DPS experience report names 65-92.5 % a non-operating region. There is no dwell and no latch because the condition is not an event to be debounced: it is a command that will be refused, and the refusal is the whole mechanism"
+
+  # --- cutoff guards: evaluated at the moment of effect, not published as alerts -----------
+  - id: prop_cutoff_guard_5
+    point: prop.propellant_remaining_pct
+    comparator: below
+    assert: 5
+    clear: 5
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "% remaining, checked at burn start"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:140"
+      note: "apollo's third propellant threshold, used here as a burn-admission guard rather than as an alert. assert and clear are equal because a guard has no recovery semantics — either the burn may start or it may not, and there is nothing to debounce"
+  - id: sps_burn_budget_guard
+    point: prop.sps_burn_count
+    comparator: above
+    assert: 50
+    clear: 50
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "restarts used against the 50 the engine was qualified for"
+    provenance:
+      basis: historical
+      source: "the AJ10-137 qualification: 50 restarts. The guard is at the qualified life rather than below it because the number is a qualification limit and not a wear estimate — the vehicle may refuse to exceed it, and it has no basis for refusing earlier"
+  - id: sps_total_burn_guard
+    point: prop.chamber_pressure_pct
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    # `ADVISORY`, which is what the 21 other interlocks in this vehicle use when they exist to
+    # refuse a command rather than to announce a hazard — and `sps_burn_budget_guard` next door is
+    # the closest sibling. This one had **no severity at all**, and it survived because nothing read
+    # the field: 138 severities across the eleven domains and the linter's only mentions of the word
+    # were in comments. A threshold with no severity is an alert that lights at no level, which for
+    # an interlock is survivable and for anything else is not — which is exactly why the union is
+    # now enforced for every threshold rather than for the ones that look like alarms.
+    severity: ADVISORY
+    point_units: "seconds of accumulated burn, against the 750 s the SPS carries"
+    gated_by: "accumulated burn time, not chamber pressure; expressed against this channel only because the profile schema keys on a published channel and accumulated burn seconds is service state"
+    provenance:
+      basis: historical
+      source: "NR and the AJ10 report: 750 s total burn capability, of which Apollo 11 used 531.9 s. Expressed as a guard rather than a threshold because it is a budget the mission spends, and the interesting decision is what to spend the last 200 seconds of it on"
+
+  # --- pressurant: apollo's phase-specific limit, made two-sided ---------------------------
+  - id: pressurant_low
+    point: prop.pressurant_pressure_psi
+    comparator: below
+    assert: 160
+    clear: 170
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    gated_by: "phase: the SPS engine inlet runs at 165 psia, so the limit is phase-specific as apollo says"
+    provenance:
+      basis: historical
+      source: "the AJ10 report and NR: SPS bottles at 3,600 psia regulate to 186 psia with an engine inlet of 165. Apollo's channel event is 'phase-specific low/high', and this is the low side of it with the published inlet pressure as its floor"
+  - id: pressurant_high
+    point: prop.pressurant_pressure_psi
+    comparator: above
+    assert: 300
+    clear: 280
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    point_units: "psi, where the transducer saturates"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:215, :347"
+      note: "this is the threshold the Apollo 11 trapped-line event crosses while the instrument cannot show it: the transducer tops out at 300 psia and the publication is 300.0 with SATURATED. An agent that reads the value without the quality sees a vehicle sitting exactly at a limit it is nowhere near, which is the single best epistemic trap the corpus offers"
+
+  # --- leak corroboration: an evidence count, not a magnitude ------------------------------
+  - id: leak_confirmed
+    point: prop.leak_state
+    comparator: above
+    assert: 3
+    clear: 1
+    dwell_assert_ms: 0
+    dwell_clear_s: 60
+    latched: true
+    interlock: true
+    severity: WARNING
+    point_units: "evidence count: 0 nominal, 1 suspect, 2 corroborating, 3 confirmed"
+    provenance:
+      basis: chosen
+      reason: "main_propulsion_diode.md:695-702's leak FSM in numeric form. The unit is a count of agreeing observations rather than a leak rate, because the vehicle cannot measure a leak rate directly — it can only count how many independent channels have noticed. The recovery is slow on purpose: a leak that stops being observed has not stopped"
+
+  - id: main_unexpectedly_armed
+    point: prop.main_armed
+    comparator: above
+    assert: 0.5
+    clear: 0.5
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    point_units: "boolean: an armed main engine"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:134"
+      note: >-
+        an engine armed when nobody meant to arm it, and the reason it is an alarm rather than a
+        state is F-01's chain: "an armed engine on a vehicle whose bus is failing is a live
+        hazard" (`domains/propulsion/commands.yaml`, `arm_engine`). Nothing about an armed engine
+        is wrong on its own — it is the precondition for a burn — and what makes it alarming is
+        the *pair* of it with anything else going wrong, which is a judgement the fleet has to
+        make and cannot make without being told the engine is armed
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    An agent may select a profile and may never edit one (D-05). This domain is where that rule
+    bites hardest, because the thresholds an agent would most like to widen are the two that
+    decide whether a burn is allowed to start.
+alternatives:
+
+    - id: conservative
+      revision: 1
+      description: "raise every cutoff guard by a quarter, for a fleet that would rather keep its propellant than spend it"
+      factor: 1.25
+      provenance:
+        basis: chosen
+        reason: "guards can only be tightened, never loosened below the service's own, so this profile is monotonically safe in the direction that matters"

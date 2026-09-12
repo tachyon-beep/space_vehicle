@@ -1,0 +1,472 @@
+# domains/rcs/components.yaml — reaction control as an attitude-and-wrench *service*.
+#
+# ## What this domain is, and what the corpus wanted it to be
+#
+# `rcs_diode.md` is the strongest engineering document in the corpus, and its central claim is
+# architectural rather than numerical (`:9`): **expose RCS/ACS as a trusted
+# attitude-and-wrench execution service, not as a remote thruster-firing bus.** The mission
+# layer requests effects — hold this attitude, translate by this much, enter safe hold, inhibit
+# this group — and the service owns the estimator, the controller, the allocator, the pulse
+# modulator and the valve drivers. `apollo_diode.md:147-153` supplies the seven channels that
+# say what the thrusters are doing; this document supplies the reason there is anything between
+# the request and the thruster.
+#
+# ## The prunings, which are as load-bearing as the additions
+#
+# Conflict C-15: **attitude is RCS only.** `apollo_diode.md:52` has no reaction wheels, no CMGs
+# and no magnetorquers, and `rcs_diode.md` assumes all three. So the whole momentum-management
+# apparatus goes: `REQUEST_MOMENTUM_DUMP`, the dump controller `τ = -K_H(H_w - H_target)`
+# (`:783`), the 80/90/95 % wheel thresholds (`:794-798`), the `HYBRID_WHEEL_RCS` control profile
+# (`:663`) and the two wheel faults in its FDIR table. A vehicle with no wheels has no momentum
+# to dump, and a wheel-saturation alarm on this spacecraft would be an alarm about hardware that
+# is not there.
+#
+# Also pruned: `rcs.feed.<id>.pressure_abs` in Pa (vocabulary §3 maps it back to apollo's
+# `rcs.quad_[a-d]_feed_pressure_pct`, C-17) and `rcs.power.bus_voltage` / `rcs.thermal.<id>` as
+# *RCS* channels, because the vehicle already publishes the bus and the zones and a second copy
+# of a measurement is a second truth.
+#
+# ## The alignment this domain had to make: 100 Hz inside a 50 Hz tick
+#
+# `rcs_diode.md:836` budgets a 100 Hz control frame with a 10 ms deadline table, and the plant
+# runs at 50 Hz (C-07). The plant does **not** get re-rated. What makes the control frame real
+# is the sub-tick integer-microsecond event queue of `plant.md` §5: a pulse is scheduled at a
+# microsecond offset inside the 20 ms tick, so a 4 ms firing is four milliseconds of thrust
+# rather than a whole tick of it. This is not a convenience — it is the difference between a
+# minimum impulse bit and a minimum *tick*, and with a 20 ms tick the smallest commandable
+# firing would be five times the size of the real one. Declared rate is therefore 50, and the
+# 100 Hz frame is a sub-step.
+#
+# ## The unpublished constant, and why it is bounded rather than fatal
+#
+# `vehicle.yaml#propulsion` declares the minimum impulse bit of the SM and LM systems
+# UNCONFIGURED: no mission report, summary report or news reference reached contains any
+# impulse-bit or minimum-firing figure. `rcs_diode.md:800-825` supplies the mechanism that makes
+# that survivable — the residual accumulator `r_i`:
+#
+#     I_acc = I* + r_i        ; if I_acc is below the qualified threshold it stays in r_i
+#     t_i   = quantize(I_acc / F_eff, dt_q)   ; subject to t_i >= t_min_on
+#     r_i  <- I_acc - I_hat(t_i)
+#
+# The average delivered impulse is therefore preserved **whatever** `t_min_on` is: the residual
+# absorbs the difference. What is *not* preserved is *when* the impulse arrives. So an unknown
+# minimum firing time costs zero mean error and unbounded phase error — a slow limit cycle
+# instead of a fast one — which is a bounded, describable degradation rather than a silent one.
+# The debt stays open and the mechanism bounds it; that is the honest engineering answer to a
+# number nobody published.
+#
+# The one consequence that is *not* benign is RCS-11 in `fault_policy.yaml`: if `t_min_on` is
+# larger than the widths the controller keeps requesting, the accumulator grows, every pulse is
+# refused as illegally short, and the thruster never fires. That failure has no valve fault, no
+# switch disagreement, and no health conclusion. Its only evidence is
+# `rcs.thruster_[n]_residual_ns` climbing while `rcs.thruster_[n]_valve` never asserts.
+
+domain: rcs
+
+# 50, not rcs_dode.md:836's 100: C-07 keeps the plant's rate and the control frame is a
+# sub-step in the event queue. See the header.
+natural_rate_hz: 50
+
+# Every node here has an edge into an RCS node in coupling.yaml, and the four are exactly the
+# ones that do. Two quantities the FDIR needs arrive as *published channels* rather than as
+# coupling edges — `structure.accel_xyz_g` for the stuck-on corroboration and
+# `thermal.coolant_supply_c` for the feed readiness check — and `controls.switches` is how a
+# crew member flies the vehicle in `manual` mode. None of them is a node this domain advances
+# or a graph edge it sits on, so none of them is declared here.
+reads: [prop_rcs, nav_state, bus_a, command_executive]
+writes: [rcs_valves, rcs_thrust]
+
+# --------------------------------------------------------------------------------------
+# Capability. Four derived figures, and each one is checkable arithmetic rather than a
+# remembered number.
+# --------------------------------------------------------------------------------------
+capability:
+
+  # The link between impulse and propellant, and the reason E-RCSP-RCS is no longer
+  # UNCONFIGURED. Thrust and Isp are published (vehicle.yaml#propulsion.rcs_*, from the
+  # Apollo 11 tables); g0 is a definition.
+  mass_flow_per_thruster:
+    value: 0.15647
+    unit: kg/s
+    provenance:
+      basis: derived
+      relation: "mdot = F / (Isp * g0) = 445 / (290 * 9.80665) = 0.15647 kg/s per thruster"
+      note: >-
+        all three systems share the 100 lbf thruster and the same 290 s, so one figure serves
+        them all. The inverse is the edge sensitivity: 290 * 9.80665 = 2843.9 N per kg/s
+  quantum_impulse:
+    value: 0.000445
+    unit: N*s
+    provenance:
+      basis: derived
+      relation: "F * dt_min = 445 N * 1e-6 s = 4.45e-4 N*s"
+      note: >-
+        `dt_min` is the plant's event-queue resolution (plant.md §5, integer microseconds),
+        not a hardware figure — so this is the smallest *representable* impulse, and it is
+        three orders of magnitude below any physical minimum firing. It is the accumulator's
+        arithmetic quantum, which is why it can be exact while t_min_on stays unknown
+  impulse_capacity:
+    unit: N*s
+    values:
+      rcs_sm: 1729109
+      rcs_cm: 318520
+      rcs_lm: 819051
+    provenance:
+      basis: derived
+      relation: "load * Isp * g0, loads from vehicle.yaml#propulsion.rcs_* (A11 Tbl 8-XI, 9-XV)"
+      note: >-
+        the total impulse each load can produce if every kilogram is burned through a 100 lbf
+        thruster — 1.729e6 N*s for the service module, 3.185e5 for the command module, 8.191e5
+        for the LM. It is an upper bound and the ceiling of `rcs.total_impulse_ns`, which is
+        what makes the published total impulse checkable against the published load: a total
+        impulse above this figure is not a thruster that has been busy, it is a spent tank. Most
+        of it will be attitude control rather than translation, so the figure prices an
+        emergency translation, not an available budget
+  minimum_firing_time:
+    value: UNCONFIGURED
+    unit: s
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the qualified minimum firing time, `t_min_on`. The only figure in the corpus is
+        rcs_dode.md:91's Voyager anecdote — a 0.2 lbf thruster reliable at 4 ms and unreliable
+        below it — and its own text says that is thruster-specific rather than a universal 4 ms
+        rule. Adopting it would be adopting a number from a different engine and calling it
+        configuration. What the domain does instead is bound the consequence: zero mean error,
+        unbounded phase error, and RCS-11's silent non-firing. The debt is named, its effect is
+        described, and neither is a default
+
+# --------------------------------------------------------------------------------------
+# State. Twelve, of which only two advance a coupling node — the rest are the service.
+# --------------------------------------------------------------------------------------
+state:
+
+  - id: thruster_valve
+    node: rcs_valves
+    method: discrete
+    unit: "map[thruster_id,bool]"
+    dwell:
+      min_on_s: UNCONFIGURED
+      min_off_s: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:149"
+      note: >-
+        `rcs.thruster_[n]_valve` is apollo's, and it is a *commanded* state — which is why the
+        protection is a dwell rather than a hysteresis band. The two dwell values are the
+        pulse generator's `t_min_on` and `t_min_off` (rcs_dode.md:801-804), and they are the
+        same unpublished hardware constants the `capability` block declines to invent: a valve
+        that can be re-commanded inside its own closing time is a valve that chatters on
+        command, and the minimum on *and* off times are what stop it. A commanded machine with
+        neither is the one case the linter refuses outright.
+
+  - id: thruster_thrust
+    node: rcs_thrust
+    method: dynamics
+    unit: "map[thruster_id,N]"
+    tau_rise_s: UNCONFIGURED
+    tau_fall_s: UNCONFIGURED
+    provenance:
+      basis: derived
+      relation: "F(t) = 445 N * rise(t; tau_rise) falling with tau_fall; amplitudes from vehicle.yaml#propulsion.rcs_*.thrust_n"
+      note: >-
+        rcs_dode.md:869 is explicit that "physical valve opening and thrust buildup are separate
+        hardware-configured quantities and must appear in the timing model" — and they are not
+        in it, because nobody publishes a 100 lbf MMH/N2O4 thruster's rise and tailoff. Both
+        are on the same state on purpose: a thruster whose rise is fast and whose fall is slow
+        delivers more impulse than its commanded width says, and a model with one time constant
+        cannot express that asymmetry, which is exactly the asymmetry a total-impulse gauge
+        would misread. The steady-state amplitude is derived; only the two times are owed
+
+  - id: pulse_residual
+    node: internal
+    method: stock
+    unit: "map[thruster_id,N*s]"
+    quantum: 0.000445
+    provenance:
+      basis: derived
+      relation: "r_i <- I_acc - I_hat(t_i), with I_acc = I* + r_i (rcs_dode.md:807-825); quantum = F * dt_q from capability.quantum_impulse"
+      note: >-
+        the residual accumulator, and the vehicle's clearest example of why plant.md §4 insists
+        on a Bresenham accumulator for fixed-point stocks. The conservation is exact by
+        construction: every newton-second requested is either delivered or held, and the
+        quantity that crosses the boundary is one integer number of quanta applied once. A
+        float accumulator would lose the last bit on every pulse, and over the LM's thousands
+        of short firings (apollo_diode.md:143) that is a propellant gauge that drifts against a
+        ledger for no physical reason — which is precisely the signature the consumables domain
+        models as a *fault* (CNS-11). Getting the arithmetic wrong here would manufacture a
+        false positive of a real failure mode
+
+  - id: pulse_width
+    node: internal
+    method: algebraic
+    unit: "map[thruster_id,us]"
+    t_min_on_s: UNCONFIGURED
+    provenance:
+      basis: derived
+      relation: "t_i = quantize(I_acc / F_eff, dt_q), subject to t_i >= t_min_on (rcs_dode.md:816-820)"
+      note: >-
+        the last width the pulse generator committed to, published per pulse so that "the valve
+        was commanded" becomes "the valve was commanded *for this long*". The quantization
+        step is derived (the plant's microsecond grid); the floor is not, and the floor is the
+        interlock — a width below it is refused rather than truncated, because a truncated
+        width is a pulse whose delivered impulse nobody can predict
+
+  - id: impulse_total
+    node: internal
+    method: stock
+    unit: N*s
+    quantum: 0.000445
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:152"
+      note: >-
+        `rcs.total_impulse_ns`, "monotonically rising", with an "excessive use rate" event.
+        Accumulated as a quantized stock for the same reason as the residual. This is the
+        channel that prices F-04's secondary effect — a stuck-on thruster's first unmistakable
+        trace is not the valve, which reads as commanded, but a total impulse climbing when
+        nothing was asked for
+
+  - id: propellant_estimate
+    node: internal
+    method: algebraic
+    unit: "%"
+    provenance:
+      basis: derived
+      relation: "100 * (1 - impulse_total / (load * Isp * g0)), with load and Isp from vehicle.yaml#propulsion.rcs_*"
+      note: >-
+        `rcs.propellant_remaining_pct` is apollo's (:151, with 25 % and 10 % events) and it is
+        an *estimate*, so this is the model that produces it: propellant inferred from
+        integrated impulse rather than measured. That makes it the second of two answers to one
+        question — the consumables domain keeps the ledger, as a conserved mass depleted by the
+        actual flow — and the difference between them is diagnostic. It is also composite:
+        a leak (mass gone without thrust) and a wrong Isp (thrust for the mass that did burn)
+        push it the same way, so the pair cannot separate them without a third source. Saying so
+        is the point; a fleet that reads the disagreement as a leak has learned something false
+        from a true observation
+
+  - id: feed_pressure
+    node: internal
+    method: algebraic
+    unit: "% nominal"
+    tank_volume_m3: UNCONFIGURED
+    provenance:
+      basis: derived
+      relation: "regulated helium blowdown: p = (n_He + n_vapour) R T / (V_tank - V_propellant); inputs prop_rcs and pressurant_he (coupling.yaml)"
+      note: >-
+        the producer of apollo's `rcs.quad_[a-d]_feed_pressure_pct` and its <90 % event, and a
+        *derived* quantity rather than a measured one because there is no feed-pressure state
+        anywhere else on the vehicle: the consumables domain keeps the masses and this is what
+        they imply. One value is owed and it is the tank volume, so the channel exists, its
+        events exist, and the constraint on it is named rather than filled in. It is also the
+        channel RCS-07 and RCS-08 move, which is why leaving it unproduced would have been a
+        hole rather than an omission.
+
+  - id: attitude_error
+    node: internal
+    method: algebraic
+    unit: deg
+    provenance:
+      basis: derived
+      relation: "q_e = q_target^-1 (x) q_est; e_theta = 2*sign(q_e,w)*q_e,v (rcs_dode.md:625-631), reduced to the rotation angle"
+      note: >-
+        the scalar the phase-plane latch switches on and the evidence that a target was
+        actually acquired. `rcs_dode.md:726` requires the allocator to let the mission layer
+        distinguish "target not reached because guidance changed" from "target is physically
+        unachievable", and the error alone cannot do it — but neither can anything else without
+        it, because a target is a request and this is the only measurement of whether the
+        request was granted
+
+  - id: deadband_latch
+    node: internal
+    method: discrete
+    unit: bool
+    hysteresis:
+      assert: UNCONFIGURED
+      clear: UNCONFIGURED
+      dwell_ms: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:668-680, the phase-plane switching variable s = omega_e + k_p*theta_e with separate fire and release boundaries"
+      note: >-
+        the comparator latch that decides whether to request corrective torque, and the reason
+        `rcs.deadband_deg` is a published telemetry rather than a constant. The three values are
+        owed together because they are one design: the fire boundary, the release boundary below
+        it, and the dwell that stops a boundary crossing from becoming a pulse train. Deriving
+        them needs inertia, disturbance torque, sensor noise and the impulse bit — the inertia
+        is the unpublished debt in vehicle.yaml and the impulse bit is the unpublished debt in
+        this file, so the whole band is downstream of two numbers nobody has. It is declared
+        latched and unset rather than given a plausible value: a deadband that is wrong by a
+        factor of three is not a slightly worse controller, it is a controller that either
+        chatters the valves or never fires them
+
+  - id: allocation_status
+    node: internal
+    method: discrete
+    unit: "enum[feasible,constrained,infeasible]"
+    hysteresis:
+      assert: UNCONFIGURED
+      clear: UNCONFIGURED
+      dwell_ms: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:722-727 and :1055, allocation_status published so that a physically unachievable target is distinguishable from a changed one"
+      note: >-
+        and the hysteresis band here is not a debounce, it is the *middle value*. A residual
+        above the assert boundary is `infeasible`; below the clear boundary it is `feasible`;
+        inside the band the request is still being met but with less margin than the design
+        intends, and that is what `constrained` means. So the three-value enum and the two-band
+        latch are the same object, and collapsing it to a boolean would delete the only warning
+        that arrives *before* a request is refused
+
+  - id: authority_margin
+    node: internal
+    method: algebraic
+    unit: normalized
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:231, :889 and :1056 — the allocator recomputes available control authority before the mission layer decides anything, and its loss is the safe-hold trigger"
+      note: >-
+        how much of the commandable wrench set is still reachable, normalized by the design's
+        requirement. It is the attitude-control analogue of a propellant gauge and it is the
+        reason F-05's chain is dangerous in an unexpected direction: the pressure-switch failure
+        costs no authority at all, and the *operators* cost it by isolating a healthy thruster
+        on one sensor's word. Of every number this domain publishes, this is the one that moves
+        when a fleet makes a mistake
+
+  - id: safety_state
+    node: internal
+    method: discrete
+    unit: "enum[nominal,rate_damp,safe_hold,fault_safe]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:867-887, the safe-mode ladder; :889 on FAULT_SAFE not meaning 'fire nothing'"
+      note: >-
+        the ladder, with a five-second dwell (chosen): its entry conditions are FDIR conclusions
+        that are already latched, so the dwell is a floor against re-entry chatter rather than a
+        control parameter, and a safety posture that can change five times a second is one no
+        log can be read against. What the ladder is *not* is a request to stop: `fault_safe` is
+        the rung where a passive vehicle may be less safe than a rate-damping one — LRO's Sun
+        Safe exists for power and thermal reasons, not because pointing at the Sun is
+        intrinsically safe — so the enum says how degraded the service is and says nothing about
+        whether it is firing
+
+  - id: mode
+    node: internal
+    method: discrete
+    unit: "enum[auto,manual,free_drift]"
+    dwell:
+      min_on_s: 2
+      min_off_s: 2
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:147"
+      note: >-
+        apollo's three modes and no others: vocabulary §4 rules that rcs_dode.md:365's ATT_HOLD
+        and TRACK are *targets*, argued through `set_attitude_target`, not modes. `manual` is
+        the one that carries real weight here — in it the crew are the controller, and the
+        commands reach the valves through `controls.switches` rather than through this service.
+        Two seconds of dwell (chosen) because a posture that can change every tick is
+        indistinguishable in a log from a fault
+
+# --------------------------------------------------------------------------------------
+# Components. The actuator inventory and the three strings it is wired as.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: thruster_100lbf
+    kind: flow
+    class: thruster
+    thrust_n: 445
+    isp_s: 290
+    count: 44
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#propulsion.rcs_sm/rcs_cm/rcs_lm — 16 SM + 12 CM + 16 LM = 44 thrusters, all 100 lbf, from A11 Tbl 8-XI and 9-XV"
+      note: >-
+        one component for all forty-four because they are the same article at the same
+        throttle, and forty-four near-identical entries would be forty-four places for the
+        arithmetic to differ
+
+  - id: pulse_generator
+    kind: discrete
+    class: controller
+    frame_hz: 100
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:836, the 100 Hz reference control frame with its 8 ms pulse-quantization deadline"
+      note: >-
+        the last trusted software layer before the drivers, and the owner of the residual
+        accumulator, the minimum-pulse check and the interlocks. Its 100 Hz frame is a
+        *sub-step* inside the 50 Hz plant tick through the event queue, not a second plant rate
+
+  - id: valve_driver
+    kind: discrete
+    class: driver
+    driver_current_a: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        rcs_dode.md:1064 detects the driver open-circuit and overcurrent faults from a current
+        envelope that nobody publishes for this thruster. The *fault* is in fault_policy.yaml
+        because the vehicle must have it; the envelope is not invented, so RCS-06 is detectable
+        only through its consequences until the number exists
+
+  - id: rcs_string_sm_primary
+    kind: discrete
+    class: string
+    thrusters: 8
+    feeds: 2
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#propulsion.rcs_sm — 16 thrusters in 4 quads; the SM flew two independent systems, which is what makes a string isolable"
+      note: >-
+        a string is the unit of `isolate_rcs_manifold` and `set_rcs_quad`: the
+        smallest set of thrusters a fleet can give up and still have a usable vehicle
+
+  - id: rcs_string_sm_secondary
+    kind: discrete
+    class: string
+    thrusters: 8
+    feeds: 2
+    provenance:
+      basis: historical
+      source: "as the primary string. This is the one Apollo 13 ran on after the SM's other systems were lost"
+      note: "the redundant half, and the reason a stuck-on thruster is survivable at all"
+
+  - id: rcs_string_cm
+    kind: discrete
+    class: string
+    thrusters: 12
+    feeds: 2
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#propulsion.rcs_cm — two systems of six thrusters (A11 Tbl 8-XI)"
+      note: "the command module's own system, used for entry attitude and for separation transients"
+
+  - id: rcs_string_lm
+    kind: discrete
+    class: string
+    thrusters: 16
+    feeds: 4
+    provenance:
+      basis: historical
+      source: "vehicle.yaml#propulsion.rcs_lm — 16 thrusters in 4 clusters of 4 (A11 Tbl 9-XV)"
+      note: >-
+        the busiest system on the vehicle. apollo_diode.md:143 notes the LM flew thousands of
+        short firings, which is why pulse accounting matters here more than thrust does, and why
+        an unset minimum firing time hurts this string most
+
+# --------------------------------------------------------------------------------------
+# What is still owed, in the domain's own words rather than the linter's.
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  - "The qualified minimum firing time for the 100 lbf thruster, and with it t_max_on and the duty cycle. Not in any source reached; bounded rather than defaulted (header), and RCS-11 is the failure mode of getting it wrong."
+  - "Thrust rise and tailoff time constants. The asymmetry between them is what a total-impulse gauge misreads, and no source gives either."
+  - "Inertia tensor and centre of mass, owed by `vehicle.yaml` and owed *to* this domain before the deadband, the allocator's wrench matrix and E-RCS-DYN can exist. Three of this domain's twelve states are waiting on it."
+  - "Thruster geometry: the unit thrust direction and lever arm of each of the 44 thrusters. Without it the allocator has no B matrix (rcs_dode.md:685-693) and E-GNC-RCS has no sensitivity."
+  - "The mission's RCS propellant allocation. `rcs.total_impulse_ns` can be checked against the load (capability.impulse_capacity) but the mission declares no RCS budget, so the three systems still carry the linter's 'no mission burn' note while their loads are flown by attitude control, which no budget line can price."

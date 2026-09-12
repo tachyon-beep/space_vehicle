@@ -1,0 +1,200 @@
+# domains/propulsion/commands.yaml — the six verbs apollo gives, and the one it does not.
+#
+# ## The decision this file records
+#
+# `main_propulsion_diode.md:293-296` requires arm-TTL and commit for **every** burn, and has no
+# nominal early-cutoff verb: the only way to stop a burn early would be `ABORT_BURN`, which
+# "requests the certified abort sequence". `apollo_diode.md:241` gives `start_burn` and
+# `stop_burn` as ordinary operator verbs.
+#
+# Conflict register C-16 resolves it, and the reasoning is worth restating here because it is the
+# clearest example in the vehicle of a safety pattern being *over*-applied: **arm/commit is for
+# actions that cannot be undone.** A burn is interruptible — `stop_burn` exists, the engine has a
+# shutdown state, and the consequence of stopping early is a trajectory error that a later burn
+# can fix. A staging event is not interruptible and has no inverse, so it keeps the two-step.
+# Requiring arm/commit for every burn does not add safety; it adds a delay between a fleet that
+# has decided and a vehicle that has acted, on the one action where the mission clock is running.
+#
+# What survives from mps is the part that was right: **effect-time revalidation**. Every guard in
+# `profiles.yaml` is evaluated when the burn starts, not when it was loaded.
+
+domain: propulsion
+commands:
+  - verb: arm_engine
+    argument_schema:
+      engine: {type: enum, values: [sps, dps, aps]}
+      state: {type: enum, values: [armed, safe]}
+    authority: A2
+    gate: {kind: preference, variable: engine_<engine>_arm_enable}
+    interlocks: [pressurant_low, feed_pressure_low, prop_cutoff_guard_5]
+    conflict_domain: prop.<engine>.arm
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 600
+    help: >-
+      Arm or safe an engine. Arming is not authorisation to burn: it is a statement that the
+      propulsion system may be commanded, and it is the state the F-01 crisis chain cares about
+      because an armed engine on a vehicle whose bus is failing is a live hazard. `safe` is
+      always available and never refused.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:241"
+      note: "apollo's arm_engine and safe_engine. main_propulsion_diode.md:1092 records that MPS 'elevates normal automation to plan/arm/commit/abort and keeps raw valve/igniter control test-only' — the elevation is declined here (C-16) and the raw valve control stays unavailable, which is the half of that observation this vehicle keeps"
+
+  - verb: load_burn
+    argument_schema:
+      engine: {type: enum, values: [sps, dps, aps]}
+      target: {type: enum, values: [loi, doi, powered_descent, ascent, rendezvous, tei,
+                                  midcourse_translunar, midcourse_transearth, custom]}
+      duration_s: {type: number, minimum: 0.5}
+      throttle_pct: {type: number, optional: true}
+      dv_target_m_s: {type: number, optional: true}
+    authority: A2
+    gate: {kind: preference, variable: burn_load_<engine>_enable}
+    interlocks: [prop_cutoff_guard_5, sps_burn_budget_guard, sps_total_burn_guard,
+                 dps_throttle_band]
+    conflict_domain: prop.<engine>.plan
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 3600
+    help: >-
+      Load a burn: which manoeuvre, how long, at what throttle, to what delta-v. Nothing
+      happens until it is started. `target` names the mission's own manoeuvres so that the
+      vehicle can check a burn against the phase it belongs to — a powered-descent load in the
+      translunar phase is a mistake the phase gate catches.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:241"
+      note: "apollo's load_burn, with the manoeuvre names taken from mission.yaml so a burn is checked against the mission rather than against itself"
+
+  - verb: start_burn
+    argument_schema:
+      engine: {type: enum, values: [sps, dps, aps]}
+    authority: A2
+    gate: {kind: preference, variable: burn_start_<engine>_enable}
+    interlocks: [chamber_pressure_low, feed_pressure_low, pressurant_low, thrust_discrepancy,
+                 prop_cutoff_guard_5, dps_throttle_band]
+    conflict_domain: prop.<engine>.run
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Start a loaded burn. Every guard is evaluated here rather than at load time, which is the
+      one property of the MPS treatment this vehicle keeps: a burn loaded at 22 % propellant and
+      started at 8 % is refused at the start. No arm token, because a burn is interruptible and
+      a two-step where one step suffices is a delay dressed as a precaution.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:241"
+      note: "apollo's start_burn fires directly. C-16: arm/commit-with-token is reserved for the irreversible events in the structures domain, where a misread line cannot be taken back"
+
+  - verb: stop_burn
+    argument_schema:
+      engine: {type: enum, values: [sps, dps, aps]}
+    authority: A2
+    gate: {kind: preference, variable: burn_stop_<engine>_enable}
+    interlocks: none - reviewed
+    conflict_domain: prop.<engine>.run
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 10
+    help: >-
+      Stop a burn. Ten seconds of queue age rather than the sixty a configuration change gets:
+      a stop command that arrives after the burn was due to end is a command that did nothing,
+      and a stale stop is worse than no stop because it reads as an intervention that happened.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:241"
+      note: "the verb main_propulsion_diode.md:296 does not have: its only early stop is ABORT_BURN, which requests a certified abort sequence. Not having a plain stop is what makes a burn irreversible, and making a burn irreversible is what makes a fleet afraid to start one"
+
+  - verb: set_throttle
+    argument_schema:
+      engine: {type: enum, values: [dps]}
+      throttle_pct: {type: number, minimum: 10.5, maximum: 92.5}
+    authority: A2
+    gate: {kind: preference, variable: throttle_<engine>_enable}
+    interlocks: [dps_throttle_band, chamber_pressure_low]
+    conflict_domain: prop.<engine>.throttle
+    allowed_phases: [lunar_orbit, descent, surface, ascent_rendezvous]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 5
+    help: >-
+      Set the descent engine's throttle. The range is published as 10.5 to 92.5 % and the
+      interlock refuses anything from 65 % upward inside that range, because the engine is not
+      designed to run there. Five seconds of queue age: a throttle command is a real-time
+      control and a stale one is a command to fly a burn that has already changed shape.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:241"
+      note: "apollo's set_throttle. main_propulsion_diode.md:295 offers SET_THROTTLE_PROFILE, which is a bounded profile selection rather than a rate — declined here because a descent engine's throttle is a control input during the descent, not a configuration"
+
+  - verb: set_burn_cutoff
+    argument_schema:
+      engine: {type: enum, values: [sps, dps]}
+      mode: {type: enum, values: [duration, dv_target, gnc_request, manual]}
+      dv_target_m_s: {type: number, optional: true}
+    authority: A2
+    gate: {kind: preference, variable: cutoff_<engine>_enable}
+    interlocks: [prop_cutoff_guard_5]
+    conflict_domain: prop.<engine>.cutoff
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Choose what ends a burn: a duration, a delta-v target, a guidance request, or nothing
+      automatic at all. The delta-v mode is the one the corpus does not have, and it is the one
+      that matters when a burn underperforms — a burn that ends on time has under-delivered,
+      and a burn that ends on delta-v has taken longer and delivered. Which of those two
+      outcomes a fleet wants is a decision it should have to make explicitly.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:141"
+      note: "conflict C-12: apollo publishes accumulated_dv_m_s with a cutoff target and main_propulsion_diode.md:645 offers only duration, plan and GNC request. This verb is the missing path, and `prop.cutoff_mode` is the channel that reports which trigger fired"
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: abort_burn
+    why: >-
+      every abort on this vehicle is a *mission* decision rather than an engine one: the abort
+      mode for a descent is jettison-and-ascend, which is `arm_event`/`execute_event` in the
+      structures domain plus `start_burn` on the ascent engine. A propulsion-level abort verb
+      would be a third path to a state two other domains already own, and the interesting
+      question — when does a crew give up on a landing — is not answered by which verb they
+      typed.
+
+  - verb: set_engine_valve
+    why: >-
+      raw valve and igniter control stays test-only. `main_propulsion_diode.md:1092` says so,
+      and the reason survives the decline of everything else in that document: valve-level
+      control is not a mission authority, it is a maintenance one, and a fleet with a valve verb
+      would spend its time on combustion instead of on the mission.
+
+  - verb: safe_engine
+    why: >-
+      not absent — *merged*. `apollo_diode.md:241` lists `arm_engine` and `safe_engine` as two
+      verbs, and this vehicle has one: `arm_engine` takes `state: armed|safe`. Two verbs for one
+      binary is how a registry grows a pair of names that must be kept consistent with each
+      other, and the asymmetry that matters is preserved in the single verb's semantics instead
+      — arming is refused when the feed or pressurant guards fail, and safing is always
+      available and never refused. Listed here because a reader looking for apollo's name should
+      find out where it went rather than conclude the vehicle cannot safe an engine.

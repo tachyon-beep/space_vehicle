@@ -1,0 +1,424 @@
+# domains/crew/components.yaml — the crew as an instrument, and the display contract that
+# bounds what they may report.
+#
+# ## Why this file is the most important one in the vehicle
+#
+# `review-findings.md` #4 found that the design's rule for the GM — "the crew answer is bounded
+# by what that crew member could perceive from where they are, not by what the GM knows"
+# (`simulator-design.md:392-403`) — is an *instruction to an LLM*, in a design whose §7 argues
+# that a convention will rot and enforces the instrument boundary in a function signature. Same
+# anti-pattern, worse placement: a leak in a crew line arrives as a plausible sentence an agent
+# correctly trusts.
+#
+# The fix is the perception function, computed **before** the GM composes so that excluded truth
+# never enters its context window:
+#
+#     (full_truth, crew_position, display_contract) → perceivable_subset
+#
+# `simulator-design.md:561-564` claims `crew_diode.md` supplies the third argument. It does not:
+# `crew_diode.md:42` says display topology "was not supplied" and "remains configuration item";
+# `module` occurs zero times in that file and `panel` once, as a widget name. So the contract
+# below is **authored**, and it is the artifact conflict register D-06 names as the precondition
+# for enabling `ask_crew` at all.
+#
+# ## What the contract is, and what it is not
+#
+# It is not a UI specification and nothing renders it. It exists so that a question can be
+# answered by a lookup instead of by a judgement: given a position, which readouts are in front
+# of that person, at what displayed precision, and therefore what could they honestly say.
+#
+# The precision field is the part that matters most and the part a channel list cannot express.
+# A crew member reading a cabin-pressure gauge to the nearest tenth of a psia is a different
+# instrument from one reading it to the nearest hundredth, and `ask_crew` must inherit the
+# *displayed* precision rather than the channel's published one — otherwise the crew become a
+# better sensor than any instrument on the vehicle, which is the opposite of the point.
+
+domain: crew
+
+# Crew are not periodic. What is periodic is the alert system they read and the alarm they hear,
+# and both are already cadenced by the domains that produce them.
+natural_rate_hz: 1
+
+reads: [instrumentation, cabin_atm, lm_cabin_atm, structure_config, command_executive]
+writes: [crew_state, alert_state]
+
+# --------------------------------------------------------------------------------------
+# State.
+# --------------------------------------------------------------------------------------
+state:
+  - id: switch_panel
+    node: internal
+    method: discrete
+    unit: "map[switch_id,enum]"
+    dwell:
+      min_on_s: 1
+      min_off_s: 1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:224"
+      note: >-
+        the crew-operated switches, and the state this domain was publishing without having.
+        `controls.switches` named `hatch_state` as its source — a state in *another domain* that
+        has nothing to do with it — which the linter's `from` check found. The switch positions
+        are the crew's own control surface: agents observe them and cannot move them, and in
+        `rcs.mode = manual` they are how the vehicle is flown. One second of dwell (chosen)
+        because a switch has mechanical detents and a position that could change every tick would
+        be a bounce rather than a setting
+
+  - id: breaker_panel
+    node: internal
+    method: discrete
+    unit: "map[breaker_id,enum[in,out,tripped]]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:225"
+      note: >-
+        the crew-operated breakers, and the same defect: it named the hatch. This is the one crew
+        control with an immediate electrical consequence, which is why the lower equipment bay is
+        where a crew action and an agent command can collide — `set_breaker` is the agent's route
+        to the same hardware and `controls.breakers` is the crew's, and they are deliberately
+        different channels for the same breakers. Five seconds of dwell because a breaker is a
+        deliberate act and a tripped one is a fault rather than a setting
+
+  - id: crew_location
+    node: crew_state
+    method: discrete
+    unit: "map[crew_id,enum[csm_commander,csm_navigator,csm_lower_equipment_bay,lm_commander,lm_pilot,tunnel,surface_eva]]"
+    dwell:
+      min_on_s: 30
+      min_off_s: 0
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226-227"
+      note: >-
+        observability has geometry (simulator-design.md:379-381): a crew member is somewhere, and
+        someone in the LM cannot report on the CSM. The 30-second minimum is a transit time — a
+        crew member does not change position in a tick, and a caller cannot be in two places. The
+        enum is the `channels.yaml#crew_positions` list verbatim, and the linter refuses a state
+        whose stations differ from the bound's: a station the crew can occupy but the bound does
+        not describe is a question answered from nowhere, and a station the bound describes but
+        nobody can occupy is a panel that is never read.
+  - id: crew_availability
+    node: crew_state
+    method: discrete
+    unit: "map[crew_id,enum[available,resting,suit,incapacitated]]"
+    dwell:
+      min_on_s: 60
+      min_off_s: 60
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226"
+      note: >-
+        apollo publishes `crew.available` as a boolean with a Sim marker, and a coarse workload
+        state, with the explicit warning to avoid synthetic psychology. The four values here are
+        the minimum that lets a question go unanswered for a reason: a crew member who is
+        resting, on suit, or incapacitated are three different silences.
+  - id: crew_workload
+    node: crew_state
+    method: lag
+    unit: "enum-level"
+    tau_s: 300
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:227"
+      note: >-
+        coarse on purpose: low, medium, high, with a five-minute lag. The lag is what makes
+        workload a *trend* rather than a reaction — a crew member who has just been asked
+        something is not thereby busy, and one who has been busy for an hour is.
+  - id: alert_lifecycle
+    node: alert_state
+    method: discrete
+    unit: "map[alert_id,enum[nominal,asserted,active_unacknowledged,acknowledged,clearing,latched,cleared]]"
+    dwell:
+      min_on_s: 1
+      min_off_s: 1
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md's alert lifecycle with suppress, inhibit and shelve as orthogonal overlays,
+        adopted at simulator-design.md:544-550. The lifecycle is a *commanded* state machine
+        rather than a comparator — acknowledgement moves it and does not clear it, which is the
+        distinction the whole C&W design turns on.
+  - id: alarm_horn
+    node: alert_state
+    method: discrete
+    unit: "enum[silent,continuous,intermittent]"
+    dwell:
+      min_on_s: 1
+      min_off_s: 1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:221-222"
+      note: >-
+        the audible half of the master alarm. It is modelled because it is the only alert channel
+        that reaches a crew member who is not looking at a panel — which is exactly the situation
+        the surface_eva position describes.
+
+# --------------------------------------------------------------------------------------
+# The display contract. One entry per position; each panel lists the readouts it shows with the
+# precision it shows them at, and each position lists what it cannot see.
+#
+# Cross-checked by the linter against `../../channels.yaml#crew_positions`: every position here
+# must exist there and every readout here must be in that position's perceivable list. The two
+# artifacts say different things — the channel list says what is perceptible, this one says what
+# an instrument in front of a person actually displays — and a disagreement between them is a
+# leak in the perception bound.
+# --------------------------------------------------------------------------------------
+display_contract:
+  revision: 1
+  supplied_by: authored
+  why: >-
+    crew_diode.md:42 says display topology was not supplied and remains a configuration item.
+    conflict register D-06 records that this is the third argument of the perception function
+    and that ask_crew cannot be safely enabled without it.
+
+  positions:
+    - id: csm_commander
+      panels:
+        - id: main_display
+          shows:
+            - {channel: eclss.cabin_pressure_psia, displayed_precision: 0.1, units: psia}
+            - {channel: eclss.cabin_temp_c, displayed_precision: 1, units: degC}
+            - {channel: eclss.co2_pp_mmhg, displayed_precision: 1, units: mmHg}
+            - {channel: eclss.pp_o2_mmhg, displayed_precision: 1, units: mmHg}
+            - {channel: structure.cabin_dp_psi, displayed_precision: 0.1, units: psid}
+        - id: electrical_panel
+          shows:
+            - {channel: power.dc_bus_a_v, displayed_precision: 0.5, units: V}
+            - {channel: power.bus_tie_state, displayed_precision: exact}
+        - id: caution_warning
+          shows:
+            - {channel: cw.master_alarm, displayed_precision: exact}
+            - {channel: cw.active_lights, displayed_precision: exact}
+        - id: suit_loop
+          shows:
+            - {channel: eclss.suit_loop_flow_cfm, displayed_precision: 1, units: "ft3/min"}
+      controls: [controls.switches, controls.breakers, structure.hatch_state]
+      cannot_see: [thermal.avionics_plate_c, thermal.comm_amp_c, prop.chamber_pressure_pct,
+                   power.load_margin_w, eclss.lm_cabin_pressure_psia]
+      human_channels:
+        - "a bang, a hiss, a smell, a draught, frost on a panel, a vibration felt through the structure"
+      note: >-
+        the left seat. The human channels are the coverage no instrument has: `bob` on no
+        channel, and a crew member who mentions one has reported something the vehicle cannot.
+
+    - id: csm_navigator
+      panels:
+        - id: gnc_display
+          shows:
+            - {channel: gnc.guidance_mode, displayed_precision: exact}
+            - {channel: "gnc.attitude_q[0..3]", displayed_precision: 0.001}
+            - {channel: gnc.body_rate_xyz_deg_s, displayed_precision: 0.01, units: "deg/s"}
+            - {channel: gnc.nav_position_sigma_m, displayed_precision: 100, units: m}
+        - id: computer_panel
+          shows:
+            - {channel: avionics.computer_mode, displayed_precision: exact}
+            - {channel: avionics.program_alarm_code, displayed_precision: exact}
+        - id: caution_warning
+          shows:
+            - {channel: cw.master_alarm, displayed_precision: exact}
+            - {channel: cw.active_lights, displayed_precision: exact}
+      controls: [controls.switches, controls.breakers]
+      cannot_see: [eclss.cabin_pressure_psia, thermal.avionics_plate_c,
+                   prop.chamber_pressure_pct, power.battery_soc_pct]
+      human_channels:
+        - "a stellar sighting that does not look right, debris outside the window, a light that flickers"
+      note: >-
+        the right seat, and the one whose displayed precisions are coarsest relative to their
+        channels: `nav_position_sigma_m` publishes at 1 m and the panel shows it in hundreds of
+        metres, which is what a three-digit readout does.
+
+    - id: csm_lower_equipment_bay
+      panels:
+        - id: breaker_panel
+          shows:
+            - {channel: controls.breakers, displayed_precision: exact}
+            - {channel: "power.lcl_[n]_state", displayed_precision: exact}
+            - {channel: power.dc_bus_a_v, displayed_precision: 0.5, units: V}
+            - {channel: power.dc_bus_b_v, displayed_precision: 0.5, units: V}
+      controls: [controls.breakers, controls.switches]
+      cannot_see: [gnc.guidance_mode, eclss.co2_pp_mmhg, thermal.comm_amp_c, comm.snr_db]
+      human_channels:
+        - "a hot smell from a rack, a relay chattering, a breaker that will not stay in"
+      note: >-
+        below the floor. A crew member here can act on the electrical system directly and cannot
+        see a single display the other two seats are reading, which is the geometry that makes
+        two people a different instrument from one.
+
+    - id: lm_commander
+      panels:
+        - id: landing_display
+          shows:
+            - {channel: gnc.radar_altitude_m, displayed_precision: 1, units: m}
+            - {channel: structure.accel_xyz_g, displayed_precision: 0.01, units: g}
+            - {channel: prop.dps_throttle_pct, displayed_precision: 1, units: "%"}
+            - {channel: prop.chamber_pressure_pct, displayed_precision: 1, units: "%"}
+        - id: lm_environment
+          shows:
+            - {channel: eclss.lm_cabin_pressure_psia, displayed_precision: 0.1, units: psia}
+            - {channel: eclss.lm_co2_pp_mmhg, displayed_precision: 1, units: mmHg}
+            - {channel: eclss.lm_pp_o2_mmhg, displayed_precision: 1, units: mmHg}
+        - id: caution_warning
+          shows:
+            - {channel: cw.master_alarm, displayed_precision: exact}
+            - {channel: cw.active_lights, displayed_precision: exact}
+      controls: [controls.switches, controls.breakers, structure.hatch_state]
+      cannot_see: [power.dc_bus_a_v, thermal.comm_amp_c, prop.pressurant_pressure_psi,
+                   eclss.cabin_pressure_psia]
+      human_channels:
+        - "the view out of the window, which is the landing radar's only cross-check, and dust"
+      note: >-
+        the commander's position during a descent. Apollo 11's commander flew the final approach
+        by hand with the radar and the throttle in front of him, and the not-perceivable list is
+        the important half: the CSM's cabin pressure is another vehicle's.
+
+    - id: lm_pilot
+      panels:
+        - id: systems_display
+          shows:
+            - {channel: avionics.exec_margin_pct, displayed_precision: 1, units: "%"}
+            - {channel: avionics.program_alarm_code, displayed_precision: exact}
+            - {channel: gnc.nav_position_sigma_m, displayed_precision: 100, units: m}
+            - {channel: gnc.radar_range_rate_m_s, displayed_precision: 0.1, units: "m/s"}
+        - id: caution_warning
+          shows:
+            - {channel: cw.master_alarm, displayed_precision: exact}
+            - {channel: cw.active_lights, displayed_precision: exact}
+      controls: [controls.switches]
+      cannot_see: [structure.accel_xyz_g, prop.dps_throttle_pct, power.dc_bus_a_v, comm.snr_db]
+      human_channels:
+        - "a callout from the commander, a gauge that disagrees with the number he just read"
+      note: >-
+        systems and navigation, callouts to the commander, and no access to the flight controls.
+        `apollo_diode.md:1044` is explicit that the pilot kept the commander informed about
+        systems status and navigational information, which makes this position a *reporter*
+        rather than an actor — and a reporter is what a question can address.
+
+    - id: tunnel
+      panels: []
+      controls: [structure.hatch_state, structure.docking_latches]
+      cannot_see: [thermal.coolant_supply_c, power.battery_soc_pct, eclss.co2_pp_mmhg]
+      human_channels:
+        - "whether the tunnel is pressurised, which is felt rather than read; a leak you can hear"
+      note: >-
+        a transit position with no panels at all. Nothing is readable here that is not a discrete,
+        so a crew member in the tunnel is a sensor with almost no coverage exactly when they are
+        between two vehicles — and the felt sense of pressure is the exception, which is why this
+        position's human channels matter more than its instruments.
+
+    - id: surface_eva
+      panels: []
+      controls: []
+      cannot_see: [eclss.lm_cabin_pressure_psia, thermal.coolant_supply_c,
+                   prop.chamber_pressure_pct, comm.snr_db]
+      human_channels:
+        - "everything. A suit has a flow indicator and an alarm light and nothing else, so every other observation is a person's"
+      note: >-
+        outside, on a suit, with no displays. The suit's own flow and the alarm light are the
+        entire instrumentation, and everything else the crew member reports is a human
+        observation — the coverage that no channel on this vehicle provides and the reason
+        `apollo_diode.md:369` calls the crew the most interesting sensor aboard.
+
+  # --------------------------------------------------------------------------------------
+  # Crew wrongness. `review-findings.md` #4 asks whether it is seeded or model whim and notes
+  # that for experimental control it should be a **seeded perturbation of the perceivable
+  # subset**. This is that decision, made.
+  # --------------------------------------------------------------------------------------
+  wrongness:
+    model: "seeded perturbation of the perceivable subset, applied before the GM composes"
+    kinds:
+      - {id: misheard, weight: 0.4,
+         mechanism: "a number transposed or a decimal shifted: 850 becomes 580",
+         provenance_note: "the most common error a person makes reading a gauge aloud"}
+      - {id: misattributed, weight: 0.3,
+         mechanism: "the right observation attached to the wrong source: frost reported on the wrong panel"}
+      - {id: forgot, weight: 0.2,
+         mechanism: "an observation that was made and not mentioned until asked, or not at all"}
+      - {id: wrong_module, weight: 0.1,
+         mechanism: "a report that belongs to another position's instruments, which is a *perception-bound violation* and must be impossible by construction"}
+    seeded: true
+    note: >-
+      `wrong_module` is listed to be excluded: it is the failure mode the display contract exists
+      to make impossible, and a perturbation model that produced it would be a leak rather than
+      an error. The other three are perturbations of values the position can actually see.
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md's four failure modes for the crew instrument — forgot, misheard,
+        misattributed, wrong module — with weights chosen so that a fleet meets the common ones
+        first. "Wrong module" cannot be produced by construction, which is the whole point of
+        computing the subset before composing.
+
+  # --------------------------------------------------------------------------------------
+  # Decision outputs. Adopted at simulator-design.md:556, and the file's claim that the design
+  # lists three of four is correct: the enum's first value is the one that keeps an ordinary
+  # state from reading as an advisory.
+  # --------------------------------------------------------------------------------------
+  decision_outputs:
+    values: [NONE, ADVISORY_ONLY, CREW_ACTION_REQUIRED, REQUEST_SAFE_ACTION]
+    authority: >-
+      advisory only. crew_diode.md:470-474 is explicit that the caution/warning system never
+      actuates; it directs investigation and requests, and every physical effect still crosses
+      the diode as a command from an agent.
+    provenance:
+      basis: historical
+      source: "crew_diode.md:39, :470-474"
+
+# --------------------------------------------------------------------------------------
+# The C&W overlays. Orthogonal to acknowledgement, never crossing semantics with it.
+# --------------------------------------------------------------------------------------
+alert_overlays:
+  overlays:
+    - {id: suppress, scope: "one alert, bounded time", clears_on: "expiry or the condition persisting", provenance_note: "crew_diode.md:393-445"}
+    - {id: inhibit, scope: "a class of alerts, bounded by a declared condition"}
+    - {id: shelve, scope: "one alert until its condition clears and re-asserts"}
+  never:
+    - "an overlay may not clear a safety-relevant alert"
+    - "acknowledgement is not a clear predicate: stale, missing or invalid evidence never satisfies one (crew_diode.md:433)"
+    - "an overlay may not be applied by anyone but the crew or the service; an agent's command cannot silence an alarm"
+
+open_debts:
+  - "The displayed precisions are authored. They are the *inverse* of the channel registry's published precisions — a panel is coarser than the instrument behind it — and the mapping from one to the other is a display-design choice with no source. What is not a choice is that they must be coarser: a crew member reading a digital channel exactly would be a better instrument than the sensor."
+  - "Reading times are not modelled. A real crew member takes seconds to find and read a gauge, and `ask_crew` currently answers instantly — which understates the cost of the crew as a sensor. It belongs with the allowance machinery rather than here."
+
+# Found by asking whether a fleet can pursue each of `mission.yaml`'s outcome objectives, which is
+# a question no check in this folder had asked. Two of the three have a clear verb path —
+# `crew_survive` through the six ECLSS verbs, `return` through the three propulsion ones — and the
+# third looked at first like it had none at all. It does: `set_hatch_valve` is available in all
+# eight phases, and `domains/structure/components.yaml#one_way_events` carries
+# `hatch_open_surface` with its consequence spelled out ("the LM cabin's atmosphere is lost to
+# vacuum unless the crew are on suit loop; the cost is an atmosphere per opening") and its three
+# observables. So the *hardware* half of an EVA is declared, and `apollo_diode.md:238` fixes the
+# vocabulary — Apollo has no EVA verb, because depressurisation is `set_vent_valve` and the suit
+# circuit is `set_suit_loop`.
+#
+# What is not declared is the crew half. `crew_location` can take `surface_eva` and
+# `crew_availability` can take `suit`, and nothing says what puts a crew member there: no verb
+# writes `crew_location` — the four crew verbs are `ack_alarm`, `ask_crew`, `set_alert_overlay`
+# and `set_display_mode`, none of which moves anybody — and no file records the rule. The objective
+# is scorable only because a crew-domain state machine that is not written down happens to move
+# them. The rule has a shape, and stating it here is what keeps whatever writes it from inventing
+# one: egress is gated on the phase being `surface`, the hatch being open and the suit loop
+# running; ingress is gated on the hatch closing; the 30-second dwell on the state is already the
+# transit time; and `apollo_diode.md:754` bounds the whole thing — crew physiology is "preferably
+# omitted", so the rule may not grow a model of a person.
+  - "Nothing declares what moves the crew. `crew_location` can take `surface_eva` and
+    `crew_availability` can take `suit`, and no verb writes either: the four crew verbs are
+    `ack_alarm`, `ask_crew`, `set_alert_overlay` and `set_display_mode`, and none of them moves
+    anybody. The hardware half of an EVA *is* declared — `set_hatch_valve` is available in all
+    eight phases, and `domains/structure/components.yaml#one_way_events` carries
+    `hatch_open_surface` with its consequence spelled out (the LM cabin atmosphere is lost to
+    vacuum unless the crew are on suit loop) and its three observables — and `apollo_diode.md:238`
+    fixes the vocabulary, because Apollo has no EVA verb: depressurisation is `set_vent_valve` and
+    the suit circuit is `set_suit_loop`. What is missing is the crew half, and
+    `mission.yaml#objectives.surface_mission` — an EVA completed on the surface — is scorable
+    only because a state machine that is not written down happens to move them. The rule has a
+    shape, and stating it is what keeps whatever writes it from inventing one: egress is gated on
+    the phase being `surface`, the hatch being open and the suit loop running; ingress on the
+    hatch closing; the 30-second `dwell` on the state is already the transit time; and
+    `apollo_diode.md:754` bounds the whole thing, because crew physiology is preferably omitted
+    and the rule may not grow a model of a person."
+  - "Crew physiology is out of scope by design (`apollo_diode.md:754`: metabolic rates are an input, not a model of a person). `incapacitated` is therefore a state with a cause the vehicle does not model."

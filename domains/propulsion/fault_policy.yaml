@@ -1,0 +1,224 @@
+# domains/propulsion/fault_policy.yaml — engine faults, and the one that cannot be diagnosed
+# from inside the engine.
+#
+# Propulsion's faults divide cleanly in two. Most are *engine* faults: a valve that will not
+# open, a throttle that will not move, a chamber that will not light. They are found by the
+# commanded-versus-estimated pair disagreeing, and the diagnosis is a matter of which of the two
+# moved.
+#
+# The rest are *evidence* faults, and the sharpest of them is PRP-01: a feed-pressure sensor
+# stuck high. The engine is fine. The sensor is fine in the sense that it is not lying about
+# anything it was built to measure — it is simply stuck. What makes it dangerous is that the
+# vehicle's own thrust estimate is *derived from* the feed pressure among other things, so a
+# stuck sensor corrupts the estimate that would otherwise reveal it. That is `apollo_diode.md:336`
+# and it is the reason this domain needs an accelerometer in its channel list: the accelerometer
+# is the one piece of evidence the feed sensor cannot reach.
+
+domain: propulsion
+faults:
+  - id: PRP-01-feed-sensor-stuck-high
+    component: dps
+    mechanism: "the feed-pressure transducer freezes at a high reading: the engine is starved and the instrument says the feed is nominal"
+    kind: instrument
+    seeding: {on_demand_p: 5.0e-4, trigger: "any burn start", schedule: "degraded scenario seeds this"}
+    perturbs: [prop.feed_pressure_pct, prop.thrust_pct_estimated, prop.chamber_pressure_pct,
+               prop.accumulated_dv_m_s, prop.cutoff_mode]
+    detection:
+      evidence: >-
+        chamber pressure and accumulated acceleration both falling short while feed pressure
+        reads nominal. The engine's own estimate is corrupted by the same sensor, so the
+        corroboration has to come from outside the propulsion domain — which is exactly why
+        `structure.accel_xyz_g` is an independent sensor rather than a derived quantity
+      latency: "seconds on chamber pressure, tens of seconds on the accumulated delta-v shortfall"
+      false_positive_risk: "a genuinely underperforming engine looks identical from inside the domain; the separation is whether feed pressure moved, and a stuck sensor is precisely the case where it did not"
+    response: {kind: advisory, note: "nothing protective to do. The decision is whether to stop the burn and replan, and it has to be made on evidence the vehicle is actively corrupting"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:336"
+      note: "apollo's own chain: 'feed-pressure sensor stuck high -> true feed starvation hidden -> underburn -> trajectory error -> larger correction-burn demand'. The best-designed fault in the corpus because the lying instrument corrupts the derived quantity that would catch it"
+
+  - id: PRP-02-feed-valve-stuck-closed
+    component: feed_valve_sps
+    mechanism: "the feed valve does not open: the engine is commanded and nothing reaches the chamber"
+    kind: discrete
+    seeding: {on_demand_p: 1.0e-4, trigger: "any burn start after a long cold soak"}
+    perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, prop.feed_pressure_pct,
+               prop.accumulated_dv_m_s, prop.main_armed]
+    detection:
+      evidence: "an armed engine, a commanded burn, zero chamber pressure, and a feed pressure that *rises* because the regulator is still pushing against a closed valve. The rise is the tell"
+      latency: "under a second — this is the fastest fault in the vehicle, and the only one where the chamber-pressure channel is the first to know"
+      false_positive_risk: "an ignition failure looks the same from chamber pressure; the feed pressure separates them, because a valve that opened and a chamber that did not light still show feed flow"
+    response: {kind: service, note: "the service safes the engine after the failed start, because an armed engine with propellant behind a closed valve is a hazard for the next command rather than for this one"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:380"
+      note: "apollo's failure-on-demand mechanism: 'Bernoulli p about 1e-4 per activation — valve fails to move, relay does not close, pump fails at start'. This is its canonical instance"
+
+  - id: PRP-03-pressurant-regulator-drift
+    component: pressurant_regulator
+    mechanism: "the regulator's outlet pressure drifts below its setpoint: the tanks are pressurised less than commanded and the feed pressure follows with a lag"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h}
+    perturbs: [prop.pressurant_pressure_psi, prop.feed_pressure_pct, prop.chamber_pressure_pct,
+               prop.leak_state]
+    detection:
+      evidence: "pressurant tank pressure holding while the feed pressure falls — the regulator is the only element between them, and the pair is the diagnosis"
+      latency: "tens of minutes"
+      false_positive_risk: "genuine tank depletion lowers both; a regulator fault lowers one"
+    response: {kind: advisory, note: "the regulator's transfer function is a declared debt, so this fault is seeded against a component whose dynamics are owed — stated rather than hidden"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:139, :318"
+      note: "the pressurant is the resource agents should see as 'tank and downstream pressure' rather than as an exact regulator state; this fault is what makes the difference between those two visible"
+
+  - id: PRP-04-throttle-actuator-stuck
+    component: dps_throttle_actuator
+    mechanism: "the throttle actuator jams at its last position: commanded throttle and delivered thrust part company"
+    kind: latent_then_acute
+    seeding: {on_demand_p: 5.0e-4, trigger: "any throttle change during a burn"}
+    perturbs: [prop.dps_throttle_pct, prop.thrust_pct_estimated, prop.chamber_pressure_pct,
+               prop.accumulated_dv_m_s]
+    detection:
+      evidence: "the commanded channel reports the new value and the estimated channel reports the old thrust. The pair disagreeing in the specific way where the command moved and nothing followed"
+      latency: "half a second — one thrust time constant"
+      false_positive_risk: "a slow actuator looks the same for the first second; only a stuck one is still disagreeing after several"
+    response: {kind: advisory, note: "the descent can be flown on a stuck throttle if the crew recognise it in time. That is the whole content of the emergency: it is survivable, and only for a fleet that notices quickly"}
+    provenance:
+      basis: chosen
+      reason: "the DPS is the only throttleable engine on the vehicle and it is the one a crew flies by hand near the surface. A stuck throttle during a powered descent is the highest-consequence, shortest-timescale fault the vehicle has, and it is the reason the throttle command has a five-second queue age rather than sixty"
+
+  - id: PRP-05-combustion-instability
+    component: sps
+    mechanism: "chamber pressure oscillates: thrust fluctuates at a frequency the estimator averages away"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, onset: "usually within the first seconds of a burn"}
+    perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, structure.accel_xyz_g]
+    detection:
+      evidence: >-
+        chamber pressure varying while the commanded throttle is constant. The estimate
+        averages it out, so the high-rate channel carries the evidence and the 10 Hz published
+        rate is barely enough — which is the reason apollo_diode.md:870's burst telemetry
+        exists, and the reason this fault is worth having rather than merely possible
+      latency: "one burst window; without burst telemetry the oscillation is a small bias in the delivered delta-v and nothing else"
+      false_positive_risk: "a noisy pressure transducer looks identical at this sampling rate; the accelerometer is the independent witness"
+    response: {kind: advisory, note: "stop the burn or accept the delta-v error. The interesting version of this fault is that a fleet reading only 10 Hz engineering telemetry will not see it at all"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:870, :888-899"
+      note: "apollo's burst telemetry exists for exactly this: 'Raise the rate around burns and faults for a bounded window. The interesting failures are transients, and a slow rate turns them into a step change that looks like nothing happened'"
+
+  - id: PRP-06-ignition-failure
+    component: aps
+    mechanism: "the engine fails to light: hypergolic ignition does not occur and the chamber stays at zero"
+    kind: discrete
+    seeding: {on_demand_p: 1.0e-4, trigger: "any ignition", note: "the ascent engine is the case that matters: there is no second attempt"}
+    perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, prop.main_armed,
+               prop.cutoff_mode]
+    detection:
+      evidence: "armed, commanded, and no chamber pressure. The same signature as PRP-02, separated by whether the feed pressure moved"
+      latency: "under a second"
+      false_positive_risk: "PRP-02, exactly and only. The two are the domain's designed ambiguity: identical on the channel that matters, distinguishable on one that a fleet has to think to check"
+    response: {kind: service, note: "the service latches the engine failed rather than retrying. A hypergolic engine that did not light once is not one to command twice, and a retry loop on an ascent engine is a way to spend the last attempt"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:364"
+      note: "apollo's failure-on-demand mechanism at about 1e-4 per activation, applied to the engine where the consequence is absolute. The ascent engine cannot throttle and cannot be restarted in any operational sense, which is why this is the fault that ends a surface mission"
+
+  - id: PRP-07-cutoff-failure
+    component: sps
+    mechanism: "the engine does not stop: the shutdown command is received and the chamber stays lit"
+    kind: latent_then_acute
+    seeding: {on_demand_p: 2.0e-4, trigger: "any commanded cutoff"}
+    perturbs: [prop.chamber_pressure_pct, prop.accumulated_dv_m_s, prop.cutoff_mode,
+               prop.propellant_remaining_pct, "res.status_[resource]"]
+    detection:
+      evidence: "the cutoff mode reports a trigger that fired and the chamber pressure does not fall. Every other engine fault is a failure to start; this is the only one that is a failure to stop, and it is the only one where the vehicle's response has to come from somewhere other than the engine"
+      latency: "two seconds — one shutdown time constant, then it is clear the command did not take"
+      false_positive_risk: "none from chamber pressure; a cutoff that fired and a cutoff that did not are unambiguous once the tailoff window has passed"
+    response: {kind: service, note: "the service closes the feed valves. This is the one propulsion fault with a service-owned protective action, because the alternative to closing the valves is spending the entire propellant load on a burn nobody wants"}
+    provenance:
+      basis: chosen
+      reason: "every other fault in this domain costs a mission; this one costs the vehicle. apollo_diode.md:581 makes 'safety actions owned by the simulator outrank all agent commands' explicit, and a burn that will not stop is the case that rule exists for"
+
+  - id: PRP-08-line-freeze
+    component: feed_valve_dps
+    mechanism: "propellant freezes in an uninsulated line: flow is restricted, then blocked, and the trapped fluid's pressure climbs as it warms"
+    kind: latent_then_acute
+    seeding: {coupled_to: TCS-07, trigger: "a long cold soak with the engine safed"}
+    perturbs: [prop.feed_pressure_pct, prop.pressurant_pressure_psi, prop.chamber_pressure_pct,
+               structure.relief_valve_state]
+    detection:
+      evidence: >-
+        a feed pressure that is high while the chamber gets nothing — the mirror of PRP-01,
+        where the instrument is telling the truth about an impossible configuration. And when
+        the trapped fluid warms, the pressurant channel saturates at its transducer limit
+      latency: "hours to develop, seconds to become dangerous when the line warms"
+      false_positive_risk: "PRP-01 produces a high feed reading too, and the separation is the pressurant channel: a stuck sensor does not raise a tank's pressure"
+    response: {kind: advisory, note: "vent or isolate, and both are irreversible decisions about a line that may be holding a relief valve shut"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:337, :347, :800-802"
+      note: "the Apollo 11 post-landing trapped-line event, which apollo calls 'almost an ideal agent test because the dangerous state cannot be recovered by simply trusting a displayed number'. It is the domain's link to the thermal domain and the best single argument for the SATURATED quality code"
+
+  - id: PRP-09-thrust-estimate-bias
+    component: sps
+    mechanism: "the thrust estimator's calibration drifts: the believed thrust departs from the delivered thrust while every sensor reads correctly"
+    kind: instrument
+    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_pct_per_h: 0.2}
+    perturbs: [prop.thrust_pct_estimated, prop.accumulated_dv_m_s, prop.cutoff_mode]
+    detection:
+      evidence: >-
+        the vehicle's own delta-v accounting diverging from the navigation solution's. No
+        channel in this domain can see it: the estimate is self-consistent and every sensor
+        agrees with every other. The discovery has to come from GNC, comparing where the
+        vehicle thinks it went with where it is
+      latency: "a whole burn, and then only if somebody compares the two"
+      false_positive_risk: "an actual underperformance looks identical on every internal channel. The independent witness is external and it is the state vector"
+    response: {kind: advisory, note: "nothing. The value of this fault is entirely in whether a fleet crosses-checked its own accounting against navigation, which is the habit the mission needs and the vehicle cannot teach by fiat"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:341-342"
+      note: "the instrumentation-fault family: 'selected channels freeze or drop out -> false confidence or inability to diagnose another fault'. A biased estimator is the sophisticated version — nothing freezes, nothing drops out, and the vehicle is confidently wrong"
+
+  - id: PRP-10-injector-degradation
+    component: dps
+    mechanism: "the injector erodes: Isp falls, so the same burn duration delivers less delta-v"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, stress: "x2 for each burn longer than 300 s"}
+    perturbs: [prop.thrust_pct_estimated, prop.chamber_pressure_pct, prop.accumulated_dv_m_s,
+               prop.feed_pressure_pct]
+    detection:
+      evidence: "chamber pressure and feed pressure both normal while the achieved acceleration falls short. Thrust is mass flow times exhaust velocity, and this fault moves the second term with the first unchanged — which is the one split that separates an injector from a feed problem"
+      latency: "one burn, then it is a delta-v shortfall"
+      false_positive_risk: "PRP-01 hides a similar shortfall; feed pressure is the separation, and it is exactly the channel PRP-01 corrupts, which is why the two are worth having together"
+    response: {kind: advisory, note: "replan the remaining budget. This is the fault that makes `mission.yaml`'s 12.9 % SPS reserve a real quantity rather than a number in a table"}
+    provenance:
+      basis: chosen
+      reason: "apollo's fidelity note for propulsion is 'tank/pressurant/feed states, thrust response, valve state, mass depletion; no combustion CFD' (apollo_diode.md:747). A slowly eroding injector is the simplest fault that produces a thrust response without combustion chemistry, and it is the one that spends the reserve"
+
+  - id: PRP-11-sps-restart-failure
+    component: sps
+    mechanism: "the engine fails to restart: the hypergolic ignition sequence does not take on a later burn"
+    kind: discrete
+    seeding: {on_demand_p: 2.0e-4, trigger: "any restart beyond the fifth", note: "the probability is per-activation and apollo's baseline is 1e-4; it is raised here because a restart failure is the fault that turns a survivable mission into a one-way one"}
+    perturbs: [prop.chamber_pressure_pct, prop.sps_burn_count, prop.thrust_pct_estimated,
+               prop.main_armed]
+    detection:
+      evidence: "the same signature as PRP-06, on an engine with a restart budget. The count channel says how much of the budget is left, and how much of it a fleet is willing to spend trying again is the decision"
+      latency: "under a second"
+      false_positive_risk: "PRP-02 again; feed pressure separates them"
+    response: {kind: advisory, note: "the remaining restarts are a budget and the vehicle does not spend them on the fleet's behalf. One retry is a reasonable policy, and the vehicle will not choose it"}
+    provenance:
+      basis: historical
+      source: "the AJ10-137 qualified for 50 restarts; Apollo 11 used 5. The number matters because a restart failure is the point at which the TEI burn becomes a question, and the whole crisis posture is built on whether the fleet can get home"
+
+coverage:
+
+  note: >-
+    Every prop channel is perturbed by at least one fault above except `prop.leak_state` and
+    `prop.cutoff_mode`, which are service conclusions derived from the other channels.
+  unperturbed: [prop.leak_state, prop.cutoff_mode]
+  unperturbed_reason: >-
+    both are state machines over evidence rather than measurements, so perturbing them directly
+    would be perturbing a conclusion — the same distinction the schema draws between a channel's
+    quality and its kind.

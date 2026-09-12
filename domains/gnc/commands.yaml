@@ -1,0 +1,246 @@
+# domains/gnc/commands.yaml — five verbs, and the one whose argument the vehicle does not have.
+#
+# ## `load_state_vector` is not the missing artifact
+#
+# The vehicle's most consequential gap is that `mission.yaml#initial_state` declares the true
+# state UNCONFIGURED: the published geometry — parking orbit, post-injection speed, both lunar
+# orbits, the descent perilune — does not close as an Earth-centred conic, and a plausible-looking
+# ellipse would put the vehicle on a trajectory that falls back. A patched-conic or numerically
+# integrated design is owed, and it is the last thing between this definition and a run that can
+# start.
+#
+# And there is a verb called `load_state_vector`, which makes it tempting to conclude that the
+# verb is the fix. It is not, and the reason is the distinction the whole experiment rests on:
+#
+#   `load_state_vector` loads a state vector into the **navigation solution**. It is the vehicle
+#   being told where to believe it is. It does not move the vehicle, and a plant whose truth is
+#   unset cannot be started by a fleet calling anything.
+#
+# So the debt is the plant's and the verb is the fleet's, and conflating them would produce a
+# vehicle whose position could be made true by assertion — which is the single most valuable
+# thing this window withholds. The verb's `help` text says so, because a fleet will otherwise
+# reason exactly as far as the name.
+#
+# ## What the five verbs are for
+#
+# `apollo_diode.md:240` gives `set_guidance_mode`, `request_imu_alignment`, `load_state_vector`,
+# `select_nav_source`, `set_radar`. They divide into two pairs and an odd one out: two choose
+# *what the vehicle believes* (state vector, nav source), two choose *what it is doing* (guidance
+# mode, alignment), and `set_radar` is the only one that configures an instrument. Together they
+# are the vehicle's entire navigation authority, and none of them can move it — which is why the
+# highest authority here is A2 and most of it is A1.
+
+domain: gnc
+commands:
+
+  - verb: set_guidance_mode
+    argument_schema:
+      mode: {type: enum, values: [coast, burn, landing, rendezvous, alignment, free_drift]}
+    authority: A1
+    gate: {kind: preference, variable: guidance_mode_<mode>_enable}
+    interlocks: none - reviewed
+    conflict_domain: gnc.guidance
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Choose which guidance program is producing a reference: coast, burn, landing, rendezvous,
+      alignment, or free drift. `free_drift` here means guidance produces no reference at all,
+      which is a different statement from `rcs.mode = free_drift` — that one means the attitude
+      service is not holding an attitude. A vehicle can be in either without the other, and a
+      fleet that reads them as one word will misread a planned coast as a control failure. No
+      interlock on review: the mode determines whether a reference exists, and the flight rule
+      that matters — no burn entry on an invalid solution — is written in
+      `profiles.yaml#flight_rules` because it gates on a ladder state rather than on a threshold.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :124"
+      note: >-
+        apollo's verb and its six modes. `gnc_diode.md:604-627` lists agent-level decision
+        primitives and this domain deliberately does not adopt them: a "primitive" that decides
+        when to abort a maneuver is a policy, and `design.md` §8 puts policy on the fleet's side
+        of the window
+
+  - verb: request_imu_alignment
+    argument_schema:
+      source: {type: enum, values: [star, sun, moon_horizon, stored]}
+      target: {type: enum, values: [EARTH_J2000, MOON_J2000, LVLH]}
+      timeout_s: {type: number, optional: true, minimum: 0}
+    authority: A2
+    gate: {kind: preference, variable: imu_align_<source>_enable}
+    interlocks: none - reviewed
+    conflict_domain: gnc.imu_alignment
+    allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: deferred
+    maximum_queue_age_s: 300
+    help: >-
+      Realign the inertial platform against a reference: a star, the Sun, the lunar horizon, or a
+      stored alignment. It is A2 and it is the highest-authority verb in this domain, because a
+      misaligned platform produces a Δv in the wrong direction and the vehicle cannot recover from
+      that by stopping — the Δv is spent. `stored` is in the argument enum and is the option to
+      refuse: it re-uses an alignment from before a maneuver, which is legitimate for a small
+      correction and dangerous before a large one, and a fleet should have to choose it rather
+      than have it chosen by default. The phase list excludes `descent` and `entry`: a platform
+      alignment takes minutes and neither phase has them.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :125"
+      note: >-
+        apollo's verb. `gnc_diode.md:474-483`'s `time_health` is not this, and the difference is
+        worth keeping straight: one is the *clock's* reference and the other is the *platform's*,
+        and a vehicle can have a synchronised clock and a drifted platform — which is the
+        combination Apollo 13 flew most of its mission in
+
+  - verb: load_state_vector
+    argument_schema:
+      frame: {type: enum, values: [EARTH_J2000, MOON_J2000, LVLH]}
+      position: {type: array, items: number, length: 3}
+      velocity: {type: array, items: number, length: 3}
+      epoch_met_s: {type: number, minimum: 0}
+      position_sigma_m: {type: number, optional: true, minimum: 0}
+      source: {type: enum, values: [ground_tracking, onboard_solution, crew_sighting]}
+    authority: A2
+    gate: {kind: preference, variable: state_vector_load_enable}
+    interlocks: none - reviewed
+    conflict_domain: gnc.nav_solution
+    allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 600
+    help: >-
+      Tell the navigation filter where the vehicle is and how fast, in a named frame, at a named
+      MET. **This changes what the vehicle believes and never where it is.** The distinction is
+      the whole of the diode's boundary and it is written here because the verb's name invites the
+      other reading: a fleet that expects the vehicle to move when it loads a state vector has
+      misunderstood what it is holding. `epoch_met_s` is required rather than optional for the
+      same reason `mission.met_s` is monotonic — a state vector without an epoch is a position at
+      an unknown time, which in a gravitational field is not a position. `position_sigma_m` is
+      how the fleet states its own confidence, and it is what the filter initialises the
+      covariance from; supplying a vector and claiming metre accuracy is a thing a fleet can do,
+      and the covariance will then treat every later measurement as a surprise.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :119"
+      note: >-
+        apollo's verb, and the reason it is central to this vehicle is recorded in the header:
+        `mission.yaml#initial_state` declares the true state unset, and the fix for that is a
+        patched-conic design in the config rather than a fleet calling a verb. The two are
+        different objects and the help text says so out loud
+
+  - verb: select_nav_source
+    argument_schema:
+      source: {type: enum, values: [imu_only, star_sighting, radar, ground_uplink, blended]}
+      weight: {type: enum, values: [exclusive, primary, secondary], optional: true}
+    authority: A2
+    gate: {kind: preference, variable: nav_source_<source>_enable}
+    interlocks: [estimator_divergence]
+    conflict_domain: gnc.nav_source
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Choose what the vehicle navigates from: the IMU alone, star sightings, the landing radar, a
+      ground uplink, or a blend. `imu_only` is the coast, and choosing it deliberately is a
+      legitimate decision — during an occultation with no radar lock it may be the only source
+      there is. The interlock is the interesting part: the vehicle refuses to be told which source
+      to trust while its estimator is diverging. That is the same protection the avionics domain
+      puts on `select_sensor` and for the same reason — a fleet that picks a source while the
+      navigation solution is failing can pick the wrong one and remove the evidence that it did.
+      `weight` matters because `blended` is not a source: it is a policy about the others, and a
+      source that cannot be made exclusive is one the vehicle trusts alongside everything else.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :123"
+      note: >-
+        apollo's verb. C-15 prunes GNSS, LiDAR and terrain-relative navigation from the source
+        list, which leaves exactly the five members above — and on this vehicle `ground_uplink` is
+        a real member for a reason the corpus makes first-class: `apollo_diode.md:903`'s
+        occultation means the uplink is *absent* for 39 % of every lunar revolution, so it is a
+        source a fleet must plan around rather than assume
+
+  - verb: set_radar
+    argument_schema:
+      state: {type: enum, values: [on, off, standby]}
+      mode: {type: enum, values: [altitude, range_rate, both], optional: true}
+      acquire_altitude_m: {type: number, optional: true, minimum: 0}
+    authority: A1
+    gate: {kind: preference, variable: radar_<state>_enable}
+    interlocks: none - reviewed
+    conflict_domain: gnc.radar
+    allowed_phases: [lunar_orbit, descent, surface, ascent_rendezvous]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Switch the landing radar on or off, or put it on standby before an acquisition. The phase
+      list is the shortest in this domain and it is the honest one: the radar is a landing
+      instrument, it needs the surface in view, and switching it on during a translunar coast is
+      a command to an instrument that cannot answer. `acquire_altitude_m` is how a fleet tells the
+      radar where to start looking, and it is the argument that matters — a radar searching the
+      wrong altitude range finds nothing and reports nothing, which is indistinguishable from a
+      failed radar.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :121"
+      note: >-
+        apollo's verb, with the phase list authored from the radar's own geometry rather than
+        from the mission's phases. `gnc.radar_altitude_m`'s threshold (`radar_out_of_range`) is
+        the observable side of the same limit
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: set_nav_gain
+    why: >-
+      the filter's weighting as an agent argument. A fleet that could widen the Kalman gain would
+      be deciding how much to trust its own measurements, and the negotiation between a
+      measurement and a model is exactly what the estimator exists to do — with the covariance
+      published afterwards so the result is auditable. `profiles.yaml#profile_selection` offers
+      the two postures somebody can qualify; a continuous gain is the same freedom with none of
+      the analysis, and the linter's forbidden-verb list already refuses the *form*.
+
+  - verb: reset_covariance
+    why: >-
+      the navigation equivalent of `clear_drift_monitor`, refused for the same reason and worth
+      stating because it is nearly reasonable: an operator genuinely does want the covariance
+      reset after a realignment, since the old P describes the old alignment. But the property the
+      covariance reports does not become untrue when it is zeroed — a vehicle that was lost a
+      minute ago and a vehicle that has just been given a position are different, and the second
+      one has a sigma it should state rather than a sigma it should assume. `load_state_vector`'s
+      `position_sigma_m` is the honest form of the same request: state where you think you are
+      *and how well*, and let the filter carry the second number forward.
+
+  - verb: set_gravity_model
+    why: >-
+      `mission.yaml#initial_state` records that the published geometry does not close as an
+      Earth-centred conic and that a patched-conic or numerically integrated design is owed. That
+      is a *configuration* decision with a fidelity consequence that runs through every trajectory
+      the vehicle will ever fly, and it belongs to whoever writes the plant rather than to a fleet
+      mid-mission. A verb here would let a fleet change the physics its own guidance is propagating
+      against, which is the one thing on this vehicle that would make two runs of the same command
+      incomparable.
+
+  - verb: request_state_snapshot
+    why: >-
+      a diagnostic verb, and the one refusal on this list that is about *scope* rather than safety.
+      `mission_diode.md:260` lists `request_snapshot` as a DIAGNOSTIC class with no physical
+      effect, and it would cost nothing to implement — the vehicle already publishes the state it
+      would return. What it would do is give a fleet a way to make the vehicle re-publish on
+      demand, which is a coordination primitive: ten agents polling for snapshots have invented a
+      shared clock through a side channel, and `design.md` §8 refuses to supply one. The published
+      ring at its own rates is the alternative, and returning from a blackout is the fleet's
+      problem to solve rather than the vehicle's to smooth over.

@@ -1,0 +1,443 @@
+# domains/comms/fault_policy.yaml — eleven faults, and the one that is a plan.
+#
+# ## The distinction the whole domain turns on
+#
+# On this vehicle, "nothing is arriving" has four causes and only three of them are faults:
+#
+#   the Moon is in the way        planned — `comm.blackout_state`, no alarm, the recorder fills
+#   the vehicle is not pointing   a control problem — the gimbal, the attitude, or a scan limit
+#   the link is thin              a budget problem — power, amplifier, temperature
+#   the vehicle has stopped       a hardware problem — the transmitter, the antenna, the bus
+#
+# `apollo_diode.md:903` supplies the first as an operational fact, and every fault below is one
+# of the other three. The reason the domain is organised this way is F-11's third order, which is
+# the sharpest sentence in the avionics and comms chains both: **"telemetry gaps → controllers
+# lose evidence during another anomaly"**. A fleet that spends an occultation diagnosing a comms
+# fault is a fleet that is not watching the vehicle, and the vehicle arranges for that to happen
+# once per orbit. So the blackout is priced, published, gated and expected — and COM-10 is the
+# fault where it *isn't*, which is the only version of it that is a fault at all.
+#
+# ## The trigger that is never the cause
+#
+# COM-02 is the power amplifier. `apollo_diode.md:1140` and `:1158` are explicit that in the
+# degraded chain the amplifier is the *trigger* and never the root fault, and this file respects
+# that: the fault below is a genuine amplifier failure, and the *chain* is
+# `coupling.yaml#C-AMP-BUS-PUMP` — a declared cycle where a healthy amplifier exposes a marginal
+# pump. Keeping them separate matters because the responses are different: a failed amplifier is
+# a comms problem with a comms fix, and an amplifier that exposed a weak bus is a power problem
+# that a fleet will misattribute to communications if it is not careful.
+
+domain: comms
+
+faults:
+
+  - id: COM-01-antenna-gimbal
+    component: antenna_pointing
+    mechanism: "the gimbal fails or jams: a drive, a resolver, a bearing; the dish stops tracking and the beam walks off Earth"
+    kind: discrete
+    seeding:
+      hazard: 3.0e-4
+      unit: per_h
+      trigger: "any period with the HGA selected and the vehicle maneuvering"
+    perturbs: [comm.hga_pointing_error_deg, comm.snr_db, comm.rx_frame_loss_pct,
+               comm.carrier_lock, comm.antenna]
+    detection:
+      evidence: >-
+        F-11's chain, and its first clue is the pointing error itself. What makes it diagnosable
+        rather than merely visible is the pattern's shape: with a 9.4-degree beam the loss is
+        0.54 dB at 2 degrees and 3.4 dB at 5, so a fleet sees a *growing* pointing error long
+        before it sees a link problem — and the growth rate is what separates a jammed gimbal
+        (linear in the vehicle's rotation, immediately) from an attitude excursion (bounded, and
+        visible in `gnc.attitude_q[0..3]` first). `E-DYN-GEOM` is 1 degree per degree and
+        `comm.hga_pointing_error_deg` is the residual after the gimbal's contribution, so the
+        difference between the two channels *is* the gimbal's error
+      latency: >-
+        seconds to the pointing channel, and minutes to a link that matters — which is the
+        domain's one piece of good news, because the quadratic pattern gives a fleet a warning
+        band it can actually use
+      false_positive_risk: >-
+        a commanded slew produces the same growing error and it is not a fault. The separation is
+        `point_hga`'s mode: in `auto` the gimbal is expected to keep up, and a pointing error that
+        grows while the vehicle is *not* maneuvering is the fault
+    response:
+      kind: service
+      note: >-
+        fall back to an omni if the geometry allows, otherwise accept a thin link. The interesting
+        decision is the fleet's: an omni costs 25 dB and keeps the link, and `point_hga`'s
+        `moon_limb` and `inertial` targets exist for the case where the vehicle no longer knows
+        where Earth is. A fleet that treats every pointing error as a reason to switch antennas
+        will spend the mission on omnis
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:339"
+      note: >-
+        apollo's chain, whose third order is the reason this domain exists in the shape it does
+
+  - id: COM-02-amplifier-failure
+    component: sband_power_amplifier
+    mechanism: "the power amplifier fails: an output stage, a bias supply, a thermal cutout that has latched"
+    kind: discrete
+    seeding:
+      hazard: 2.5e-4
+      unit: per_h
+      trigger: "any transition of set_power_amplifier to on"
+    perturbs: [comm.tx_power_w, comm.snr_db, comm.link_mode, power.bus_a_current_a]
+    detection:
+      evidence: >-
+        apollo's two events on `comm.tx_power_w` pointing in opposite directions, and telling
+        them apart is the whole diagnosis: a *low RF output at a normal DC draw* is a failing
+        final stage, and a *normal output at a high DC draw* is an amplifier that has become a
+        load. The second is the closing mechanism of the flagship cycle and it is why this fault
+        perturbs a power channel: `E-AMP-LOAD` puts the draw on the bus at 0.0357 A per watt, so
+        an amplifier that starts drawing 90 W instead of 72 moves the bus by 0.64 A before
+        anything else notices
+      latency: "immediate on the power channels, one frame on the link"
+      false_positive_risk: >-
+        a low SNR from any other cause looks like a failed amplifier from the ground. The
+        separation is `comm.tx_power_w`: an amplifier that has failed still draws its DC input,
+        and a link that is thin for a pointing or bus reason does not
+    response:
+      kind: service
+      note: >-
+        fall back to the transceiver alone, which costs 6 dB of RF and 36 W of DC. The 6 dB figure
+        is derived rather than published — 11.2 W RF against 2.8 W is exactly 4x, which is 6.0 dB
+        — and it is the size of the step a fleet is choosing between, which is why it is worth
+        stating rather than leaving as "the amplifier helps"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:157, :168, :1140"
+      note: >-
+        the *fault* is the amplifier's; the *chain* is not. `apollo_diode.md:1158` makes the
+        amplifier the trigger of the degraded chain and never its root fault, and this entry is
+        kept separate from `C-AMP-BUS-PUMP` for that reason: a failed amplifier is a comms problem
+        with a comms fix, and an amplifier that exposed a marginal pump is a power problem that a
+        fleet will misattribute to communications if it is not careful
+
+  - id: COM-03-weak-link
+    component: link_snr
+    mechanism: "the link budget closes but thinly: range at lunar distance, a partially deployed antenna, a degraded feed"
+    kind: sustained
+    seeding:
+      hazard: 3.5e-4
+      unit: per_h
+      drift_db_per_h: UNCONFIGURED
+    perturbs: [comm.snr_db, comm.rx_frame_loss_pct, comm.telemetry_rate_bps]
+    detection:
+      evidence: >-
+        apollo's "<8 degraded" on a band whose nominal is 8-30 dB, with the *achieved* rate as the
+        corroboration: a link at 6 dB SNR that is carrying `low` is a thin link, and the same 6 dB
+        carrying `high` produces frame loss. The pair of channels is the diagnosis, and either one
+        alone is ambiguous — which is why `comm.telemetry_rate_bps` and
+        `comm.rx_frame_loss_pct` are separate points rather than one "link quality"
+      latency: "one second to the SNR, and the frame-loss threshold's five-second window to know whether it matters"
+      false_positive_risk: >-
+        a commanded fallback to an omni is a 25 dB loss that is not a fault. The antenna channel
+        is the separation, and it is published for exactly this reason
+    response:
+      kind: advisory
+      note: >-
+        the fleet's choice among three: accept it, switch to a profile that fits the link, or
+        change the antenna. The vehicle's contribution is that all three are observable
+        afterwards — the profile chosen, the achieved frame loss and the recorder's fill — so a
+        fleet can tell whether its own bandwidth decision was the right one
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:164, :166"
+
+  - id: COM-04-carrier-lock-loss
+    component: carrier_lock
+    mechanism: "the receiver loses the carrier: a frequency excursion, a pointing transient through the beam edge, an amplifier that has drifted off frequency"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.5e-3
+      trigger: "any pointing error transient past the beam edge, or any transmitter change"
+    perturbs: [comm.carrier_lock, comm.snr_db, comm.rx_frame_loss_pct]
+    detection:
+      evidence: >-
+        apollo's "lock loss" event, and the reason it is a *separate* fact from a low SNR: a
+        carrier locks at a level far below what carries data, so a locked receiver with a poor SNR
+        can hear the vehicle and not read it, and an unlocked receiver has lost it entirely. A
+        fleet that reasons about comms from SNR alone will misread the second as the first and
+        keep waiting for frames that cannot arrive
+      latency: "one second, the assert dwell"
+      false_positive_risk: >-
+        *high* and structural, which is why the threshold is gated on the blackout: behind the
+        Moon the receiver is supposed to lose the carrier, and an ungated lock alarm would fire
+        every orbit. The gate is not a convenience — an alarm a fleet learns to expect is an alarm
+        a fleet learns to ignore, and this one has to work on the orbit when something else is
+        also wrong
+    response:
+      kind: service
+      note: "the vehicle holds its configuration and re-acquires when the geometry allows. Nothing is gained by thrashing the antenna, because acquisition is a search and a search restarted is a search begun again"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:162"
+
+  - id: COM-05-frame-corruption
+    component: frame_loss
+    mechanism: "frames are being dropped or corrupted at a rate the link does not explain: a noisy receiver, a marginal demodulator, interference on the channel"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      loss_pct: UNCONFIGURED
+    perturbs: [comm.rx_frame_loss_pct, comm.carrier_lock]
+    detection:
+      evidence: >-
+        apollo's ">2 %" event on a band whose nominal is 0-0.5 %, and the *disagreement* with the
+        SNR is the diagnosis: frame loss with a healthy SNR is a receiver or a demodulator
+        problem, and frame loss with a poor SNR is a link problem. Neither channel alone can say
+        which, which is why the domain publishes both and refuses to publish a single "link
+        quality"
+      latency: "the threshold's own five-second window, which is a quarter of a million bits at the high rate — enough for 2 % to be a rate rather than an accident"
+      false_positive_risk: >-
+        low, because the threshold's dwell is long and the quantity is a ratio of counts. The risk
+        is the other kind: a fleet that reads a 2 % loss as trivial. `apollo_diode.md:901` is
+        about exactly this — a link that drops content is a link whose *evidence* is incomplete,
+        and 2 % of an eight-day mission is a lot of missing history
+    response:
+      kind: advisory
+      note: "drop to a lower telemetry profile, which is the only response that helps and the one the vehicle cannot make for the fleet"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:166, :901"
+
+  - id: COM-06-antenna-selection-fault
+    component: antenna_selection
+    mechanism: "the selection sticks or the switch fails: the vehicle believes it is on the HGA and is radiating through an omni, or the reverse"
+    kind: discrete
+    seeding:
+      hazard: 1.5e-4
+      unit: per_h
+      trigger: "any select_antenna command"
+    perturbs: [comm.antenna, comm.snr_db, comm.tx_power_w, comm.carrier_lock]
+    detection:
+      evidence: >-
+        a 25 dB step in the link budget that the commanded selection does not explain. Apollo's
+        "unexpected switch" event is the first clue, and the diagnosis is arithmetic: if the
+        selected antenna is the HGA and the SNR is at omni levels, the selection is a belief
+        rather than a fact — and `comm.tx_power_w` separates the two cases, because a receiver
+        that has lost a high-gain link sees a low SNR while a transmitter that never switched
+        draws the amplifier's current
+      latency: "one frame, because the selection is a service state and the SNR is not"
+      false_positive_risk: >-
+        a real 25 dB fade — a deep null, a rain-free but badly pointed beam — looks identical from
+        the ground. The separation is the *speed*: a switch is a step and a fade is a curve
+    response:
+      kind: service
+      note: "re-command the selection and compare. The verb is idempotent precisely so that a re-command is a safe experiment rather than a second guess, and the 10-second dwell means the result of the experiment is observable before it is repeated"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:167"
+
+  - id: COM-07-amplifier-overheat
+    component: sband_power_amplifier
+    mechanism: "the amplifier runs hot: a stalled coolant loop, a blocked coldplate, an amplifier whose own dissipation has risen"
+    kind: sustained
+    seeding:
+      coupled_to: "E-PLATE-COMM and the flagship cycle C-AMP-BUS-PUMP: a hot amplifier draws more current, which loads the bus, which slows the pump"
+      trigger: "thermal.comm_amp_c above its apollo threshold of 60 C"
+    perturbs: [comm.tx_power_w, comm.snr_db, thermal.comm_amp_c, power.bus_a_current_a,
+               comm.link_mode]
+    detection:
+      evidence: >-
+        the thermal domain's `comm_amp_high` threshold, which is apollo's `comm_amp_c > 60 C`
+        event — and the reason this fault is in the comms file rather than only in thermal's is
+        that the *response* is a comms decision. `set_power_amplifier`'s interlock list carries
+        `thermal.comm_amp_high` for exactly this case, so the vehicle refuses to add 36 W to a
+        component that is already too hot, and the fleet's alternative is to accept 6 dB less link
+      latency: "the thermal threshold's own dwell; the electrical consequence follows within a second because E-AMP-LOAD is algebraic"
+      false_positive_risk: >-
+        a sunlit amplifier with a working loop is warm and not faulty. The separation is
+        `thermal.primary_flow_l_min`: a hot amplifier with good flow is a sun problem and a hot
+        amplifier with poor flow is the flagship chain
+    response:
+      kind: service
+      note: >-
+        the vehicle sheds the amplifier and the fleet gets a thinner link. This is the one
+        comms fault whose *first* symptom is a power or thermal channel, and a fleet that
+        starts from `comm.snr_db` will be two domains behind
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:106, :341"
+      note: >-
+        the `comm_amp_c` event at `:106` and the crisis point at `:341` — "radiator isolation or
+        poor attitude raises battery temperature", and the amplifier is on the same coldplate
+
+  - id: COM-08-transmitter-unpowered
+    component: sband_transceiver
+    mechanism: "the transmitter loses power: an open breaker, a failed converter, a bus below the transmitter's hold threshold"
+    kind: discrete
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      trigger: "E-BUS-COMM: the bus falls below the link's hold threshold"
+    perturbs: [comm.link_mode, comm.tx_power_w, comm.carrier_lock, power.dc_bus_a_v]
+    detection:
+      evidence: >-
+        the link goes to `none` while the geometry and the pointing are both fine — and that
+        conjunction is the diagnosis. `comm.blackout_state` clear plus
+        `comm.hga_pointing_error_deg` in band plus `comm.link_mode = none` is a transmitter that
+        is not transmitting, and it is the only combination in this domain that has exactly one
+        explanation
+      latency: "one frame to the mode, and the bus channel is already there"
+      false_positive_risk: >-
+        low, because the two gates are geometric and independent of the transmitter. This is the
+        one comms fault a fleet can diagnose without a comparison
+    response:
+      kind: service
+      note: >-
+        fall back to what still has power. On this vehicle the interesting case is the LM during a
+        descent: 20 W on the low transmitter is 0.7 A and the high transmitter is 3.2 A, so a
+        sagging LM bus takes the link down exactly when the link matters most — which is the
+        coupling `E-BUS-COMM` models and the reason the link is on the power domain's shed ladder
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:168, :157"
+      note: "`E-BUS-COMM`'s edge; the sensitivity (dB per volt) is owed because it needs the amplifier's gain-versus-supply curve"
+
+  - id: COM-09-recorder-failure
+    component: recorder
+    mechanism: "the on-board record fails or fills: a tape or solid-state store, a write head, a capacity reached"
+    kind: discrete
+    seeding:
+      hazard: 1.0e-4
+      unit: per_h
+    perturbs: [comm.recorder_fill_pct, comm.rx_frame_loss_pct]
+    detection:
+      evidence: >-
+        `comm.recorder_fill_pct` not falling across a contact period that should have drained it.
+        There is no other evidence, and that is the fault's character: the recorder is the
+        vehicle's memory of its own blackout, and a recorder that has stopped is a vehicle whose
+        history has a hole in it that nothing else can fill. The failure is silent by construction
+        — the frames that were never written are frames nobody ever had
+      latency: >-
+        one contact period, at minimum, and potentially one full orbit: the fill percentage is
+        only informative when it *should* have changed
+      false_positive_risk: >-
+        a fleet that selected `burst` before the blackout filled the recorder legitimately, and a
+        full recorder is then a consequence of its own decision rather than a fault. The profile
+        is published, so the separation is whether the fleet spent the bandwidth
+    response:
+      kind: advisory
+      note: >-
+        there is no vehicle-side recovery, and the honest statement is about what is lost: during
+        the *next* occultation the vehicle will have nowhere to put what it cannot send, so the
+        blackout stops being a delay and becomes a gap. That is the moment the choice
+        `apollo_diode.md:901` demands becomes compulsory rather than optional, and a fleet that
+        has not planned for it will discover it by losing the record of whatever else went wrong
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903"
+      note: "the recorder is the mechanism that makes an occultation survivable; its capacity is not published and is recorded as a debt rather than invented"
+
+  - id: COM-10-occultation-longer-than-predicted
+    component: blackout
+    mechanism: "the blackout runs longer than the geometry predicts: a navigation error, a higher orbit, a vehicle that is not where its own state says"
+    kind: discrete
+    seeding:
+      coupled_to: "gnc.nav_position_sigma_m — the blackout's duration is a function of where the vehicle is, and so is its prediction"
+      trigger: "the link does not return within the predicted blackout plus margin"
+    perturbs: [comm.blackout_state, comm.recorder_fill_pct, gnc.nav_position_sigma_m,
+               gnc.velocity_xyz_m_s]
+    detection:
+      evidence: >-
+        a *late* return, which is the domain's most interesting observable because the evidence
+        arrives after the fact and in a different domain. The blackout is derived from
+        `arcsin(R_moon / r_orbit)`, so it is a function of the vehicle's orbit — and a vehicle
+        whose orbit is not what it thinks will be silent for the wrong length of time. F-10's
+        chain is a navigation degradation, and this is where it becomes *visible*: not as a
+        growing sigma a fleet has to notice, but as a communications silence that ends late
+      latency: "one orbit, by construction"
+      false_positive_risk: >-
+        an antenna that did not re-acquire looks the same. The separation is
+        `comm.hga_pointing_error_deg` after the return: a late return with a pointing error is a
+        comms problem, and a late return with a clean antenna is a trajectory problem
+    response:
+      kind: advisory
+      note: >-
+        nothing on the vehicle side, and the fleet's action is in another domain: this is an
+        observation that a navigation solution is wrong, and the response is to distrust the
+        state vector rather than the radio. That is the whole value of the fault — it turns an
+        occultation, which is the one time the vehicle is *expected* to be silent, into a free
+        measurement of the orbit
+    provenance:
+      basis: derived
+      relation: "the blackout duration is 2*arcsin(R_moon/r_orbit)/360 of the orbital period; at a 100 km circular lunar orbit that is 46.5 min of 117.8, and the derivation reproduces Apollo's ~45 min loss-of-signal to within the eccentricity and the Earth's own disc"
+      note: >-
+        derived rather than historical because the corpus supplies the *fact* of the blackout
+        (`apollo_diode.md:903`) and not its duration, and the geometry supplies the duration. The
+        fault is the interesting consequence: a derived quantity that a fleet can be wrong about
+        is a measurement, and this one is free — the vehicle is silent anyway
+
+  - id: COM-11-unexplained-blackout
+    component: link_snr
+    mechanism: "the link is lost with the geometry clear and nothing else wrong: an occultation that should not be happening"
+    kind: emergent
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "comm.blackout_state clear and comm.carrier_lock false and comm.link_mode none"
+    perturbs: [comm.link_mode, comm.carrier_lock, comm.snr_db, comm.blackout_state,
+               avionics.oldest_sample_age_ms]
+    detection:
+      evidence: >-
+        the *conjunction*: blackout clear, pointing in band, transmitter commanded on, link none.
+        It is the only combination in this domain with exactly one explanation, and the reason
+        `comm.blackout_state` is published at all — without it, a fleet cannot tell this fault
+        from the orbit, and every orbit would be a diagnosis. This is the fault `snr_loss`'s
+        `gated_by` clause exists to make visible: the gate suppresses the *expected* loss so that
+        this one arrives into an alarm list with nothing else in it
+      latency: >-
+        immediate, which makes it the only comms fault detected in one frame — and that is
+        deliberate. Everything else in the domain takes seconds to minutes because the quantities
+        are noisy or slow; a vehicle that has stopped transmitting with a clear sky is not
+        ambiguous
+      false_positive_risk: >-
+        a receiver problem on the *other* end of the link. The vehicle cannot distinguish its own
+        transmitter from the ground station's receiver, and it should not pretend to: what it
+        publishes is that it believes it is transmitting and nothing is arriving, which is a
+        statement about the link rather than about either end of it
+    response:
+      kind: service
+      note: >-
+        the vehicle re-commands the transmitter and falls back through the antenna list. The
+        fleet's decision is whether to believe the vehicle at all — an unexplained blackout is the
+        one condition in this domain that a fleet might reasonably treat as a *sensor* failure
+        rather than a comms failure, because everything it knows about the link comes through the
+        link
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:162, :168, :903"
+      note: >-
+        the conjunction of apollo's "lock loss" and "mode" events with the occultation property,
+        and the reason the domain publishes its geometry rather than letting a fleet infer it
+
+coverage:
+  note: >-
+    Every channel this domain publishes is perturbed by at least one fault above. The two that
+    are perturbed by only one are `comm.telemetry_rate_bps` (COM-03 and COM-08 both move it,
+    since a thin link and an unpowered transmitter both force a fallback) and
+    `comm.blackout_state`, which only COM-10 moves — deliberately, because the blackout is not a
+    fault and a fault that moved it would be a fault that changed where the Moon is.
+  unperturbed: []
+  gated_alarms:
+    note: >-
+      three thresholds in `profiles.yaml` carry `gated_by: "comm.blackout_state is clear"`, and
+      they are the domain's central operational decision rather than a convenience. An alarm that
+      fires every orbit is an alarm a fleet learns to dismiss, and the failure mode is F-11's
+      third order — controllers lose evidence during another anomaly. The vehicle therefore
+      suppresses three alarms for a condition it can predict, so that when they fire they mean
+      something. The cost is real and worth stating: a fleet that cannot see
+      `comm.blackout_state` would read a scheduled silence as a fault, which is why the channel
+      is published at P2 to every profile down to `emergency`.
+  cross_domain:
+    note: >-
+      four faults perturb a channel outside `comms.*`, and in each case the outside channel is
+      part of the *diagnosis* rather than a consequence: `power.bus_a_current_a` for the
+      amplifier that has become a load (E-AMP-LOAD), `power.dc_bus_a_v` for the transmitter that
+      has lost its supply, `thermal.comm_amp_c` for the amplifier that is hot before it is
+      electrical, and `gnc.nav_position_sigma_m` for the occultation that ended late. That last
+      one is the domain's most useful export: an occultation is the one time the vehicle is
+      *supposed* to be silent, so a silence that runs long is a free measurement of the orbit —
+      F-10's navigation degradation becoming visible as a communications fact rather than as a
+      number a fleet has to notice.

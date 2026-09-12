@@ -1,0 +1,273 @@
+# domains/thermal/profiles.yaml — zone limits, interlocks and watchdogs, as versioned data.
+#
+# `thermal_diode.md:131` requires "paired heat/cool thresholds with minimum dwell mandatory for
+# regulated zones", and `:765-772` gives the hard-limit reactions — including the rule that a
+# zone with hard evidence in both directions simultaneously must not be commanded further in
+# either. `:852-870` adds the watchdog that this domain needs more than any other: **thermal
+# no-progress**, where an actuator is working electrically and the temperature is not
+# responding. That is a real thermal fault mode and it has no analogue in the other domains.
+#
+# The dwells here are longer than the power domain's by two orders of magnitude, and that is
+# the point of having both domains: a 500 ms dwell on a signal sampled at 1 Hz is a dwell that
+# cannot be evaluated, and a 30 s dwell on a bus that sags in 200 ms is a dwell that is already
+# over. Each domain's dwells are sized to its own physics.
+
+domain: thermal
+profiles:
+  - id: default
+    revision: 1
+    description: "the vehicle's own zone limits, from apollo's channel events and vehicle.yaml#thermal"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:101-107"
+      note: "the channel events are apollo's; the paired recovery values and dwells are chosen so that every regulated zone can be held without chattering at its own sampling rate"
+
+thresholds:
+
+  # --- CSM cabin: apollo's <10 and >30 events, paired and dwelled ------------------------
+  - id: csm_cabin_low
+    point: "thermal.zone_[id]_t_c"
+    comparator: below
+    assert: 10
+    clear: 13
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:89"
+      note: "cabin_temp_c events are <10 and >30; the 3 K recovery gap and the 30 s assert dwell are sized to a 1 Hz channel with a 48 min time constant, so the dwell is a debounce and the gap is the stabiliser"
+  - id: csm_cabin_high
+    point: "thermal.zone_[id]_t_c"
+    comparator: above
+    assert: 30
+    clear: 27
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:89"
+
+  # --- avionics and the amplifier: the components the flagship chain takes out ------------
+  - id: avionics_plate_high
+    point: thermal.avionics_plate_c
+    comparator: above
+    assert: 50
+    clear: 45
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:105"
+      note: "avionics_plate_c event is >50 C; the 5 K gap is wider than the cabin's because the plate has a 7 min constant and a 5 K excursion is a real trend rather than noise"
+  - id: comm_amp_high
+    point: thermal.comm_amp_c
+    comparator: above
+    assert: 60
+    clear: 52
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:106"
+      note: ">60 C with a fast rise. An 8 K gap because the amplifier is the smallest thermal lump in the vehicle at a 4.4 min constant, so it moves fastest and needs the widest band"
+  - id: comm_amp_fast_rise
+    point: thermal.comm_amp_c
+    comparator: above
+    assert: 0.5
+    clear: 0.1
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    point_units: "K/min, a rate threshold on a level channel"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:106"
+      note: "apollo's event includes 'fast rise' as well as the absolute limit. The rate matters more than the level here: 60 C that took an hour to reach is a load problem, and 60 C that took two minutes is a flow problem"
+
+  # --- the loop: apollo's four coolant events -------------------------------------------
+  - id: coolant_supply_high
+    point: thermal.coolant_supply_c
+    comparator: above
+    assert: 10
+    clear: 8
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:101"
+      note: "coolant_supply_c events are >10 and <1"
+  - id: coolant_supply_low
+    point: thermal.coolant_supply_c
+    comparator: below
+    assert: 1
+    clear: 3
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:101"
+      note: "the cold end is a freezing risk in an uninsulated line, and it is the condition the F-09-style trapped-line chain grows out of"
+  - id: coolant_return_high
+    point: thermal.coolant_return_c
+    comparator: above
+    assert: 20
+    clear: 17
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:102"
+  - id: flow_low
+    point: thermal.primary_flow_l_min
+    comparator: below
+    assert: 0.8
+    clear: 1.1
+    dwell_assert_ms: 5000
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:103"
+      note: "flow events are <0.8 and zero. The recovery value sits inside the 1.3-1.7 nominal band rather than at its edge, so a restored pump does not immediately re-trip"
+  - id: flow_zero
+    point: thermal.primary_flow_l_min
+    comparator: below
+    assert: 0.05
+    clear: 0.6
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:103"
+  - id: radiator_inlet_high
+    point: thermal.radiator_inlet_c
+    comparator: above
+    assert: 35
+    clear: 30
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: derived
+      relation: "the published inlet is 22.8-23.9 C in lunar orbit (TN D-6718); 35 C is chosen as the point where the rejection curve is stressed rather than comfortable, and it is set above the coolant supply limit because a high inlet with a normal supply is a load problem rather than a loop problem"
+
+  # --- the LM's own limits ---------------------------------------------------------------
+  - id: lm_cabin_low
+    point: "thermal.zone_[id]_t_c"
+    comparator: below
+    assert: 10
+    clear: 13
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: chosen
+      reason: "the LM cabin mirrors the CSM cabin's limits because no source distinguishes them (vehicle.yaml#thermal)"
+  - id: lm_cabin_high
+    point: "thermal.zone_[id]_t_c"
+    comparator: above
+    assert: 32
+    clear: 29
+    dwell_assert_ms: 30000
+    dwell_clear_s: 120
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: chosen
+      reason: "as above; 2 K wider than the CSM's upper limit because the LM cabin is a smaller volume with a proportionally larger crew load"
+  - id: lm_descent_freeze
+    point: "thermal.zone_[id]_t_c"
+    comparator: below
+    assert: -5
+    clear: 2
+    dwell_assert_ms: 60000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: chosen
+      reason: "the descent bay holds water-based coolant and hypergolic propellant; -5 C is chosen as the point where an uninsulated line is at risk, and the 7 K recovery gap reflects that thawing takes far longer than freezing"
+
+  # --- watchdogs and interlocks (service-owned) -------------------------------------------
+  - id: pump_no_flow
+    point: thermal.primary_flow_l_min
+    comparator: below
+    assert: 0.1
+    clear: 0.5
+    dwell_assert_ms: 4000
+    dwell_clear_s: 20
+    latched: true
+    interlock: true
+    severity: WARNING
+    point_units: "L/min, evaluated only while the pump is commanded on"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:104"
+      note: "apollo's event is 'commanded-on but zero flow'. The 4 s dwell is longer than the pump's own 8 s spin-up constant would suggest, so a normal start cannot trip it"
+  - id: thermal_no_progress
+    point: thermal.coolant_supply_c
+    comparator: above
+    assert: 0.35
+    clear: 0.1
+    dwell_assert_ms: 300000
+    dwell_clear_s: 300
+    latched: true
+    interlock: true
+    severity: WARNING
+    point_units: "K/min: the rate of change expected while a commanded heater or cooler is working"
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:852-870's thermal no-progress watchdog, and the fault mode it catches has no analogue elsewhere: the actuator is drawing current and the temperature is not moving. 0.35 K/min is chosen as the smallest response a working actuator should produce in the cabin, and the 5 minute dwell is long enough that a sensor's own noise cannot satisfy it"
+  - id: heater_stuck_on
+    point: "thermal.heater_[bank]_duty"
+    comparator: above
+    assert: 5
+    clear: 0
+    dwell_assert_ms: 60000
+    dwell_clear_s: 300
+    latched: true
+    interlock: true
+    severity: CAUTION
+    point_units: "% duty"
+    gated_by: "the zone's own upper limit: the watch is only armed while the zone is above it"
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:780-797 lists heater-stuck-on as an interlock requiring upstream isolation, and its :765-772 table forbids commanding heating and cooling at once. The condition is a contradiction — duty above 5 % while the zone is already over its limit — but it is still expressed as a band rather than as assert == clear, because a latched watch with no hysteresis is a watch that chatters, and the linter refused the degenerate form before it could ship"
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    Agents select a versioned profile and never a threshold (D-05), for the reason
+    thermal_diode.md:826 gives: the model that reasons about the spacecraft must not also be
+    able to rewrite the limits by which its reasoning is constrained. A thermal fleet's
+    temptation to widen its own zone limits is exactly the failure this prevents.
+alternatives:
+
+    - id: tight
+      revision: 1
+      description: "every zone limit pulled 10 % toward its nominal value"
+      factor: 0.9
+      provenance:
+        basis: chosen
+        reason: "an agent that wants earlier warning has somewhere legitimate to go, so it has no reason to want writable limits"

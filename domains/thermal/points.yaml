@@ -1,0 +1,124 @@
+# domains/thermal/points.yaml — what the thermal domain publishes, and how each number is made.
+#
+# Every entry names a channel registered in `../../channels.yaml`. The two that carry the most
+# weight are `thermal.loop_transport_c` and `thermal.radiator_rejection_w`, because between
+# them they are the difference between a thermal model that can be diagnosed from and one that
+# can only be watched.
+
+domain: thermal
+points:
+  - channel: thermal.coolant_supply_c
+    from: coolant_loop_t
+    layer: measurement
+    derivation: "the loop temperature at the coldplate manifold"
+    note: >-
+      apollo's Apollo-anchored band: 2.8-7.2 C, which is where water-glycol leaving the
+      evaporator sat (37-45 F, apollo_diode.md:97). Both a high and a low event, because a
+      coolant supply that is too cold is a freezing risk in a line that is not insulated.
+  - channel: thermal.coolant_return_c
+    from: coolant_loop_t
+    layer: measurement
+    derivation: "the loop temperature after the coldplates, before the radiator"
+    note: >-
+      Return minus supply is the vehicle's heat load made visible in one subtraction, and it
+      is the channel that tells an agent whether a rising component temperature is a thermal
+      problem or an electrical one.
+  - channel: thermal.primary_flow_l_min
+    from: coolant_flow_kg_s
+    layer: measurement
+    derivation: "mass flow divided by the fluid's density, 1,050 kg/m3"
+    note: "apollo's band is 1.3-1.7 L/min around the 24 gal/h Apollo order (apollo_diode.md:103)"
+  - channel: "thermal.pump_[n]_speed_rpm"
+    from: pump_1_speed_rpm
+    layer: measurement
+    derivation: "the pump's shaft speed"
+    note: >-
+      Speed and flow together are the diagnosis: a pump at speed with no flow is a blocked
+      loop, and a pump losing speed with flow following is a failing pump. Either channel
+      alone is ambiguous, which is why both exist.
+  - channel: thermal.pump_1_commanded
+    from: pump_1_speed_rpm
+    layer: service
+    derivation: "the commanded state, not the achieved one"
+  - channel: thermal.pump_1_current_a
+    from: pump_1_speed_rpm
+    layer: measurement
+    derivation: "the pump motor's current, from its electrical model"
+    note: >-
+      The evidence pair apollo asks for (`apollo_diode.md:109`): publish `commanded`, `current`
+      and `flow` and let the agents infer a stall, rather than publishing `pump_1_state:
+      stalled` because the simulator knows the rotor stopped. Apollo's own table gives the
+      enum, and the enum is available — but it is available *because the vehicle has such a
+      diagnostic*, not because we do.
+  - channel: thermal.pump_1_state
+    from: pump_1_speed_rpm
+    layer: service
+    derivation: "off, on or stalled, from the speed and flow the vehicle can actually measure"
+    note: "the event is 'commanded on but zero flow', which is a condition the vehicle can detect without knowing why"
+  - channel: thermal.avionics_plate_c
+    from: zone_csm_avionics_t
+    layer: measurement
+    derivation: "the avionics coldplate's lumped temperature"
+  - channel: thermal.comm_amp_c
+    from: comm_amp_t
+    layer: measurement
+    derivation: "the communications amplifier's case temperature"
+    note: "the node the flagship chain overheats; its >60 C event is apollo's"
+  - channel: "thermal.zone_[id]_t_c"
+    from: [zone_csm_avionics_t, zone_csm_service_t, zone_lm_descent_t, zone_radiator_t]
+    layer: measurement
+    derivation: "each regulated or observed zone's lumped temperature, one channel per zone id in components.yaml#zones — except the two cabins, which apollo names"
+    note: >-
+      the `from` is a list because the template covers four states and naming one of them was how
+      the cabins stayed in the family: `from: zone_csm_cabin_t` said the family was about the
+      cabin, so the cabin's own apollo channel looked like a second name for a different thing.
+      Naming all four makes the family's scope a declaration rather than an inference, and the
+      linter now refuses a `from` that resolves to nothing at all.
+  - channel: thermal.loop_transport_c
+    from: loop_transport_t
+    layer: measurement
+    derivation: "the temperature arriving from the far end of the loop, 1,042 s behind the supply"
+    note: >-
+      This is the channel that exists only because the transport delay does. Without it, a
+      component that starts overheating looks like it started overheating when the *radiator*
+      saw the change, and an agent reasoning correctly reaches a conclusion that is wrong by
+      seventeen minutes.
+  - channel: thermal.radiator_inlet_c
+    from: coolant_loop_t
+    layer: measurement
+    derivation: "the loop temperature entering the radiator"
+  - channel: thermal.radiator_rejection_w
+    from: radiator_rejection_w
+    layer: estimate
+    inputs: [thermal.radiator_inlet_c, "thermal.zone_[id]_t_c"]
+    derivation: "epsilon x sigma x A_eff x T_rad^4, minus the absorbed environmental load"
+    note: >-
+      Marked an estimate because the radiating temperature is inferred from the inlet, and the
+      environmental term depends on an attitude the vehicle knows only approximately. The
+      event is 'capacity below generated heat', which is apollo's own condition and is
+      computable from published channels without knowing the truth.
+  - channel: thermal.evaporator_rejection_w
+    from: radiator_rejection_w
+    layer: estimate
+    derivation: "the evaporator's rejection, capped at its rated capacity, with the water it consumes charged to res.water_cooling_kg"
+  - channel: "thermal.heater_[bank]_duty"
+    from: heater_bank_duty
+    layer: service
+    derivation: "commanded heater duty after the zone's hard limits have been applied"
+
+not_published:
+
+  - channel: "thermal.zone_[id]_true_t_c"
+    why: >-
+      hidden truth. The published zone temperature is an instrument reading with noise, bias and
+      a lag; a sensor that has drifted away from the zone it watches is a diagnosable fault
+      rather than a corrected number.
+  - channel: coolant mass remaining in the loop
+    why: >-
+      hidden truth, and a leak is visible the way a real one is: a falling supply-to-return
+      delta at constant load, a pump drawing less torque, and eventually a low flow alarm. The
+      published evidence is the consequence, not the inventory.
+  - channel: radiator absorbed solar load
+    why: >-
+      the vehicle cannot measure it. It knows its attitude and the sun's position and it infers
+      the load, which is why `radiator_rejection_w` is an estimate and why F-13 is hard.

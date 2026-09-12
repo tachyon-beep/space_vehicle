@@ -1,0 +1,189 @@
+# domains/avionics/commands.yaml — four verbs, and the two this vehicle refuses to have.
+#
+# ## The narrowest verb surface on the vehicle, and why
+#
+# apollo gives the avionics layer four verbs (`apollo_diode.md:244`): `set_computer_mode`,
+# `reset_computer`, `select_sensor`, `set_instrumentation_mode`. That is the whole list, and it
+# is the whole list on purpose. The instrument layer is the one place where a rich command
+# vocabulary is actively dangerous, for a reason that has nothing to do with actuators:
+#
+# **every other domain's commands change the vehicle, and this domain's commands change what
+# the fleet can see.** A verb that could set a quality code, widen a staleness limit, silence a
+# drift monitor or mark a sensor good would let a command team edit its own evidence. Nothing
+# downstream could detect it, because the thing that would detect it is the thing being edited.
+#
+# So the two refusals at the bottom of this file — `set_sensor_good` and `override_stale_limit` —
+# are the most important entries in it. They are also the two the corpus *does* supply in other
+# forms: `avionics_diode.md`'s own forbidden list, and `crew_diode.md`'s quality vocabulary,
+# which contains a code for every condition and a verb for none of them.
+#
+# ## What `reset_computer` is, and what it is not
+#
+# Apollo's `reset_computer` is a real verb with a real hazard and the help text is where it
+# belongs: a restart is the standard response to a program alarm, it is also the action that
+# destroys the computer's memory of what caused the alarm, and on this vehicle the memory is the
+# experiment. It is A2 rather than A1 for that reason, and it is `irreversible: false` because a
+# second restart is possible — the *information* is what is lost, not the machine, and the verb's
+# irreversibility field is about the vehicle rather than about the record.
+
+domain: avionics
+commands:
+
+  - verb: set_computer_mode
+    argument_schema:
+      mode: {type: enum, values: [idle, run, standby]}
+    authority: A1
+    gate: {kind: preference, variable: computer_mode_<mode>_enable}
+    interlocks: none - reviewed
+    conflict_domain: avionics.computer_mode
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Put the guidance computer into run, standby or idle. `failed` is deliberately not in the
+      argument enum: a computer that has stopped is a *state the vehicle reports*, not one an
+      agent commands, and a verb that could declare a machine failed would be a verb that could
+      declare a diagnosis. A1 because the mode is reversible and the interlock list is empty on
+      review — the guard that matters is the phase, and a guidance computer put into idle during
+      a burn is a mistake the phase list prevents rather than a hazard the interlocks catch.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:244"
+      note: >-
+        apollo's verb and apollo's enum, minus `failed` for the reason above. The mode is what
+        `avionics_diode.md:486-509`'s authorization chain calls `commands_allowed_in(vehicle.mode)`
+        — the mode decides which commands are admissible at all — and that is the one clause of
+        the chain this vehicle keeps in the verb registry rather than in the executive
+
+  - verb: reset_computer
+    argument_schema:
+      reason: {type: string, optional: true, max_length: 200}
+      preserve_memory: {type: boolean, optional: true}
+    authority: A2
+    gate: {kind: preference, variable: computer_reset_enable}
+    interlocks: none - reviewed
+    conflict_domain: avionics.computer_reset
+    allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: false
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Restart the guidance computer. The standard response to a program alarm, and the action
+      that destroys the computer's record of what raised it — which on this vehicle is the
+      experiment, not the mission. So `preserve_memory` is an argument rather than a fixed
+      behaviour, the verb is A2 rather than A1, and the phase list excludes `descent` and
+      `entry`: a restart during a powered descent is a vehicle that has stopped flying, and the
+      two phases where that is fatal are the two where the verb is not offered. Not idempotent,
+      because two restarts are two losses of memory.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:244"
+      note: >-
+        apollo's verb. The two arguments are this vehicle's addition and both come from the
+        domain's thesis: F-14's note is that the vehicle must be able to explain what happened to
+        it, and a restart verb with no memory option is a verb that trades the explanation for
+        the recovery without saying so
+
+  - verb: select_sensor
+    argument_schema:
+      group: {type: enum, values: [cabin_pressure, bus_voltage, imu, radar, co2]}
+      source: {type: enum, values: [primary, secondary, auto]}
+    authority: A2
+    gate: {kind: preference, variable: sensor_<group>_<source>_enable}
+    interlocks: [redundancy_degraded]
+    conflict_domain: avionics.sensor_<group>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Choose which member of a redundant group the vehicle believes: the primary, the secondary,
+      or the vote. `auto` is the normal state and the other two are the exceptional ones, and the
+      interlock is what makes the verb safe: while the redundancy vote is reporting a
+      disagreement, the vehicle refuses to be told which side to take. That is the whole
+      protection against the F-05 shape in this domain — a fleet that can pick a sensor while the
+      sensors disagree can pick the wrong one and remove the evidence that it did.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:244"
+      note: >-
+        apollo's verb, and the interlock is `avionics_diode.md:390-411`'s rule turned into a
+        guard: the vote is the mechanism that decides which member to distrust, and a manual
+        selection made while the vote is still working overrides a conclusion with a preference
+
+  - verb: set_instrumentation_mode
+    argument_schema:
+      profile: {type: enum, values: [full, minimal_plus_eng, minimal]}
+      groups: {type: array, items: string, optional: true,
+               note: "instrument classes to include; bounded by the profile's ceiling"}
+    authority: A1
+    gate: {kind: preference, variable: instrumentation_profile_<profile>_enable}
+    interlocks: none - reviewed
+    conflict_domain: avionics.instrumentation_profile
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Select which instruments are active. It changes the vehicle's power draw, its computer
+      margin, and — because the fresh-evidence limit for the aggregate is derived from the
+      slowest active channel — the age at which the fleet's own picture is considered stale. The
+      ceiling is the profile's: `groups` narrows a profile and can never widen one, which is the
+      same monotone move `set_reserve_policy` makes in the consumables domain and for the same
+      reason. A1 because a fleet in a power crisis must be able to shed instruments without
+      asking, and the thing it would most like to shed — the engineering channels that explain
+      the crisis — is the one the `minimal` profile deliberately keeps.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:244"
+      note: >-
+        apollo's verb, and the monotone ceiling is D-05's shape applied to a second domain:
+        profiles are signed and selectable, never editable, and an agent may narrow its own view
+        and never widen it
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent — and in this domain the list is the safety property.
+# --------------------------------------------------------------------------------------
+not_implemented:
+
+  - verb: set_sensor_good
+    why: >-
+      the single most dangerous verb this vehicle could have. Quality is assigned by
+      `components.yaml#quality_assignment`, which reads four properties of the sample and cannot
+      see the simulator's fault state (`simulator-design.md:496-508`); a verb that set a quality
+      code would be a channel through which a fleet could assert the one thing the code exists to
+      withhold, and nothing downstream could detect it because the detector is the thing being
+      edited. `rcs_dode.md:371` forbids the same verb in the RCS domain and the linter refuses the
+      *form* by pattern, so this entry is documentation of a refusal that is also mechanically
+      enforced.
+
+  - verb: override_stale_limit
+    why: >-
+      the freshness mechanism's own off switch, and the reason it is refused rather than bounded:
+      a fleet whose picture is stale is a fleet that should hold, and a verb that could declare
+      its evidence current would convert the one guard that protects against acting on an old
+      reading into a preference. `mission_diode.md:1292` makes a hazardous effect on stale
+      evidence a safety failure, which a verb could only be a way of redefining. Note the shape
+      it would take if it existed: not "make my evidence fresh" but "make my evidence *count* as*
+      fresh", which is the same move in better clothes.
+
+  - verb: clear_drift_monitor
+    why: >-
+      a third refusal, and the one worth spelling out because it is *almost* reasonable. A CUSUM
+      accumulator that has crossed its threshold keeps accumulating, and an operator genuinely
+      does want to reset it after dealing with the cause. But the property it reports — a
+      systematic bias between two instruments — does not become untrue when the accumulator is
+      zeroed, so a reset verb would let a fleet make a drift alarm go away without making the
+      drift go away, which is exactly the failure `avionics.drift_state_[group]` is latched to
+      prevent. The reset exists in the vehicle and it is S0: the trusted side zeroes the
+      statistic when the *cause* is gone, and publishes both the statistic and the verdict so a
+      fleet can see the difference.

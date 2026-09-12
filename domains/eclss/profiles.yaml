@@ -1,0 +1,352 @@
+# domains/eclss/profiles.yaml — the thresholds that have minutes rather than hours.
+#
+# ## Why the dwells here are the shortest in the vehicle
+#
+# Every other domain's thresholds are debounced against a process that takes minutes: a bus sags
+# in 200 ms but a pump takes eight seconds to spin up, a thermal zone moves over tens of minutes,
+# a consumable drains over days. ECLSS is different in one specific way: **the atmosphere's
+# response to a hull breach is measured in seconds**, and the crew's response to it — donning
+# suits, closing a regulator — is measured in tens of seconds. So the pressure thresholds carry
+# the shortest assert dwells on the vehicle, and the reason is not that the instrument is noisy
+# but that the process is fast.
+#
+# The counter-case matters too. A regulator cycling normally moves the cabin pressure by a few
+# hundredths of a psia continuously, and a threshold that fired on that would be an alarm nobody
+# reads by the second day. So the *caution* level is debounced generously and the *emergency*
+# level is not debounced at all: the difference between "something is wrong" and "you have
+# seconds" is exactly the difference between a dwell and its absence.
+
+domain: eclss
+profiles:
+  - id: default
+    revision: 1
+    description: "apollo's cabin thresholds, with the escape and fire limits derived from the 5 psia oxygen atmosphere"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:84-95"
+      note: "the cabin pressure levels (4.5 caution, 3.5 emergency) and the 7.6 mmHg CO2 caution are apollo's own; the partial-pressure limits are derived from the published 5 psia oxygen cabin, which is why they are not the sea-level values"
+
+thresholds:
+  # --- cabin pressure: apollo's three levels ------------------------------------------------
+  - id: cabin_pressure_caution
+    point: eclss.cabin_pressure_psia
+    comparator: below
+    assert: 4.5
+    clear: 4.7
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:88"
+      note: "apollo's own <4.5 caution. The 0.2 psia recovery gap is twenty times the instrument's precision, because a regulator cycling at its normal band edge must not be able to retrigger this."
+  - id: cabin_pressure_emergency
+    point: eclss.cabin_pressure_psia
+    comparator: below
+    assert: 3.5
+    clear: 4.2
+    dwell_assert_ms: 0
+    dwell_clear_s: 10
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:84, :88"
+      note: >-
+        apollo's emergency regulator held the cabin above 3.5 psia long enough to don suits
+        (apollo_diode.md:84). No assert dwell at all: at 3.5 psia the crew have minutes of
+        useful consciousness and the threshold's only job is to say so immediately. The
+        recovery gap is 0.7 psia because re-pressurising past the level is a deliberate act,
+        not something that happens on its own.
+  - id: cabin_pressure_high
+    point: eclss.cabin_pressure_psia
+    comparator: above
+    assert: 5.6
+    clear: 5.4
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: derived
+      relation: "0.4 psia above apollo's stated 5.2 psia upper bound, with the 0.2 psia recovery gap matching the caution level's. A high cabin pressure is a regulator that will not close, which is the fault a low pressure would not reveal."
+
+  # --- oxygen partial pressure: derived from a 5 psia oxygen cabin --------------------------
+  - id: ppo2_hypoxia
+    point: eclss.pp_o2_mmhg
+    comparator: below
+    assert: 200
+    clear: 230
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    point_units: "mmHg, where the nominal band is 248-269"
+    provenance:
+      basis: derived
+      relation: "200 mmHg is roughly the lower bound of useful consciousness without acclimatisation, and it is 21 % below a 5 psia oxygen cabin's nominal 258.6. Expressed as a partial pressure rather than as a cabin pressure because a *diluted* cabin and a *depressurised* cabin have the same total pressure and very different consequences."
+  - id: ppo2_fire_risk
+    point: eclss.pp_o2_mmhg
+    comparator: above
+    assert: 300
+    clear: 275
+    dwell_assert_ms: 10000
+    dwell_clear_s: 120
+    latched: true
+    severity: WARNING
+    point_units: "mmHg, against a nominal 258.6"
+    provenance:
+      basis: historical
+      source: >-
+        the Apollo 1 fire, which killed three astronauts in a 16.7 psia pure-oxygen cabin on the
+        pad. Flight cabins ran at 5 psia for exactly this reason, and 300 mmHg is 16 % above the
+        nominal — the level at which material flammability changes character. It is the one
+        threshold in the vehicle whose justification is a body count.
+
+  # --- carbon dioxide: two statistics, two channels -----------------------------------------
+  - id: co2_caution
+    point: eclss.co2_pp_mmhg
+    comparator: above
+    assert: 7.6
+    clear: 6.5
+    dwell_assert_ms: 3000
+    dwell_clear_s: 60
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:84, :90"
+      note: >-
+        apollo's ECS caution at >7.6 mmHg — and its companion fact, which is the reason this
+        alarm is worth having at all: the same ECS light could mean a glycol pump, a water
+        separator or a suit fan. An alarm that directs investigation rather than replacing it.
+  - id: co2_exposure_1h
+    point: eclss.co2_pp_1h_avg_mmhg
+    comparator: above
+    assert: 3
+    clear: 2.5
+    dwell_assert_ms: 0
+    dwell_clear_s: 600
+    latched: true
+    severity: ADVISORY
+    provenance:
+      basis: historical
+      source: >-
+        eclss_diode.md:735: NASA's current nominal requirement is a one-hour average ppCO2 of no
+        more than 3 mmHg. It is a different statistic from the instantaneous alarm — an exposure
+        limit rather than a warning — and it is deliberately ADVISORY rather than CAUTION,
+        because it says something about the next hour rather than about now.
+  - id: co2_absorber_low
+    point: eclss.absorber_capacity_pct
+    comparator: below
+    assert: 20
+    clear: 30
+    dwell_assert_ms: 10000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    reserve_floor: 20
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:93"
+      note: "apollo's <20 % with a predicted breakthrough inside an hour. Duplicated from the consumables domain on purpose: there it is a resource floor an agent plans against, and here it is an atmosphere alarm."
+
+  # --- the leak, and the corroboration that makes it a diagnosis ----------------------------
+  - id: leak_rate_rising
+    point: eclss.leak_rate_g_s
+    comparator: above
+    assert: 0.01
+    clear: 0.005
+    dwell_assert_ms: 60000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    point_units: "g/s, where the nominal flight leak is 0.0064 and the published precision is 0.01"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:94"
+      note: >-
+        The threshold sits exactly at the instrument's published precision, which means it fires
+        when the leak is twice the nominal flight value — and that a leak below that is visible
+        only through the ledger residual, which is the whole argument of
+        review-findings.md #1. The 60 s dwell is long enough to average out the thermal term.
+  - id: pressure_sensor_disagreement
+    point: eclss.cabin_pressure_psia
+    comparator: above
+    assert: 0.05
+    clear: 0.02
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    interlock: true
+    severity: CAUTION
+    point_units: "psia of disagreement between the two redundant channels"
+    provenance:
+      basis: chosen
+      reason: >-
+        avionics_diode.md:390-411's redundant_vote in threshold form: two channels that differ by
+        more than five times the instrument precision are disagreeing, and the vehicle cannot
+        say which is right. It is an interlock rather than an alarm because a leak diagnosis
+        resting on a disputed sensor is worse than no diagnosis.
+
+  # --- the fast one: the suit loop ---------------------------------------------------------
+  - id: suit_loop_flow_low
+    point: eclss.suit_loop_flow_cfm
+    comparator: below
+    assert: 20
+    clear: 25
+    dwell_assert_ms: 2000
+    dwell_clear_s: 10
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:92"
+      note: >-
+        apollo's <20 event on a 27-33 cfm loop. EMERGENCY rather than CAUTION and a two-second
+        dwell: a suit loop is what keeps a crew member alive in a depressurised cabin, so its
+        loss and the cabin's loss are the same emergency arriving by two routes.
+  - id: o2_supply_low
+    point: eclss.o2_supply_pressure_psi
+    comparator: below
+    assert: 750
+    clear: 790
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    point_units: "psi"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:91"
+      note: "apollo's 750-950 psi band with a low-pressure event and a >5 psi/min fall condition"
+  - id: o2_supply_fast_fall
+    point: eclss.o2_supply_pressure_psi
+    comparator: above
+    assert: 5
+    clear: 2
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    point_units: "psi per minute, a rate threshold on a level channel"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:91"
+      note: >-
+        The rate is the better channel of the two: a tank at 760 psi that has been there for a
+        day is a full tank near the bottom of its band, and a tank that fell 40 psi in the last
+        ten minutes is a leak. Apollo publishes both and this is why.
+
+  # --- the LM's own atmosphere ------------------------------------------------------------
+  # Four thresholds that did not exist. The CSM had `cabin_pressure_caution`,
+  # `cabin_pressure_emergency`, `co2_caution` and the ppO2 pair; the LM had **none of them**,
+  # while its three channels declared exactly those events in `channels.yaml`. The event audit
+  # is what surfaced it: `eclss.lm_cabin_pressure_psia` promised "<4.5 caution, <3.5 emergency,
+  # fast leak" and nothing on the vehicle watched it.
+  #
+  # This is the compartment that matters most and it was the one without limits. From undocking
+  # to docking the LM is the crewed vehicle and the CSM is empty: for three days of the surface
+  # phase there is no other cabin, so a caution on the CSM's pressure is a caution about a
+  # spacecraft with nobody in it. The values are the CSM's, adopted rather than re-chosen —
+  # both compartments hold the same 4.8-5.2 psia of essentially pure oxygen, and a fleet should
+  # not have to learn two bands for one atmosphere.
+  - id: lm_cabin_pressure_caution
+    point: eclss.lm_cabin_pressure_psia
+    comparator: below
+    assert: 4.5
+    clear: 4.7
+    dwell_assert_ms: 1000
+    dwell_clear_s: 10
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:88-90"
+      note: "the CSM's caution level, adopted for the LM: one atmosphere, one band, and a crew that had to learn two would be a crew that hesitated."
+
+  - id: lm_cabin_pressure_emergency
+    point: eclss.lm_cabin_pressure_psia
+    comparator: below
+    assert: 3.5
+    clear: 4.2
+    dwell_assert_ms: 500
+    dwell_clear_s: 10
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:88-90"
+      note: >-
+        the emergency level, and it is the one an abort decision is timed against: 3.5 psia is
+        below the 4.8-5.2 band and above the ppO2 a suit can carry, so a cabin at 3.5 is a cabin
+        to leave rather than a cabin to repair
+
+  - id: lm_co2_caution
+    point: eclss.lm_co2_pp_mmhg
+    comparator: above
+    assert: 7.6
+    clear: 6.0
+    dwell_assert_ms: 10000
+    dwell_clear_s: 600
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:96"
+      note: >-
+        apollo's LM CO2 event, and the LM's absorber is a *different* cartridge from the CSM's —
+        which is the fact Apollo 13 turned on when the CM's cartridges would not fit the LM and
+        the crew built an adapter out of a flight plan cover. A single CO2 threshold covering both
+        compartments would have made that difference invisible
+
+  - id: lm_ppo2_hypoxia
+    point: eclss.lm_pp_o2_mmhg
+    comparator: below
+    assert: 248
+    clear: 258
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: derived
+      relation: "the bottom of the 248-269 mmHg band that 4.8-5.2 psia of essentially pure oxygen gives; the CSM's band is the same because the atmosphere is"
+      note: >-
+        the derived band's lower edge, at the LM's own compartment. The CSM's version of this
+        threshold exists; this one is what a crew on the surface has, and the surface is where a
+        suit loop and a cabin regulator share a gas supply
+
+  - id: lm_ppo2_fire_risk
+    point: eclss.lm_pp_o2_mmhg
+    comparator: above
+    assert: 269
+    clear: 262
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: derived
+      relation: "the top of the 248-269 mmHg band; 5.2 psia of pure oxygen"
+      note: >-
+        the fire risk the Apollo 1 crew died of, at the LM's compartment. It is a *warning* rather
+        than an emergency because the band's top is reached by a regulator drifting, and the
+        response is to bring it back rather than to leave
+
+profile_selection:
+  selectable_by: A1
+  note: >-
+    An agent may select a profile and may never edit one (D-05). This domain is where that
+    matters most for a reason the others do not have: the thresholds are partly *survival* limits,
+    and an agent that could widen the emergency pressure level could turn a decompression into a
+    green board.
+  alternatives:
+    - id: conservative
+      revision: 1
+      description: "raise every caution level by a fifth toward the nominal band, for a fleet that wants to be told early"
+      factor: 0.8
+      provenance:
+        basis: chosen
+        reason: "the factor moves the *caution* levels only, never the emergency ones, so the profile can only ever make the fleet more cautious — which is the monotonicity min(agent, operator) requires"

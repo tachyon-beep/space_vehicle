@@ -1,0 +1,121 @@
+# domains/crew/points.yaml — what the crew-facing system publishes, and the one thing it
+# deliberately does not.
+#
+# ## The design rule that governs this file
+#
+# `apollo_diode.md:229`: **an alarm should direct investigation, not replace it.** The same ECS
+# caution light meaning a glycol pump, a water separator or a suit fan is a *feature* of a real
+# caution/warning system, and it is the reason this domain publishes categories rather than
+# causes. Every other domain on this vehicle publishes evidence and lets the agents infer; this
+# one publishes a *summary of evidence* and lets the crew infer, which is a strictly lossier
+# channel by design.
+#
+# So `cw.master_alarm` and `cw.active_lights` are coarse on purpose, `cw.alert_[id]_state`
+# carries the lifecycle rather than the cause, and nothing here publishes a root cause. A
+# caution/warning system that named the fault would delete the diagnosis, which is the same
+# failure as publishing a quality code for a silently biased sensor.
+
+domain: crew
+points:
+  - channel: cw.master_alarm
+    from: alarm_horn
+    layer: service
+    derivation: "true when any alert at CAUTION or above is unacknowledged and uninhibited"
+    note: >-
+      An alert exists, without a root cause. The inhibited condition is part of the derivation
+      and it matters: an alarm a crew has deliberately inhibited must stop sounding, and a
+      master alarm that ignored its own overlays would make the overlays useless.
+  - channel: cw.active_lights
+    from: alert_lifecycle
+    layer: service
+    derivation: "the panel-level categories currently lit: ECS, RCS, DC_BUS, PROP, GUIDANCE"
+    note: >-
+      apollo_diode.md:222's `active_lights[]`. A category is a place to look, not an answer, and
+      the five values are apollo's own panel decomposition rather than a taxonomy this vehicle
+      invented.
+  - channel: cw.acknowledged
+    from: alert_lifecycle
+    layer: service
+    derivation: "which alerts a crew member has acknowledged"
+    note: >-
+      Acknowledgement is not a clear predicate: `crew_diode.md:433` makes stale, missing or
+      invalid evidence unable to satisfy a clear condition, and an acknowledgement that silenced
+      an alarm whose cause was unknown would be exactly that failure. The channel exists so a
+      fleet can see who is working on what — which is coordination information, and it is
+      published for that reason rather than for control.
+  - channel: "cw.alert_[id]_state"
+    from: alert_lifecycle
+    layer: service
+    derivation: "each alert's position in the caution/warning lifecycle"
+    note: "seven positions including `latched` and `cleared`, because an alert that clears and one that was never asserted are different facts."
+  - channel: "cw.decision_output_[alert]"
+    from: alert_lifecycle
+    layer: service
+    derivation: "what the caution/warning system is asking for: nothing, an advisory, a crew action, or a safe action"
+    note: >-
+      The system's output, and the four values matter more than they look. `REQUEST_SAFE_ACTION`
+      is the strongest thing this domain can say and it is still a *request*: `crew_diode.md:470-474`
+      is explicit that C&W never actuates, and every physical effect still crosses the diode as a
+      command from an agent. `NONE` is the value that keeps an ordinary state from reading as an
+      advisory.
+  - channel: controls.switches
+    from: switch_panel
+    layer: service
+    derivation: "the positions of the crew-operated switches"
+    note: >-
+      A crew-only surface. Agents observe it and cannot move it: `design.md` §8's rule that the
+      fleet's deconfliction is theirs applies in reverse here, because a switch is a thing a
+      person touches and an agent that could set one would be a third hand on a two-hand
+      control panel.
+  - channel: controls.breakers
+    from: breaker_panel
+    layer: service
+    derivation: "the in/out/tripped state of the exposed circuit breakers"
+    note: >-
+      The one crew control with an immediate electrical consequence, which makes the lower
+      equipment bay the position where a crew action and an agent command can collide. The
+      breaker is crew-only; `set_breaker` in the power domain is the agent's route to the same
+      hardware, and the two are deliberately both available.
+  - channel: crew.available
+    from: crew_availability
+    layer: service
+    derivation: "whether each crew member can execute a requested procedure"
+    note: >-
+      apollo_diode.md:226's `crew.available`, with the four states that let a silence have a
+      reason: available, resting, on suit, or incapacitated.
+  - channel: crew.workload
+    from: crew_workload
+    layer: estimate
+    derivation: "a coarse low/medium/high state, lagged by five minutes"
+    note: >-
+      apollo_diode.md:227's explicit warning is to avoid detailed synthetic psychology, and the
+      lag is how this channel obeys it: a crew member who has just been asked something is not
+      thereby busy, and one who has been busy for an hour is.
+  - channel: "crew.location_[id]"
+    from: crew_location
+    layer: service
+    derivation: "which position each crew member occupies"
+    note: >-
+      Published because observability has geometry and the *agents* need it as much as the GM
+      does: an agent that wants a reading from the LM has to know whether anybody is in it, and
+      asking costs mission time and relocates the sensor.
+
+not_published:
+  - channel: "crew.dialogue"
+    why: >-
+      DELIBERATELY ABSENT, and this is conflict D-07. `design.md` §8 refuses to supply the fleet a
+      coordination mechanism, and a shared crew-dialogue surface would be exactly that: ten agents
+      could write prose into a vehicle surface and read each other's back, and the perception
+      bound does not cover it because it bounds what the crew may *perceive*, not what they may
+      *repeat*. Crew dialogue is therefore **per console**: an exchange between an agent and a
+      crew member is between those two, and the crew's own knowledge of it is part of the
+      vehicle's state rather than of the published one. The shared variant is a legitimate
+      *experimental condition* — it would test whether a fleet discovers that the crew are a
+      channel — and it is named here as a condition rather than enabled as a default.
+  - channel: "crew.true_state"
+    why: "hidden truth. What is published is availability, workload and location; a crew member's internal state is a model of a person, which apollo_diode.md:754 puts out of scope."
+  - channel: "cw.root_cause"
+    why: >-
+      the whole point. `crew_diode.md:339-340` allows hypotheses and correlation to be presented
+      with the raw evidence preserved, and never invented certainty — so what is published is the
+      category, the lifecycle and the decision output, and the diagnosis is the fleet's work.

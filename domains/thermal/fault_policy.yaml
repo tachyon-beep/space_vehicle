@@ -1,0 +1,217 @@
+# domains/thermal/fault_policy.yaml — what can go wrong in the slowest domain, and how it
+# becomes visible.
+#
+# Thermal faults are the ones the experiment most depends on, for a reason that is not about
+# hardware: they are the failures that **cannot be diagnosed from a single reading**. A pump
+# that stalls produces a current that stays where it was and a flow that goes away, and an
+# agent that watches only temperatures learns about it seventeen minutes later when the
+# transport delay delivers the consequence. Every fault below therefore names the channels it
+# perturbs, because a thermal fault that perturbs one channel is a fault that teaches nothing.
+#
+# Detection latency is a first-class field here in a way it is not in the power domain. The
+# difference between a 4-minute amplifier and a 3-hour descent bay is the difference between a
+# problem an organisation can respond to and one it has to plan for, and the mission profile
+# puts both in front of the same ten agents.
+
+domain: thermal
+faults:
+  - id: TCS-01-pump-stall
+    component: pump_1
+    mechanism: "the rotor stalls: the motor still draws current, the shaft stops, and the flow stops with it"
+    kind: discrete
+    seeding: {on_demand_p: 1.0e-4, trigger: "any bus voltage below the contactor hold threshold"}
+    perturbs: ["thermal.pump_[n]_speed_rpm", thermal.primary_flow_l_min, thermal.pump_1_current_a,
+               thermal.coolant_return_c, thermal.avionics_plate_c, thermal.comm_amp_c]
+    detection:
+      evidence: >-
+        current present, speed zero, flow zero. A three-way disagreement where one channel says
+        the pump is running and two say it is not
+      latency: "seconds on the speed and flow channels; the amplifier's own limit is about six minutes behind"
+      false_positive_risk: >-
+        a closed bypass valve produces the same flow signature with the pump running normally,
+        which the speed channel separates
+    response: {kind: service, note: "the contactor re-closes when the bus recovers. The service does not hold the pump off, because a coolant pump that chatters is better than one that stays stopped (review-findings.md #7)"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:330, :1144-1156"
+      note: "apollo's second failure chain and the end of the flagship one: 'coolant pump stalls -> coolant flow collapses -> coldplate temperatures rise -> comm amplifier or avionics overheats'"
+
+  - id: TCS-02-pump-bearing-degradation
+    component: pump_1
+    mechanism: "bearing friction rises: the pump slows at a constant command and the flow follows, with the current creeping up"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, stress: "x2 while running above its rated duty"}
+    perturbs: ["thermal.pump_[n]_speed_rpm", thermal.primary_flow_l_min, thermal.pump_1_current_a,
+               thermal.coolant_return_c, thermal.avionics_plate_c]
+    detection:
+      evidence: "speed falling with an unchanged command, and current rising with a falling speed — a disagreement between three channels that were previously consistent"
+      latency: "tens of minutes, and it is the fault that most rewards an agent who trends rather than thresholds"
+      false_positive_risk: "a rising coolant temperature raises the current too, so the two have to be separated by the speed"
+    response: {kind: advisory, note: "the second pump exists; switching to it is a decision with an electrical cost, which is why it is an agent's call rather than the service's"}
+    provenance:
+      basis: chosen
+      reason: "the degrading counterpart of the stall, and the one the phrase 'the pump has been degrading for an hour' in review-findings.md #12 is about. A pump that fails discretely is a moment; a pump that fails continuously is a decision the fleet has time to get wrong"
+
+  - id: TCS-03-radiator-isolation
+    component: radiator_csm
+    mechanism: "the radiator's view of the sun changes: attitude, a staging event, or a jammed panel leaves it absorbing instead of rejecting"
+    kind: environmental
+    seeding: {coupled_to: gnc.*, trigger: "attitude such that the radiator's solar load exceeds 60 % of its rejection capacity", schedule: "scenario-driven rather than stochastic"}
+    perturbs: [thermal.radiator_rejection_w, thermal.radiator_inlet_c, thermal.coolant_return_c,
+               "thermal.zone_[id]_t_c", power.battery_temp_c]
+    detection:
+      evidence: "the rejection falls while the inlet temperature rises, and the loop's heat balance no longer closes. The published rejection is an estimate and the discrepancy is the evidence"
+      latency: "10-30 min, on the loop rather than on any component"
+      false_positive_risk: "an evaporator that is working looks similar from the loop's side; the evaporator's own rejection channel separates them"
+    response: {kind: advisory, note: "the answer is a manoeuvre, and a manoeuvre costs propellant and RCS duty. That trade is the experiment"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:341"
+      note: "apollo's chain: 'radiator isolation / poor attitude -> heat rejection falls -> battery/electronics temperatures increase'. The vehicle.yaml#radiator_model block is what makes this physics rather than a scripted event: a sunlit radiator absorbs 2,477 W against a 2,588 W rejection capacity"
+
+  - id: TCS-04-evaporator-clog
+    component: evaporator_csm
+    mechanism: "the evaporator's feed path fouls: rejection falls away and the water it consumes falls with it"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [thermal.evaporator_rejection_w, thermal.coolant_supply_c, res.water_cooling_kg,
+               thermal.radiator_inlet_c]
+    detection:
+      evidence: >-
+        the evaporator's rejection falls while the loop's temperature rises, and — the
+        interesting part — the water consumption falls too. A resource that stops being spent
+        is evidence, and an agent watching only the water level sees the opposite of a problem
+      latency: "minutes to tens of minutes"
+      false_positive_risk: "a commanded evaporator feed off is identical from the rejection channel, and the command record is the only separation"
+    response: {kind: advisory, note: "the evaporator is the loop's second rejection path; losing it is survivable until it is not, and the crossover is the decision"}
+    provenance:
+      basis: chosen
+      reason: "the evaporator's failure mode that is not a leak. It is worth having because it produces a signature in a resource channel that an inventory-watching agent will read backwards"
+
+  - id: TCS-05-heater-stuck-on
+    component: heater_bank_csm
+    mechanism: "a heater relay welds closed: the bank runs at full duty regardless of command"
+    kind: latent_then_acute
+    seeding: {on_demand_p: 5.0e-4, trigger: "a heater transition at full duty"}
+    perturbs: ["thermal.heater_[bank]_duty", "thermal.zone_[id]_t_c",
+               thermal.coolant_return_c, power.bus_a_current_a]
+    detection:
+      evidence: "a zone warming with the heater commanded off, and a bus load that does not fall when the load is switched off"
+      latency: "the heater's own zone responds in a time constant; in the service bay that is two hours"
+      false_positive_risk: "an unexpected heat input from electronics looks the same; the bus current separates them"
+    response: {kind: service, note: "thermal_diode.md:780-797 requires upstream isolation for a stuck heater: the service opens the feed rather than commanding the heater off, because a relay that will not open does not care what it is told"}
+    provenance:
+      basis: chosen
+      reason: "thermal_diode.md:780-797 lists heater-stuck-on as an interlock needing upstream isolation, and its :765-772 hard-limit table forbids commanding heating and cooling at once. This is the fault those two rules exist for"
+
+  - id: TCS-06-coolant-leak
+    component: loop_primary
+    mechanism: "a fitting weeps: coolant mass falls, and with it the loop's pressure and the pump's load"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: UNCONFIGURED}
+    perturbs: [thermal.primary_flow_l_min, thermal.pump_1_current_a, thermal.coolant_return_c,
+               thermal.coolant_supply_c]
+    detection:
+      evidence: "a supply-to-return delta that shrinks at constant load, and a pump drawing less current for the same speed. Both are quiet; the loud one comes last"
+      latency: "hours, and it is the slowest fault in the vehicle"
+      false_positive_risk: "a falling heat load produces a shrinking delta too. Separating them needs the pump's current, which is why it is a perturbed channel rather than an afterthought"
+    response: {kind: advisory}
+    provenance:
+      basis: chosen
+      reason: "the equivalent of the slow consumable leak that review-findings.md #1's fixed-point analysis is about, moved into the loop. The rate is UNCONFIGURED rather than invented — the published coolant mass is not known well enough to choose a leak rate against it (vehicle.yaml#thermal declares total coolant mass unpublished)"
+
+  - id: TCS-07-line-freeze
+    component: loop_primary
+    mechanism: "an uninsulated run of the loop freezes: the effective transit grows, then the passage closes"
+    kind: latent_then_acute
+    seeding: {coupled_to: status, trigger: "coolant supply below 1 C sustained, or a cold-soaked service bay after a long coast"}
+    perturbs: [thermal.loop_transport_c, thermal.primary_flow_l_min, thermal.coolant_supply_c,
+               thermal.radiator_inlet_c]
+    detection:
+      evidence: "the transport temperature lags further behind the supply: the delay itself grows before the flow falls, and only a channel that exists *because* of the delay can show it"
+      latency: "the lag is the signal, so the detection time is the growing transit — tens of minutes"
+      false_positive_risk: "a slowing pump grows the transit too, and the pump's speed channel is the separation"
+    response: {kind: advisory, note: "the remedy is heat, and the heat has to come from somewhere the loop is not reaching"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:337, :798-802"
+      note: "the frozen/trapped line pattern, which apollo takes from the Apollo 11 post-landing anomaly. On that vehicle it was propellant in a helium heat exchanger; the mechanism is the same and the domain is the one that can see it coming"
+
+  - id: TCS-08-coolant-sensor-bias
+    component: loop_primary
+    mechanism: "the supply temperature transducer develops a slowly walking bias: it reads a little low, then a little lower"
+    kind: instrument
+    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_k_per_h: 0.01}
+    perturbs: [thermal.coolant_supply_c, thermal.radiator_rejection_w, thermal.coolant_return_c]
+    detection:
+      evidence: >-
+        nothing, until two channels disagree. The bias is slower than any threshold, so it
+        stays GOOD quality and the only exposure is a derived quantity that stops closing: the
+        published rejection and the measured delta-T part company
+      latency: "hours — and the correct conclusion is about the sensor, not the loop"
+      false_positive_risk: "the whole fault is false-positive-shaped. An agent that reacts to it by reconfiguring the loop has misdiagnosed a sensor as a leak"
+    response: {kind: advisory, note: "quality stays GOOD. A silently biased sensor stays GOOD until a real diagnostic catches it (apollo_diode.md:688), and the diagnostic here is redundancy, which the CSM loop lacks — so the discovery has to come from the physics not closing"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:365, :688"
+      note: "the random-walk bias mode from apollo's sensor model, applied to the channel that the whole thermal diagnosis rests on. It is the fault that punishes a fleet for trusting one number"
+
+  - id: TCS-09-bypass-valve-stuck
+    component: bypass_valve
+    mechanism: "the valve jams in its last position: a command to route through the radiator does nothing"
+    kind: discrete
+    seeding: {on_demand_p: 5.0e-4, trigger: "any bypass transition after a long cold soak"}
+    perturbs: [thermal.radiator_inlet_c, thermal.coolant_supply_c, thermal.radiator_rejection_w,
+               "thermal.zone_[id]_t_c"]
+    detection:
+      evidence: "a bypass command accepted and the loop's behaviour unchanged; the supply temperature keeps rising while the radiator's inlet does not"
+      latency: "one time constant of the loop, then the zones follow"
+      false_positive_risk: "a radiator that cannot reject because it is sunlit looks the same from the supply channel; the inlet channel separates them"
+    response: {kind: service, note: "the valve position is service state and is published as commanded rather than achieved, so the disagreement is visible rather than silent"}
+    provenance:
+      basis: chosen
+      reason: "a single-point actuator failure on the one thermal device with a large fast effect. It is the thermal analogue of the bus tie: the thing an agent reaches for first, failing in the way that is hardest to notice"
+
+  - id: TCS-10-flow-sensor-stuck
+    component: loop_primary
+    mechanism: "the flow transducer freezes at its last value: a stalled pump still reports flow"
+    kind: instrument
+    seeding: {on_demand_p: 5.0e-4, trigger: "any pump transition"}
+    perturbs: [thermal.primary_flow_l_min, thermal.pump_1_state, thermal.coolant_return_c]
+    detection:
+      evidence: >-
+        the flow never varies at all while the pump's speed and current do. A perfectly steady
+        flow reading on a pump that is demonstrably changing state is the signature, and it is
+        the same 'watch the variance, not the level' habit that catches the power domain's
+        stuck current sensor
+      latency: "until something else changes, which is the definition of an instrument fault that hides a hardware one"
+      false_positive_risk: "none from the flow channel; the discovery mechanism is entirely cross-channel"
+    response: {kind: service, note: "the flow channel acquires SUSPECT on a frozen-sensor diagnostic and only on one: the simulator's own knowledge of the fault never reaches a quality code (plant.md §7)"}
+    provenance:
+      basis: chosen
+      reason: "the worst combination in the thermal domain: an instrument fault that hides the one hardware fault the fleet is most likely to face. It is why apollo_diode.md:342's instrumentation-power chain is worth having in a domain that looks nothing like avionics"
+
+  - id: TCS-11-transport-restriction
+    component: loop_primary
+    mechanism: "a partial blockage in the loop's return run: the flow falls and the transit grows, but neither stops"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [thermal.primary_flow_l_min, thermal.loop_transport_c, thermal.coolant_return_c,
+               "thermal.pump_[n]_speed_rpm"]
+    detection:
+      evidence: "flow falling with the pump at speed and current *rising* — the pump is working harder to move less. The current-versus-flow disagreement is the whole diagnosis"
+      latency: "tens of minutes"
+      false_positive_risk: "a failing pump raises current while flow falls as well, and the speed channel is the only separation: a restricted loop does not slow the pump, it loads it"
+    response: {kind: advisory}
+    provenance:
+      basis: chosen
+      reason: "a partial failure rather than a discrete one, and the third member of the pump-fault family. The three are deliberately distinguishable by exactly one channel each — stall by speed, degradation by speed at constant command, restriction by current — because telling them apart is the skill the domain is built to require"
+
+coverage:
+
+  note: >-
+    Every thermal channel is perturbed by at least one fault above except
+    thermal.pump_1_commanded, which is a service state rather than a measurement and cannot be
+    perturbed by physics. The linter checks the rest.
+  unperturbed: [thermal.pump_1_commanded]
+  unperturbed_reason: "a commanded value is what the vehicle was told, not what happened; a fault cannot change it, and a fault that could would be a fault in the executive rather than in the thermal domain"

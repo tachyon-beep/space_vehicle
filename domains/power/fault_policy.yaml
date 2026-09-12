@@ -1,0 +1,230 @@
+# domains/power/fault_policy.yaml — what can break, what it looks like, and what the service
+# does about it without asking.
+#
+# Two rules govern this file.
+#
+# **Every fault names the published channels it perturbs.** `review-findings.md` #11: an
+# aggregate model is legitimate only if it can produce every fault signature in that
+# component's policy. A fault that perturbs nothing observable is a fault nobody can
+# diagnose, and the linter refuses one. The failure this prevents is real and quiet — a
+# lumped battery model that cannot produce a single-cell-short signature will tell an agent
+# reasoning correctly from `cell_min_v` that no cell has failed.
+#
+# **Detection is evidence, not announcement.** A fault reaches the agents only by propagating
+# through physics and instruments (`plant.md` §7). The `detection` field below says what an
+# operator could notice and how long it would take; it is not a quality code. A silently
+# biased sensor stays `GOOD`, and a degrading fuel cell does not light anything until the bus
+# voltage actually falls.
+#
+# **The service acts first where the timescale is shorter than a conversation.** The `response`
+# field distinguishes what is service-owned (protection that cannot wait for an agent) from
+# what is advisory (something an agent should decide). A local LCL does not ask whether a dead
+# short should be disconnected (`electrical_diode.md:845`).
+
+domain: power
+faults:
+  - id: PWR-01-source-regulation-loss
+    component: source_converter
+    mechanism: "the converter's regulation loop degrades: bus voltage follows load instead of holding its setpoint"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h, stress: "2x beyond the caution temperature limit"}
+    perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.load_margin_w]
+    detection:
+      evidence: "bus voltage falls further than the measured load step explains; the two buses diverge under a shared load change"
+      latency: "minutes to hours — this is the creeping fault"
+      false_positive_risk: "a genuine load step looks identical for the first few seconds, which is why it needs the second bus to disagree"
+    response: {kind: advisory, note: "an agent decides whether to move loads; the service only warns"}
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md's converter (its :248) is a real component with a >=94 % efficiency claim and no degradation model; the mechanism is the obvious failure of a regulated output and the hazard rate is apollo's noncritical baseline"
+
+  - id: PWR-02-fuel-cell-degradation
+    component: fc_1
+    mechanism: "one cell's output falls away: the stack loses a third of its capacity and its internal resistance rises"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-5, unit: per_h}
+    perturbs: [power.source_1_current_a, power.dc_bus_a_v, power.load_margin_w, res.time_to_limit_s]
+    detection:
+      evidence: "one source current falls while the others rise to hold the bus; margin shrinks before the voltage does"
+      latency: "tens of minutes at 2 Hz on the current channel"
+      false_positive_risk: "a load shed on that bus looks the same from the current channel alone"
+    response: {kind: advisory, note: "shedding is the crew's call; the service holds the bus and does not redistribute silently"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:329, :380"
+      note: "the fuel-cell half of the cryogenic chain. Apollo 13 lost all three; losing one is the same information problem at a survivable scale"
+
+  - id: PWR-03-lcl-nuisance-trip
+    component: lcl
+    mechanism: "a protection device trips on a transient that was inside its rating: an inrush the model did not predict"
+    kind: transient
+    seeding: {on_demand_p: 1.0e-4, trigger: "any load energisation with inrush_w > 300"}
+    perturbs: ["power.lcl_[n]_state", "power.lcl_[n]_current_a", power.dc_bus_a_v, power.load_margin_w]
+    detection:
+      evidence: "a load current steps to zero with no command; the bus voltage rises slightly as the load leaves"
+      latency: "one event, immediate, but easy to misread as a load the crew turned off"
+      false_positive_risk: "high — an intentional set_load off is indistinguishable on the current channel alone, and the command record is the only way to tell"
+    response: {kind: service, note: "one controlled reclose after 5 s, then latch. The reclose is service-owned because a protection device that asks permission is not a protection device"}
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:254 gives a 110-125 % limit with >200 % hard short and <=2 ms trip; a nuisance trip on inrush is the failure that turns a good load into a perceived failure, and it is the reason F-05's corroboration rule exists"
+
+  - id: PWR-04-lcl-stuck-closed
+    component: lcl
+    mechanism: "the protection device fails to open: its sensed current stops responding to actual current, so it never trips"
+    kind: latent_then_acute
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [power.bus_a_current_a, "power.lcl_[n]_current_a", power.dc_bus_a_v, power.source_1_current_a]
+    detection:
+      evidence: "bus current rises above what the enabled load list accounts for, with no LCL tripped. The overload is visible only at the bus, not at the load"
+      latency: "seconds — the highest-energy fault in the domain"
+      false_positive_risk: "low once the load accounting is right, which is why the load inventory is a published artifact rather than an internal table"
+    response: {kind: service, note: "shed the whole bus group rather than the stuck load; you cannot disconnect a breaker that will not open"}
+    provenance:
+      basis: chosen
+      reason: "the failure electrical_diode.md does not model and every protected distribution has: protection that has itself failed. It is the power-domain analogue of apollo_diode.md:342's instrumentation fault — the device that is supposed to reveal a problem is the problem"
+
+  - id: PWR-05-bus-tie-stuck-closed
+    component: csm_tie_ab
+    mechanism: "the tie contactor welds closed: the two buses cannot be separated"
+    kind: latent_then_acute
+    seeding: {on_demand_p: 5.0e-4, trigger: "tie closure into a bus that is already faulted"}
+    perturbs: [power.bus_tie_state, power.dc_bus_a_v, power.dc_bus_b_v, power.bus_a_current_a]
+    detection:
+      evidence: "a tie commanded open reports closed and the voltages stay coupled: the healthy bus's voltage sags toward the faulted one's"
+      latency: "immediate on the tie channel, but the consequence arrives before the command result does"
+      false_positive_risk: "low"
+    response: {kind: advisory, note: "the crew's problem is now load management across two buses that move together, and that is a decision, not a protection action"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:340"
+      note: "apollo's own chain: 'bus tie closed into a fault -> redundant bus becomes electrically coupled to the failed side -> loss of previously healthy loads'"
+
+  - id: PWR-06-bus-tie-stuck-open
+    component: csm_tie_ab
+    mechanism: "the tie fails to close: cross-support between buses is unavailable when it is asked for"
+    kind: latent_then_acute
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [power.bus_tie_state, power.dc_bus_a_v, power.dc_bus_b_v, power.load_margin_w]
+    detection:
+      evidence: "a tie command is accepted and the tie does not close; a subsequent single-bus failure has no cross-support"
+      latency: "the fault is instantaneous and the consequence may be hours later, which is exactly the latent class"
+      false_positive_risk: "the tie interlock refusing closure for a legitimate dV reason looks identical on the state channel"
+    response: {kind: service, note: "the interlock would have refused anyway on dV; what the service does is keep reporting the position as it actually is"}
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:341 makes the tie a controlled element with a dV condition; the stuck-open failure is what makes the redundancy a claim rather than a fact"
+
+  - id: PWR-07-battery-capacity-derate
+    component: battery_lm_descent_1
+    mechanism: "battery capacity derates with temperature: the same charge delivers less, and the SOC estimate does not know"
+    kind: continuous_degradation
+    seeding: {coupled_to: TCS-*, trigger: "battery zone temperature above 318 K"}
+    perturbs: [power.battery_soc_pct, power.battery_temp_c, res.battery_energy_wh, res.time_to_limit_s]
+    detection:
+      evidence: "the published SOC estimate and the actual delivered energy part company; the estimate is the thing that is wrong, so the evidence is a load that lasts less long than predicted"
+      latency: "hours — and it is discovered by a plan failing rather than by a channel moving"
+      false_positive_risk: "the estimator's own bias is indistinguishable from the derate, which is the point: this is where an inferred quantity is wrong without any sensor having failed (apollo_diode.md:38)"
+    response: {kind: advisory, note: "nothing to protect; the fleet must notice that its plan was built on a number that drifted"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:341"
+      note: "apollo's chain 'radiator isolation / poor attitude -> heat rejection falls -> battery/electronics temperatures increase'. This edge has a ZERO nominal sensitivity and a non-zero crisis one (coupling.yaml E-PLATE-BAT), which is why the fidelity closure must be evaluated at the crisis point"
+
+  - id: PWR-08-contactor-dropout
+    component: csm_bus_b
+    mechanism: "bus voltage sags below the contactor hold threshold: a running motor's contactor opens, and the load is gone until the bus recovers"
+    kind: transient
+    seeding: {on_demand_p: 1.0e-4, trigger: "bus voltage below 24.5 V for more than one tick with the pump energised"}
+    perturbs: [power.dc_bus_b_v, power.bus_a_current_a, thermal.pump_1_commanded,
+               thermal.primary_flow_l_min, thermal.coolant_return_c]
+    detection:
+      evidence: "pump commanded true, pump current zero, coolant flow falling, and no LCL trip. The corroboration is that the electrical channels are innocent of the thermal consequence"
+      latency: "seconds on the flow channel, tens of seconds on the coldplate"
+      false_positive_risk: "low, and this is the one fault where the three-way disagreement is the diagnosis"
+    response: {kind: service, note: "the contactor re-closes when the bus recovers; the service does not hold the load off, because a coolant pump that stays off is worse than one that chatters — which is exactly the reasoning review-findings.md #7's hysteresis simulation puts numbers on"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:331, :1144-1156"
+      note: "THIS is the flagship chain: 'high-gain amplifier switched on during a weak-bus condition -> electrical load step -> voltage sag -> marginal pump/contactors drop out -> thermal rise'. The amplifier is never the root fault; it is the trigger that exposes a latent one"
+
+  - id: PWR-09-instrumentation-bus-loss
+    component: lcl
+    mechanism: "the instrumentation feed's protection opens and does not reclose: a group of channels goes dead together"
+    kind: discrete
+    seeding: {hazard: 2.0e-5, unit: per_h}
+    perturbs: [avionics.instrumentation_power_w, avionics.telemetry_frame_sync,
+               avionics.oldest_sample_age_ms, "power.lcl_[n]_state"]
+    detection:
+      evidence: "a correlated group of channels stops updating at once, with the frame-sync and oldest-sample-age channels confirming that the silence is real rather than a quiet vehicle"
+      latency: "immediate, and the failure is that the agents lose the ability to see anything else"
+      false_positive_risk: "a real vehicle with nothing happening looks similar; the age channel is what separates them"
+    response: {kind: service, note: "nothing. This is the fault whose correct response is to make the loss of evidence visible rather than to restore the feed"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:342"
+      note: "apollo's 'instrumentation power fault -> selected channels freeze or drop out -> false confidence or inability to diagnose another fault'. It attacks the experiment rather than the mission"
+
+  - id: PWR-10-high-resistance-joint
+    component: lcl
+    mechanism: "a connector's resistance creeps upward: voltage drop grows slowly, load by load"
+    kind: continuous_degradation
+    seeding: {hazard: 2.0e-4, unit: per_h}
+    perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.load_margin_w]
+    detection:
+      evidence: "the bus sags a little more each day at the same load, and the sag is not explained by any single load's current"
+      latency: "days — the slowest fault in the domain, and the one a short run cannot see"
+      false_positive_risk: "converter degradation produces the same signature; separating them needs the load-resolved currents"
+    response: {kind: advisory}
+    provenance:
+      basis: chosen
+      reason: "the creeping electrical fault worth having: it is what makes the multi-day horizon of the endurance harness mean something, and it is invisible to every threshold that watches only magnitudes"
+
+  - id: PWR-11-ground-fault
+    component: csm_bus_a
+    mechanism: "a hard short to structure: bus voltage collapses, current spikes, the upstream protection opens"
+    kind: discrete
+    seeding: {on_demand_p: 1.0e-4, trigger: "any bus with a pre-existing high-resistance joint"}
+    perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.bus_tie_state,
+               "power.lcl_[n]_state", power.load_margin_w]
+    detection:
+      evidence: "voltage collapse with a current spike, an LCL trip and a breaker state change, all inside a second"
+      latency: "instantaneous; the interesting number is not the latency but the order the channels move in"
+      false_positive_risk: "low"
+    response: {kind: service, note: "protection opens first and reports afterwards. A local LCL does not ask whether a dead short should be disconnected (electrical_diode.md:845)"}
+    provenance:
+      basis: chosen
+      reason: "the fast fault that makes the sub-tick event queue necessary: a >=200 % hard short trips in <=2 ms (electrical_diode.md:254), which is a tenth of a tick, so it cannot be evaluated on the tick boundary at all (plant.md §5)"
+
+  - id: PWR-12-source-current-sensor-stuck
+    component: fc_2
+    mechanism: "the source current transducer sticks at its last value: the source looks steady while its output is not"
+    kind: instrument
+    seeding: {on_demand_p: 5.0e-4, trigger: "any degraded source on the same bus"}
+    perturbs: [power.source_1_current_a, power.load_margin_w]
+    detection:
+      evidence: "a current that never varies at all: real currents breathe with the load, and a perfectly steady one is the signature"
+      latency: "long — until a load change that should have moved it does not"
+      false_positive_risk: "low if the fleet watches variance rather than level, which is a habit worth discovering"
+    response: {kind: service, note: "the channel acquires SUSPECT on a frozen-sensor diagnostic only; the simulator's own knowledge of the fault never reaches a quality code (plant.md §7)"}
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:661-671"
+      note: "the 'stuck value' mode from apollo's eleven sensor faults, applied to the channel that the source-degradation diagnosis depends on — a sensor fault that hides a hardware fault is the most expensive combination in the domain"
+
+# --------------------------------------------------------------------------------------
+# Coverage. The rule from review-findings.md #11, applied by hand so the linter's version of
+# it has something to check against.
+# --------------------------------------------------------------------------------------
+coverage:
+
+  note: >-
+    Every channel this domain publishes is perturbed by at least one fault above, except the
+      two battery level channels, which are perturbed only indirectly through PWR-07. That is
+      the honest state: a battery that fails in a way that is not thermal has no signature in
+    this policy, and inventing one would be inventing a mechanism rather than modelling one.
+  unperturbed: [power.battery_soc_pct, power.battery_temp_c]
+  unperturbed_reason: >-
+    battery_temp_c is an input from the thermal domain rather than a power-domain state, and
+    battery_soc_pct is an estimate of a stock whose failure modes (capacity loss, rate
+    limitation) are not yet modelled. Declared rather than papered over.

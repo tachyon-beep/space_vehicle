@@ -1,0 +1,1506 @@
+# vehicle/
+
+The seed of the vehicle — the far side of the window that `space_chassis` deliberately does
+not contain. It lives here because the separate repository `integration/simulator-design.md`
+§2 decides on does not exist yet; when it does, this folder moves wholesale.
+
+The corpus in the parent folder describes **what a domain reports and accepts**. It does not
+describe what a domain *does*: there is no mass, no inertia, no thrust, no Isp, no mission
+duration and no integrator anywhere in sixteen thousand lines (`integration/corpus-review.md`
+§3 and §6). This folder is where those things are written down once, with their provenance
+attached, so that a plant can be built against them and a run can be interpreted afterwards.
+
+| File | What it is |
+|---|---|
+| `plant.md` | The core contract: what `step()` is, the six integrator classes, determinism, the event queue, and what the plant may never do. |
+| `vehicle.yaml` | Globals: the frame registry and the four scalar conventions, environment, configurations and their mass closure, propulsion, consumable loads, thermal zones, antennas. |
+| `mission.yaml` | The profile: eight phases summing to 192.0 h, the ten-posture execution machine, the freshness manifest, the derived lunar occultation, MET epoch, crew, the Δv budget, objectives, the three scenario postures. |
+| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, six declared cycles and the fifteen failure chains. The linter derives the 39-node tick order from it. |
+| `presentation.yaml` | The vehicle's side of the frozen window: the epistemic mapping, the six files, the frame envelope, the mirror and its bound, the ring's cadence classes, and which of `diode_probe.py`'s twelve checks the configuration satisfies. |
+| `channels.yaml` | The point dictionary: 146 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound. |
+| `domains/<name>/` | One landed subsystem: `components` · `points` · `profiles` · `commands` · `fault_policy`. |
+| `tools/check_vehicle.py` | The linter. `--order` prints the derived 39-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
+| `tools/generate_help.py` | Emits the vehicle's `HELP.md` from the command registries — §8's only place a verb name may appear, so it is generated rather than written. |
+| `tools/plant.py` | A **reference plant**: loads the world from the configuration, builds the tick order, emits a frame, and runs until it reaches something it cannot compute — where it names what is missing instead of guessing. `--readiness` prints the build order. |
+
+## Running the linter
+
+```sh
+python3 tools/check_vehicle.py            # report; exit 0 even with declared debts
+python3 tools/check_vehicle.py --strict   # exit 2 if anything needed is unfilled
+python3 tools/check_vehicle.py --order    # the derived tick order, dependencies first
+python3 tools/check_vehicle.py --phases   # the verbs by phase, in place of the deleted list
+
+python3 tools/plant.py --readiness        # the build order: ready, blocked, and by what
+python3 tools/plant.py --frame            # one telemetry frame in the declared shape
+python3 tools/plant.py --state            # one state.json: the mirror and the capability snapshot
+python3 tools/plant.py --crew             # who is at which station, and which phases cannot say
+python3 tools/plant.py --state --closed-gate reserve_floor_water_cooling_enable
+python3 tools/generate_help.py            # HELP.md, from the command registries
+
+# the adversary: 118 declared faults, scheduled from the domains' own hazard rates
+python3 tools/faults.py --seed 20260912                     # the nominal run's fault schedule
+python3 tools/faults.py --seed 20260912 --posture crisis    # x10 hazard, x20 demand, one placed
+python3 tools/faults.py --seed 20260912 --posture degraded  # x5, and one latent primary placed
+python3 tools/faults.py --check                             # adding a fault moves no other's events
+python3 tools/faults.py --list                              # every fault, its kind and its seeding
+
+# the vehicle's side of the frozen window, and the repository's own instrument against it
+python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --init
+python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --cycles 300 --poll 0.2
+python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll-seconds 1
+```
+
+It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
+standard library only.
+
+Current state: **composes, with 220 declared debts.** A debt is reported and is fatal under
+`--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
+
+- a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
+  under `--strict`
+- a name that is not in the canonical vocabulary (`../integration/reconciliation/02-canonical-vocabulary.md`)
+- a channel referenced but not registered; a channel registered twice or under another
+  domain's prefix
+- **a claim quantity** — any channel matching `reserved|allocated|committed|available_to_new`
+  (D-04: declining the feature and permitting the field names would be a decline in name only)
+- **a crew readout a position cannot perceive**, and a `crew.location_[id]` whose vocabulary is
+  not exactly the `crew_positions` list (D-06: the perception bound is one bound written in two
+  files, and drift between them is invisible in both)
+- an edge, cycle or failure chain that refers to something that does not exist
+- a cycle with no back-edge, or a delay with no back-edge to carry it
+- a conservation edge whose two ends are in different dimensions, **whose ends have no dimension
+  the linter can look up at all**, **whose sensitivity is unset**, or **which carries anything
+  other than one for one** — conservation is one quantity travelling, so there is nothing to
+  configure and no ratio to choose. The four clauses arrived together: the dimension lookup
+  returned nothing for six of the node units, and the old `if a and b` guard then skipped the
+  check entirely, which is how `E-ATM-ABSORB` spent its life asserting that cabin carbon dioxide
+  is *conserved* into absorbent man-hours while `E-PRESS-PROP` asserted a bladder pressurant is
+  conserved out of a tank it never leaves. A check that cannot run is not a check that passed, so
+  an undecidable conservation edge is a refusal now and the fix is to stop calling it conservation.
+  A node holding several quantities at once — a cabin holds four gas masses *and* the pressure
+  they make together — declares which of them it can receive a conservation of, in `conserves:`
+- a `chosen` value with no reason, a `derived` value with no relation, a `historical` value
+  with no source, an `apollo` value with no reference
+- a mass breakdown that does not sum to its stated total
+- a mission whose phase durations do not sum to its total, or that names a configuration
+  `vehicle.yaml` does not declare
+- **an engine whose tank cannot fly its Δv budget**, or that carries more propellant than its
+  declared margin
+- a discrete state with no protection against oscillating: an inverted hysteresis, a commanded
+  machine with no dwell, or a **one-way state with no arming step**
+- a command that names no interlock, or a fault that perturbs no published channel — the second
+  is `review-findings.md` #11's coverage rider made checkable, since a fault nobody can observe
+  is a fault nobody can diagnose
+- **an interlock that resolves to no threshold** — in this domain, or dotted into one that has
+  none. A verb that declares a guard which cannot be looked up is a guard that is never
+  evaluated, and three domains shipped one
+- **a verb with no argument schema**, because `capability.snapshot` is what a machine reads to
+  build a call and an empty schema is a wrong answer rather than a missing one. Six domains had
+  their schema keys one level too shallow under an empty `argument_schema:`
+- **a forbidden verb form** — `fire_thruster`, `open_valve`, `set_minimum_pulse_width`,
+  `write_body_rate`, `disable_watchdog`, `clear_fault…`, `request_momentum_dump` and their
+  relatives, by pattern rather than by name, so a domain cannot acquire one later
+  (`rcs_dode.md:369-380`; the same reasoning as D-04's forbidden channels)
+- **a declined verb with no verb or no reason** — a refusal list whose entries can be silently
+  swallowed by an over-indented line is a refusal list that lies about what the vehicle lacks.
+  Six entries across two domains had been absorbed into the previous entry's prose
+- **a key written twice in one mapping** — PyYAML lets the last win, which makes it the quietest
+  structural fault in the format, and it is the *signature* of the absorbing failure above: the
+  absorbed item's keys collide with the entry that swallowed it. 49 were found across five files,
+  and they had cost two cycles and 21 point entries
+- **a registered channel nothing publishes** — no domain point, no frame field and no entry in
+  `presentation.yaml#plant_published`. Every other check runs from a name *to* the registry, and
+  this is the one that runs back; without it 27 channels had no producer
+- **a residual cycle in the schedule** — the declared back-edges do not break every loop, so the
+  total order `plant.md:71` promises does not exist. This found two undeclared cycles
+- **a cycle that does not close** — a declared back-edge whose `to` cannot reach its `from`
+  through the cycle's other members, which reads as a decision and changes nothing
+- **a node advanced by several states with no declared order** — ten nodes are in that position,
+  and the frozen lexicographic tiebreak decides them all. It gets `link` wrong: `link_snr` sorts
+  before `tx_power`, and transmit power is a term in the link budget
+- **a point whose `from` exists nowhere** — a source that resolves to no state and no coupling
+  node silently skips the enum binding, and it hid the vehicle's longest-surviving duplication:
+  `eclss.cabin_temp_c` and `thermal.zone_csm_cabin_t` were one cabin temperature published twice,
+  because the two points named their sources differently. Also refuses a point that reads another
+  domain's state directly, which bypasses the edge meant to carry the value
+- **a declared event with no class, or an `alarm` nothing implements** — the dictionary's `events`
+  field is apollo's prose and the thresholds are the machine-readable form of the same promises,
+  and nothing joined them. The audit found 53 of 118 channels promising events no threshold
+  watched; a `realised_by` class names the threshold that keeps the promise when it lives on
+  another channel
+
+## Provenance
+
+Every value that matters carries one of five classes, and the linter refuses a claim without
+support:
+
+| Class | Meaning |
+|---|---|
+| `apollo` | Anchored to a claim or channel in `apollo_diode.md`. Carries the line. |
+| `historical` | A published figure about the real vehicle, outside the corpus. Carries a source. |
+| `derived` | Computed from other values here. Carries the relation, so the linter can re-derive it and disagree. |
+| `chosen` | Picked to make the simulation run. Carries a reason. |
+| `UNCONFIGURED` | Needed and unset. **Fails the build under `--strict`, naming what wants it.** |
+
+`historical` is not one of the design's original three classes (`simulator-design.md:151-156`)
+and it earns its place: the corpus contains no masses, so the figures that make this a vehicle
+at all come from published sources about the real one. Marking them `chosen` would hide that
+they are checkable; marking them `apollo` would be a lie.
+
+## What composes today, and what does not
+
+**Composes.** Mass closure for all four configurations — CSM 28,807 kg, LM 15,278 kg, docked
+44,085 kg, ascent stage alone 4,888 kg — every breakdown summing to its stated total. The
+rocket equation closes for all three engines, flown sequentially in phase order through each
+tank, with the reserves the real vehicle had:
+
+| Engine | Spends | Tank | Reserve |
+|---|---:|---:|---:|
+| SPS | 16,387 kg | 18,508 kg | 12.9 % |
+| LM descent | 7,677 kg | 8,248 kg | 7.4 % |
+| LM ascent | 2,265 kg | 2,376 kg | 4.9 % |
+
+The SPS reserve is why a lunar-orbit contingency is survivable at all, and the LM descent
+reserve is the resource a crew spends when it redesignates a landing site — Apollo 11 spent
+most of it. The linter's SPS figure is 4 % above the flight-measured 15,727 kg (531.9 s of
+SPS firing), which is the expected error from not modelling thrust build-up and tailoff; the
+direction of that error is stated in `check_propulsion` rather than tuned away.
+
+146 channels resolve against the failure chains' clues and the crew perception bound. The phase
+ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
+pricing is now derived from a phase list rather than assumed.
+
+**All eleven domains have landed** — 146 channels, 119 states over 42 nodes, 140 thresholds, 58
+verbs and 118 classified events across the eleven directories, with 220 declared debts and every
+one of them named. That completes the design's spike many times over (`simulator-design.md:113`
+asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
+well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
+
+Two counts, and the difference is deliberate. The **220** is every obligation the linter can name,
+prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
+debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
+the crisis gains, the source resistance, the missing pack-voltage state, and the missing
+charging efficiency). The **183** the plant
+reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
+differ by exactly the obligations that are not yet a field anywhere. Counting the graph's seven
+took them from being read by nobody to being refusals under `--strict`, which is where a debt that
+is only displayed stops being a debt.
+
+`domains/power/` carries a 25-load inventory with inrush currents and shed classes, nine
+states with their integrator classes, thirteen thresholds, five verbs and twelve faults. Two
+things in it are worth reading rather than skimming:
+
+- **The load-shed ladder is re-anchored.** `review-findings.md` recommends generalising
+  `electrical_diode.md:814-890` as the hysteresis template, and it cannot be used as written:
+  that ladder fires DEGRADED at `<25.5 V` while apollo fires an *event* at `<26.5 V for 0.5 s`.
+  `domains/power/profiles.yaml` puts apollo's threshold at the top of the ladder and the shed
+  tiers below it, each with a recovery gap wider than the load step it restores.
+- **Every fault names the channels it perturbs**, which is `review-findings.md` #11's
+  fault-coverage rider made checkable: the linter refuses a fault that perturbs nothing
+  observable, because such a fault cannot be diagnosed.
+
+`domains/thermal/` pays the debt `thermal_diode.md:965` created when it refused to infer a
+single TCS constant. Eleven states, eighteen thresholds, five verbs, eleven faults — and the
+parameters are **derived** wherever a published geometry plus a standard material property
+determines them, with the relation stated so the linter can disagree:
+
+- **The cabin's time constant is 2,880 s, and the air is not why.** The cabin holds 2.4 kg of
+  air at 5 psia, which is 0.5 % of the lumped thermal mass; a bare-air model would have a time
+  constant of seconds and be wrong by three orders of magnitude.
+- **The transport delay is 1,042 s** — 25 litres of coolant at the published 200 lb/hr. That
+  delay is the difference between "the pump stalled just now" and "the pump has been degrading
+  for an hour", and a lumped RC network cannot express it at all.
+- **A sunlit radiator absorbs 2,477 W against its own 2,588 W rejection capacity.** That
+  derivation is what makes F-13 (`apollo_diode.md:341`) a physics chain rather than a scripted
+  event, and it is why attitude is a thermal command surface.
+
+
+`domains/structure/` is the sixth, and it exists to fill a hole the corpus left: conflict C-13.
+`events_diode.md` is labelled "Structural, Pressure, and Sequential Events" and contains **no**
+staging, pyro, hatch, docking, jettison, latch or separation event — the words occur zero times —
+while describing modal and spectral health monitoring that `apollo_diode.md:753` explicitly rules
+out. So the taxonomy is authored rather than extracted. Eight states, eleven thresholds, six
+verbs, eleven faults, and a five-entry **one-way event taxonomy** that records each irreversible
+action with its predecessor configuration, its consequence in terms of what the vehicle *becomes*,
+and the channels that would reveal the change.
+
+The domain also forced a third protection mechanism into the schema. Every other discrete state
+is protected against oscillating — a comparator latch needs hysteresis, a commanded state machine
+needs dwell. **A one-way state cannot oscillate, because it cannot be re-entered.** What it can do
+is happen by accident, and the only protection against that is the two-step. So `one_way` states
+must declare `requires_arm: true`, and the linter refuses one that does not — which is
+`apollo_diode.md:167-170` made mechanical. Three states carry it, and `arm_event`/`execute_event`
+are the vehicle's only two-step verbs (C-16: a burn is interruptible, so requiring arm/commit for
+one adds a delay rather than a safety).
+
+`domains/eclss/` is the fifth, and the one where a fault has minutes rather than hours.
+Twelve states — four conserved gases in each of **two** compartments — thirteen thresholds, six
+verbs, eleven faults. Three things in it are worth reading:
+
+- **The atmosphere is modelled as gas masses, not as a pressure.** Pressure is `nRT/V`, so a
+  cabin that heats up gains pressure without gaining gas. A leak diagnosis built on a pressure
+  state alone reads every thermal transient as a mass loss, and this vehicle has thermal
+  transients by design. The conserved quantities are oxygen, diluent, CO₂ and water vapour, and
+  `E-ZONE-ATM` is the edge that makes the thermal coupling physical.
+- **A band that had to be derived.** The cabin is 4.8–5.2 psia of essentially pure oxygen, so
+  ppO₂ is **248–269 mmHg**. The registry carried 140–180 — the value a mixed atmosphere at
+  14.7 psia gives — and the correction matters because the failure modes are opposite: 140 is
+  hypoxic and 269 is the fire risk that killed the Apollo 1 crew. No range check would have
+  caught it; a fire-risk threshold does.
+- **Two compartments, because the mission has two.** The crew live in the CSM from translunar
+  coast to undocking and in the LM from undocking to docking, and the atmospheres cannot
+  equalise in between. Which one is crewed is a mission-phase fact, so it comes from
+  `mission.yaml` rather than from the domain.
+
+`domains/propulsion/` is the fourth: ten states including three engine state machines with
+minimum on and off times, eleven thresholds, six verbs, eleven faults. It is the domain where
+the mission's Δv stops being a budget and starts being spent, and it closes conflict C-12 —
+`prop.accumulated_dv_m_s` had no producer and no consumer until `set_burn_cutoff` and
+`prop.cutoff_mode` existed. Two things in it are worth reading:
+
+- **The interlock that is unique to the vehicle.** `dps_throttle_band` refuses a throttle
+  command inside the descent engine's 65–92.5 % *non-operating* region. Every other interlock
+  protects against a consequence; this one protects against a command that is **meaningless**,
+  and an agent that commands 80 % is not being lied to by the vehicle but by its own model.
+- **The fault that corrupts its own diagnosis.** PRP-01 is a feed-pressure sensor stuck high.
+  The thrust estimate is partly *derived* from feed pressure, so the stuck sensor corrupts the
+  quantity that would reveal it — `apollo_diode.md:336` — and the corroboration has to come
+  from an accelerometer outside the domain.
+
+`domains/consumables/` is the third and the most consequential, because it is where the
+experiment's two structural decisions become code:
+
+- **The ledger pair is three channels, not one number.** `Δ_recon = observed − ledger` is
+  published *with both of its terms*, because a residual alone is a diagnosis and
+  `design.md:211-214` forbids publishing those. It is how a slow leak first becomes visible:
+  the leak runs for hours below any sensor's precision, and the ledger is the only thing with
+  the resolution to notice.
+- **D-04 is a build refusal, not a paragraph.** The claims lifecycle is declined because a
+  published reservation is a deconfliction primitive, and `design.md` §8 refuses to supply one.
+  The corpus's schema makes `reserved`, `allocated`, `committed` and `available_to_new`
+  *required* fields — and `available_to_new` is exactly the aggregate other agents' claims
+  leave behind. So the linter now refuses any channel matching those names, and there is a test
+  that adds one back and watches it fail. Declining the feature without forbidding the fields
+  would have been a decline in name only.
+- **CNS-06 and CNS-11 are information faults, not leaks.** One is `apollo_diode.md:1174`'s
+  crisis opening — a quantity sensor that "occasionally reads suspiciously high", invisible for
+  hours. The other is a ledger drift with no physical cause, which produces *exactly* the slow
+  leak's signature. Telling them apart needs a third source or a reasoning step, and a fleet
+  that learns to ignore residuals will miss the one that is real.
+
+The consumables domain also forced a linter fix worth recording: a concrete channel name did not
+resolve against a registered template, so `res.recon_o2_kg` was refused against
+`res.recon_[resource]_kg`. The first version of the rule quietly refused every residual the
+domain published — a check that was too strict in a way that would have looked like a missing
+feature rather than a broken rule, which is the failure mode a linter is least likely to
+surface on its own.
+
+The thermal domain also forced a correction to `plant.md`: it needed a transport delay, which
+is not one of the six methods I had written down. A lag forgets its history exponentially and a
+delay *is* its history, so there is now a seventh class — and the linter refused the state by
+name rather than letting it default into a lag with a long time constant. That is the mechanism
+working.
+
+`domains/rcs/` is the eighth, and it is the domain where the corpus's best document had to be
+argued with rather than ported. `rcs_diode.md` is the strongest engineering artifact in the
+sixteen thousand lines and its central claim is architectural (`:9`): **expose RCS/ACS as a
+trusted attitude-and-wrench execution service, not as a remote thruster-firing bus.** Thirteen
+states, ten thresholds, nine verbs, eleven faults, and three things in it are worth reading:
+
+- **The vehicle's one unpublished constant, bounded instead of guessed.** No source reached gives
+  a minimum firing time for the 100 lbf thruster — the only figure in the corpus is a Voyager
+  anecdote its own text flags as hardware-specific. `rcs_dode.md:800-825`'s residual accumulator
+  is what makes that survivable: unexecuted impulse stays in `r_i` until it exceeds the qualified
+  threshold, so the **mean** delivered impulse is preserved whatever the constant is and the error
+  is unbounded in *phase* rather than in magnitude. RCS-11 is the case that is not benign — the
+  accumulator grows, every pulse is refused as illegally short, and the thruster stops complying
+  with no valve fault, no switch disagreement and no health conclusion. It is why
+  `rcs.thruster_[n]_residual_ns` is a published channel: without it, an unknown constant produces
+  a silent failure instead of a bounded one.
+- **Two questions apollo's RCS channels cannot answer.** apollo's seven points all say what the
+  thrusters are *doing*. They cannot say whether the vehicle can still do what it is about to be
+  asked, which is what `rcs_dode.md:722-727` requires be published — the allocation residual, the
+  control-authority margin, the allocation status. `constrained` is the value that justifies the
+  exercise: the request was met, the actuator set is smaller than the design assumes, and nothing
+  has failed yet. It is the band between the allocator's assert and clear boundaries, so the
+  three-value enum and the two-band latch are the same object.
+- **Nine verbs, and eleven the vehicle refuses to have.** The boundary is drawn at *effects*:
+  `request_translation` takes a Δv, a window and a propellant ceiling and the service picks the
+  jets, because `rcs_dode.md:735` is explicit that a translation request is not synonymous with
+  firing a labelled jet. The refused list is the architecture stated negatively, and
+  `set_minimum_pulse_width` is the most interesting entry: a fleet that could set it would be
+  choosing how finely it is allowed to command pulses the hardware is not qualified for. The
+  linter now refuses those forms by pattern, so no future domain can acquire one by writing a
+  plausible verb.
+
+Four prunings came with it, and they are as load-bearing as the additions. **C-15: attitude is
+RCS only** — `apollo_diode.md:52` has no reaction wheels, no CMGs and no magnetorquers, so the
+whole momentum-management apparatus goes: `request_momentum_dump`, the dump controller, the
+80/90/95 % wheel thresholds, the `HYBRID_WHEEL_RCS` profile and the two wheel faults in the spec's
+own FDIR table. A wheel-saturation alarm on a vehicle with no wheels is an alarm about hardware
+that is not there. The other three are smaller and are recorded in the domain header: Pa-absolute
+feed pressures (C-17), duplicate bus and zone channels, and the spec's nine-mode control ladder —
+which vocabulary §4 had already ruled on, because `ATT_HOLD` and `TRACK` are *targets* and not
+modes, so "what am I pointing at" is an argument and the mode enum says only who is flying.
+
+Landing it also closed a coupling debt and sharpened another. `E-RCSP-RCS` had been UNCONFIGURED
+while Isp was unset; Isp arrived with the Apollo 11 tables and `thrust = ṁ · Isp · g₀` is a
+definition, so the sensitivity is **2843.9 N per kg/s** and the debt is retired. `E-GNC-RCS` stays
+open and is now precise about why: the allocator does not map a radian to a valve, it maps a
+wrench through `B = [Fᵢdᵢ ; rᵢ × Fᵢdᵢ]`, so what that edge needs is forty-four thrust directions and
+lever arms plus the inertia tensor — one artifact, and the same one `E-RCS-DYN` is waiting on.
+
+`domains/crew/` is the seventh, and it is the one that decides what the experiment actually
+measures. It carries no physics at all: five states, ten points, nine thresholds, four verbs,
+seven faults. What it carries is the **display contract** — the third argument of
+`review-findings.md` #4's perception function, `(full_truth, crew_position, display_contract) →
+perceivable_subset`, which the design claimed `crew_diode.md` supplied and which that document
+does not contain (`crew_diode.md:42`: display topology was not supplied). Three things in it are
+worth reading:
+
+- **The bound is exact, and that is the whole point.** Seven positions, each with a `perceivable`
+  list, a `cannot_see` list, panels with a `displayed_precision` per readout, and the human
+  channels that have no gauge at all — a bang, a smell, a draught, frost. A bound that is merely
+  *approximate* produces crew reports that are sometimes impossible, and an impossible report
+  teaches a fleet to distrust the crew instead of teaching it to cross-check them. So the linter
+  refuses a panel readout the position cannot perceive, in either direction.
+- **They can be wrong without being broken.** `simulator-design.md:383-385` is explicit that a
+  crew member who says "it's cold in here" when the coldplate is fine is a person in a draught,
+  not a biased transducer, and that this is a different epistemic class from `SUSPECT` quality.
+  So the seven faults in `fault_policy.yaml` are weighted misheard (0.4), misattributed (0.3),
+  forgot (0.2) — and **nothing ever attaches a quality code to a crew report**, because a quality
+  code would be the vehicle answering the question the fleet is supposed to answer.
+- **One of the seven is not a fault at all.** CRW-05 is a fleet asking the LM commander about the
+  CSM's cabin pressure. The answer is "there is no readout for that in this module" — correct
+  behaviour, listed as a fault because the alternative, a GM that answers anyway, is the leak
+  D-06 exists to prevent. It is the control case that proves the bound holds.
+- **`ask_crew` is safe because of four properties, not because of a filter.** The reply is drawn
+  from the position's perceivable subset (never the truth), the wrongness model perturbs a value
+  the position could really have read, the work costs mission time, and the same question asked
+  twice can get two different answers. A dialogue surface with none of those is a truth channel
+  wearing a crew uniform.
+
+**Where the numbers come from.** Masses, propellant loads, consumable loads, thrusts and loop
+parameters are `historical`: Apollo 11 mission-report and Apollo Program Summary Report
+figures, with the two traps that pass surfaced recorded in `vehicle.yaml`'s header — the
+Rockwell press-kit SM dry mass does not close against flown weights, and the widely repeated
+LM descent-engine Isp of 311 s traces only to Wikipedia where NASA's design requirement is
+305 s. Everything else is `chosen` with a reason or `UNCONFIGURED` with a name attached to it.
+
+**Does not compose, and is declared rather than defaulted.**
+
+- **Inertia tensor and centre of mass.** The mission report tabulates c.g. and inertia per
+  phase, but the axis datum lives in the CSM/LM Operational Data Book, which is not reachable,
+  so the tabulated values cannot be converted to physical offsets. `rcs_diode.md:119-121`
+  names both as Unknown and says what they block. Without them the vehicle cannot tumble and
+  the attitude loop has no gains. Landing `domains/rcs/` split this into two named unknowns:
+  the inertia, and the forty-four thrusters' geometry — each unit thrust direction and lever arm,
+  which is what the allocator's wrench matrix is built from. `E-RCS-DYN` and `E-GNC-RCS` are both
+  waiting on the pair.
+- **Thermal node heat capacities and conductances.** `thermal_diode.md:965` declares every
+  thermal constant UNSPECIFIED and refuses to infer them, so the thermal edges have no `tau`
+  and the thermal domain cannot be integrated. This is the largest single debt.
+- **LM sublimator rejection and water consumption.** Genuinely unpublished, and it is half of
+  the thermal water budget.
+- **RCS minimum impulse bit and minimum qualified firing time, for all three systems.** Not
+  published anywhere reachable, and no longer a hole with no shape: the residual accumulator
+  bounds the consequence to zero mean error and unbounded phase error, and RCS-11 names the one
+  case that is not benign.
+- **Fuel-cell reactant consumption per kWh.** The sustain-flow figure is a standby rate, not a
+  per-kilowatt rate, so the O₂-to-power coupling cannot yet be closed exactly.
+- **The plant.** No document names an integrator. `../integration/reconciliation/01-conflict-register.md`
+  D-09 adopts `review-findings.md` §5's method split by model form; writing it is the next artifact.
+- **The crew display contract, as a design rather than a transcription.** `crew_diode.md:42` says
+  display topology was not supplied, so `domains/crew/components.yaml#display_contract` is
+  `chosen` and is owed a review against the real module geometry — which panels are where, and
+  whether a seated crew member can read the ones it claims. The *bound* it draws is checkable
+  now and the linter checks it; the *layout* is an authoring decision and is not.
+- **No domains.** All eleven have landed. What remains is not a domain: it is the **plant**,
+  and it is the largest single thing left. Every domain now declares states with methods, edges
+  with sensitivities and faults with signatures, and none of it has been integrated once — the
+  declared debts are the plant's shopping list, and `plant.md` is the contract it will be
+  built against. The order to build it in is the order the design already chose
+  (`simulator-design.md:113`): dictionary and linter, a spike on electrical, thermal and
+  consumables, then outward.
+- **Two of six orbital elements, and a published figure that cannot arrive.** The initial state
+  vector was the vehicle's largest debt for several rounds. Solving it turned up **conflict C-24**:
+  the three published figures from `A11 Tbl 7-II` — 25,562 ft/s in the parking orbit, 35,546 ft/s
+  after cutoff, a 9,984 ft/s difference — are mutually consistent and describe a trajectory that
+  **does not reach the Moon**. 10,834.4 m/s from a 185 km orbit gives an apogee of 188,812 km, and
+  it is not a timing problem: a minimum-energy Hohmann transfer needs 10,928.2 m/s, so the published
+  speed is 93.8 m/s *slower than the cheapest trajectory that arrives at all*. The 73-hour transit
+  wins, because the phase ladder and the LOI budget depend on it, and the transfer that arrives in
+  73.0 h has **a = 254,545 km, e = 0.974216, apogee 502,526 km and a cutoff speed of 10,949.8 m/s**.
+  Four of the six elements are now determined and `check_trajectory` re-derives all four, refusing
+  an initial state whose apogee is short of the Moon. The other two need one datum rather than a
+  design: a **lunar ephemeris at the arrival epoch**, because the transfer plane is fixed by where
+  the Moon is at MET 73 h. The landing site is unset for a different reason — `apollo_diode.md:1206`
+  argues against a site whose history is recognisable, so it should be chosen rather than inherited.
+
+## Closing a coupling, and the three ways the request turns out to be wrong
+
+An edge in `coupling.yaml` carries a `sensitivity` and, until it is filled in, an `UNCONFIGURED`
+value with a note saying what it wants. Forty-two of the fifty-five have been closed. What the
+last stretch taught is that roughly a third of the *asks* were malformed, and in three distinct
+ways — which matters because the instinct on finding an unset value is to go and find the number.
+
+**The unit asked for a coefficient that the architecture does not have.** `E-FC-BUS` wanted
+"V per W" — a droop slope from fuel-cell power to bus volts. But `electrical_diode.md:249`
+specifies the source regulator as a *regulated* output (24–32 V over 25–100 % of a 1.2 kW rating,
+≥94 % efficient, <10 ms transient), and a regulated source does not sag in proportion to load.
+Reading the envelope across the load band as a slope gives 8 V / 1.2 kW, which would sag the bus
+4 V at full load — contradicting both the word *regulated* and the undervoltage ladder in
+`domains/power/profiles.yaml`, whose top rung asserts at apollo's own 26.5 V event. The edge is a
+**unity carry** and is closed at 1.0 V per V. The residual sag is the source's internal
+resistance, which is genuinely unpublished — but it is a property of `source_converter_v` and
+belongs in that state's relation, so the debt is recorded as a resistance rather than as a
+coefficient on the coupling. Closing the edge retired the coefficient half and left the
+resistance half standing, which is the honest split and not a way of making the number go away.
+
+**The label was doing physics it does not do.** `E-ATM-ABSORB` and `E-LM-ATM-ABSORB` were
+`kind: conserve` while carrying 26.37 man-hours per kg of CO₂, and `E-PRESS-PROP` was `conserve`
+with an unset "kg prop per kg He". The conservation check had existed all along and had never
+once refused them, because it looked each endpoint's unit up in a `DIMENSION` table that has no
+entry for six of the node units in this file — `kg + Pa`, `man_hours`, `m, m/s`, `quat` and the
+bare `-` — and the guard was `if a and b`, so an undecidable edge passed by default. **A check
+that cannot run is not a check that passed.** Four clauses now: unmatched dimensions refuse, a
+composite or unstated unit refuses unless the node declares `conserves:`, an unset sensitivity
+refuses (conservation crosses one for one, so there is nothing to configure), and any value other
+than 1.0 refuses. Two cabins declare `conserves: mass` because they hold four gas masses *and*
+the pressure they make together; the absorb edges became `rate`, which is what a spent cartridge
+rating is.
+
+**The value violated the conservation it claimed to be.** `E-FC-WATER` read **0.45 kg of water
+per kg of reactants**. The reaction is `2 H₂ + O₂ → 2 H₂O`, so the ratio is
+`(2 × 18.01528) / (2 × 2.01588 + 31.9988) = 1.0` exactly: every kilogram that enters leaves as
+water, and the electricity and heat are chemical energy leaving, not mass. 0.45 asserts that 55 %
+of the reactant mass became neither — in a plant that conserves its stocks exactly. Its `relation`
+read "0.45 kg of product water per kg of reactants consumed", which is the value restated with a
+unit phrase attached and derives nothing. **That is what a fabricated number looks like when it is
+wearing a derivation's clothes**, and it is why every derived value here now carries a
+`computation` the linter re-evaluates on every run: `E-RAD-WATER` had already been caught 7 % out
+by hand, and this one was 2.2× out and had been for the file's whole life.
+
+The same discipline sharpened two edges that must *not* close. `E-FC-DRAW-O2` and `E-FC-DRAW-H2`
+have no published value, but Faraday fixes a hard floor: four electrons per O₂ at the 1.229 V
+Gibbs voltage gives 6.747e-08 kg/J, two electrons per H₂ gives 8.501e-09 kg/J, and their ratio is
+0.1260 = 1/7.937 — the 8:1 the reaction fixes, which is a cross-check the derivation passes on its
+own. A flown cell runs near 0.7–0.9 V, so the truth is 1.4–1.8× the floor; using the floor would
+silently stretch every oxygen budget in the mission by that factor, and oxygen duration *is* the
+experiment. So they stay `UNCONFIGURED` with the floor exact, the bound stated as
+[6.747e-08, 1.105e-07] kg/J, and one named scalar owed: the cell voltage under load. **A bound and
+a named owe is a better answer than a number nobody can source.**
+
+`E-BAT-BUS` is the case that neither sharpening nor closing can fix, and it is the most useful of
+the four. `battery_energy` advances exactly one state — `battery_charge_j`, a stock of joules —
+and an *algebraic* edge from it to `bus_a` asserts that bus volts are a function of stored energy.
+There is no pack-voltage state, no open-circuit-voltage curve and no bidirectional converter in
+the model (`electrical_diode.md:250` gives that converter as 20–36 V battery to 28 V bus, ≥94 %),
+so the edge couples from a node that cannot produce the quantity it carries. Unit arithmetic
+cannot catch this — joules are a plausible denominator — and the fix is **a state, not a number**.
+It is written into `open_debts` as a missing state, because adding one changes the schedule, and
+the schedule is derived.
+
+### The fourth way, still open: eight edges where the answer is a table
+
+Nineteen edges remain unset, and eight of them share a shape that a scalar cannot express. The
+unit says *derivative* and the physics says *regime*:
+
+| Edge | Unit it declares | What it actually is |
+|---|---|---|
+| `E-BUS-GNC`, `E-BUS-INST`, `E-BUS-COMM` | `1 per V`, `dB per V` | a load that draws what it draws while the bus is inside its envelope |
+| `E-BUS-RCS` | `1 per V`, `discrete` | a valve driver that is powered or not |
+| `E-GNC-ENG` | `enum per m` | a commanded engine mode selected by a nav state and a metric |
+| `E-GNC-RCS` | `enum per rad` | the allocator's wrench matrix — a table, not a slope |
+| `E-STRUCT-PLATE` | `K per enum` | a plate temperature set by which configuration the vehicle is in |
+
+A proportional law is the wrong model for every one of them. A consumer's draw does not scale with
+bus volts — it is constant inside the 24–32 V envelope and then it stops, and that envelope is
+*already written down* as the undervoltage ladder in `domains/power/profiles.yaml`. `E-GNC-RCS` is
+explicitly not a number: `rcs_dode.md:685-693` maps a **wrench** to a set of thruster pulses
+through `B = [F_i d_i ; r_i × F_i d_i]`, so the "sensitivity" is a matrix whose columns are
+forty-four thrust directions and lever arms. `E-STRUCT-PLATE` is a lookup from a five-entry
+configuration enum to a thermal state.
+
+The closing move is therefore not eight numbers. It is a **sensitivity form for a lookup** — a
+`regimes:` table on a `discrete` edge, mapping the driver's band to the response, with the linter
+checking those bands against the thresholds that already exist rather than inventing a second set.
+That would turn eight unset scalars into checkable tables *and* connect the coupling graph to the
+threshold ladders it currently ignores, which is the alignment that is missing rather than a
+number. Until then they stay `UNCONFIGURED`, because a made-up `1 per V` would be a load that grows
+without bound as the bus sags — the opposite of what a load does.
+
+## The tick order ran backwards, and nothing could tell
+
+`derive_schedule` emitted the schedule **exactly reversed** for the whole life of the function.
+Kahn's algorithm as written took the nodes with no *successors* first, and a node with no
+successors is the *last* element of a topological order — so the list `--order` printed under the
+heading "dependencies first" was "dependencies last". All thirty-nine ordering constraints were
+violated: fuel cells computed after the buses they feed, `E-PRESS-PROP` after the propellant tank
+it fills, `E-DYN-GNC` after the navigation solution that reads it.
+
+Nothing refused it, and the reason is worth more than the bug. **The only property being checked
+was the absence of a cycle, and a reversed topological order has no cycle either** — it is a
+perfectly valid answer to the wrong question. The cycle search was correct; the emission step
+consumed the same map in the opposite direction to the one it was built in. One map was serving
+two loops that want opposite directions, which is exactly the kind of economy that reads as tidy
+and is not.
+
+What made it invisible is that **a reversed order still contains every node**. Every check that
+asks "is X in the schedule" passed. The plant ran, produced frames, and named a first blocker; the
+counts were right; the tail of the schedule was reported on every run and looked plausible. The
+only question that distinguishes a tick order from its reverse is *which end of each edge comes
+first*, and nobody had asked it.
+
+Two real defects fell out within minutes of asking it:
+
+- **`battery_energy` had no inbound edge at all.** Its only inbound edge was `E-PLATE-BAT`, the
+  thermal back-edge of `C-BAT-THERMAL` — so the battery was a stock that nothing ever charged, and
+  the plant said so in as many words once it walked the order correctly: *"is a stock with no
+  incoming edge, so nothing drives it"*. The fleet had been flying a vehicle whose batteries only
+  ever drained. The gap is now `E-BUS-BAT`, which is the `accumulate` class `plant.md` §10 was
+  written for (bus power integrated into a stock of joules, never subsampled), and it comes with
+  its own declared cycle `C-BAT-BUS` — charge and discharge are the same bidirectional converter
+  (`electrical_diode.md:250`) in two directions, so the loop is real and the stock breaks it. The
+  edge also gives a home to a number the load budget had been admitting without modelling: *"the
+  297 W difference is battery charging"* (`domains/power/components.yaml#load_budget`).
+- **The plant's first stop moved from an arbitrary state to a meaningful one**, from the crew alert
+  lifecycle to the first algebraic state in schedule order. The old answer was not wrong so much as
+  unreachable — it was the first thing in a list whose order meant nothing.
+
+The fix is two maps, `successors` for the cycle search and `predecessors` for the emission, and the
+guard is `test_the_derived_schedule_puts_every_producer_before_its_consumer`, which walks the edge
+list and demands each producer come first. It is written against the **graph** rather than against
+the emitted list, so it cannot agree with the emitter the way a round-trip check would — and it was
+verified by reintroducing the bug, where it reports all thirty-nine violations by name. A test that
+has never been seen to fail is the same article as a check that cannot run.
+
+The general lesson, which is why this is a section and not a commit message: **a derived artifact
+that nothing independently validates will be consumed confidently in whatever shape it comes out
+in.** The schedule was derived once, printed on every run, imported by the plant so the two could
+never disagree — and "never disagree" was true, and useless, because they agreed on the reversal.
+
+## Four ways a declaration can look like a connection
+
+Fixing the reversed tick order raised the obvious follow-up question: **if a reversed order hid a
+source-less stock for a round, what else passes a membership test without being connected?** Four
+answers, each now a refusal rather than a reading exercise. They share a shape — every one of them
+was invisible to a check that asked whether something *exists* rather than whether it *connects*.
+
+**A node with no incident edge** is in the node list and not in the graph. The bus tie was in
+exactly that state: `bus_tie_closed` existed, `E-BUSB-BUSA` existed, and that edge's own note read
+"gated by bus_tie" while the coupling ran straight from `bus_b` to `bus_a` and stepped over the
+device it claimed to be gated by. The tie is now **on the path** (`E-BUSB-TIE` → `E-TIE-BUSA`),
+which is what makes the state a fleet commands the state the topology reads.
+
+**A `bool` state publishing a three-valued channel.** `bus_tie_closed` was `unit: bool` while
+`power.bus_tie_state` offered `enum[open,closed,tripped]`, so the tie could not represent
+`tripped` — the very condition its own provenance note says it latches into on a ground fault. The
+vehicle could be in a state it was structurally unable to report. The vocabulary-binding check had
+existed since the domains landed and had never once looked at a `bool`, because
+`if not chan_enums or not state_enums: continue` treated an unhandled *type* as a pass. **That is
+the third time in this file an unhandled case defaulted to success** — after the conservation
+guard's `if a and b` and the six node units with no dimension. The pattern is worth naming: a
+check written as a sequence of skips will skip its way past exactly the inputs nobody anticipated,
+which are the inputs worth checking.
+
+**A stock nobody fills** only drains. `battery_energy` was the first instance, found by the tick
+order. Three tanks are legitimately pre-loaded — `o2_lm`, `prop_rcs`, `pressurant_he`, filled at
+the pad and never again — and each now says so in `preloaded:`, because *saying* it is different
+from *forgetting* it.
+
+**A stock nobody draws** only fills, and it is the quieter defect: the fleet watches the quantity
+rise, and a rising number looks like a healthy number until the mission ends. `water_potable` was
+produced by the fuel cell and consumed by nothing, so the one number a rationing crew would watch
+could only go up. The edge that fixes it is `E-CREW-WATER`, and the evidence that it was always
+intended is in the file already — `E-CREW-ATM`'s relation reads "the same rate is the CO2 produced
+and **the water and food consumed**, at the published planning rates". The sentence named the
+consumer; no edge ever declared it. (`absorber_capacity` is the legitimate case and says so in
+`accumulates:`: it is a *consumption counter*, not a tank, so the cartridge is spent when the count
+reaches its rating and the remaining capacity is a subtraction. The name is what made it look like
+a stock that should be drawn.)
+
+The outbound rule is deliberately asymmetric from the inbound one, and the reason is physical: a
+back-edge *out* of a stock still drains it, because the stock's own integrator subtracts the flow
+the back-edge reads. Only the inbound side must be forward, because a fill read from last tick is
+not a fill. `h2_csm` and `water_cooling` both discharge entirely through back-edges and both are
+right.
+
+### The two edges that were missing because a node moved
+
+Round 23 promoted `guidance` to a service node so the guidance→engine and guidance→valve couplings
+could stop pretending to be functions of the navigation solution. That fix left the new node with
+**no inbound edge at all**: the function that commands the engine and the valves was connected to
+nothing. Two more gaps fell out of the same move, and neither was visible while the edges pointed
+the wrong way:
+
+- **`nav_state` had three inbound edges and none out.** The vehicle's own estimate of where it was
+  informed nothing. `E-NAV-GNC` closes it: guidance reads the solution. What is *not* unity is the
+  confidence in it — `gnc.nav_position_sigma_m` and `nav_integrity` are separate channels, and a
+  guidance program that ignored the covariance would fly the same profile with a 2 km error as
+  with a 20 m one.
+- **Eight `E-CMD-*` edges existed and none reached `guidance`**, although `set_guidance_mode` is a
+  verb whose `conflict_domain` has read `gnc.guidance` since it was written. `E-CMD-GUID` is the
+  ninth. The failure it prevents is specific: a fleet could command `set_guidance_mode`, the
+  *state* would change, and nothing downstream of the graph would know guidance had been
+  re-tasked.
+
+The general lesson, and the reason both are written up rather than just committed: **moving an edge
+to a more honest endpoint can disconnect the node it left.** A node that is a source is legitimate;
+a node that is a source *by accident* is not, and nothing in the definition distinguished them
+until the edge count made it visible.
+
+## The gate variable map: 58 templates, 226 names, and nobody could publish it
+
+`state.json`'s capability snapshot was a declared deliverable that nothing emitted.
+`presentation.yaml#mirror.capability_snapshot` gave the fields and the derivation and said the
+generator "belongs with the plant, because `available` and `availability_reason` depend on live
+state". The plant now exists, so `tools/plant.py --state` emits it. Writing it found three things
+the specification had assumed rather than checked, and all three are now refusals.
+
+**The expansion rule is by name, not by position.** The first rule tried was positional — the i-th
+placeholder filled by the i-th enum argument — and it publishes `power_amplifier_True_enable`,
+because `set_power_amplifier` declares `state` (a boolean) before `transmitter`. Name binding also
+makes the template self-documenting: `<transmitter>` says which argument it varies over, and a
+reader who has to count is reading a convention nothing states. The map is **226 published names**
+where the registries declare 58 variables, which is precisely what
+`mirror.variables_are_templated` predicted and the reason §9's check 5 cares: a refusal that named
+`reserve_floor_<resource>_enable` would be a name a fleet cannot act on.
+
+**Ten verbs could not be expanded at all**, and nothing had ever asked whether they could.
+
+- Eight wrote a bare `<id>` where their own argument was named `antenna`, `source`, `load`,
+  `breaker`, `battery`, `engine`, `pump`, `hatch` or `loop`. The template can name the argument or
+  it names nothing; `<id>` names nothing.
+- Two declared their values as a **sentence**. `set_load`'s `load` was
+  `[any id in components.yaml#loads]`, and `set_breaker`'s was
+  `[any id in components.yaml#components where class == protection]`. A described set instantiates
+  to nothing, so the mirror would have published `load_any id in components.yaml#loads_enable`.
+  Both are enumerated now, verbatim from the registry each sentence pointed at — 25 loads and 2
+  protection-class components.
+
+The general shape is the same one the last three rounds kept finding: **a declaration that reads as
+a connection but cannot be consumed.** A gate variable with a placeholder in it, or with a sentence
+where its values should be, is a name in the contract that resolves to nothing — and the failure is
+invisible until something tries to publish it. The linter now refuses it, which means the next verb
+that writes `<id>` is caught at the point of writing rather than at the point of a fleet needing to
+name a closed gate.
+
+What a reference plant can honestly put in `variables` is also worth stating, because it is the
+place the temptation to default is strongest: there is no plant code here, so **no gate variable has
+a value**, and all 226 are declared and unset. Emitting `true` would be the defaulting this folder
+exists to refuse; emitting nothing would lose the names. So the names are published, `--closed-gate`
+carries whatever live state a caller has, and a verb whose gate is in neither set reports
+`gate: <name>` rather than claiming to be open. `budget`, `queue_depth` and `published_at` are
+deliberately **not** emitted — they are the executive's, and a vehicle that filled them would be
+writing the executive's record for it.
+
+## The window, implemented and probed
+
+`docs/diode-contract.md` is the one thing this repository and the vehicle share, and until this
+round the vehicle's side of it was **declared and not implemented**. `presentation.yaml#conformance`
+claimed a status for each of §9's twelve checks, `plant.py --state` emitted one `state.json`, and
+`generate_help.py` printed `HELP.md` to stdout — but nothing claimed the console, wrote a result
+file, or advanced telemetry without being asked. So `contract/diode_probe.py`, which is the
+repository's instrument for exactly that, **had never been run against the vehicle at all**.
+
+`tools/console.py` is that loop, and it is deliberately the smallest thing that can be probed. It
+knows no physics — the probe says of itself that it "only answers: does the window behave the way
+the world is built to expect?", and this is the same shape — and it knows no verbs of its own,
+because the vocabulary comes from the registry the linter already refuses to let drift. What it
+refuses, it refuses *in a result file*: "a refusal is a result. Unavailable verb, allowance
+exhausted, bad argument, internal error: one file each, same shape."
+
+**The probe passes: 14 passed, 0 failed, 1 skipped.** The skip is check 9 and it is honest — no
+deferring verb is reachable at the phase the probe runs in, and a vehicle that invented one to
+satisfy a check would be worse than one that admits the gap. The statuses in
+`presentation.yaml#conformance` now split three ways where they split two, because
+`satisfied_by_configuration` had been doing two jobs: some rows were argued from the registries and
+some were merely asserted, and only running the instrument tells them apart. Four rows moved to
+**demonstrated** with the evidence recorded.
+
+Running it found three things that no amount of reading would have:
+
+- **The window was briefly inconsistent.** The first console created `console.json` and published
+  on its first cycle, so a reader attaching in the gap saw a vehicle with an ingress file and no
+  mirror — and the probe reported *"HELP.md and state.json named none"* for a vehicle about to name
+  226 gates. `console.json` is now written **last**: a window announces itself only once it can
+  answer.
+- **`HELP.md`'s format collides with the probe's fallback.** `published_gates()` returns an *empty
+  list* the moment HELP.md is absent and never falls through to `state.json.variables`, and its
+  verb fallback scans HELP.md for lines of the form ``- `name` `` — which in this vehicle's HELP.md
+  is the form used for **arguments**. The fallback would read `mode`, `reason` and `group` as verbs,
+  submit `mode probe`, and report a vocabulary failure that is not one. The vehicle meets the
+  contract through `state.json.available_commands`, so the fallback is never taken; the hazard is
+  recorded in the conformance table rather than papered over by giving HELP.md a verb list it does
+  not otherwise need.
+- **A second HELP.md generator is a second source of truth.** The first console hand-rolled its own
+  HELP.md, which this file already warns against in as many words — "a hand-edited `HELP.md` would
+  create a second source of truth for the vocabulary", and a second *generator* is hand-editing with
+  extra steps. It now calls `tools/generate_help.py`, and the probe's gate count confirms the fix
+  from the outside: it read **226** gates, not the 284 it read when the hand-rolled file listed the
+  58 verbs in the form the probe scans for gates.
+
+The general shape is the one this folder keeps rediscovering: **a declaration that reads as a
+connection but has never been consumed.** A conformance table is a claim about an instrument, and a
+claim about an instrument that has never been pointed at anything is a paragraph. It took a
+76 KB HELP.md, a 226-entry variable map and fourteen checks to find out that three of them were
+wrong.
+
+## Two ways a declaration escapes its own checks
+
+Round 22 found that `coupling.yaml`'s eight `open_debts` were displayed and not counted. They are
+counted now. This round found the same asymmetry **one level further down, in the eleven
+domains** — and worse than displayed: `domains/*/components.yaml`'s `open_debts` were read by
+*nothing at all*. Not counted, not printed, not parsed. Twenty-four of them, and they are not
+trivia: `avionics`' note that `exec_margin_pct` has apollo's event and no budget behind it, the
+IMU's drift and alignment budget waiting on two unpublished instrument constants, the 277 analogue
+channels that are deliberately aggregated rather than enumerated. The crew domain's own paragraph
+about EVA was in that set while a question about EVA went looking for it. A debt is a value that is
+needed and unset *wherever it is written*, and a paragraph in a file no tool opens is not a debt —
+it is a comment with better manners. **193 → 217**, all fatal under `--strict`.
+
+The second escape is worse because the check existed and passed.
+
+**A declared interlock is not a closed one.** `capability_snapshot` — written the round before —
+read `commands.yaml`'s `interlocks` list as a condition and reported every verb carrying one as
+unavailable. That is **32 of the vehicle's 58 verbs**, permanently: `arm_engine`, `start_burn`,
+`load_burn`, `set_attitude_target`, `set_coolant_pump` and 27 more, each with an
+`availability_reason` naming an interlock that was not tripped. A fleet reading that `state.json`
+would have concluded the vehicle was nearly unusable, and the console built on it refused all 32 by
+name. With the semantics corrected — phase and gate are standing conditions, an interlock is
+checked when a command arrives — availability at `translunar_coast` goes from **22/58 to 54/58**.
+
+Nothing caught it, and the reason is the part worth keeping. **The contract probe submits an
+*available* verb and an *unknown* one**, so a snapshot that hides half the vocabulary from itself
+passes every check it has. `14 passed, 0 failed` was true before the fix and true after it. Passing
+the instrument is not the same as being correct, and what found this was not a test at all: it was
+asking whether the *challenge is playable* — whether a fleet can actually pursue each of
+`mission.yaml`'s objectives. The assertion that now guards it is about the **size** of the published
+set rather than about any single verb, because no single-verb check could have seen it.
+
+That question also produced a finding of its own, recorded rather than fixed. Two of the three
+outcome objectives have clear verb paths — `crew_survive` through the six ECLSS verbs, `return`
+through the three propulsion ones. `surface_mission` ("an EVA is completed on the surface") looked
+at first like it had none, and it does: `set_hatch_valve` is available in all eight phases, and
+`domains/structure/components.yaml#one_way_events` carries `hatch_open_surface` with its consequence
+spelled out and its three observables. `apollo_diode.md:238` confirms the vocabulary is complete —
+Apollo has no EVA verb, because depressurisation is `set_vent_valve` and the suit circuit is
+`set_suit_loop`. What is missing is the **crew half**: `crew_location` can take `surface_eva` and
+`crew_availability` can take `suit`, and no verb writes either, so the objective is scorable only
+because a state machine that is not written down happens to move them. The debt records the shape
+that rule must have, so that whatever writes it does not invent one.
+
+## The diagnostic half of 118 faults was read by nothing
+
+Every domain carries a `fault_policy.yaml`, and the linter checked three fields of each entry:
+`component`, `mechanism`, and `perturbs`. It did not read `kind`, `seeding`, `detection` or
+`response` — **the whole diagnostic half of all 118 faults**. A field no tool reads is a field that
+drifts, and these had drifted three ways:
+
+- **Eleven `kind` values with no union**, while `02-canonical-vocabulary.md` §10 had been promising
+  one since it was written: "**a code not in the union** — a quality, kind, severity, lifecycle
+  state or priority that is not one of the above." Two of the eleven were not distinctions.
+  `PWR-05-bus-tie-stuck-closed` was `latent_then_acute` and `PWR-06-bus-tie-stuck-open` was
+  `latent` — the same contactor, the same failure class, opposite directions — and PWR-06's own
+  mechanism text reads "cross-support between buses is unavailable **when it is needed**", which is
+  the definition of the kind it was not given. And `continuous` (6 faults: a hot amplifier, a thin
+  link budget, a branch losing pressure) is not `continuous_degradation` (22: a resistance creeping,
+  a capacity derating) — a persistent condition is not a trend, and an agent that read them as one
+  would wait for a drift that never comes. `continuous` is now **`sustained`**, which also clears a
+  collision with `plant.md` §3's integrator class of the same name. **V-09** declares the union of
+  ten.
+- **Two placements for `response`.** 41 faults nested it inside `detection` and 77 put it at fault
+  level, one division per group of domains. A response is what the vehicle *does* about the fault,
+  not part of detecting it; all 118 are at fault level now, and nesting one is refused.
+- **Four faults whose `detection:` was an empty key** with `evidence`, `latency` and
+  `false_positive_risk` left at fault level — the absorbed-list-item shape, arriving in a fault
+  policy. One per each of four domains, and invisible for the same reason as everything else here.
+
+The checks that now enforce it are the ones §10 promised, plus two the repair made obvious: a fault
+must name one of the three seeding forms (`hazard`, `on_demand_p`, `coupled_to`) because a fault
+that does not say how it can occur cannot be scheduled, and a `service` response must carry a note,
+because it acts without asking and the note is the only place its action is stated.
+
+## The vehicle can now fail
+
+**118 faults and no way to fail** was the state until `tools/faults.py`: every policy declared what
+can break and how it seeds, and nothing read the seeding. A challenge whose vehicle never breaks is
+a piloting exercise, and the adversity was sitting in the corpus unused.
+
+The schedule is a Poisson process per fault at the domain's own hazard rate — *exponential
+inter-arrivals*, because that is what a constant hazard rate means; sampling a count and scattering
+it uniformly would make events regular, and regularity is precisely what a fleet should not be able
+to rely on. The streams are keyed by name, per `simulator-design.md:190-198`: `(master_seed,
+domain, component_id, purpose)`, so "adding a component is not class-breaking". `--check` asserts
+that rather than remarking it, by appending a synthetic fault and requiring no other fault's events
+to move — and requiring the probe itself to have drawn events, since comparing two empty schedules
+proves nothing.
+
+Two numbers worth recording, because nothing had computed them:
+
+- **2.10 stochastic faults expected over the 192-hour mission**, so a fleet meets one to three
+  faults per run and a completely faultless mission is 12 % likely. That is a challenge with
+  adversity rather than one that is reliably quiet.
+- **60 of the 118 are armed rather than scheduled.** They seed on `on_demand_p` or `coupled_to` —
+  "any fault that removes a publisher's input without removing the publisher", "any redundant group
+  with two or more live members" — and sampling those from a rate would invent a rate the domain
+  deliberately withheld. They are listed with their triggers and the plant arms them when the
+  trigger holds. The two `p=1` entries are the interesting ones: `CRW-05-wrong-module-attempt` fires
+  on "any ask_crew whose subject is outside the position's perceivable set" and
+  `RCS-11-accumulator-stall` on "a minimum qualified firing time larger than the pulse widths the
+  command asks for". Neither is a random event; both are the certain consequence of an invalid
+  request, which is why they are certainties.
+
+The schedule is a **run input**, not a log line (`simulator-design.md` §3.4), and it is never
+published: `plant.md` §7's boundary is that a fault reaches a fleet only by propagating through
+physics and instruments. A vehicle that announced its own fault list would delete the experiment —
+so the scheduler produces data for the operator, and what the fleet sees is whatever the perturbed
+channels do.
+
+## What else was read by nothing, and the one that mattered most
+
+Round 28 found the diagnostic half of 118 faults unread. The obvious follow-up is a question rather
+than a hunch — *which declared fields does no tool read?* — and asking it over the whole definition
+returns 164 keys used twice or more that appear in no tool as anything but a comment. Most are
+prose by design. Four were not.
+
+**`points.yaml#not_published` — the truth boundary — was read by nothing.** `plant.md` §7 is the
+invariant the whole design rests on: "The plant owns hidden truth. **The instruments turn `T` into
+`A`; the publisher turns `A` into files.**" Every domain says by name which truths it withholds —
+41 named channels and 3 described categories — and `presentation.yaml` points at the section twice
+while nothing parsed it. A channel that is declared withheld *and* registered is truth on the wire,
+and the declaration that would have said so was the one nobody read. Nothing leaks today, which is
+the point: the corpus happens to be right and there is nothing keeping it right. A withheld truth
+that is registered is now a refusal — **and so is a failure chain whose observable clue is one**.
+Those two sections are the same subject from opposite sides: `not_published` says what the vehicle
+refuses to publish, the failure chains say what a fleet has to work out, and nothing had ever
+compared them. A chain whose first clue is hidden truth is a chain nobody can start on. All 15
+chains are clean today and the join now holds them that way.
+
+**`severity`, declared 138 times, was read by nothing either.** §10 has promised since it was
+written that the linter refuses "a code not in the union — a quality, kind, severity, lifecycle
+state or priority that is not one of the above"; the word `severity` appeared in this file only
+inside comments. It is the field that decides what a crew actually sees. Enforcing V-04's ladder
+found **one threshold out of 138 with no severity at all** — `sps_total_burn_guard`, an interlock
+whose 21 siblings all carry `ADVISORY` — which is an alert that lights at no level.
+
+**`conflict_domain`, declared once per verb, was read by nothing — and it is a runtime policy.**
+`apollo_diode.md:576-579` is four lines: every command declares a domain, "Within one conflict
+domain, **first valid command received wins for that tick**", and — the half that makes it a policy
+rather than a race — "Later commands are **not** silently discarded: they receive
+`CONFLICT_SUPERSEDED`." V-02 lists that as a first-class refusal and rejects silent discard in
+terms. The console now implements it. The consequence of its absence was not a wrong answer but an
+*undefined* one: every command was accepted, so two agents commanding one actuator in one tick both
+succeeded and the physics that followed was whatever the plant did with two winners. The template
+makes it sharper than a name-keyed rule would: `prop.<engine>.run` is one domain per engine, so two
+agents starting different engines are both accepted — and the expansion reuses `gate_instantiations`
+rather than growing a second rule that could disagree with the first.
+
+**And one finding that is a weakness rather than an omission.** Writing the `not_published` check
+turned up a false positive that was really a false negative: `thermal.zone_[id]_true_t_c` — correctly
+withheld — resolved as *registered*, because `ChannelIndex._compile` turns `[...]` into an unbounded
+`.+?` and the wildcard absorbed `1_true` before the literal `_t_c` matched. The same
+over-permissiveness means `power.lcl_1_old_state` resolves to `power.lcl_[n]_state`'s row, so every
+"is this a registered channel?" question in this file is weaker than it reads. The wildcard cannot
+simply be bounded — `res.recon_[resource]_kg` has to match `water_cooling`, so a placeholder may
+contain underscores, and then `[id]` matching `1_true` is indistinguishable from `[id]` matching
+`csm_cabin`. The fix is for each registry entry to name the values its placeholders take, which
+turns a template from a pattern into an enumeration; that is a decision about the registry's shape,
+so it is recorded in `channels.yaml`'s own debt list rather than patched here.
+
+## The two halves of a command that arrives later, and the one that arrives never
+
+The console could refuse, accept and settle a command within one tick, and the contract asks for
+more than that in three places. All three are now written, and each was found by asking what the
+vehicle *declares* about a command rather than what it does with one.
+
+**A deferred command has to survive the process that accepted it.** The contract is explicit —
+"A command that takes longer than one cycle — a burn, a deploy, a self-test — completes
+asynchronously and reports when it is done" — and `pending.json` is described as "the vehicle's own
+deferral queue". The console wrote that file every cycle and **read it never**, so a deferral could
+not survive a restart and, since the console is a process per invocation, could never settle at
+all. The same root cause reset the tick counter and the sequence number, which made an absolute
+`due_tick` meaningless in the next run and restarted `seq` so a second run's frames overwrote the
+first run's in the ring. The counters now persist in `pending.json` rather than in `state.json`,
+and the boundary is why: the contract says published state is never read back as input, and a
+counter that must survive a restart is the vehicle's own record — `vehicle -> vehicle`, which is
+what `pending.json` is for.
+
+**`maximum_queue_age_s` was declared 58 times and read only by the generator that prints it.** No
+command had ever expired. It now does, and the age is wall-clock because a monotonic reading is
+meaningless in the process that restores the queue. V-02's `EXPIRED` and `INHIBITED` are both
+reachable: a due command is re-checked against the phase, its gate and its interlocks at the moment
+of effect, and the contract calls that "the single most important property in the whole interface".
+
+**And `arm_token` was checked by nothing.** `arm_event`'s own help fixes the contract — "Arming does
+nothing physical: it returns a short-lived token bound to this specific event, and it is the only
+verb on the vehicle whose result carries a [token]" — and no token was ever minted, so
+`execute_event` accepted any token at all, including none. `requires_arm` was enforced by the
+linter on the *state* and on no *path*, which left F-15 (premature staging) reachable by a single
+unarmed command. The token is now minted by `arm_event`, carried in its result, bound to one event,
+and **consumed by use** — verified for the unarmed case, the wrong-token case, the replay case and
+the wrong-event case.
+
+One incidental bug is worth recording because a durable counter introduced it: `--cycles` compared
+the target against the *restored* tick count, so a resumed console at tick N with `--cycles 1` ran
+zero cycles. The flag now counts what this invocation runs, which is what it always meant.
+
+## The difficulty knob did nothing
+
+`mission.yaml#scenario_postures` declares three postures straight from `apollo_diode.md:370-374`:
+`nominal`, `degraded` and `crisis`, differing by **10× in critical hazard and 20× in demand
+failure**, each with a `gm_disposition` and a `seeded_faults` policy. The 118 fault policies carry
+the *nominal* baselines — 2e-5 and 2e-4 — as though they were absolute, and `faults.py` read the
+policies and never the postures. **A crisis run and a nominal run produced the same faults.** The
+one number the experiment exists to vary was inert.
+
+It scales now: 1 scheduled event at `nominal`, 7 at `degraded`, 20 at `crisis`, with the declared
+factors printed so a run can be read against the table it used.
+
+**And the reason it was applicable at all is a coincidence that is now a rule.** A posture has a
+critical column and a noncritical column because they are separate baselines, so the obvious
+implementation asks each fault which class it is — except the policies declare a bare `hazard` and
+no class, and **19 of the 58 sit between the baselines**: `COM-09-recorder-failure` at 1e-4 is 5× the
+critical baseline and 0.5× the noncritical one, and nothing says which scaling it should take. The
+scaling is well-defined today only because *both* columns move ×5 at `degraded` and ×10 at `crisis`,
+which makes the class irrelevant. That is a property of these particular numbers and not something
+anyone wrote down, so `check_scenario_postures` now refuses a table whose two hazard columns move by
+different factors — "move both columns together or give the faults a class" — verified by moving one
+column and watching it refuse.
+
+**`seeded_faults` is the half that cannot be sampled.** `apollo_diode.md:368` says why the mechanism
+exists: a common-cause event is "explicitly seeded rather than relying on tiny random probability".
+At the nominal critical hazard a 192-hour mission expects **0.0038 events** from any one fault, so a
+posture promising "one guaranteed major primary" and then sampling for it would deliver an empty
+mission almost every time. `degraded` and `crisis` now *place* one fault at a deterministic time
+inside the mission; `nominal` places none, per its own `seeded_faults: none`.
+
+Two readings were made to implement it and both are written into the code so they can be argued
+with. **"Major" is read as the critical class**, the only severity the corpus declares. **"Optional"
+is read as the GM's decision rather than a probability draw**: crisis carries
+`gm_disposition: white_team`, and the only rate the posture declares for it — `failure_on_demand_p`
+— is apollo's *per-activation* Bernoulli `p`, which used per mission would understate by the
+thousands of activations in 192 hours. So the scheduler *offers* the latent sensor defect, names the
+pool of 26 instrument faults, and seats one only on `--sensor-defect`. Inventing a per-mission
+number to replace it would have been inventing a number.
+
+## The crew are described twice and the two descriptions never met
+
+`mission.yaml#crew` is a personnel model — `size`, `surface_party`, and one entry per person with
+`location_phase_default` and `goes_to_surface`. `vehicle.yaml#configurations` is a hardware model —
+`crew_aboard` and `crew_in`. Both are right. They overlap on every question a fleet can ask about
+who is where, and **all five fields were read by nothing**: not by a tool, not by the other file,
+not by a sentence in any document. The values happen to agree today — `crew.size` 3 is the largest
+`crew_aboard`, `surface_party` 2 is the count of `goes_to_surface` — and nothing was keeping them
+that way.
+
+Four checks now hold the join. Three are plain mismatches. The fourth is the one worth writing up:
+**`crew_in` had to be anchored to the station vocabulary's own prefixes**, because otherwise the
+check is circular — `crew_in` validated against `location_phase_default` and that against
+`crew_in` — and a configuration saying the crew are in a `cockpit` would agree with a mission saying
+the same.
+
+**And the join turned up a naming problem that is a real one.** `location_phase_default: csm` is
+correct on its own terms: all three crew are in the CSM before undocking. But every *other* naming
+of a place in this vehicle is a **station** — `csm_commander`, `csm_navigator`,
+`csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva` — and `ask_crew`'s
+perception bound is per station. So a question asked from "csm" is a question asked from nowhere.
+The crew are in fact named three ways: `ask_crew`'s `crew_id` and `mission.yaml#crew.positions` both
+say `commander`/`lm_pilot`/`csm_pilot`; `crew_positions` names stations; and
+`location_phase_default` names a vehicle. The linter now refuses a vehicle term that is not a
+vehicle, and it cannot go further, because **which CSM station each person occupies is undeclared**:
+the corpus gives three stations for three people and never says who sits where. That is a decision
+about the vehicle rather than a repair, so it is recorded rather than invented.
+
+The same join found a second gap, reported as a debt at the two phases it affects. **`descent` and
+`surface` name no configuration that holds the CSM**, so the CSM pilot cannot be placed in either —
+while her own entry in `mission.yaml` says she is "alone in the CSM for the surface phase". The two
+readings of a phase's `configurations` list — the configurations it passes *through* versus the
+vehicles *present* in it — give different answers here, `lunar_orbit` and `ascent_rendezvous` each
+name two (suggesting a sequence), and nothing in the corpus says which is meant. Under the sequence
+reading `descent` is right and the CSM's presence during it is simply unrecorded.
+
+## Which seat, and the four declarations it took to answer
+
+`location_phase_default: csm` is the right answer to "which vehicle is this person in", and it is
+the wrong *shape* of answer to the question `ask_crew` actually asks. The perception bound is
+computed per **station**, and `domains/crew/components.yaml#display_contract` gives the CSM's three
+stations three different panel sets and three different `cannot_see` lists — so a question asked
+from "csm" is a question asked from nowhere. The corpus named three crew and three CSM stations and
+never said who sat where.
+
+The corpus did supply the geometry, which is what made the assignment a decision rather than a
+guess:
+
+- `csm_commander`'s note calls it "**the left seat**", and it is the commander's.
+- `csm_navigator`'s note calls it "**the right seat**" and names it for the *navigation* role,
+  which is the CM pilot's — so `csm_pilot` takes it.
+- That leaves the LM pilot the third CSM station, the **lower equipment bay**, and the choice has a
+  consequence worth wanting: the bay's note says a crew member there "cannot see a single display
+  the other two seats are reading", so the LM pilot in the CSM has a strictly different perception
+  bound from the other two — a fleet that asks all three the same question gets two answers and one
+  abstention. The alternative, the CM pilot in the bay, puts the navigation specialist where she
+  cannot see the guidance display, which the corpus's own notes argue against.
+
+Every station map is `basis: chosen` with that reasoning in the file, because the corpus gives the
+geometry and not the assignment. What is *not* a matter of choice is checked: the vocabulary (a
+station must be one `crew_positions` names, or it is a place with no panels), the surface party (a
+crew member who goes has an LM station; one who does not never has one), and — the assertion that
+matters most — **no two people share a seat**, because one station means one perception bound and
+two crew at one station would be two people the vehicle cannot tell apart.
+
+`plant.py --crew` then computes the projection the bound needs, from three declarations that were
+each necessary and none sufficient: `vehicle.yaml#configurations` (which vehicle carries crew),
+`mission.yaml#phases` (which configurations a phase passes through), and the station map. It is
+keyed on **(phase, configuration)** rather than on phase, and that is not a detail: `lunar_orbit`
+runs from docked to undocked and `ascent_rendezvous` from the ascent stage to a docked CSM, so
+"where is the commander during lunar orbit" has two true answers and reporting neither would be
+worse than reporting both.
+
+And it reports where it cannot answer. `descent` and `surface` name only LM configurations, so the
+CSM pilot is placed by no configuration in either — while her own entry says she is "alone in the
+CSM for the surface phase". That gap was a paragraph in a debt list last round and is now a value
+the plant prints, which is the difference between a record and a fact.
+
+## Authoring convention: no flow mappings
+
+Every file here is **block form**, and that is a decision with a history. The definition was
+originally written with flow mappings — `- {id: ..., provenance: {...}}` — because a component's
+fields are short and a block form costs lines. That cost two things and they compound:
+
+- The correct number of closing braces depends on whether the *enclosing* item is itself a flow
+  mapping, so `provenance: {…}` needs one brace in a block item and two in a flow item. Both
+  compile in a reader's head; only one compiles in a parser, and the error points at the *next*
+  item.
+- A template channel name inside a flow sequence — `res.recon_[resource]_kg` — is a syntax error
+  and has to be quoted, which no reader notices and no reader remembers.
+
+Both are mechanical, and both are silent until something downstream refuses. One repair round
+turned them into a much worse fault: indentation lost in a *parseable* file, where 76 parent/child
+relationships were flattened and several linter checks quietly stopped running while the linter
+still reported COMPOSES. A parse error is a gift by comparison.
+
+So: block mappings, always. A `provenance` is written as a block, never as `{…}`. It costs about
+a third more lines in the files where components are dense, and it removes a whole class of fault
+that produced a worse failure than the one it caused.
+
+`domains/avionics/` is the ninth, and it is the domain that attacks the experiment rather than the
+mission. `corpus-review.md` §1 dismisses the document it comes from in one line — "an aircraft
+avionics ICD template: ARINC 429/664, GNSS, elevons, DO-178C" — and the dismissal of the *vehicle*
+is right (C-15 prunes the GNSS and the aerosurfaces exactly as it pruned reaction wheels). The
+dismissal of the **functions** was too quick. There are nine of them at `avionics_diode.md:371-509`
+and four close gaps nothing else in sixteen thousand lines closes:
+
+- **A quality-assignment function with the right signature.** `simulator-design.md:496-508`
+  requires quality to be assigned by a function that cannot see the simulator's fault state, and
+  `corpus-review.md` §6 lists it among what nobody wrote. `sensor_health` takes
+  `(sample, now_mono)` and reads four properties of the *sample* — finite, in range, fresh, not
+  bit-failed. It is the only concrete function in the corpus that satisfies the clause, and the
+  linter now enforces both ways to break it: read a fault-state parameter, or emit a code that is
+  not a quality. The second is the subtle one, because the document's own function returns `FAULT`
+  from the same branch that returns `SUSPECT`, and `FAULT` is refused as a quality by
+  `design.md:211-214`.
+- **A CUSUM drift detector, which is the vehicle's only sub-precision instrument.**
+  `plant.md` §4 states the requirement in its strongest form: the nominal cabin leak is
+  0.023 kg/h, *below* `eclss.leak_rate_g_s`'s own 0.01 g/s quantum, and it "must still happen".
+  No threshold can see that and no rate-of-change test can either, because each sample is smaller
+  than the resolution of the instrument producing it. A cumulative sum of (sample − expectation)
+  against an allowance accumulates what a threshold cannot, and it is now a published statistic
+  with four monitored groups — cabin leak, O₂ ledger, RCS ledger, bus source.
+- **A command-authorization chain with an ordering argument.** Ten `require` clauses in a
+  deliberate order, and the last two apply only to irreversible actions: a valid prepare token,
+  and **a synchronised clock** — `require(vehicle.time_quality == "SYNC", "TIME_UNTRUSTED")`. That
+  term is not in `mission_diode.md`'s eight-term predicate and it is not in any domain's registry.
+  Its reason is specific: an irreversible action with a time-tagged deadline has that deadline
+  measured against the vehicle's clock, so a drifted clock is a one-shot with an unknown arming
+  window. It is now `requires_time_sync`, required by the linter on every irreversible verb.
+- **A redundant-vote rule that stops voting.** Below two healthy members the vote returns
+  `degraded` rather than publishing a median of one, and `select_sensor` is refused while a
+  disagreement stands — `apollo_diode.md:333`'s "a single discrepant switch must not condemn a
+  thruster" generalised from pressure switches to every redundant group on the vehicle.
+
+Thirteen states, fourteen points, eleven thresholds, four verbs, eleven faults, and the narrowest
+verb surface on the vehicle — because this is the one domain whose commands change *what the fleet
+can see*. The three refusals at the bottom of its `commands.yaml` are therefore the most important
+entries in it: `set_sensor_good`, `override_stale_limit` and `clear_drift_monitor` are each a way
+for a command team to edit its own evidence, and nothing downstream could detect any of them,
+because the thing that would detect it is the thing being edited.
+
+The domain also **closed a debt the vehicle had been carrying**: `mission_diode.md:380-383` wants
+`health.overall` and `health.confidence` as guard terms, and `apollo_diode.md:184-186` answers it
+in terms — "it is therefore historically faithful to give your agents heterogeneous observations
+rather than a synthesized single health score." So the aggregate is refused on three grounds
+rather than left open: apollo declines it, `design.md` §8 refuses to publish diagnoses, and it is
+not derivable from the published channels without a weighting nobody could disagree with.
+
+`domains/comms/` is the tenth, and it is the one domain whose subject is **the fleet's own
+ability to observe**. `apollo_diode.md:901` is the sentence it is built around: "when
+communications degrade, the simulator should actually have to choose which data arrives. Do not
+merely set `comm.degraded=true` while delivering every telemetry field normally." Every other
+domain models a quantity; this one models a constraint on observation, and it is the only place
+in the vehicle where the experiment's epistemology has a bandwidth. Ten states, ten thresholds,
+five verbs, eleven faults, and four things worth reading:
+
+- **The blackout is derived, planned, and deliberately not alarmed.** The Moon occults the Earth
+  whenever the vehicle is within `arcsin(R_moon / r_orbit)` of the anti-Earth direction: a
+  71.0-degree half-angle at a 100 km orbit, 39.5 % of each 117.8-minute revolution, **46.5
+  minutes**. Apollo's loss-of-signal was about 45 minutes, and the difference is the eccentricity
+  and the Earth's own disc — so the derivation is right to within the effects it omits, which is
+  a stronger statement than a citation would be. Three thresholds carry
+  `gated_by: "comm.blackout_state is clear"`, because an alarm that fires every orbit is an alarm
+  a fleet learns to dismiss — and F-11's third order ("telemetry gaps → controllers lose evidence
+  during another anomaly") is what that habit costs.
+- **A quadratic antenna pattern, and a latent defect it exposed.** `vehicle.yaml` carried
+  `beamwidth_deg: 1.0` beside `gain_db: 26.7` and those two numbers cannot both be true: any
+  aperture obeys `G = 41253/θ²`, so 26.7 dB is a **9.4-degree** beam and a 1-degree beam would
+  need 46 dB. The error was invisible until this domain landed because the beamwidth is what the
+  pointing channel and `E-GEOM-LINK` scale against — and the *corrected* figure makes apollo's
+  own threshold coherent: `:163` calls 0–2° a good link, and at 2° off a 9.4° beam the pattern is
+  0.54 dB down, whereas against a 1° beam it would be 48 dB down, i.e. a "good link" range in
+  which no link exists.
+- **The amplifier is a load, not just a transmitter.** `set_power_amplifier` adds 36 W to the bus
+  and quadruples the RF output, and `apollo_diode.md:1140`/`:1158` are explicit that it is the
+  *trigger* of the degraded chain and never its root fault — it does not fail, it exposes. That
+  makes it the most consequential non-actuator verb on the vehicle, and its interlock list mixes
+  two electrical guards with a *thermal* one and a transmitter-draw one, because the amplifier is
+  a member of the cycle it can start.
+- **Bandwidth as a resource the fleet spends.** Five telemetry profiles, apollo's own, from
+  `emergency` — event and alarm channels plus essential power, ECLSS and GNC, and no engineering
+  channels at all — to `burst`, which is temporary and expensive. `set_telemetry_profile` is the
+  vehicle's only verb whose effect is on the fleet's own observation, bounded by an operator
+  ceiling and by `duration_s`, and `comm.recorder_fill_pct` is where its cost becomes visible: a
+  blackout is a telemetry *delay* until the recorder fills, and then it is a gap.
+
+Three coupling edges closed with it. `E-AMP-LOAD` at **0.0357 A per watt** (the transmitter's DC
+input is the load, so the sensitivity is `1/V_bus`), `E-GEOM-LINK` at **−0.54 dB per degree** at
+the 2° operating point from the quadratic pattern, and `E-DYN-GEOM` — which had been declared
+`UNCONFIGURED` beside a relation saying the coupling is the signal itself, a contradiction rather
+than a deferral, since an identity relation has a value and it is 1.0. The fix makes the useful
+distinction visible: the edge is the geometry, and `comm.hga_pointing_error_deg` is the residual
+after the gimbal compensates.
+
+`domains/gnc/` is the eleventh and last, and it is the domain that had to be pruned hardest
+before anything could be kept. C-15 is blunt: `gnc_diode.md` is written for a different vehicle
+class. Gone are the reaction wheels, CMGs, magnetorquers, momentum dump, GNSS, LiDAR,
+terrain-relative navigation and aerosurfaces — and with them the QP control allocator and the
+quaternion feedback law, both of which are `domains/rcs/`'s on a vehicle whose attitude is RCS
+only. What survives is the **navigation** half, and it is real mathematics: an error-state EKF
+with a Joseph-form covariance update, a fifteen-state error vector, a quintic trajectory segment
+with exact coefficients, and two state machines. Twelve states, seven thresholds, five verbs,
+eleven faults.
+
+Four things in it are worth reading:
+
+- **Four conventions, which are the document's most valuable export.** `gnc_diode.md:382` states
+  the rule — "no vector is valid without a declared frame" — and goes further, fixing four things
+  that are *conventions* rather than quantities: quaternion component order `[w,x,y,z]`, the
+  rotation direction `attitude_ref_from_body`, the frame an angular velocity is resolved in, and
+  covariance units per block. `apollo_diode.md:117` publishes `gnc.attitude_q[0..3]` and fixes
+  none of them. Two agents can disagree about the component order while both being right about
+  the physics, and nothing downstream reports the disagreement — the attitude is simply wrong, in
+  a way that looks like a control problem. So the four are declared once in
+  `vehicle.yaml#conventions`, and the frame registry gained the fields that make them bindable:
+  `central_body`, `rotating_or_inertial`, `orientation_parent`.
+- **A ladder, because a sigma is not a state.** `gnc.nav_position_sigma_m` has been a registered
+  channel since the registry was written and it cannot say whether the vehicle is navigating,
+  coasting on gyros, or lost — three different vehicles with three different correct responses.
+  `gnc_diode.md:666-691` supplies the missing ladder, and its own summary is the best sentence in
+  the document: **"a high covariance can therefore be an operational state transition, not merely
+  a number in telemetry."** `coasting` earns its place: no absolute update, the attitude right,
+  the rates right, the sigma growing slowly, and `gnc.coast_elapsed_s` as the only thing that says
+  how much time is left. Apollo 13 flew a large part of a mission on a platform that had not been
+  aligned since a burn, and elapsed time was the fact that governed what the crew could still do.
+- **`load_state_vector` is not the missing artifact.** The vehicle's largest gap is that
+  `mission.yaml#initial_state` declares the true state UNCONFIGURED — the published geometry does
+  not close as an Earth-centred conic, and a plausible ellipse would put the vehicle on a
+  trajectory that falls back. There is a verb called `load_state_vector`, and it is tempting to
+  conclude the verb is the fix. It is not: **it loads the navigation solution, and a plant whose
+  truth is unset cannot be started by a fleet calling anything.** The debt is the plant's and the
+  verb is the fleet's, and conflating them would make position assertable — which is the single
+  most valuable thing the window withholds. The verb's help text says so out loud, because a
+  fleet will otherwise reason exactly as far as the name.
+- **The 100 Hz question, answered rather than re-litigated.** `gnc_diode.md:1054` runs a 100 Hz
+  major cycle with a 10 Hz guidance update inside it; C-07 keeps the plant at 50 Hz. The
+  disposition is `vehicle.yaml:127`'s — "a GNC inner loop is sub-stepped rather than the plant
+  re-rated" — and the distinction that makes it honest is `rcs_dode.md:189`'s: **sample time is
+  not publish time.** The propagation genuinely runs at 100 Hz through the event queue; the
+  measurement updates cannot, because they are bounded by the sensors. A 100 Hz filter reading a
+  50 Hz IMU has fifty measurements per second and a hundred propagations.
+
+Three coupling facts came with it. `E-RCS-DYN` and `E-ENG-DYN` now have a producer for the state
+they act on. `gnc_diode.md:1175-1177`'s trajectory — the corpus's only concrete one, placing the
+vehicle 14.1 km *below* the lunar mean radius — is discarded per C-23 and recorded as GNC-08, the
+one fault in the vehicle whose cause is a missing configuration item rather than a failure. And
+`domains/avionics/`'s `innovation_window`, declared and unadvanceable since it landed, can now be
+advanced: the two domains share one innovation test, which is the right number of them.
+
+**With the eleventh domain in, three defects the last round's binding check had been waiting for
+surfaced immediately.** Generalising the state/channel enum binding to every domain found that
+`eclss.cabin_regulator_state` published three of the regulator's four positions — so a *closed*
+regulator, a cabin isolated from its supply, which is the configuration Apollo 13 flew, was a
+state the vehicle could be in and could not report — and that apollo's single `stage_state`
+channel covers a fact two machines produce, with `abandoned` (the descent stage left on the
+surface) belonging to neither of the ones it was pointed at. `domains/structure/` gained a
+`configuration` state and an `arm_state` state, the latter being the arm/commit pattern's own
+state that five `one_way_events` entries had been implying and nothing held.
+
+`presentation.yaml` is not a domain and not a plant artifact: it is **the vehicle's side of the
+frozen window**, and until it existed nothing played that role. `channels.yaml` declares 145 points
+and the domain registries declare 58 verbs, and not one of them said which points appear in
+`state.json`, which appear in the telemetry ring, what shape a frame has, or how a verb becomes a
+line in `HELP.md`. `docs/diode-contract.md` is frozen, so a vehicle that has never been introduced
+to it is a vehicle that may satisfy nothing of it.
+
+Two gaps were concrete enough to name before the file was written. §3 requires that **every verb's
+gate variable appears in `HELP.md` and `state.json`**, and §9's check 5 turns that into a
+conformance test — every verb here declares a `gate.variable` and nothing collected them into a
+published set. And §5.1 says "every published field is one of three things" (A, I or T) while the
+registry declares **four** kinds, which is a question about how a commanded valve position is
+labelled to a fleet that must not mistake it for a measurement.
+
+Four things in the file are worth reading:
+
+- **The four-kinds/three-layers resolution.** `measurement → A`, `estimate → I`, and
+  `service → A` — and the last is the argument rather than a convenience. The contract defines A as
+  "authoritative *about the report*, not about the world… may be wrong, drifting, saturated, stuck".
+  A commanded valve position is authoritative about the report in exactly that sense, and it is not
+  a claim about the world because the valve may not have moved. So a service state is **an A with a
+  different subject, not a fourth layer** — and the consequence is operational: a service channel
+  carries GOOD only, because a quality code says how much to trust a *reading* and a fleet that saw
+  `SUSPECT` on `rcs.mode` would go looking for a sensor fault in a mode enum.
+- **The mirror's bound is a rule, not a style.** `state.json` is rewritten every cycle, so its
+  membership is a cost paid at the ring's cadence. The rule is "the vehicle's own software state" —
+  `layer: service` at P0/P1 — which derives **19 channels**, with a declared ceiling of 24 so that
+  adding a twentieth is a decision with a number attached. No measurements and no estimates: a
+  reading belongs in the ring, where a fleet can see what it did over time, and a mirror carrying
+  readings would give one current number and no history.
+- **The ring's cadence classes, and what a frame actually contains.** 21 channels at ≥ 5 Hz, 85 at
+  1–5, 8 at 0.5–1, 27 slower, and 4 with no period at all. The rule is that **a frame carries the
+  values whose period has elapsed**, so the `values` map's *membership* is itself information —
+  and a fleet that reads a frame as a complete snapshot will treat an absent slow channel as a
+  dropout. That is F-14's failure mode arriving from the other side: a frozen value and a slow rate
+  look the same.
+- **`HELP.md` is generated, and generating it found a falsehood.** §8 makes `HELP.md` the only place a verb name may appear, which means a verb the documentation misses is a verb no fleet can discover. `tools/generate_help.py` emits it from the registries, and its first run listed `set_telemetry_profile` under *"verbs this vehicle does not have"* — while `domains/comms/` implements it. A domain declining a verb means **"not mine"**, not "not this vehicle's", and for this one verb the two readings come apart. It now has a heading of its own, and a test holds the partition.
+- **No hidden verbs, and why that is not an omission.** §3 permits a hidden verb only if it is
+  **inert** — no egress, no spend, no state change — because a hidden verb bypasses gate evaluation
+  by construction. This vehicle has no inert verbs: all 58 do something, and a verb that did
+  nothing would be a name in `HELP.md` that costs a fleet a command cycle to discover is empty.
+  What the vehicle hides instead is *channels*, in each domain's `points.yaml#not_published`, and
+  hiding a channel is safe in a way that hiding a verb is not.
+
+The file also carries a **conformance table**: for each of `diode_probe.py`'s twelve checks, whether
+the vehicle's own configuration satisfies it, shares it with the executive, or cannot influence it.
+Five are satisfied by configuration — the closed vocabulary, the published gate variables, the
+mirror that is not read back, the deferred re-check, and telemetry that advances on its own; two
+are shared; four are the far side's; and one is vacuous, which is check 6, because this vehicle has
+no hidden verbs for it to test. That table is the closest thing this folder has to a claim about the
+implementation, and it is deliberately a column of *reasons* rather than a checklist of ticks.
+
+**Deriving the tick order found four structural defects and one contract error**, and the
+sequence is worth recording because each finding came from the one before it.
+
+`plant.md:71` promises a deliverable: *"Topological order is only partial, so the linter emits a
+total order and the scheduler obeys it."* Nothing emitted one. Writing it was the point, and what
+it found was not what it was looking for.
+
+- **The flagship cycle had lost its back-edge, and two cycles had disappeared.** The `cycles:` block
+  in `coupling.yaml` had three entries whose `- id:` lines were indented at the same depth as the
+  content of the preceding `note:` block scalar — the same absorbing failure that took six declined
+  verbs in the commands files, at larger cost here. `C-RAD-COOL` and `C-BAT-THERMAL` were **not
+  cycles at all**; their remaining keys became keys of `C-AMP-BUS-PUMP` and silently replaced its
+  own. The flagship degraded chain therefore parsed as an algebraic loop with `back_edge: null`,
+  `E-PLATE-COMM` was nobody's back-edge, and the hysteresis requirement that
+  `review-findings.md` §7 exists for was gone. Every one of those overwritten values was
+  individually valid, which is why the linter passed it.
+- **And 21 point entries had been swallowed the same way**, in four domains: `thermal` 8, `power` 4,
+  `propulsion` 4, `consumables` 5. Their entries were absorbed into the `note:` above, which left
+  **27 registered channels with no producer at all** — thresholds watching values nobody computed,
+  crew positions told they could read gauges that did not exist, and a failure chain whose first
+  clue was never emitted. Two linter checks came out of it: a **duplicate key is refused** (49 were
+  found across five files, and a duplicate is always a fault because nothing here is written twice
+  on purpose), and **every registered channel must have a declared source** — a domain point, a
+  frame field, or an entry in `presentation.yaml#plant_published`.
+- **Three cycles that were declared did not close.** `C-BAT-THERMAL` named `E-BUS-GNC` — bus to the
+  avionics computer — as its third member, which leads nowhere near the coldplate. The check asks a
+  question nobody had asked of any of the five: does the back-edge's `to` actually reach its
+  `from` through the other members?
+- **Two cycles were genuinely missing.** `E-AMP-LOAD` and `E-BUS-COMM` form a transmitter-load /
+  bus-voltage loop with no declaration — found because the schedule could not be built. And
+  `C-REACTANT-DRAW` was named for the fuel cell's reactants and declared only the oxygen half; the
+  hydrogen path is the same physics through a second tank and is now `C-REACTANT-DRAW-H2`.
+- **And the contract was wrong about the granularity.** `plant.md` specified the order over
+  *domains*, and a domain order **cannot in general exist**: it is a coarsening of the node graph,
+  and coarsening creates cycles the physics does not have. `comms → power → consumables →
+  propulsion → gnc → comms` is a cycle in the projection with no node-level path behind it. The
+  order is now derived over **nodes** — 39 of them — with the frozen lexicographic tiebreak on node
+  id, and a domain with states on several nodes simply appears at several points. That is what
+  Gauss-Seidel does anyway: the domain is an authoring unit, not a scheduling unit.
+
+One smaller find came with them, from the state/channel binding check: `power.lcl_[n]_state`
+published `open` where the machine holds `latched`, so an LCL about to reclose was
+indistinguishable from one that never would — which is the entire reason
+`electrical_diode.md:254` specifies a controlled reclose.
+
+**And the last gap the ordering work exposed is closed.** Ten nodes are advanced by more than
+one state, and **nothing declared which advances first** — so the frozen lexicographic tiebreak
+decided all ten. That is not ambiguity, it is a wrong answer waiting to happen, and `link` is the
+proof: `link_snr` sorts before `tx_power`, and transmit power is a term in the link budget, so the
+derived order would have computed every signal-to-noise ratio from *last tick's* power. On a
+nominal link that is a 20 ms error; across `set_power_amplifier` it is a 6 dB step reported a tick
+late, which is precisely the transient a fleet watches for.
+
+Each node in that position now declares `state_order` — the group of producing states, in the order
+they advance — or `independent`, which is a permitted answer that has to carry a reason. Seven
+declare an order and three declare independence:
+
+| Node | Declared | Why |
+|---|---|---|
+| `link` | `tx_power`, `link_snr` | transmit power is a term in the link budget |
+| `structure_config` | `pyro_fired`, `lm_separation_state`, `descent_stage_state`, `configuration` | the three mechanisms, then the projection they produce |
+| `crew_state` | `crew_location`, `crew_availability`, `crew_workload` | workload is a lag on activity, which depends on the first two |
+| `vehicle_dynamics` | `body_rate`, `attitude`, `orbital_state` | the causal order the 6-DOF integration is written in |
+| `coolant_flow` | `pump_1_speed_rpm`, `coolant_flow_kg_s` | the pump produces the flow |
+| `fuel_cell` | `fuel_cell_power_w`, `source_converter_v` | the cell produces, the converter regulates what it produced |
+| `alert_state` | `alert_lifecycle`, `alarm_horn` | the horn sounds *because* of the alerts |
+| `cabin_atm`, `lm_cabin_atm` | independent | mixture components: each gas is advanced from its own flows, and pressure is a read of all of them |
+| `engine_main` | independent | three machines sharing an actuator inventory, not interacting |
+
+`--order` prints the result: the 40 nodes in derived order, each with its producing states in
+evaluation order, and the 59 internal states that advance with their domain. That view is the
+artifact `plant.md:71` promises, and both of its levels are derived — so neither can drift from
+the configuration that produces it.
+
+**The dictionary's promises are now traceable.** `channels.yaml`'s `events` field is apollo's
+prose — "stuck-on/off signature", "<8 degraded", "any non-null" — and the thresholds are the
+machine-readable form of the same promises. Nothing joined them, and the audit that did found
+**53 of 118 channels declaring events that no threshold watched**.
+
+A dictionary that promises an alarm the vehicle does not raise is worse than one that promises
+nothing, because a fleet reads the promise and waits. But not all 53 were holes, and telling the
+cases apart is the work. Every channel with events now declares which kind it is:
+
+| Class | Count | What it claims, and what the linter does with it |
+|---|---:|---|
+| `alarm` | **81** | the vehicle raises a C&W alert, so a threshold must watch this channel |
+| `realised_by` | **20** | a threshold on *another* channel keeps the promise, and `event_thresholds` names it |
+| `notification` | **16** | published when it changes; requires `on_event: true` |
+| `frame` | **1** | carried in the envelope's own fields |
+
+`realised_by` is the class that made the audit worth doing. `eclss.cabin_temp_c` and
+`thermal.zone_[id]_t_c` are **one cabin temperature seen from two domains' sides**, and the
+thermal domain's `csm_cabin_low`/`csm_cabin_high` are what keep the ECLSS channel's "<10, >30"
+promise. Naming the implementer turns a plausible claim into a checkable one — which matters
+more than usual here, because two channels for one physical quantity is the reconciliation's
+oldest problem arriving in a new place. It is now named where it occurs.
+
+**Nineteen thresholds came out of it**, taking the vehicle from 121 to 139, and five of them were
+a compartment with no limits at all: the CSM had cabin-pressure caution and emergency levels, a
+CO₂ caution and the ppO₂ pair, and **the LM had none of them** while its three channels declared
+exactly those events. That is the compartment that matters most and it was the one unwatched —
+from undocking to docking the LM is the crewed vehicle and the CSM is empty, so for three days of
+the surface phase a caution on the CSM's pressure is a caution about a spacecraft with nobody in
+it. The rest are the alarms the dictionary promised and nothing raised: an uncommanded
+acceleration (**F-04's own corroborating channel**, registered, on two crew perceiving lists, and
+with no alarm on the one condition it exists to detect), an LCL that tripped and latched, a
+guidance computer that restarted, an engine armed when nobody meant to arm it, a hydrogen reserve
+with no floor behind it.
+
+**The oldest surviving duplication is resolved, and finding it took a new check.** `eclss.cabin_temp_c`
+and `thermal.zone_csm_cabin_t` were **one cabin temperature published twice** — one state, two
+channels, two sets of thresholds. It survived every previous audit because the two points named
+their sources differently: one a state, the other a coupling node, and nothing compared them.
+
+The check that found it is the one that asks whether a point's `from` resolves to *anything*: a
+state in its own domain, or a coupling node. A `from` that resolves to nothing silently skips the
+enum binding, which is exactly the comparison that would have caught the duplication. Three
+defects came out of it:
+
+- **The duplication itself.** The resolution follows vocabulary §3 — apollo's name wins where
+  apollo has one — so the cabins are `eclss.cabin_temp_c` and a new `eclss.lm_cabin_temp_c`, and
+  `thermal.zone_[id]_t_c` now covers the four zones apollo is silent about (avionics bay, service
+  bay, descent bay, radiator). Two compartments, two channels, one producer each.
+- **`power.battery_temp_c` named a state that exists nowhere** — while `battery_overtemp` and
+  `battery_thermal_runaway_rate` watched it. A threshold on a channel with no producer is the same
+  defect as an alarm with no threshold, arriving from the other side. The power domain now has a
+  `battery_thermal_state`.
+- **The crew's switch and breaker channels both named `hatch_state`** — a state in the *structure*
+  domain that has nothing to do with them. Two channels had no source of their own and the crew
+  domain had no switch or breaker state at all; it has both now.
+
+The LM cabin's split also corrected a crew position: the LM commander and pilot listed a cabin
+temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c` existed the only
+one they could have been reading was **the other spacecraft's**.
+
+**"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
+world — 119 states, 60 edges, 146 channels, 58 verbs — derives the 40-node tick order by importing
+the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
+telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
+schedule order until it reaches something it cannot compute, where it names exactly what is
+missing**. That is `simulator-design.md:146-150`'s method applied to the plant instead of to the
+linter: you do not enumerate what a simulator needs up front, you build it, run it, and it tells
+you what you now owe.
+
+What it says:
+
+| | |
+|---|---|
+| states fully configured | **107 / 119** |
+| states with a debt, in schedule order | 12 |
+| edges carrying a sensitivity | **22 / 55** |
+| `UNCONFIGURED` scalars | 219 |
+
+The twelve blocked states are named and ordered, and their debts are the vehicle's real physics
+gaps rather than bookkeeping: the gyro bias's time constant, the battery's thermal τ, the
+pressurant's lag, RCS's `t_min_on` and its deadband bands, the feed tank's volume, the thrust rise
+and tailoff. **The first tick stops at `E-LM-ATM-ABSORB`** — the LM's LiOH path, which is the leg
+Apollo 13's crew improvised an adapter for, and which is unconfigured because the LM's absorber is
+a different cartridge from the CSM's.
+
+Two things about the tool are deliberate. It **imports the linter** rather than re-deriving the
+schedule, because two implementations of one order is how two runs of the same seed come to
+differ. And its debt count — 219 — is **not** the linter's 202, because they measure different
+things: the linter counts prose obligations as well as unset values, and this counts only the
+values that literally say `UNCONFIGURED`, since those are the ones that stop a plant. Two numbers
+with one name would be worse than either.
+
+The method implementations are mostly refusals, and that is the honest shape: a `lag` needs a time
+constant and a driving value, a `stock` needs a quantum and a flow, and an `algebraic`, `discrete`
+or `dynamics` state needs a *rule* — which no configuration can supply, because the rules are
+domain code. What the file provides is the frame those rules go in, and the error messages that
+tell you where.
+
+## The invariants, and which of them are enforced
+
+`mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
+with the document rather than from it — several are properties this vehicle already had, stated
+badly or not at all — and the useful thing to do with a list like this is to say, for each one,
+whether the linter would catch a violation. An invariant that nothing checks is a paragraph.
+
+| | Invariant | Enforced by |
+|---|---|---|
+| A | `ExecutedEffect ⇒ verb ∈ Registry` — no unregistered input causes an effect | The command registry, and `FORBIDDEN_VERB`: a verb form that must not exist is refused by pattern, so the registry cannot grow one. |
+| B | `AgentRequest ⇏ ActuatorEffect` — always a trusted step between them | Not a property of this folder. It is the diode's, and it is the reason the vehicle is behind a window at all (`docs/diode-contract.md`, `design.md` §8). |
+| C | `Effect(i,t) ⇒ Guards(i,t)` — validity at admission is not enough | Every verb declares `gate`, `interlocks`, `allowed_phases` and `conflict_domain`; the linter refuses an interlock that resolves to no threshold, and the phases a verb allows must be phases the mission declares. `avionics_diode.md:496-508` adds the tenth term the predicate was missing — an irreversible action needs a synchronised clock, because its deadline is measured against one — and the linter now requires `requires_time_sync` on every irreversible verb. |
+| D | `RequiredTelemetryStale ⇒ ¬HazardousEffect` | **New, and the reason for this round.** Every threshold's point must resolve to a maximum decision age, a declared age may not be shorter than the publish period, and every entry of `mission.yaml#transition_evidence` must be meetable by the channel it names. |
+| E | `AbortLatched ⇒ ¬Permit(hazardous)` | Partly. `mission.abort_latched` is a P0 channel and the posture machine gives `aborting`/`aborted` no hazardous actions; the dominance rule itself is the executive's to implement, and the vehicle's contribution is that the latch is published and unambiguous. |
+| F | `AgentWrite(TelemetryMirror) ⇏ Change(MissionState)` | Not a property of this folder — it is the window's, and `plant.md`'s truth/evidence boundary is the vehicle-side half of it. |
+| G | `Accepted(seq_n) ⇒ seq_n > highwater` | The canonical chain's (V-02, C-21): `seq` + `boot_id` + `stream_id`. The vehicle publishes the sequence; the ledger is the executive's. |
+| H | `Effect ⇒ RemainingAfterEffect ≥ SafetyReserve` | The reserve floors: `prop_cutoff_guard_5`, `o2_reserve_10`, `water_reserve_20`, `cooling_water_reserve`, `rcs_propellant_reserve` and their siblings, each with an `interlock: true` guard evaluated at request time. |
+| I | `Irreversible(a) ⇒ Registry[a].irreversible ∧ TrustedPermit(a)` | Every verb declares `irreversible`, and every one-way *state* must declare `requires_arm` or the linter refuses it — which is where the vehicle's only two-step verbs live. |
+| J | `MissionState = ABORTED ⇒ MissionState ≠ EXECUTE` | The posture machine: `aborted` is `terminal: true`, `abort_latched` is not in any verb's argument schema, and the linter refuses a `mission.posture` enum that does not match `mission.yaml`'s postures. |
+
+Six of the ten are enforced mechanically, two are enforced in part, and two are properties of the
+window rather than of the vehicle. The distinction matters for reading the rest of this folder:
+**the linter is a referee for claims about the vehicle, not for claims about the boundary**, and
+D is the one that turned out to have teeth — applying it found that nineteen of the fifty channels
+a threshold watches were gated on evidence their own publisher could not deliver in time.
+
+## The one thing to keep in mind when extending this
+
+The linter is not a schema validator; it is the mechanism the design calls "a conversation
+with the linter" (`simulator-design.md:146-150`). You do not enumerate what the simulator
+needs up front — you add a domain, run it, and it tells you what you now owe. When it reports a
+debt, the debt is the deliverable: the wrong response is to fill the value with something
+plausible so the build goes green.

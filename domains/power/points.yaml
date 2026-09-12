@@ -1,0 +1,91 @@
+# domains/power/points.yaml — what this domain publishes, and how each number is made.
+#
+# Every entry names a channel that is already registered in `../../channels.yaml`. A domain
+# may not invent one: the registry is the vocabulary (vocabulary V-01), and a domain that
+# needs a new channel registers it there rather than forking it here. The linter refuses an
+# unregistered channel by name.
+#
+# `layer` is inherited from the registry and repeated here only where this domain's derivation
+# is what makes the claim true.
+
+domain: power
+points:
+  - channel: power.dc_bus_a_v
+    from: bus_a_v
+    layer: measurement
+    derivation: "the nodal solve at this tick: source EMF minus the drop across source and harness resistance"
+    note: >-
+      An instrument reading, not truth. The plant's hidden bus voltage is never published;
+      this is what a transducer on the bus would report, noise, bias and quantisation
+      included, and the quality function that labels it cannot see a fault.
+  - channel: power.dc_bus_b_v
+    from: bus_b_v
+    layer: measurement
+    derivation: as dc_bus_a_v, on the second bus
+  - channel: power.bus_a_current_a
+    from: bus_a_load_w
+    layer: measurement
+    derivation: "total enabled load on bus A divided by its voltage"
+    note: >-
+      Apollo's range for this channel is 10-120 A (apollo_diode.md:75), which is wider than
+      electrical_diode.md:251's 40 A continuous rating — the vehicle is apollo's, so the
+      instrument must span apollo's range (conflict C-02).
+  - channel: power.source_1_current_a
+    from: fuel_cell_power_w
+    layer: measurement
+    derivation: "the first fuel cell's output divided by the bus voltage"
+    note: "an unexpected zero here is the fast signature of a source loss; an overload is the signature of a shorted load behind it"
+  - channel: power.battery_soc_pct
+    from: battery_charge_j
+    layer: estimate
+    derivation: "remaining charge against rated capacity, per battery string, worst string published"
+    note: >-
+      Inferred, and it should be: no Apollo battery published a state of charge, so this is
+      the ground model's estimate resting on current integration and temperature. Marked as
+      an estimate because an agent that plans against it is trusting a model, and the model
+      is wrong after a capacity derate.
+  - channel: power.battery_temp_c
+    from: battery_thermal_state
+    layer: measurement
+    derivation: "the battery zone's temperature, from the thermal domain's node for that zone"
+    note: "the channel through which the thermal domain reaches back into the electrical one — cycle C-BAT-THERMAL"
+  - channel: power.bus_tie_state
+    from: bus_tie_closed
+    layer: service
+    derivation: "the tie's commanded and actual position, including a trip"
+    note: "a service state, not a physical claim: it says what the switchgear did, not what the voltage is"
+  - channel: power.load_margin_w
+    from: fuel_cell_power_w
+    layer: estimate
+    inputs: [power.dc_bus_a_v, power.bus_a_current_a]
+    derivation: "available generation minus present demand, published at 1 Hz"
+    note: >-
+      One of the three inferred quantities the spike exists to exercise (simulator-design.md
+      §3.9). Its <100 W and negative events make it the channel an agent watches to decide
+      whether to shed before the bus makes the decision for them.
+  - channel: "power.lcl_[n]_state"
+    from: lcl_tripped
+    layer: service
+    derivation: "per-load protection state: closed, tripped, retrying, or latched after a second trip inside the recovery dwell"
+  - channel: "power.lcl_[n]_current_a"
+    from: bus_a_load_w
+    layer: measurement
+    derivation: "the load's own current, so an overloaded load is distinguishable from a failed bus"
+  - channel: power.load_shed_class
+    from: load_shed_class
+    layer: service
+    derivation: "the highest priority class currently shed"
+    note: "an agent that cannot see this cannot tell a vehicle that is conserving power from one that is failing"
+
+# --------------------------------------------------------------------------------------
+# Channels this domain deliberately does not publish, and why. A domain that omits an
+# uncomfortable channel is a domain that has deleted a diagnosis.
+# --------------------------------------------------------------------------------------
+not_published:
+
+  - channel: fuel cell internal resistance
+    why: "hidden truth. A degrading cell is visible as a falling bus voltage under a known load, which is what an operator would have; publishing the resistance would hand over the diagnosis."
+  - channel: "power.bus_a_ground_fault"
+    why: "a conclusion, not evidence. The signature is a current rise with a voltage collapse and an LCL trip, and `design.md:211-214` forbids publishing conclusions."
+  - channel: "power.battery_capacity_remaining_ah"
+    why: "the battery's true capacity after a derate is hidden truth; what is published is the estimate above, which is wrong in an interesting direction exactly when the thermal derate matters."

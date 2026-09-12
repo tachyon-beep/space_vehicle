@@ -1,0 +1,326 @@
+# domains/gnc/profiles.yaml — the navigation limits, and the ladder they drive.
+#
+# ## What is apollo's and what is not
+#
+# apollo's GNC block (`:117-128`) publishes eleven channels with bands and events, and most of
+# them are *observations*: a sigma, an alignment error, a rejection reason. What apollo does not
+# supply — because apollo is a channel catalogue and this is a subsystem — is the set of limits
+# that turn those observations into decisions, and the navigation-integrity ladder is the only
+# place in the corpus that states what the decisions are (`gnc_diode.md:666-691`).
+#
+# So this file has two halves and they are unusually clean:
+#
+#   the *instrument* limits, owed from nobody   a drift rate, an alignment budget, a radar range.
+#                                                No source reached publishes any of them, and
+#                                                every one is a debt with a name.
+#   the *ladder* limits, from the document       the covariance and coast limits that move
+#                                                `gnc.nav_integrity`, which `gnc_diode.md:684-686`
+#                                                names (`coast limit / covariance limit`) and does
+#                                                not value.
+#
+# ## The one limit that is not owed
+#
+# `estimator_divergence` watches the position sigma against a *derived* limit rather than an
+# invented one, and the derivation is this file's contribution: the vehicle's only absolute
+# position source in cislunar space is a star-horizon sighting, and the accuracy of that is
+# bounded by the crew's ability to read an angle through a sextant — a figure the Apollo
+# literature puts at roughly a nautical mile, about 1.8 km. So the sigma at which the estimate
+# stops being a navigation solution and becomes a guess is the sigma of the best measurement
+# available, and that is a number this vehicle can defend without having published a figure for
+# the gyro.
+
+domain: gnc
+
+profiles:
+
+  - id: default
+    revision: 1
+    description: "apollo's GNC channel events plus the navigation-integrity ladder's limits"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:117-128"
+      note: >-
+        apollo's events are adopted where it states them — the estimator's rejection conditions,
+        the alignment channel's band. The ladder's limits are `gnc_diode.md`'s and are owed as
+        values; the dwells are chosen and argued where they appear. This domain has fewer apollo
+        thresholds than any other because apollo's GNC block states *bands* rather than *events*
+        for most of its channels: a sigma with a nominal and no event is an observation, and
+        turning it into a decision is what the ladder does.
+
+thresholds:
+
+  # --- the ladder: what moves `gnc.nav_integrity` -----------------------------------------
+  - id: estimator_divergence
+    point: gnc.nav_position_sigma_m
+    comparator: above
+    assert: 1800
+    clear: 1000
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    point_units: "m: the accuracy of the best absolute measurement the vehicle has"
+    provenance:
+      basis: derived
+      relation: >-
+        1 nautical mile = 1,852 m, rounded down to 1,800. A star-horizon sighting through a
+        sextant is the vehicle's only absolute position source in cislunar space
+        (`apollo_diode.md:123`), and the Apollo literature puts its accuracy at about a nautical
+        mile — so the sigma at which the estimate stops being a navigation solution and becomes a
+        guess is the sigma of the best measurement available. The recovery edge at 1,000 m is the
+        same argument with margin: a solution that has been *corrected* down to a kilometre is
+        being corrected by something better than a sighting, and the vehicle should notice that it
+        is being helped
+      note: >-
+        this is the ladder's upper rung and it drives both `degraded` and `invalid`. The reason it
+        is derived rather than owed is that the *measurement's* accuracy is published, so the
+        limit is a statement about the vehicle's instruments rather than about its gyro — and a
+        threshold that can be defended from a published figure is worth more than one that cannot
+
+  - id: covariance_high
+    point: gnc.nav_position_sigma_m
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    point_units: "m: the phase-specific covariance limit of gnc_diode.md:684"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:684-686 — DEGRADED -> INVALID on 'integrity bound exceeded', and COASTING -> INVALID on 'coast limit / covariance limit'"
+      note: >-
+        the ladder's *lower* rung, and it is owed for a reason worth stating: it is phase-specific
+        rather than absolute. A position sigma of 500 m during a translunar coast is comfortable
+        and the same 500 m during a powered descent is not — the descent needs a navigation
+        solution good to tens of metres because the guidance is flying the vehicle to a point on
+        the surface. So the limit is a function of the phase, and `mission.yaml`'s phase list is
+        what it is a function of; the values are owed with the descent's guidance accuracy, which
+        is the same figure `mission.yaml#initial_state`'s missing perilune depends on
+
+  - id: coast_limit_exceeded
+    point: "gnc.coast_elapsed_s"
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 1000
+    dwell_clear_s: 0
+    latched: true
+    severity: WARNING
+    point_units: "s: the coast limit of gnc_diode.md:686"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:684-686 — COASTING -> INVALID on 'coast limit'"
+      note: >-
+        how long the vehicle may propagate on gyros alone before it declares itself lost, and it
+        is owed *and* it is derivable in principle — the limit is where the covariance reaches
+        `covariance_high`, which depends on the gyro's drift rate, which is the figure
+        `components.yaml` records as unset. So two owed values stand between this vehicle and a
+        coasting descent being a modelled condition rather than a name: the drift rate and the
+        phase's accuracy need. Recording that chain is more useful than recording either end of it
+
+  - id: innovation_rejected
+    point: gnc.estimator_rejection_reason
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: CAUTION
+    point_units: "ordinal: none = 0, any other value = 1"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:120"
+      note: >-
+        apollo's channel, whose whole enum is an event: `none` is nominal and every other member
+        is something the filter declined. No dwell and no band, because a rejection is a discrete
+        occurrence rather than a band crossing — the same shape as the avionics domain's program
+        alarm, and for the same reason. The `innovation` member is the interesting one and it is
+        the only member whose *cause* the vehicle can pursue: `domains/avionics/`'s
+        `innovation_window` counts how many of the last *m* rejections were innovations, and two
+        is a sensor that has stopped agreeing with the filter rather than a bad measurement
+
+  - id: alignment_error_high
+    point: gnc.imu_alignment_error_deg
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    point_units: "deg, against the platform's alignment budget"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:122"
+      note: >-
+        apollo publishes the channel and no band for it, so the limit is owed with the alignment
+        budget — and it is the threshold that most directly prices a burn. A platform aligned to
+        within θ degrees produces a Δv off by θ in direction, so a 0.1-degree error on a 3,000 m/s
+        burn is 5 m/s of velocity error in the wrong direction, which over a translunar coast is
+        the difference between a free-return trajectory and one that has to be fixed. The number
+        is a mission decision about how much trajectory correction the vehicle is willing to
+        spend propellant on, and it belongs to the mission rather than to the instrument
+
+  - id: gyro_bias_growing
+    point: "gnc.gyro_bias_xyz_deg_s"
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 5000
+    dwell_clear_s: 60
+    latched: true
+    severity: ADVISORY
+    point_units: "deg/s, the largest component magnitude"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:815-825 — `b_g` in the error-state vector"
+      note: >-
+        the vehicle's earliest warning of an IMU that is going, and it arrives before the
+        covariance does. A bias *estimate* that is growing is an instrument drifting; the sigma
+        grows as a consequence, a minute or an hour later depending on the drift rate. So this
+        threshold is F-10's earliest observable and it is advisory rather than caution on purpose:
+        a drifting gyro is not yet a vehicle that cannot navigate, and a fleet that treats it as
+        one will spend a mission replanning around an instrument that still has hours of useful
+        life
+
+  - id: radar_out_of_range
+    point: gnc.radar_altitude_m
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 500
+    dwell_clear_s: 5
+    latched: false
+    severity: CAUTION
+    point_units: "m, above the radar's acquisition range"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121"
+      note: >-
+        the landing radar's range, and it is a *gating* condition rather than a fault: above the
+        acquisition range the radar reports nothing and the vehicle is coasting on gyros, which is
+        why this threshold's saturation is the moment `gnc.nav_integrity` most needs to be read.
+        The value is owed with the radar's range, and both belong to the same missing figure — a
+        radar that cannot be characterised cannot be the source that ends a coast
+
+# --------------------------------------------------------------------------------------
+# Flight rules: the two relations this domain contributes to the executive rather than to a
+# threshold. They are here rather than in the command registry because the registry does not
+# yet have a field for "gate on a ladder state", and recording them as prose that the registry
+# will absorb is better than inventing a field before the second use of it exists.
+# --------------------------------------------------------------------------------------
+  - id: nav_integrity_degraded
+    point: gnc.nav_integrity
+    comparator: below
+    assert: 3
+    clear: 3
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: CAUTION
+    point_units: "ordinal: invalid = 0, reacquire = 1, coasting = 2, degraded = 3, nominal = 4"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:666-691 — the navigation-integrity ladder"
+      note: >-
+        the ladder's own announcement, and it exists because the ladder was a *published state*
+        with nothing watching it. `gnc.nav_integrity` is P0 and drives the flight rules in
+        `domains/gnc/profiles.yaml`, and until this threshold it drove them without ever raising
+        an alarm — a fleet would learn that navigation had degraded by noticing that a burn was
+        refused. The ordinal is the ladder's own latency order rather than an invented scale
+
+  - id: nav_velocity_sigma_high
+    point: gnc.nav_velocity_sigma_m_s
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 5000
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    point_units: "m/s, against the phase's velocity tolerance"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:120"
+      note: >-
+        apollo's event is "> phase-specific tolerance" and the value is owed with the phase's
+        tolerance, which is a mission decision about how much trajectory correction the vehicle is
+        willing to spend propellant on. This is the channel that catches a *gravity-model* error:
+        GNC-08's signature is the position and velocity sigmas rising together with
+        `gnc.estimator_rejection_reason` staying `none`, and the position half already has
+        `estimator_divergence`. Without the velocity half, a model error that is growing the
+        velocity estimate faster than the position one has nothing watching it
+
+flight_rules:
+
+  - id: attitude_known_before_burn
+    rule: "guidance_mode may not enter `burn` while nav_integrity is `invalid` or `reacquire`"
+    why: >-
+      the one rule this domain contributes to the command registry rather than to a threshold,
+      and it is the reason `start_burn`'s interlock list will grow a GNC member when this domain
+      is wired in. A burn flown on a lost platform is thrust in an unknown direction, and the
+      vehicle cannot recover from it by stopping — the Δv is spent. Note the asymmetry with
+      `alignment_error_high`: an alignment *error* is a degraded burn and an *invalid* solution
+      is a burn with no direction at all, so the rule gates on the ladder rather than on the
+      number
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:693-723 — translational guidance, and :962-987's diode-enforced safety rules"
+
+  - id: coasting_is_not_lost
+    rule: "a coasting vehicle may continue the current activity; an invalid one may not"
+    why: >-
+      the ladder's most operationally important distinction and the reason `coasting` is a
+      separate state from `invalid` rather than a stage on the way to it. A coasting vehicle has
+      a good attitude, a good rate, a position that was right when the coast began and a clock;
+      most activities are fine and the ones that are not are the ones that need *absolute*
+      position — a descent, a rendezvous, an alignment. A fleet that treats a coast as a
+      failure will abort activities that were never at risk, and F-10's third order is what
+      happens when it does: "burn error -> extra propellant and degraded return margin"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:666-691, :1028-1052"
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    an agent may select a profile and may never edit one (D-05). What a profile changes here is
+    the *estimator's* behaviour rather than the vehicle's, and that is a harder case for the rule
+    than it looks: a fleet that could widen its own covariance limit would be deciding how lost it
+    is allowed to be before anyone is told. So the profiles below change how the filter spends its
+    measurements, and never what it means for the estimate to be good enough.
+
+  alternatives:
+
+    - id: conservative
+      revision: 1
+      description: "tighter innovation gates and a more selective measurement set: fewer updates accepted, a smoother and less responsive solution"
+      factor: 0.7
+      provenance:
+        basis: historical
+        source: "gnc_diode.md:413-418 — the warn and trip thresholds of the normalized innovation test, and the k-of-m history"
+        note: >-
+          the profile a fleet wants when it suspects a sensor and cannot prove which: raising the
+          innovation gate rejects more measurements, which costs responsiveness and buys immunity
+          to a single bad source. The cost is real and worth stating — with a tighter gate the
+          filter rejects *good* measurements too, so a conservative vehicle whose sensors are all
+          healthy navigates slightly worse than a nominal one. That is the trade, and a fleet
+          should have to make it rather than have the vehicle make it silently
+
+    - id: radar_aided
+      revision: 1
+      description: "weight the landing radar heavily where it has a lock: absolute range updates during the descent"
+      factor: 1.3
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:121, :1044"
+        note: >-
+          the profile for a powered descent, and the one that ends a coast. The radar is the only
+          absolute position source that does not depend on a crew member looking through an
+          eyepiece, so during the minutes when the vehicle is descending to a point on the surface
+          it is the measurement the filter should be built around. Apollo 11's commander flew the
+          last part of the descent with exactly these two numbers

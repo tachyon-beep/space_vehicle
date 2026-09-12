@@ -1,0 +1,187 @@
+# domains/crew/commands.yaml — the ask_crew verb, and the four things about it that make it
+# safe to enable.
+#
+# ## `ask_crew` is the most dangerous verb on the vehicle, and the danger is not mechanical
+#
+# Every other verb can be bounded by an interlock. This one cannot: an unbounded crew answer is
+# a channel to the truth, and a crew member who could report anything would be a better
+# instrument than every sensor aboard — which inverts the entire epistemic design. `review-findings.md`
+# #4 put it precisely: a leak in a crew line "arrives as a plausible sentence an agent correctly
+# trusts", and it cannot be cleaned up retroactively because after the fact it is
+# indistinguishable from a legitimately lossy report.
+#
+# Four properties make the verb safe, and all four are structural rather than instructed:
+#
+# 1. **The answer is computed from a subset, not from the truth.** The GM composes *after*
+#    `(full_truth, crew_position, display_contract) → perceivable_subset`, so excluded truth
+#    never enters its context window. `components.yaml#display_contract` is that contract, and
+#    it did not exist until this round (D-06).
+# 2. **The position is part of the request.** A question is asked of a crew member *somewhere*,
+#    and the answer is bounded by what that position's panels show. "What is the CSM's cabin
+#    pressure?" asked of the LM commander is answerable with "there is no readout for that in
+#    this module", which is a true and useful answer.
+# 3. **The displayed precision is coarser than the channel's.** A crew member reading a gauge
+#    is a worse instrument than the gauge, and the contract's `displayed_precision` is what the
+#    answer inherits — otherwise the crew become a way to read a sensor with more precision than
+#    the sensor publishes.
+# 4. **Asking costs.** `simulator-design.md:405-406` puts crew attention on the same allowance
+#    machinery as everything else, which is what keeps the verb from being a free oracle.
+
+domain: crew
+commands:
+  - verb: ask_crew
+    argument_schema:
+      crew_id:
+        type: enum
+        values: [commander, lm_pilot, csm_pilot]
+      position:
+        type: enum
+        values: [csm_commander, csm_navigator, csm_lower_equipment_bay, lm_commander,
+                 lm_pilot, tunnel, surface_eva]
+      question:
+        type: string
+        max_length: 300
+    authority: A1
+    gate:
+      kind: preference
+      variable: ask_crew_enable
+    interlocks: none - reviewed
+    conflict_domain: crew.attention.<crew_id>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: false
+    execution_class: declarative
+    maximum_queue_age_s: 120
+    help: >-
+      Ask a crew member something and get an answer bounded by what they can perceive from where
+      they are. Three kinds of question are answerable and they are worth distinguishing before
+      you ask: *"did you notice anything unusual?"* is answerable by anyone and is the crew's
+      unique value, because a bang or a smell is on no channel; *"what does the gauge in front of
+      you read?"* is answerable at that panel's precision and no better; and *"is the aft bay
+      frosted?"* is answerable only by somebody who goes and looks, which costs mission time and
+      relocates the sensor. An answer of "there is no readout for that here" is a real answer and
+      not a refusal.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226-227"
+      note: >-
+        the crew are `crew.available` and a coarse workload; what apollo does not supply, and what
+        this verb depends on, is the perception bound. simulator-design.md:392-403 states the rule;
+        this file and display_contract are what make it mechanical
+
+  - verb: ack_alarm
+    argument_schema:
+      alert_id:
+        type: string
+        max_length: 64
+    authority: A1
+    gate:
+      kind: preference
+      variable: ack_alarm_enable
+    interlocks: none - reviewed
+    conflict_domain: crew.alerts
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Acknowledge an alert. Acknowledging records that somebody has seen it and says nothing about
+      the condition: it does not clear the alert, does not silence a safety-relevant one, and does
+      not satisfy a clear predicate. What it does is tell the other nine agents that this alert has
+      an owner, which is coordination information the fleet did not have before.
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:433 and its authority matrix at :491-495, which the spec is careful about:
+        a mission agent must not be able to impersonate crew acknowledgement. In this world the GM
+        acknowledges as crew, so the separation holds because of who operates the GM rather than
+        because of cryptography — a tension the spec names and this vehicle inherits
+
+  - verb: set_alert_overlay
+    argument_schema:
+      alert_id:
+        type: string
+        max_length: 64
+      overlay:
+        type: enum
+        values: [suppress, inhibit, shelve, clear_overlay]
+      duration_s:
+        type: number
+        optional: true
+    authority: A2
+    gate:
+      kind: preference
+      variable: alert_overlay_enable
+    interlocks: [overlay_cannot_clear_safety, stale_cannot_clear, invalid_cannot_clear]
+    conflict_domain: crew.alerts
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Suppress, inhibit or shelve an alert. All three change what is *annunciated* and none of
+      them changes what is true: an overlayed alert keeps its lifecycle position, keeps being
+      published, and cannot be cleared by the overlay. A fleet that suppresses an alert to stop a
+      distraction and then forgets it exists has made a mistake the record will show.
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:393-445, which is emphatic that suppress, inhibit and shelve are orthogonal
+        overlays and never cross semantics with acknowledgement. The interlocks are the three
+        predicates from profiles.yaml, and they are service-owned: an overlay is a request and the
+        service decides whether it is permissible
+
+  - verb: set_display_mode
+    argument_schema:
+      position:
+        type: enum
+        values: [csm_commander, csm_navigator, csm_lower_equipment_bay, lm_commander, lm_pilot]
+      mode:
+        type: enum
+        values: [nominal, caution_review, procedure, trend]
+    authority: A1
+    gate:
+      kind: preference
+      variable: display_<position>_enable
+    interlocks: none - reviewed
+    conflict_domain: crew.display.<position>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Change what a panel is showing. It does not change what the panel *can* show, and therefore
+      does not change the perception bound: a crew member asked about a channel their position
+      cannot perceive still cannot perceive it, whatever the display is doing. The verb exists
+      because a real crew re-purpose their displays constantly, and because a fleet that wants a
+      reading from a position that does not carry it should discover that it cannot be had.
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:352-370's display widget types and its caution-review and procedure displays.
+        The four modes are the spec's, and the point of implementing them as a *display* command
+        rather than as a perception change is the one D-06 turns on
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+  - verb: crew_action
+    why: >-
+      there is no verb that makes a crew member do something. A crew action is a *procedure* —
+      don suits, close a hatch, throw a switch — and the vehicle already has verbs for the
+      hardware. A `crew_action` verb would be a second path to the same state with a person in
+      the middle, and the interesting question (does the fleet ask a person to do something, or
+      does it command the hardware) is answered by which verb they reach for.
+  - verb: set_crew_state
+    why: >-
+      crew availability and workload are outcomes, not controls. A verb that set them would let a
+      fleet declare its crew rested, which is exactly the class of self-serving edit the
+      read-only-profile rule exists to prevent.

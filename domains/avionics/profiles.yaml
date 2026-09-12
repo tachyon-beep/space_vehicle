@@ -1,0 +1,361 @@
+# domains/avionics/profiles.yaml — the instrument layer's limits, and the one that is a design
+# choice rather than a measurement.
+#
+# ## Most of this file is apollo's, and that is unusual
+#
+# Eight of the eleven thresholds below are apollo's channel events adopted verbatim: computer
+# margin below 10 %, any non-null program alarm, any sensor-bus error, instrumentation power
+# excessive or zero, clock offset over 100 ms, frame-sync loss. apollo's avionics block
+# (`:174-186`) is one of the few places in the corpus where a document states events for a
+# subsystem it also describes, and there is nothing for this domain to add except the dwells.
+#
+# ## The three that are not apollo's, and why each one had to be authored
+#
+#   - `drift_detected` watches a statistic that does not exist anywhere else in the corpus.
+#   - `sensor_stale` watches the aggregate age, and its limit is not a constant: it is derived
+#     from the slowest rate in the active profile, because a vehicle whose slowest channel
+#     publishes at 0.2 Hz is not stale at 2 s and one whose slowest publishes at 10 Hz is.
+#   - `redundancy_degraded` watches a *count of disagreements* rather than a value, and its
+#     assert value is 1 for a reason worth stating: the vote degrades at two healthy members,
+#     but a fleet needs to know one disagreement earlier.
+#
+# ## The decision this file records about alarming
+#
+# apollo's event for `sensor_bus_errors_s` is ">0" and for `program_alarm_code` it is "any
+# non-null" — both fire on the first occurrence, with no dwell and no recovery band. That is
+# correct for both, and for the same reason: neither is a *measurement crossing a band*. A bus
+# error is an event that either happened or did not, and a program alarm is the computer saying
+# it has stopped understanding its situation. So the two thresholds below carry `latched: false`
+# and zero dwell, and the linter's inverted-hysteresis rule does not apply to them because there
+# is no band to invert. A domain that put a 500 ms debounce on a program alarm would have made
+# the vehicle's most informative discrete channel into a filtered one.
+
+domain: avionics
+
+profiles:
+
+  - id: default
+    revision: 1
+    description: "apollo's avionics events plus the three instrument-monitor limits"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:174-186"
+      note: >-
+        the events are apollo's. The dwells are chosen and each is argued where it appears:
+        the instrument layer is the one domain where a debounce is often *wrong*, because
+        several of its events are discrete occurrences rather than band crossings.
+
+thresholds:
+
+  # --- apollo's, verbatim ----------------------------------------------------------------
+  - id: exec_margin_low
+    point: avionics.exec_margin_pct
+    comparator: below
+    assert: 10
+    clear: 20
+    dwell_assert_ms: 1000
+    dwell_clear_s: 10
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:177"
+      note: >-
+        apollo's nominal is ">20 **Sim**" and its event is "<10". Both numbers are apollo's and
+        `Sim` marks the nominal as a recommended baseline rather than an assertion about the
+        actual machine, so the *event* is adopted and the nominal is adopted as the recovery
+        edge — which is what makes this a hysteresis band rather than a single line. One second
+        to assert because the margin falls with a task load rather than with a fault, and ten
+        seconds to recover because a computer that has just shed load should not be declared
+        healthy on the first frame that looks better
+
+  - id: program_alarm_raised
+    point: avionics.program_alarm_code
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:178"
+      note: >-
+        apollo's event is "any non-null", expressed here as a comparison against a code of zero
+        because the threshold machinery compares numbers. No dwell and no band, and that is the
+        decision this entry records: a program alarm is the computer announcing it has lost its
+        situation, and a debounce on the announcement would filter `<the thing the fleet most
+        needs>`. Apollo 11's 1202 arrived three times in a few minutes and the correct response
+        was different each time
+
+  - id: sensor_bus_error
+    point: avionics.sensor_bus_errors_s
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:181"
+      note: >-
+        apollo's ">0", and the only threshold on the vehicle whose nominal and whose limit are
+        the same number. A sensor bus with error detection reporting zero errors is working; the
+        first error is a fact about the harness. `latched: false` because the count is a rate —
+        a burst that stops is over, and a latched alarm on a rate would keep announcing a
+        transient
+
+  - id: instrumentation_power_zero
+    point: avionics.instrumentation_power_w
+    comparator: below
+    assert: 1
+    clear: 5
+    dwell_assert_ms: 500
+    dwell_clear_s: 5
+    latched: true
+    severity: EMERGENCY
+    gated_by: "the vehicle is powered and the instrument set is commanded on"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:182"
+      note: >-
+        apollo's "excessive/zero" is two events in one field and they are split here, because
+        they have opposite meanings and different responses. Zero is F-14: the instruments are
+        dark and the vehicle has lost the ability to explain itself. The 500 ms assert dwell is
+        the shortest in this file and is there for one reason — an instrument set that is being
+        power-cycled passes through zero — while the ladder's own re-anchor (`power/profiles.yaml`)
+        means a bus sag is announced by the power domain rather than here
+
+  - id: instrumentation_power_excessive
+    point: avionics.instrumentation_power_w
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 1000
+    dwell_clear_s: 10
+    latched: true
+    severity: CAUTION
+    point_units: "W, above the configured draw for the active instrument set"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:182"
+      note: >-
+        the other half of apollo's "excessive/zero", and the one that cannot be given a number:
+        "configuration dependent" is apollo's own words, and the draw depends on which
+        instruments the active profile has selected. A high draw is a short or a stuck heater,
+        and both are electrical faults the power domain will also see — so this threshold's
+        value belongs with `set_instrumentation_mode`, which is what changes the configuration
+        it is measured against
+
+  - id: clock_offset_high
+    point: avionics.clock_offset_ms
+    comparator: above
+    assert: 100
+    clear: 50
+    dwell_assert_ms: 2000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:183"
+      note: >-
+        apollo's ">100" with a recovery band at half of it (chosen). The asymmetry is the point:
+        a clock that has drifted 100 ms is a clock whose timestamps are wrong by more than a
+        tenth of a second, and 50 ms of recovery margin stops a clock hovering at the limit from
+        re-announcing itself every frame. This is the threshold that stands between the vehicle
+        and an irreversible command: `avionics_diode.md:496-508` requires a synchronised clock
+        before a one-shot may fire, and `requires_time_sync` on the structure domain's two
+        irreversible verbs is where that requirement lives
+
+  - id: frame_sync_loss
+    point: avionics.telemetry_frame_sync
+    comparator: below
+    assert: 0.5
+    clear: 0.5
+    dwell_assert_ms: 200
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:180"
+      note: >-
+        a boolean compared against a half, which is how the threshold machinery expresses
+        "false" — the same shape as the structure domain's `hatch_open_with_pressure`. 200 ms to
+        assert and none to recover, because F-14's dropout arrives here first: a loss of frame
+        coherence is the earliest evidence that the picture is about to become unreliable, and a
+        sync bit that needs a second of dwell before it reports would arrive after the frozen
+        values it exists to warn about
+
+  # --- the instrument monitors -----------------------------------------------------------
+  - id: sensor_stale
+    point: avionics.oldest_sample_age_ms
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 5
+    latched: true
+    severity: WARNING
+    point_units: "ms: 2x the slowest publish period in the active profile"
+    provenance:
+      basis: chosen
+      reason: >-
+        the aggregate's limit cannot be a constant and is therefore a function of the active
+        profile: a vehicle whose slowest channel publishes at 0.2 Hz is not stale at 2 s, and
+        one whose slowest publishes at 10 Hz is stale at a fifth of a second. The rule the
+        registry states — a mirror's maximum age is one publish period — gives each *point* its
+        own limit, and this threshold is the aggregate's: twice the slowest period in the set,
+        which is the point at which the slowest member has missed a scheduled refresh rather
+        than merely being the slowest. The value is owed because "the active profile" is what
+        decides it and the profiles are the avionics registry's own selection
+  - id: redundancy_degraded
+    point: avionics.redundancy_disagreement
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: CAUTION
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:390-411 — `redundant_vote`, whose `degraded` return is reached when fewer than two members remain healthy"
+      note: >-
+        fires on the first disagreement, which is *earlier* than the vote degrades and
+        deliberately so: the vote's own trip counter takes `trip_cycles` samples to isolate a
+        member, and a fleet needs the warning while the vote is still working, not after it has
+        stopped. `latched: false` because a disagreement count is a state that clears when the
+        sensors agree again — `rcs.thruster_[n]_health` is latched because a conclusion is, and
+        this is not a conclusion
+  - id: drift_detected
+    point: "avionics.drift_statistic_[group]"
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: true
+    severity: CAUTION
+    point_units: "normalized, against the decision threshold h of avionics_diode.md:420-428"
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428 — `cusum_rule`, and the `decision_h` it compares against"
+      note: >-
+        the vehicle's only alarm for a drift smaller than the instrument's own resolution, and
+        the reason it is latched: the property being reported is a systematic bias, and a bias
+        does not stop being true when the accumulator is reset. `h` is owed per monitored group
+        and stays owed — it is a false-alarm rate, which is a decision about how much evidence
+        the vehicle demands before it accuses an instrument, and it is not an instrument
+        property that any source could supply
+
+  # --- the interlock apollo's authorize_command contributes -------------------------------
+  - id: time_sync_required
+    point: avionics.time_sync_state
+    comparator: below
+    assert: 2
+    clear: 2
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "ordinal: unsync = 0, degraded = 1, sync = 2"
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:496-508 — `require(vehicle.time_quality == SYNC, \"TIME_UNTRUSTED\")`, the second of the two clauses that apply only to irreversible commands"
+      note: >-
+        an enum compared against its own ordinal, which is a compromise worth naming: the
+        threshold machinery compares numbers, and the ordering `unsync < degraded < sync` is the
+        enum's own latency ladder rather than an invented scale. Equal assert and clear because
+        an interlock has no recovery semantics — either the clock is synchronised or the
+        one-shot does not fire. This is the term `mission_diode.md`'s eight-term authorization
+        predicate does not have, and the reason a time-tagged irreversible action on a drifted
+        clock is an action with an unknown deadline
+
+  - id: computer_restarted
+    point: avionics.computer_mode
+    comparator: below
+    assert: 2
+    clear: 2
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    point_units: "ordinal: failed = 0, idle = 1, standby = 2, run = 3"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:176"
+      note: >-
+        apollo's events are "restart" and "mode change", and this is the restart half: any
+        departure from `run` or `standby` is either a commanded mode change or a restart, and the
+        commanded ones are visible in the command log while this one is not. A guidance computer
+        that restarted is the moment F-01's chain stops being a power problem and becomes a
+        navigation one — and the `program_alarm_code` that caused it may already have been cleared
+        by the restart, which is the whole reason `reset_computer`'s help text warns about it
+
+  - id: imu_power_loss
+    point: avionics.imu_power
+    comparator: below
+    assert: 0.5
+    clear: 0.5
+    dwell_assert_ms: 500
+    dwell_clear_s: 10
+    latched: false
+    severity: WARNING
+    point_units: "boolean: is the platform powered"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:178"
+      note: >-
+        apollo's event is "unexpected loss" and the word doing the work is *unexpected*: the
+        platform is powered off deliberately during some configurations, and what alarms is losing
+        it without asking. The vehicle cannot know what the fleet expected, so it alarms on the
+        loss and publishes the command log beside it — which is the same division the antenna
+        selection and the bus tie use, and it is the honest one: the vehicle reports the fact and
+        the fleet has the intent
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    an agent may select a profile and may never edit one (D-05). What a profile changes here is
+    the instrument set, which is why `set_instrumentation_mode` and this section are the same
+    decision seen twice: the profile names which instruments are active, and `sensor_stale`
+    derives its limit from the slowest of them.
+
+  alternatives:
+
+    - id: minimal
+      revision: 1
+      description: "publish only the channels the executive's guards read, at their own rates"
+      factor: 0.5
+      provenance:
+        basis: chosen
+        reason: >-
+          the profile a vehicle in a power crisis wants, and the one that makes the freshness
+          mechanism earn its keep: dropping channels raises the slowest period in the set and
+          therefore *loosens* `sensor_stale`, which is the correct direction — a vehicle
+          deliberately publishing less is not a vehicle whose publisher has failed. The
+          distinction between a smaller instrument set and a dead publisher is exactly what the
+          aggregate age cannot express on its own, and it is why the profile is published.
+          `EXEC_MARGIN` for the computer also rises, which is the reason the profile exists at
+          all: apollo's own margin is throughput against the task set, and a smaller set is more
+          margin
+
+    - id: minimal_plus_eng
+      revision: 1
+      description: "the minimal set plus the engineering channels a diagnosis needs"
+      factor: 0.75
+      provenance:
+        basis: chosen
+        reason: >-
+          the profile for a vehicle in trouble rather than in a power crisis, and the one that
+          exists because of `design.md` §8's rule about diagnoses: a fleet that sheds the
+          engineering channels to save power has saved the power and destroyed its ability to
+          say what went wrong. The factor is a fraction of the full set rather than of the
+          minimal one, which is what makes the two alternatives comparable

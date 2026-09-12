@@ -1,0 +1,1607 @@
+# coupling.yaml — the cross-domain graph, as data.
+#
+# apollo_diode.md:258-303 has this graph as a mermaid diagram, and turning it into
+# data is most of what integration means here (simulator-design.md:138). This file is
+# that conversion, plus the three things the diagram cannot carry and the design needs:
+#
+#   1. EDGE KIND. The diagram says "what feeds, heats, loads, drains what". It does not
+#      say whether an edge is an instantaneous balance that must be co-solved, a conserved
+#      transfer that must close exactly, a first-order lag, or a discrete event. Those four
+#      need four different integrators, and review-findings.md #10 shows that retyping
+#      edges after multi-rate lands is the expensive part. So every edge is typed now.
+#
+#   2. SENSITIVITY, EVALUATED AT THE CRISIS POINT. Topology alone excludes nothing for
+#      fidelity purposes: walking apollo's actual graph, every node reaches a published
+#      channel, so node-level closure is the whole graph (review-findings.md #8). What
+#      bounds fidelity is per-edge gain — and gains must be read at the crisis operating
+#      point, not nominal, because THERM->BAT is negligible in nominal balance and dominant
+#      under radiator isolation. Every edge therefore carries `at` (where the number was
+#      taken) and, where they differ, a crisis value.
+#
+#   3. CYCLES, DECLARED WITH THEIR BACK-EDGE. Gauss-Seidel on the DAG with a one-tick delay
+#      on back-edges only (review-findings.md #3). An undeclared cycle is a stability bug
+#      that hides for a week and then presents as archaeology.
+#
+# Provenance vocabulary (basis), used on every number:
+#   apollo   — anchored to a claim or channel in apollo_diode.md; the line is cited
+#   derived  — computed from other values in this config; the relation is stated
+#   chosen   — picked to make the simulation run; the reason is stated
+#   UNCONFIGURED — needed and unset. The linter fails the build and names the wanting edge.
+#              A value that is needed and unset must never resolve to a plausible default
+#              (thermal_diode.md:29, simulator-design.md:146-150).
+#
+# Units are SI internally; the publisher converts to apollo's imperial channel units at the
+# boundary (reconciliation/01-conflict-register.md, "units").
+
+schema_version: 1
+generated_from: docs/deep_research/apollo_diode.md
+provenance_rules: docs/deep_research/integration/simulator-design.md#31
+
+# --------------------------------------------------------------------------------------
+# Nodes. `domain` keys into domains/<name>/ and must match apollo's twelve operational
+# domains (apollo_diode.md:20). `kind` tells the scheduler what it is holding:
+#   stock    — a conserved quantity. Conserves exactly. Integer fixed-point + residual.
+#   flow     — a rate. Balances instantaneously; never integrated on its own.
+#   state    — a continuous state. Advanced by the integrator.
+#   discrete — a latched or enumerated state. Advanced by the event queue.
+#   service  — a process, not a physical quantity. Holds authority, not energy.
+#   sink     — where published evidence goes. Never read back.
+# --------------------------------------------------------------------------------------
+nodes:
+  # --- consumables: the conserved stocks (apollo_diode.md:836-847) --------------------
+  o2_csm:            {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  o2_lm:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    preloaded: "the LM's oxygen is loaded at the pad and the LM has no refill path in this mission. Its first tick is its full load and every tick after is a draw"
+  h2_csm:            {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  water_potable:     {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  water_cooling:     {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  prop_main:         {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  prop_rcs:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    preloaded: "RCS propellant is loaded at the pad and nothing in the mission refills it. The RCS load is 4.9 % of the LM's ascent budget at the tightest point, so this is the tank whose margin a crew spends first"
+  pressurant_he:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    preloaded: "the helium charge is loaded at the pad, and the bladder means it does not leave the tank either: the stock is constant for the whole mission and the coupling is a displacement rather than a consumption"
+  absorber_capacity:
+    domain: eclss
+    kind: stock
+    unit: man_hours
+    apollo: "846"
+    note: >-
+      modelled in man-hours of CO2 removal, not kilograms: LR and PSR give a primary cartridge as
+      41 man-hours and a secondary as 78 with 6 spares, and no kg-CO2 capacity is published
+      (vehicle.yaml#consumables)
+    accumulates: >-
+      this is a *consumption counter*, not a tank, and the name is the reason it took a linter to
+      notice: `absorber_man_hours` counts man-hours spent, so the cartridge is exhausted when the
+      count reaches its rating and the remaining capacity is a subtraction rather than a stock.
+      Nothing draws from it because nothing should — a counter that could be drawn down would be
+      a counter that could be refilled, and no verb in this vehicle swaps a cartridge. Modelled
+      this way because the sources give man-hours and not kilograms; if a cartridge-swap verb
+      lands, this declaration is what should be deleted
+  battery_energy:    {domain: power,       kind: stock,    unit: J,  apollo: "836-847"}
+
+  # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
+  fuel_cell:
+    domain: power
+    kind: flow
+    unit: W
+    apollo: "261-263"
+    state_order: [fuel_cell_power_w, source_converter_v]
+    state_order_note: >-
+      the cell produces and the converter regulates what it produced, so the converter reads this
+      tick's power rather than the previous one
+  bus_a:             {domain: power, kind: state,   unit: V,  apollo: "73-75"}
+  bus_b:             {domain: power, kind: state,   unit: V,  apollo: "74"}
+  bus_tie:           {domain: power, kind: discrete, unit: enum, apollo: "79"}
+  load_shed_state:   {domain: power, kind: discrete, unit: enum, apollo: "48"}
+
+  # --- thermal: lumped nodes plus the transport that an RC network loses ---------------
+  coolant_flow:
+    domain: thermal
+    kind: flow
+    unit: kg/s
+    apollo: "103"
+    state_order: [pump_1_speed_rpm, coolant_flow_kg_s]
+    state_order_note: >-
+      the pump produces the flow. The frozen tiebreak would have put `coolant_flow_kg_s` first,
+      which computes the loop's transport from a shaft speed that has not been updated yet — a
+      tick of lag on the quantity the whole thermal domain is built on
+  coolant_supply_t:  {domain: thermal, kind: state, unit: K, apollo: "101"}
+  coldplate_t:       {domain: thermal, kind: state, unit: K, apollo: "105"}
+  radiator_reject:   {domain: thermal, kind: flow,  unit: W, apollo: "107"}
+  lm_cabin_zone_t:   {domain: thermal, kind: state, unit: K,
+                      note: "the LM cabin's thermal state, the second compartment's input to its own pressure"}
+  cabin_zone_t:      {domain: thermal, kind: state, unit: K,
+                      note: "the cabin's thermal state, which is also an input to its pressure. It exists as a node because the atmosphere's pressure is nRT/V: a cabin that heats up gains pressure without gaining gas, and a leak diagnosis that ignores temperature will read a thermal transient as a mass loss"}
+  loop_transport:    {domain: thermal, kind: state, unit: K,
+                      note: "tick-indexed ring buffer; see review-findings.md #12. A lumped RC network mixes instantaneously, which erases the difference between 'the pump stalled just now' and 'the pump has been degrading for an hour'."}
+
+  # --- ECLSS: the atmosphere as a lumped stock (apollo_diode.md:748) -------------------
+  cabin_atm:
+    domain: eclss
+    kind: stock
+    unit: "kg + Pa"
+    apollo: "88-95"
+    conserves: mass
+    state_order: independent
+    state_order_note: >-
+      four conserved gas masses in one compartment. They share a volume through the ideal-gas
+      relation, but each is advanced from its own flows and the total pressure is a *read* of all
+      four rather than something one of them writes, so there is no order to get wrong
+  lm_cabin_atm:
+    domain: eclss
+    kind: stock
+    unit: "kg + Pa"
+    conserves: mass
+    note: "the LM's own atmosphere, a separate compartment with a separate ECLSS (apollo_diode.md:1071). Two nodes rather than one because the CSM/LM boundary is a phase-dependent topology switch, not a pipe: from undocking to docking the two atmospheres cannot equalise, and a leak diagnosis that assumed they could would be wrong for exactly the phase where it matters"
+    state_order: independent
+    state_order_note: >-
+      the LM's three, for the same reason: mixture components, not a sequence
+  cabin_regulator:   {domain: eclss, kind: discrete, unit: enum, apollo: "95"}
+
+  # --- GNC, dynamics, geometry --------------------------------------------------------
+  vehicle_dynamics:
+    domain: gnc
+    kind: state
+    unit: "m, m/s, quat"
+    apollo: "117-120"
+    state_order: [body_rate, attitude, orbital_state]
+    state_order_note: >-
+      a 6-DOF integrator advanced as three states, in the causal order the integration implies:
+      the rate integrates the attitude, and the attitude determines the thrust direction that
+      integrates the orbit. The three are physically simultaneous and the split is a modelling
+      choice, so the order is declared as the one the equations are written in
+  # A `service` node, and the header's own definition is the argument: it holds authority, not
+  # energy. Apollo's guidance could command the engine and the RCS without a crew verb, and
+  # `set_guidance_mode` is the agent-side half of the same authority — its `conflict_domain` has
+  # read `gnc.guidance` since the verb was written, so the partition existed and only the node was
+  # missing. Without it the guidance->engine and guidance->valve couplings had to be declared as
+  # leaving `nav_state`, which is the *navigation* solution: a quantity, not a decision. That is
+  # why both edges were asking for units like `enum per m` — they were coupling from the wrong
+  # thing, and no number would ever have satisfied them.
+  guidance: {domain: gnc, kind: service, unit: enum, apollo: "124, :240"}
+  nav_state:         {domain: gnc,  kind: state, unit: "m, m/s", apollo: "119-122"}
+  imu:               {domain: gnc,  kind: state, unit: "quat", apollo: "123"}
+  antenna_geometry:  {domain: comms, kind: state, unit: "deg", apollo: "163"}
+  link:
+    domain: comms
+    kind: flow
+    unit: dB
+    apollo: "164"
+    state_order: [tx_power, link_snr]
+    state_order_note: >-
+      **the case that made this check worth writing.** Transmit power is a term in the link
+      budget, so the signal-to-noise ratio has to be computed from the power of this tick — and
+      the lexicographic tiebreak sorts `link_snr` before `tx_power`, which would have made every
+      SNR a function of one-tick-old transmit power. On a nominal link that is a 20 ms error;
+      across `set_power_amplifier` it is a 6 dB step reported a tick late, which is exactly the
+      transient a fleet is watching for
+
+  # --- propulsion and RCS -------------------------------------------------------------
+  engine_main:
+    domain: propulsion
+    kind: discrete
+    unit: enum
+    apollo: "134-141"
+    state_order: independent
+    state_order_note: >-
+      three engine state machines sharing a node because they share an actuator inventory, not
+      because they interact. Each has its own verbs and its own dwell, and the only coupling
+      between them is the propellant they all draw — which is an edge to a consumables node rather
+      than a state here
+  thrust_main:       {domain: propulsion, kind: flow,     unit: N,    apollo: "135-137"}
+  rcs_valves:        {domain: rcs,        kind: discrete, unit: enum, apollo: "149"}
+  rcs_thrust:        {domain: rcs,        kind: flow,     unit: N,    apollo: "150"}
+
+  # --- avionics, structure, crew, and the executive -----------------------------------
+  instrumentation:   {domain: avionics,  kind: service,  unit: "-",  apollo: "180-182"}
+  avionics_compute:  {domain: avionics,  kind: state,    unit: "%",  apollo: "177"}
+  structure_config:
+    domain: structure
+    kind: discrete
+    unit: enum
+    apollo: "211"
+    state_order: [pyro_fired, lm_separation_state, descent_stage_state, configuration]
+    state_order_note: >-
+      the three mechanisms and then the configuration they produce. `configuration` is a
+      projection of the separation and descent-stage machines — its own provenance says so — and
+      therefore has to read them after they have advanced. `pyro_fired` leads because a pyro event
+      causes a separation rather than the reverse
+  crew_state:
+    domain: crew
+    kind: state
+    unit: enum
+    apollo: "226-227"
+    state_order: [crew_location, crew_availability, crew_workload]
+    state_order_note: >-
+      workload last because it is a lag on what the crew have been doing, and what they are doing
+      depends on where they are and whether they are available. The first two are independent of
+      each other and the order between them *is* the frozen tiebreak — declared here so that it is
+      a recorded decision rather than an accident of the alphabet
+  alert_state:
+    domain: crew
+    kind: discrete
+    unit: enum
+    apollo: "221-223"
+    state_order: [alert_lifecycle, alarm_horn]
+    state_order_note: >-
+      the state machine first and the horn second, because the horn sounds *because* of the
+      alerts: `alarm_horn` is a projection of the alert set, so advancing it first would sound
+      last tick's alarm at this tick's severity
+  command_executive: {domain: executive, kind: service,  unit: "-",  apollo: "415-447"}
+  published_evidence: {domain: window,   kind: sink,     unit: "-",  apollo: "592-595"}
+
+# --------------------------------------------------------------------------------------
+# Edges. `sensitivity.value` is d(to)/d(from) in `unit` at the operating point in `at`.
+# A zero is meaningful and must be written down: it is a claim that the coupling exists
+# but does not matter *there*, which is exactly the claim that has to be re-read at the
+# crisis point.
+# --------------------------------------------------------------------------------------
+edges:
+
+  # --- consumables into everything ----------------------------------------------------
+  - id: E-O2-FC
+    from: o2_csm
+    to: fuel_cell
+    kind: rate
+    sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "8 kg O2 per kg H2 consumed, charged exactly to the O2 stock",
+    at: nominal, note: "exact stoichiometric draw; the O2 inventory is shared between ECLSS and the fuel cells (apollo_diode.md:780-784), which is the coupling that makes Apollo 13 possible"}
+  - id: E-H2-FC
+    from: h2_csm
+    to: fuel_cell
+    kind: rate
+    sensitivity: {value: 0.125, unit: "kg H2 per kg H2", basis: derived, relation: "1 kg H2 per 8 kg O2 consumed (the cell reaction stoichiometry)",
+    at: nominal, note: "8:1 O2:H2 mass ratio for the cell reaction"}
+  - id: E-FC-BUS
+    from: fuel_cell
+    to: bus_a
+    kind: algebraic
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "V per V"
+      basis: derived
+      relation: "the source converter's regulated output is the bus's source EMF, so the edge carries it one for one. `bus_a_v` is the nodal solve (domains/power/components.yaml) over source EMF, source internal resistance, tie state and total load — the load-dependent sag is the resistance term *inside* that solve, not a coefficient on this coupling"
+      at: nominal
+      note: >-
+        the unit read `V per W` and that asked for a droop coefficient the architecture does not
+        have. electrical_diode.md:249 specifies the source regulator as a *regulated* output —
+        24-32 V over 25-100 % of a 1.2 kW rating, >=94 % efficient, with a regulation transient
+        under 10 ms — and a regulated source does not sag proportionally to its load. Reading the
+        envelope across the load band as a slope would give 8 V / 1.2 kW and would sag the bus 4 V
+        at full load, which contradicts both the word "regulated" and the undervoltage ladder in
+        domains/power/profiles.yaml, whose top rung asserts at 26.5 V on apollo's own event
+        (apollo_diode.md:73). The residual sag is the source's internal resistance, and that
+        number is genuinely unpublished and still owed — but it is a property of
+        `source_converter_v`, and it belongs in that state's relation, so it is recorded in
+        open_debts as a resistance rather than as a coefficient here. Closing this edge retires
+        the *coefficient* half of that debt and leaves the resistance half standing
+  - id: E-FC-WATER
+    from: fuel_cell
+    to: water_potable
+    kind: rate
+    sensitivity:
+      value: 1.0
+      computation: "(2 * 18.01528) / (2 * 2.01588 + 31.9988)"
+      unit: "kg water per kg reactants"
+      basis: derived
+      relation: "2 H2 + O2 -> 2 H2O, so every kilogram of reactant that enters the cell leaves as water: (2 * 18.01528) / (2 * 2.01588 + 31.9988) = 1.0. The electricity and the heat are the chemical energy leaving, not mass leaving, and apollo_diode.md:849 writes the reaction the same way: O2 + H2 -> electrical energy + water + heat"
+      at: nominal
+      note: >-
+        this read 0.45 until the arithmetic was done, and 0.45 is not a number this reaction can
+        produce: it asserts that 55 % of the reactant mass becomes neither electricity nor water
+        nor heat, in a plant that conserves its stocks exactly. The old `relation` read "0.45 kg
+        of product water per kg of reactants consumed", which is the value restated with a unit
+        phrase attached and derives nothing — that is what a fabricated number looks like when it
+        is wearing a derivation's clothes, and it is why every derived value in this file now
+        carries a `computation` the linter re-evaluates on each run. The value was 2.2x low, so
+        the potable-water budget understated production by that factor. Product water is potable
+        (apollo_diode.md:849-853), so the whole yield is booked as potable here; a *recovery*
+        loss in the separator would be a second quantity on a separate edge, and none is
+        declared, so none is assumed
+  - id: E-FC-HEAT
+    from: fuel_cell
+    to: coldplate_t
+    kind: rate
+    sensitivity: {value: UNCONFIGURED, unit: "W per W", basis: UNCONFIGURED,
+    at: nominal, note: "waste heat: the cell rejects heat through the coolant loop (apollo_diode.md:849-853)"}
+  # The edge the corrected schedule order found on its first tick. `battery_energy` had exactly
+  # one inbound edge — `E-PLATE-BAT`, the thermal back-edge — so it was a stock nothing ever
+  # filled, and the plant said so: "is a stock with no incoming edge, so nothing drives it". The
+  # gap was invisible while the schedule ran backwards, because a reversed order still has every
+  # node in it and nothing checks that a stock has a source. Apollo charged the batteries from the
+  # bus through `BAT_CONV_A/B`, bidirectional, 20-36 V battery to 28 V bus at >=94 %
+  # (electrical_diode.md:250) — and the load budget already admits the charging exists without
+  # modelling it: "the 297 W difference is battery charging, transients and the loads Apollo
+  # carried" (domains/power/components.yaml#load_budget). This is the edge that 297 W belongs to.
+  - id: E-BUS-BAT
+    from: bus_a
+    to: battery_energy
+    kind: accumulate
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "J per W per s"
+      basis: UNCONFIGURED
+      at: nominal
+      relation: >-
+        an `accumulate` edge, which is the class plant.md §10 was written for: "accumulate a
+        sub-rate domain's flows over the intervening ticks and apply the integral once — never
+        subsample the flow". A power flow into a stock of joules is exactly that case, and the
+        rule is not a style preference here: sampling a 50 Hz charging current at a 1 Hz
+        consumables cadence loses 98 % of the charge
+      note: >-
+        owed, and the floor is published rather than the value. `BAT_CONV_A/B` is >=94 %
+        (electrical_diode.md:250) and that is the whole of what any source gives: the battery's
+        own coulombic efficiency is not published anywhere in the corpus, and the round-trip
+        figure a crew would want is not the converter's number. So the floor is 0.94 J per W per s
+        and the value is above it. Getting this wrong is not academic — it sets how long the
+        vehicle can run on batteries after the cells stop, which is the same class of number as
+        the oxygen duration and is owed for the same reason
+  - id: E-BAT-BUS
+    from: battery_energy
+    to: bus_a
+    kind: algebraic
+    sensitivity: {value: UNCONFIGURED, unit: "V per J", basis: UNCONFIGURED,
+    at: nominal, note: "LM and backup source; battery SOC and temperature both move the terminal voltage"}
+  - id: E-O2-ECLSS
+    from: o2_csm
+    to: cabin_atm
+    kind: conserve
+    sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-LM-O2-ECLSS
+    from: o2_lm
+    to: lm_cabin_atm
+    kind: conserve
+    sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
+    note: "LM ECLSS is a separate compartment; the CSM/LM boundary is a phase-dependent topology switch, not a pipe (apollo_diode.md:1068-1072)"}
+  - id: E-ZONE-ATM
+    sensitivity:
+      value: 116.86
+      computation: "5 * 6894.757 / 295"
+      unit: "Pa per K"
+      basis: derived
+      relation: "the ideal-gas relation P = nRT/V gives dP/dT = P/T. At the cabin's nominal 5 psia = 34,474 Pa and 295 K, that is 116.9 Pa per kelvin"
+      at: "csm cabin, nominal"
+      note: >-
+        the edge whose note has said "computable" since it was written, and it is. It is also the
+        reason a leak diagnosis needs the thermal domain: a cabin that warms by one kelvin gains
+        117 pascals without gaining a molecule, and a leak detector built on pressure alone reads
+        every thermal transient as a mass loss
+    from: cabin_zone_t
+    to: cabin_atm
+    kind: lag
+  - id: E-LM-ATM-ABSORB
+    sensitivity:
+      value: 26.37
+      computation: "41 / (41 * 0.91 / 24)"
+      unit: "man-hours per kg CO2"
+      basis: derived
+      relation: "as E-ATM-ABSORB — the man-hour rating is the same cartridge class. The LM's absorber is a *different* cartridge from the CSM's, which is the fact Apollo 13 turned on when the CM's would not fit and the crew built an adapter"
+      at: "primary cartridge"
+      note: >-
+        the second of the two CO2 paths, and the one the crisis was about. Its sensitivity is the
+        same number because the rating is the same; what differs is which compartment's atmosphere
+        it draws from, and that is the edge's endpoints rather than its value
+    from: lm_cabin_atm
+    to: absorber_capacity
+    kind: rate
+  - id: E-LM-CREW-ATM
+    sensitivity:
+      value: 0.03792
+      computation: "0.91 / 24"
+      unit: "kg/h per crew"
+      basis: derived
+      relation: "as E-CREW-ATM: 0.91 kg of oxygen per crew-day divided by 24 h. The LM carries two crew during the descent, the surface and the ascent, so the rate is per crew member and the count comes from the configuration"
+      at: "per crew member, awake"
+      note: >-
+        the same figure, at the second compartment. Two edges rather than one because the two
+        atmospheres are separate stocks and a leak or an absorber failure in one must not be
+        diluted by the other's volume
+    from: crew_state
+    to: lm_cabin_atm
+    kind: rate
+  - id: E-ZONE-ATM-LM
+    sensitivity:
+      value: 116.86
+      computation: "5 * 6894.757 / 295"
+      unit: "Pa per K"
+      basis: derived
+      relation: "as E-ZONE-ATM: dP/dT = P/T at the LM's nominal 5 psia and 295 K, 116.9 Pa per kelvin"
+      at: "lm cabin, nominal"
+      note: >-
+        the same relation at the second compartment, and the same trap: the LM's volume is 6.7 m3
+        against the CSM's 5.9, so the same kelvin moves the same pressure in a slightly larger
+        room and the masses differ by 14 %
+    from: lm_cabin_zone_t
+    to: lm_cabin_atm
+    kind: lag
+  - id: E-ATM-ABSORB
+    sensitivity:
+      value: 26.37
+      computation: "41 / (41 * 0.91 / 24)"
+      unit: "man-hours per kg CO2"
+      basis: derived
+      relation: "a primary LiOH cartridge is rated 41 man-hours (vehicle.yaml#consumables) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the cartridge removes 41 * 0.03792 = 1.554 kg and the sensitivity is 41/1.554 = 26.37 man-hours per kg"
+      at: "primary cartridge"
+      note: >-
+        closed by arithmetic on two published figures, and it is the *only* way to close it: the
+        absorber node is modelled in man-hours rather than kilograms precisely because no kg-CO2
+        capacity is published for the cartridges, while the man-hour rating and the metabolic rate
+        both are. Deriving the bridge between them is what makes the atmosphere's CO2 path a
+        conversion with a stated factor rather than a curve fit — and it is a conversion, not a
+        conservation: the cartridge's capacity is spent in man-hours, and no mass crosses the
+        edge one for one. It said `conserve` until the conservation check learned to refuse an
+        edge whose endpoints have no dimension, which is the only reason the mislabelling was
+        ever visible
+    from: cabin_atm
+    to: absorber_capacity
+    kind: rate
+  - id: E-WATER-RAD
+    sensitivity:
+      value: 4.0816e-07
+      computation: "1 / 2.45e6"
+      unit: "kg per J"
+      basis: derived
+      relation: "the inverse of E-RAD-WATER: 1 / 2.45e6 J per kg = 4.082e-7 kg of water per joule rejected"
+      at: "nominal"
+      note: >-
+        the backward half of the vehicle's only cycle with a water budget in it, and it is the
+        inverse of the forward half rather than an independent figure. That is what makes
+        `C-WATER-BUDGET` a cycle: one edge asks how much rejection a kilogram of water buys and
+        this one asks how much water a joule of rejection costs, and Gauss-Seidel settles it by
+        letting this half read last tick's value
+    from: water_cooling
+    to: radiator_reject
+    kind: rate
+  - id: E-PROP-ENG
+    sensitivity:
+      value: 3084.2
+      computation: "314.5 * 9.80665"
+      unit: "N per kg/s"
+      basis: derived
+      relation: "thrust = mdot * Isp * g0. At the service propulsion system's 314.5 s that is 3084.2 N per kg/s; the LM's descent engine at 305 s gives 2991.0 and its ascent engine at 309.4 s gives 3034.1, and the plant reads whichever engine is firing"
+      at: "sps"
+      note: >-
+        the main engine's version of the figure `E-RCSP-RCS` closed at 2843.9, and the three
+        engines differ because their Isps do. What this edge does *not* carry is the
+        throttle-to-thrust **law** — the DPS's 65-92.5 % non-operating region is a property of the
+        engine rather than of the propellant, and `domains/propulsion/` refuses to interpolate
+        across it
+    from: prop_main
+    to: thrust_main
+    kind: rate
+  - id: E-PRESS-PROP
+    from: pressurant_he
+    to: prop_main
+    kind: rate
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "kg prop displaced per kg He"
+      basis: UNCONFIGURED
+      at: nominal
+      note: >-
+        a displacement, not a conservation, and it was declared `conserve` until the conservation
+        check learned to refuse an edge with an unset value — which is the right answer for the
+        wrong reason. The helium is held in a bladder or diaphragm and does not leave the tank, so
+        there is no mass crossing this edge one for one; what the charge does is occupy volume that
+        propellant would otherwise fill. The ratio is therefore set by the helium charge pressure
+        and the propellant's density, and the state that carries the pressure is
+        `propulsion.pressurant_pressure_psi` — a lag that is itself blocked on its own
+        `provenance.basis`. Closing this edge means closing that state first, and the coupling is
+        pressure-mediated, so the number here is a bridge between two quantities rather than a
+        property of either. The feed-pressure-sensor-stuck-high chain (apollo_diode.md:336) reads
+        this edge, which is why it is declared at all rather than left implied by the tank
+
+  - id: E-RCSP-RCS
+    from: prop_rcs
+    to: rcs_thrust
+    kind: rate
+    sensitivity:
+      value: 2843.9
+      computation: "290 * 9.80665"
+      unit: "N per kg/s"
+      basis: derived
+      relation: "thrust = mdot * Isp * g0, so the sensitivity is Isp * g0 = 290 * 9.80665 = 2843.9 N per kg/s, independent of which propellant is burning. One figure for all three systems: they share the 100 lbf thruster and the 290 s Isp (vehicle.yaml#propulsion.rcs_*)"
+      at: nominal
+      note: >-
+        closed by landing `domains/rcs/`. The edge was declared UNCONFIGURED while Isp was unset;
+        Isp arrived with the Apollo 11 tables and the relation is a definition, so what remained
+        was arithmetic. The inverse is the domain's own published figure —
+        `domains/rcs/components.yaml#capability.mass_flow_per_thruster` = 445/2843.9 = 0.15647
+        kg/s — and that is what makes delivered impulse convertible to propellant mass, which is
+        what lets the RCS impulse estimate be compared against the consumables ledger at all
+
+  # --- power distribution -------------------------------------------------------------
+  - id: E-BUS-GNC
+    from: bus_a
+    to: avionics_compute
+    kind: algebraic
+    sensitivity:
+      unit: "compute available"
+      basis: derived
+      at: "28 V bus"
+      relation: >-
+        the guidance platform is a *class* of load, not a function of volts: it computes at full
+        rate for as long as its bus is inside the envelope and stops when the ladder sheds its
+        class. The classes are `domains/power/components.yaml#loads` and the tiers are
+        `domains/power/profiles.yaml`, both reused by name
+      note: >-
+        this is the chain review-findings.md #7 simulates, arriving as data rather than as prose:
+        the guidance computer is class **P1** and `csm_imu` is P1 with it, so the tier that keeps
+        only P0 sheds *both*. The vehicle loses its navigation solution and its attitude sensing
+        in the same tick, at the bottom of a ladder it climbed because something else was already
+        wrong. Whether guidance belongs in P0 is a re-rating question this table now makes
+        visible — the ladder is a profile and profiles are versioned (D-05), so the answer is a
+        revision rather than a code change
+      regimes:
+        - when: nominal
+          response: >-
+            full compute: the platform runs at its rated rate and the reference is available
+        - when: bus_a_undervoltage
+          response: >-
+            unchanged. apollo's own event tier (apollo_diode.md:73) sheds nothing
+        - when: bus_a_shed_p3
+          response: >-
+            unchanged: P3 goes first
+        - when: bus_a_shed_p2
+          response: >-
+            unchanged: the platform is P1 and this tier sheds P2, which costs `csm_instrumentation` (120 W) rather than the computer
+        - when: bus_a_survival
+          response: >-
+            **shed.** `csm_guidance_computer` is class P1 (domains/power/components.yaml#loads) and survival keeps only P0, so the platform drops out — and `csm_imu` is P1 beside it, so attitude sensing goes with it. Whatever the crew does next is done without a navigation solution
+        - when: otherwise
+          response: >-
+            no bus, nothing powered
+
+  - id: E-BUS-COMM
+    from: bus_a
+    to: link
+    kind: algebraic
+    sensitivity:
+      unit: "link available"
+      basis: derived
+      at: nominal
+      relation: >-
+        the transmit chain is two loads in two classes — `csm_sband_transceiver` at P1 (36 W) and
+        `csm_sband_power_amplifier` at P2 (72 W) — so the bus gate is a two-step loss rather than
+        a fade. Each tier below is a shed tier from `domains/power/profiles.yaml`, and the link
+        budget's own dB follow from which of the two is still energised
+      note: >-
+        this edge is a **back-edge** of `C-COMM-BUS` with a one-tick delay, and the regimes make
+        the cycle's content explicit for the first time: the amplifier is 72 W on the bus, so
+        losing it *raises* the bus, which is a stabilising feedback with a lag in it. The dB
+        values each regime implies are the link model's business, not this edge's — what this
+        edge decides is which transmitter is powered
+      regimes:
+        - when: nominal
+          response: >-
+            both the transceiver and the power amplifier energised: the full link budget
+        - when: bus_a_undervoltage
+          response: >-
+            unchanged. apollo's own event tier (apollo_diode.md:73) sheds nothing
+        - when: bus_a_shed_p3
+          response: >-
+            unchanged: P3 goes first
+        - when: bus_a_shed_p2
+          response: >-
+            the power amplifier is P2 and goes; the transceiver alone remains, so the link is short by the amplifier's contribution to transmit power
+        - when: bus_a_survival
+          response: >-
+            **both shed.** The transceiver is P1 and the amplifier is P2, and survival keeps only P0 — so the vehicle is not merely quiet, it is inaudible, in the tier where a crew would most want to be heard
+        - when: otherwise
+          response: >-
+            no bus, nothing powered
+
+  - id: E-BUS-PUMP
+    sensitivity:
+      value: 8.9998e-04
+      computation: "(200 * 0.45359237 / 3600) / 28"
+      unit: "kg/s per V"
+      basis: derived
+      relation: "a DC motor's speed follows its terminal voltage, and a centrifugal pump's flow follows its speed, so the flow tracks the bus linearly: the nominal 200 lb/hr = 0.02520 kg/s at 28 V gives 9.0e-4 kg/s per volt"
+      at: "nominal 28 V"
+      note: >-
+        **the edge the whole experiment turns on, and its sensitivity is the least interesting
+        thing about it.** The relation is linear and the number is arithmetic; what makes this edge
+        critical is not its slope but *where it sits*: it is the only edge in the flagship cycle
+        that leaves the electrical domain and enters the thermal one, so it is where a bus
+        comparator's single-tick decision becomes a coolant flow, and from there a coldplate
+        temperature, and from there — through `E-PLATE-COMM` — back to the bus as load. A linear
+        edge in a loop is still a loop
+    from: bus_a
+    to: coolant_flow
+    kind: algebraic
+  - id: E-BUS-RCS
+    from: bus_a
+    to: rcs_valves
+    kind: discrete
+    sensitivity:
+      unit: "energised or shed"
+      basis: derived
+      at: nominal
+      relation: >-
+        a gate with a regime per rung of the shed ladder, not a gain. The valve drivers are a
+        survival load: a valve that cannot be commanded is a vehicle that cannot point, which is
+        the definition of the situation the ladder exists to prevent. The tiers below are
+        `domains/power/profiles.yaml`'s own thresholds, reused by id rather than restated, so a
+        change to the ladder moves this edge with it
+      note: >-
+        the unit read "1 per V" and the edge is `discrete`, which is a contradiction the file
+        carried for its whole life: a discrete response has no derivative with respect to volts.
+        What it has is a band structure, and the band structure was already written down —
+        apollo's own 26.5 V event (apollo_diode.md:73) at the top and three shed tiers below it
+      regimes:
+        - when: nominal
+          response: >-
+            valve drivers energised; the valves take whatever the allocator commands
+        - when: bus_a_undervoltage
+          response: >-
+            still energised. This is apollo's event tier and it sheds nothing: it exists to tell
+            the crew the bus is in the band where things start dropping out
+        - when: bus_a_shed_p3
+          response: >-
+            still energised. P3 goes first and the valve drivers are not P3
+        - when: bus_a_shed_p2
+          response: >-
+            still energised, and this is the rung that costs something adjacent: P2 carries the
+            RCS *heaters* (domains/power/components.yaml#loads), so the valves still fire and fire
+            cold. A cold thruster has a longer rise time and the allocator's pulse widths stop
+            matching what the vehicle does, which is a control problem reported as a valve problem
+        - when: bus_a_survival
+          response: >-
+            energised, and now one of the few things left: survival keeps the P0 loads, and being
+            able to point is what surviving consists of
+        - when: otherwise
+          response: >-
+            no bus. The valves are unpowered and fail closed, which is a requirement rather than
+            an omission: a valve that cannot be commanded must not be open
+  - id: E-BUS-INST
+    from: bus_a
+    to: instrumentation
+    kind: algebraic
+    sensitivity:
+      unit: "instruments available"
+      basis: derived
+      at: nominal
+      relation: >-
+        the instrumentation service is supplied or it is not. `csm_instrumentation` is class P2
+        (120 W) and `lm_instrumentation` is P2 (100 W), so the tier that sheds P2 takes the
+        vehicle's own telemetry with it — after which the fleet is flying an unlit panel
+      note: >-
+        the tier order here is the argument for the ladder's shape. Instruments go at P2, one
+        tier before guidance and comms go at survival, so a crew loses the numbers before it
+        loses the ability to act on them. The reverse order would be a vehicle that still had
+        thrust and no way to know where it was pointing
+      regimes:
+        - when: nominal
+          response: >-
+            all instruments sampling and reporting at their declared rates
+        - when: bus_a_undervoltage
+          response: >-
+            unchanged. apollo's own event tier (apollo_diode.md:73) sheds nothing
+        - when: bus_a_shed_p3
+          response: >-
+            unchanged: P3 goes first
+        - when: bus_a_shed_p2
+          response: >-
+            **shed.** `csm_instrumentation` and `lm_instrumentation` are both class P2, so this is the tier where the vehicle stops reporting its own state — the degradation is visible to the crew only in its absence
+        - when: bus_a_survival
+          response: >-
+            still shed, and now guidance and comms have gone the same way. Nothing on the vehicle is measuring anything
+        - when: otherwise
+          response: >-
+            no bus, nothing powered
+
+  # The tie was an isolated node: `bus_tie_closed` existed, `E-BUSB-BUSA` existed, and that edge's
+  # own note said "gated by bus_tie" while `bus_tie` gated nothing — the coupling ran straight from
+  # `bus_b` to `bus_a` and stepped over the device it claimed to be gated by. Splitting it puts the
+  # tie on the path, so the state a fleet commands is the state the topology reads.
+  - id: E-BUSB-TIE
+    from: bus_b
+    to: bus_tie
+    kind: discrete
+    sensitivity:
+      unit: "energised or not"
+      basis: derived
+      at: "both buses inside envelope"
+      relation: >-
+        bus B's rail arrives at the tie. The tiers are `domains/power/profiles.yaml`'s own ladder
+        on `power.dc_bus_b_v`, reused by id; what crosses is the rail, and what the tie does with
+        it is `E-TIE-BUSA`'s question
+      note: >-
+        a gate rather than a gain, for the same reason as every other bus coupling in this file: a
+        regulated rail is present or it is not. `power.dc_bus_b_v` is produced by `bus_b`'s own
+        state, which is what lets the linter check that these regimes key on the driver's own
+        quantity rather than on something wearing its name
+      regimes:
+        - when: nominal
+          response: "bus B live and inside its envelope; the tie has a rail to transfer"
+        - when: bus_b_undervoltage
+          response: >-
+            bus B live but low. The tie is still feedable, and whether it should be closed into a
+            low bus is the interlock's question rather than this edge's
+        - when: otherwise
+          response: >-
+            no bus B. The tie has nothing to transfer, so bus A cannot be cross-supported from
+            this side
+  - id: E-TIE-BUSA
+    from: bus_tie
+    to: bus_a
+    kind: discrete
+    sensitivity:
+      unit: "transferred or isolated"
+      basis: derived
+      at: "tie closed"
+      relation: >-
+        the tie's position decides whether bus B reaches bus A. The keys are the values
+        `bus_tie_closed` can take, read off the driver node by the linter, so a regime naming a
+        position the tie cannot be in is refused
+      note: >-
+        the second half of the split, and the half that carries the gate. `tripped` is not `open`:
+        both isolate bus A from bus B, and they differ in what a crew may do next — an open tie can
+        be commanded closed, and a tripped one has latched, where closing it couples the healthy
+        bus to a ground fault (apollo_diode.md:340). A boolean could not tell those apart, so this
+        regime table is the first place in the definition where the distinction exists in data
+      regimes:
+        - when: closed
+          response: >-
+            bus B transfers to bus A. The tie is a conduction path, so what crosses is bus B's rail
+            less the tie's own drop — and that drop is still owed, with the source resistance, in
+            open_debts
+        - when: open
+          response: >-
+            isolated. The two buses are separate networks and neither can cross-support the other,
+            which is the nominal state: the tie is normally open unless transfer or cross-support
+            policy says otherwise (electrical_diode.md:252)
+        - when: tripped
+          response: >-
+            isolated and latched. The same electrical consequence as `open` and a different
+            operational one: the tie tripped on a ground fault, so the next command is a diagnosis
+            rather than a reclose
+
+  - id: E-FC-DRAW-O2
+    from: fuel_cell
+    to: o2_csm
+    kind: rate
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "kg/s per W"
+      basis: UNCONFIGURED
+      at: nominal
+      relation: >-
+        the consume side of E-O2-FC, and the one edge in this file whose value has a hard floor
+        and no published ceiling. Faraday fixes the floor exactly: a cell moving four electrons
+        per O2 and delivering V volts draws 0.032 / (4 * 96485.33212 * V) kg of oxygen per
+        joule, so at the Gibbs voltage of 1.229 V the floor is 6.747e-08 kg/J and the flown cell
+        is worse than the floor by exactly 1.229 / V_cell. The hydrogen edge is the same
+        arithmetic at two electrons and 0.002016 kg/mol, which gives 8.501e-09 kg/J and a
+        H2:O2 ratio of 0.1260 = 1/7.937 — the 8:1 the cell's own stoichiometry fixes and the
+        ratio C-REACTANT-DRAW-H2 uses as its diagnostic
+      note: >-
+        UNCONFIGURED and staying that way, because the one number that would close it is not
+        published: a real cell runs near 0.7-0.9 V rather than at the 1.229 V Gibbs voltage, so
+        the true draw is 1.4-1.8x the floor, and using the floor as the value would silently
+        stretch every oxygen budget in the mission by that factor. That is the failure this file
+        exists to prevent, and it is worse here than elsewhere because oxygen duration *is* the
+        experiment. What the derivation buys is a bound and a single named owe: the value lies in
+        [6.747e-08, 1.105e-07] kg/J, the floor is exact, and the only missing scalar is the cell
+        voltage under load — vehicle.yaml#electrical carries a standby sustain flow and no
+        operating point. `E-FC-WATER` was the same class of number and it was wrong by 2.2x
+  - id: E-FC-DRAW-H2
+    from: fuel_cell
+    to: h2_csm
+    kind: rate
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "kg/s per W"
+      basis: UNCONFIGURED
+      at: nominal
+      relation: >-
+        as E-FC-DRAW-O2, at two electrons and 0.002016 kg/mol rather than four and 0.032: the
+        floor is 0.002016 / (2 * 96485.33212 * 1.229) = 8.501e-09 kg/J, which is 0.1260 of the
+        oxygen floor and 1/7.937 of it, the 8:1 mass ratio the reaction fixes. Owed on the same
+        single scalar, the cell's operating voltage, so the two edges close together or not at
+        all
+      note: >-
+        separate from the oxygen edge and deliberately not folded into it: the two gases are
+        separate stocks, either can limit the cell, and a fleet that has run out of one has not
+        run out of the other. Keeping them as two edges with a fixed ratio between their floors
+        is what makes a hydrogen tank draining at the oxygen rate a *diagnosis* — a leak in the
+        wrong tank — rather than an unexplained consumption
+  - id: E-RAD-WATER
+    from: radiator_reject
+    to: water_cooling
+    kind: rate
+    sensitivity:
+      value: 4.0816e-07
+      computation: "1 / 2.45e6"
+      unit: "kg/s per W"
+      basis: derived
+      at: "full evaporator rate"
+      relation: "the latent heat of vaporisation at about 280 K, 2.45e6 J/kg, so 1 W of evaporative rejection costs 1/2.45e6 = 4.082e-7 kg/s of water. The published figure is the evaporator's 2,345 W capacity, and the consumption rate no source gives is derived from it"
+      note: >-
+        the edge that makes a thermal problem into a consumables problem, and the one an agent
+        that treats water and heat as separate budgets will miss. **The value was 3.8e-7 and the
+        arithmetic in its own relation says 4.082e-7** — the two had disagreed by 7 % since the
+        edge was written, which nothing caught because a `derived` value's relation is prose the
+        linter cannot evaluate. It is now the arithmetic, and it is block form so the relation and
+        the value sit in the same place
+
+  # --- thermal: the slow domain that turns loads into failures ------------------------
+  - id: E-PUMP-COOL
+    from: coolant_flow
+    to: coolant_supply_t
+    kind: lag
+    sensitivity: {value: UNCONFIGURED, unit: "K per kg/s", basis: UNCONFIGURED, at: nominal,
+    note: "tau is UNSPECIFIED in thermal_diode.md:965 and must be supplied here. Use the exponential map, not forward Euler (review-findings.md #5)."}
+  - id: E-COOL-TRANSPORT
+    from: coolant_supply_t
+    to: loop_transport
+    kind: delay
+    sensitivity: {value: 1.0, unit: "K per K", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
+    delay_ticks: UNCONFIGURED,
+    note: "transport delay, tick-indexed ring. apollo_diode.md:97 gives about 24 gal/h, which is minutes of transit for the loop volume."}
+  - id: E-TRANSPORT-PLATE
+    from: loop_transport
+    to: coldplate_t
+    kind: lag
+    sensitivity: {value: UNCONFIGURED, unit: "K per K", basis: UNCONFIGURED, at: nominal}
+  - id: E-PLATE-CRITICAL
+    from: coldplate_t
+    to: avionics_compute
+    kind: lag
+    sensitivity: {value: UNCONFIGURED, unit: "1 per K", basis: UNCONFIGURED,
+    at: "hot end, plate > 323 K",
+    note: "avionics_plate_c event is >50 C (apollo_diode.md:105). Near zero nominally."}
+  - id: E-PLATE-COMM
+    from: coldplate_t
+    to: link
+    kind: lag
+    sensitivity: {value: UNCONFIGURED, unit: "dB per K", basis: UNCONFIGURED,
+    at: "comm_amp_c > 333 K", note: "comm_amp_c event is >60 C (apollo_diode.md:106)"}
+  - id: E-PLATE-BAT
+    from: coldplate_t
+    to: battery_energy
+    kind: lag
+    sensitivity: {value: 0.0, unit: "J per K", basis: chosen, at: nominal,
+    reason: "a deliberately declared nominal zero whose crisis value is not zero; the point of the field is that the two differ (review-findings.md #8)",
+    crisis: {value: UNCONFIGURED, unit: "J per K",
+             note: "radiator isolation / poor attitude raises battery temperature and derates usable capacity (apollo_diode.md:341). The nominal zero is the review-findings.md #8 case: a closure computed at nominal passes a fidelity decision that is wrong exactly when it matters."}}
+  - id: E-RAD-THERM
+    from: radiator_reject
+    to: coolant_supply_t
+    kind: algebraic
+    sensitivity: {value: UNCONFIGURED, unit: "K per W", basis: UNCONFIGURED, at: nominal,
+    note: "rejection is a function of coolant temperature, not a constant. This edge and E-COOL-COOL below form an algebraic loop that is solved to consistency within the tick rather than delayed."}
+  - id: E-AMP-LOAD
+    from: link
+    to: bus_a
+    kind: rate
+    sensitivity:
+      value: 0.0357
+      computation: "1 / 28"
+      unit: "A per W"
+      basis: derived
+      relation: "the transmitter's DC input is the load, so the sensitivity is 1 / V_bus = 1/28 = 0.0357 A per W; the 36 W transceiver and the 72 W power amplifier are `dc_w` in vehicle.yaml#comms.transmitters"
+      at: "S-band amplifier on"
+      note: >-
+        closed by landing `domains/comms/`. The edge is the vehicle's one bidirectional coupling
+        that is not a fault at all: switching the power amplifier on is a 36 W step on the bus,
+        and apollo_diode.md:1140 and :1158 are explicit that this "is the trigger that exposes a
+        latent problem, never the root fault". That is what makes `set_power_amplifier` the most
+        consequential non-actuator verb on the vehicle — a command that can start a cascade with
+        nothing wrong anywhere.
+
+  # --- dynamics, guidance, and the geometry that comms depends on ---------------------
+  - id: E-ENG-DYN
+    sensitivity:
+      value: 2.2683e-05
+      computation: "1 / 44085"
+      unit: "m/s2 per N"
+      basis: derived
+      relation: "a = F/m, so the sensitivity is 1/m(t). At the heaviest configuration, `csm_lm_docked` at 44,085 kg, that is 2.268e-5 m/s2 per N. The plant uses the live mass from vehicle.yaml#configurations, because the same newton accelerates the LM twice as hard once the CSM is gone"
+      at: "csm_lm_docked, wet"
+      note: >-
+        closed by landing the masses. What was missing was never the relation — it is Newton's
+        second law — but the *mass*, and `vehicle.yaml#configurations` now closes on mass for all
+        four configurations. The value here is one point on the curve: the whole point of
+        `1/m(t)` is that it is a function, and the difference between 2.27e-5 and 2.05e-4 across
+        the mission is why a fixed acceleration would misprice every RCS translation anyone
+        planned
+    from: thrust_main
+    to: vehicle_dynamics
+    kind: lag
+  - id: E-RCS-DYN
+    from: rcs_thrust
+    to: vehicle_dynamics
+    kind: lag
+    sensitivity: {value: UNCONFIGURED, unit: "rad/s2 per N", basis: UNCONFIGURED, at: nominal,
+    note: "needs the inertia tensor, which nobody supplies"}
+  - id: E-DYN-GNC
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "-"
+      basis: derived
+      relation: "the coupling is the signal itself; one unit in, one unit out, plus the estimator's noise and its covariance"
+      at: nominal
+      note: >-
+        truth into the estimator. The value is 1.0 because this edge carries a value rather than
+        transforming one — what makes the estimate an estimate is the *state* on the far side
+        (`nav_solution` with `nav_covariance` beside it), not this edge, and a sensitivity other
+        than one here would be a claim that the vehicle's own state vector is measured with a
+        scale factor
+    from: vehicle_dynamics
+    to: nav_state
+    kind: algebraic
+  - id: E-IMU-NAV
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "-"
+      basis: derived
+      relation: "the coupling is the signal itself; one unit in, one unit out"
+      at: nominal
+      note: >-
+        the platform's measurement into the navigation solution, and the second of the two edges
+        that feed it. `domains/gnc/`'s estimator is what weighs them against each other; this edge
+        carries the raw reading and the filter's job is to decide how much of it to believe
+    from: imu
+    to: nav_state
+    kind: algebraic
+  # Two edges the file was missing, and both were invisible for the same reason: `guidance` had no
+  # inbound edge at all, so the function that commands the engine and the valves was connected to
+  # nothing. It had been coupled *from* `nav_state` until round 23 moved those edges here, and
+  # moving them exposed that `nav_state` then had nothing leaving it either — a navigation solution
+  # that informed nothing. Eight `E-CMD-*` edges exist and none of them reached `guidance`, although
+  # `set_guidance_mode` is a gnc verb whose `conflict_domain` has read `gnc.guidance` all along.
+  - id: E-CMD-GUID
+    from: command_executive
+    to: guidance
+    kind: discrete
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "-"
+      basis: derived
+      relation: >-
+        the commanded mode is the mode guidance runs. `set_guidance_mode` is authority A1 and
+        declarative (domains/gnc/commands.yaml), so it selects which program produces a reference
+        and changes no physical quantity — a command arriving one for one, as the other eight
+        `E-CMD-*` edges are
+      at: nominal
+      note: >-
+        the ninth command edge, and it was missing while the verb was not. A fleet could command
+        `set_guidance_mode` and the graph would not know the command had a destination, which is a
+        different failure from a verb that does nothing: the *state* changed, and nothing downstream
+        of the graph was aware that guidance had been re-tasked
+  - id: E-NAV-GNC
+    from: nav_state
+    to: guidance
+    kind: algebraic
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "solution per solution"
+      basis: derived
+      at: nominal
+      relation: >-
+        guidance reads the navigation solution. The error-state filter's estimate is the input every
+        guidance program steers from — `coast` propagates it, `burn` targets with it, `landing`
+        descends on it — so the coupling is the estimate itself and the gain is one. What is *not*
+        one is the confidence in it: `gnc.nav_position_sigma_m` and `nav_integrity` are separate
+        channels, and a guidance program that ignored the covariance would fly the same profile with
+        a 2 km error as with a 20 m one
+      note: >-
+        the other half of the same gap. Until this edge existed `nav_state` had three inbound edges
+        and none out, so the vehicle's own estimate of where it was informed nothing in the
+        coupling graph — the navigation solution was a number the fleet could read and the vehicle
+        could not act on. Derived rather than configured because there is no quantity to choose:
+        guidance consumes the solution, and the *use* it makes of the uncertainty is a property of
+        the guidance program rather than of this transfer
+  - id: E-GNC-ENG
+    from: guidance
+    to: engine_main
+    kind: discrete
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "mode per mode"
+      basis: derived
+      relation: >-
+        guidance selects the engine mode and the mode is what the engine takes: this is the
+        closed loop apollo_diode.md:792-796 calls "fully closed loop", and closed loop here means
+        guidance holds the authority to start and stop a burn without a crew verb. That makes the
+        coupling a *command* rather than a law of motion, and a command arriving one for one is a
+        unity gain — the same shape as the eight `E-CMD-*` edges that leave `command_executive`
+      at: "burn prep"
+      note: >-
+        this edge was `from: nav_state` with unit "enum per m" and it is the clearest case of the
+        class: there is no derivative of an engine mode with respect to metres, and no number
+        would ever have satisfied it. The edge was coupling from the *navigation solution* — a
+        quantity — to ask a question only a *decision* can answer, and the tell was that the
+        guidance-mode enum was sitting on `node: internal` with nowhere to be a driver. Promoting
+        it to the `guidance` service node is the fix; `set_guidance_mode`'s `conflict_domain` has
+        read `gnc.guidance` since the verb was written, so the authority partition already existed
+        and only the node was missing. The wrench matrix the old note went looking for is not
+        here either, and never was: it belongs to the allocator, which is `domains/rcs/`'s code
+  - id: E-GNC-RCS
+    from: guidance
+    to: rcs_valves
+    kind: discrete
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "mode per mode"
+      basis: derived
+      relation: >-
+        the commanded valve set is delivered. Guidance decides *whether* to control and in which
+        regime; the allocator decides which thrusters realise the wrench; the valves do what the
+        allocator says. Each step is a table, and this edge is the last one, where a commanded
+        selection arrives unchanged
+      at: nominal
+      note: >-
+        the old unit was "enum per rad" and the old note argued, correctly, that no scalar could
+        express this coupling — the allocator maps a *wrench* to thruster pulses through
+        `B = [F_i d_i ; r_i x F_i d_i]` (rcs_dode.md:685-693), so the "sensitivity" is a matrix
+        over forty-four thrust directions and lever arms. What the note got wrong was the
+        conclusion. A matrix is not a missing sensitivity on *this* edge, it is the content of a
+        different one: `B` is the allocator's, and the allocator lives in `domains/rcs/`. Routing
+        it through a guidance-to-valve coupling put a control law on an edge that carries a
+        decision. The geometry and the inertia tensor remain owed — but they are owed to
+        `E-RCS-DYN` and to `domains/rcs/`, and this edge is now closed without them
+  - id: E-DYN-GEOM
+    from: vehicle_dynamics
+    to: antenna_geometry
+    kind: algebraic
+    sensitivity:
+      value: 1.0
+      unit: "deg per deg"
+      basis: derived
+      relation: "the coupling is the geometry itself; one degree of attitude error is one degree of boresight error for a body-mounted antenna. The gimbal reduces the residual rather than the edge doing so, which is why the residual is its own channel"
+      at: nominal
+      note: >-
+        attitude -> pointing, the coupling of apollo_diode.md:786-790. The value was declared
+        UNCONFIGURED beside a relation saying the coupling is the signal itself, which is a
+        contradiction rather than a deferral: an identity relation has a value and it is 1.0, and
+        three sibling edges carrying the same relation already say so. What is *not* one-to-one is
+        the residual after the gimbal compensates, and that residual is
+        `comm.hga_pointing_error_deg` — the quantity the 2 deg threshold actually watches.
+        Collapsing the two would have made a gimbal failure indistinguishable from a vehicle
+        pointing the wrong way.
+  - id: E-GEOM-LINK
+    from: antenna_geometry
+    to: link
+    kind: algebraic
+    sensitivity:
+      value: -0.54
+      unit: "dB per deg"
+      basis: derived
+      relation: "the standard quadratic pattern near boresight, G(theta) = G0 - 12*(theta/theta_3dB)^2 dB, whose slope is dG/dtheta = -24*theta/theta_3dB^2. At the 2 deg operating point with theta_3dB = 9.4 deg (vehicle.yaml#comms.antennas.high_gain, itself derived from the gain-beamwidth product) that is -0.54 dB per deg"
+      at: "pointing error near 2 deg"
+      note: >-
+        where the antenna's *shape* becomes a number, and it is quadratic rather than linear —
+        which is what apollo_diode.md:163 means by "the gain is steep near the beam edge and flat
+        at boresight". The consequence is worth stating because it is counter-intuitive: at 1 deg
+        the loss is 0.14 dB, at 2 deg it is 0.54, at 5 deg it is 3.4 and at 9.4 deg it is 12. A
+        fleet watching the pointing error therefore sees almost nothing for a long time and then
+        loses the link over the last few degrees, and a linear edge could not express that.
+
+  # --- the executive: the only edge class that originates outside the plant -----------
+  - id: E-CMD-EXEC
+    from: command_executive
+    to: instrumentation
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
+    note: "commands are revalidated at the moment of effect (diode-contract.md:145-148)"}
+  - id: E-CMD-BUS
+    from: command_executive
+    to: load_shed_state
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-CMD-ATM
+    from: command_executive
+    to: cabin_regulator
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-CMD-ENG
+    from: command_executive
+    to: engine_main
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-CMD-RCS
+    from: command_executive
+    to: rcs_valves
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-CMD-LINK
+    from: command_executive
+    to: link
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  - id: E-CMD-GNC
+    from: command_executive
+    to: nav_state
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
+    note: "guidance mode and state-vector load; not a fast-loop authority (gnc_diode.md:17)"}
+
+  # --- structure and crew: discrete, irreversible, and the only unanticipated sensor ---
+  - id: E-CMD-STRUCT
+    from: command_executive
+    to: structure_config
+    kind: discrete
+    irreversible: true
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the command is the cause of the configuration change, one for one; the irreversibility is in the destination, not in the edge", at: nominal,
+    note: "staging, jettison, pyro. Arm/commit with a short-lived token bound to the action (apollo_diode.md:476-509); the vehicle configuration increments permanently."}
+  - id: E-STRUCT-PLATE
+    from: structure_config
+    to: coldplate_t
+    kind: discrete
+    sensitivity:
+      unit: "K per configuration"
+      basis: chosen
+      reason: >-
+        the driver is an enum, so the coupling is a lookup over the values that enum can take
+        rather than a derivative with respect to anything. `domains/structure/components.yaml`
+        declares `configuration: enum[docked, undocked, separated, abandoned]`, and the linter
+        reads that vocabulary off the driver node, so a regime naming a configuration the vehicle
+        cannot be in is refused
+      at: "stage separated"
+      note: >-
+        the unit read "K per enum", which is not a unit — but the *shape* was right and the rest
+        of the file was wrong to treat it as a scalar gap. What is owed is not one sensitivity,
+        it is one temperature per configuration, and they are owed for different reasons: docked
+        and undocked differ by whether the LM's avionics bay is dumping heat into the same
+        structure, while separated and abandoned differ by whether the descent stage is still
+        there to be a heat sink. Premature staging permanently alters the thermal and comms
+        geometry (apollo_diode.md:343), which is why the lookup is keyed on the configuration
+        rather than on a mass or a time
+      regimes:
+        - when: docked
+          response: UNCONFIGURED
+          note: >-
+            the plate temperature with the LM attached and its avionics powered. Owed as a Kelvin
+            offset against the undocked case; `domains/thermal/` has the plate's own balance and
+            no figure for what the LM adds to it
+        - when: undocked
+          response: UNCONFIGURED
+          note: >-
+            the reference case, and the one the plate's balance already describes. What is owed
+            is the confirmation that the CSM-only figure is the one `thermal_diode.md` gives,
+            since a plate sized for two vehicles is oversized for one and cold is as much a
+            failure as hot for a lithium-ion pack on the same structure
+        - when: separated
+          response: UNCONFIGURED
+          note: >-
+            descent stage gone after a nominal ascent: the plate loses a heat sink and gains
+            exposure. Owed as a Kelvin offset, and the direction is not obvious enough to assume
+            — the stage both shades and conducts
+        - when: abandoned
+          response: UNCONFIGURED
+          note: >-
+            the LM left in lunar orbit and the CSM alone: the same geometry as `separated` with
+            the LM further away and its heaters still running. The difference between the two is
+            the smallest of the four and the one most likely to be dismissed as negligible, which
+            is why it is a regime rather than a footnote
+  - id: E-CREW-ATM
+    sensitivity:
+      value: 0.03792
+      computation: "0.91 / 24"
+      unit: "kg/h per crew"
+      basis: derived
+      relation: "0.91 kg of oxygen per crew-day (vehicle.yaml#consumables.metabolic.o2_kg_per_crew_day), divided by 24 h. The same rate is the CO2 produced and the water and food consumed, at the published planning rates for a 154 lb man"
+      at: "per crew member, awake"
+      note: >-
+        closed by arithmetic: the metabolic rates are published as *daily* figures and this edge
+        wants an hourly one. The relation is exact for the gas exchange and it is deliberately the
+        only crew physiology on the vehicle — `apollo_diode.md:754` makes metabolic O2 and CO2 an
+        *input* rather than a model of a person, and a crew member is a source term here and a
+        state machine in `domains/crew/`
+    from: crew_state
+    to: cabin_atm
+    kind: rate
+  # The edge `E-CREW-ATM`'s own relation already claimed. It reads "the same rate is the CO2
+  # produced and the water and food consumed, at the published planning rates" — so the design
+  # always intended the crew to drink, and no edge was ever declared for it. `water_potable` was
+  # therefore a stock that only ever filled, and the number a crew would watch when rationing was
+  # the one number in the consumables budget that could only go up.
+  - id: E-CREW-WATER
+    sensitivity:
+      value: 0.094583
+      computation: "2.27 / 24"
+      unit: "kg/h per crew"
+      basis: derived
+      relation: >-
+        2.27 kg of water per crew-day (vehicle.yaml#consumables.metabolic.water_kg_per_crew_day,
+        from the NR glossary planning rates for a 154 lb man), divided by 24 h. The same figure
+        `E-CREW-ATM` cites for oxygen, at the water rate rather than the gas-exchange rate
+      at: "per crew member, awake"
+      note: >-
+        this is a *draw on the tank*, and it is the only one, so it sets how long the
+        water lasts exactly as the oxygen draw sets how long the oxygen lasts — which is why the
+        two are declared at the same granularity rather than one being folded in as a fraction.
+        It is also the mission's quietest consumable: an Apollo crew had 2.27 kg per person per day
+        against a fuel cell producing water continuously, so the tank fills faster than it drains
+        and the failure mode is a *flood* rather than a shortage. That asymmetry is worth having in
+        the graph, because a fleet that sees the water quantity rise has to decide whether it is
+        looking at a healthy vehicle or a leaking one, and this edge is the term that makes the
+        question answerable. Food is the third rate in the same sentence and remains unmodelled:
+        no state consumes it and no channel publishes it, so declaring an edge for it would be
+        declaring a consumer that does not exist
+    from: water_potable
+    to: crew_state
+    kind: rate
+  - id: E-INST-ALERT
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "-"
+      basis: derived
+      relation: "the coupling is the signal itself. The information is lost in what the alert *says*, not in the transfer: a master alarm and a panel category rather than a root cause"
+      at: nominal
+      note: >-
+        instruments into the caution/warning system, and `apollo_diode.md:229` is the specification:
+        the C&W "deliberately loses information — master alarm plus panel category, no root cause".
+        That is a statement about the *content* of the alert rather than about the edge, and the
+        edge is one for one. It is the domain boundary where losing information is the design
+    from: instrumentation
+    to: alert_state
+    kind: discrete
+  - id: E-INST-TEL
+    from: instrumentation
+    to: published_evidence
+    kind: rate
+    one_way: true
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "published evidence is the instrument state restated at the publication rate; one unit in, one unit out", at: nominal}
+  - id: E-LINK-TEL
+    from: link
+    to: published_evidence
+    kind: rate
+    one_way: true
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the link is the transport for whatever the publisher chose to send; it can drop or delay, never invent", at: nominal,
+    note: "when the link degrades the publisher must actually choose what arrives, not set comm.degraded=true and deliver everything (apollo_diode.md:901)"}
+
+# --------------------------------------------------------------------------------------
+# Declared cycles. Every cycle names its back-edge; the back-edge carries the one-tick
+# delay, everything else resolves in topological order within the tick, with a frozen
+# lexicographic tiebreak on domain name so the order is total and therefore replayable
+# (review-findings.md #3).
+# --------------------------------------------------------------------------------------
+cycles:
+
+  - id: C-AMP-BUS-PUMP
+    name: "the flagship degraded chain: amplifier -> bus -> pump -> coolant -> coldplate -> amplifier"
+    members: [E-AMP-LOAD, E-BUS-PUMP, E-PUMP-COOL, E-COOL-TRANSPORT, E-TRANSPORT-PLATE, E-PLATE-COMM]
+    back_edge: E-PLATE-COMM
+    closing_mechanism: "a hot amplifier draws more current for the same output, which returns to the bus as extra load"
+    delay_ticks: 1
+    apollo: "1144-1158"
+    stability:
+      hysteresis_required: true
+      note: >-
+        Verified in review-findings.md #7: the one-tick delay neither creates nor cures the
+        limit cycle — hysteresis does, and dwell alone is worse, because a 300 ms dwell
+        without hysteresis produces a ~1.7 Hz relay oscillation that an agent reading 2 Hz
+        engineering telemetry will read as physics. Every latched state on this cycle must
+        carry hysteresis, and the recovery-minus-assert gap must exceed the load delta the
+        transition itself causes.
+
+  - id: C-RAD-COOL
+    name: "radiator rejection versus coolant temperature"
+    members: [E-RAD-THERM, E-WATER-RAD]
+    back_edge: null
+    delay_ticks: 0
+    algebraic: true
+    note: >-
+      Not a delayed cycle but a genuine algebraic loop: rejection is a function of coolant
+      supply temperature and the supply temperature is a function of rejection. Solve to
+      consistency within the tick at t, commit at t+dt. Declared here so the scheduler knows
+      to iterate rather than to order.
+
+  - id: C-BAT-THERMAL
+    name: "battery temperature versus available capacity"
+    members: [E-PLATE-BAT, E-BAT-BUS, E-BUS-PUMP, E-PUMP-COOL, E-COOL-TRANSPORT, E-TRANSPORT-PLATE]
+    back_edge: E-PLATE-BAT
+    delay_ticks: 1
+    note: >-
+      A hot coldplate raises the battery's temperature, a hot battery delivers less of its
+      capacity, a weaker source loads the bus harder, and a harder-working bus drives the pumps
+      that feed the coldplate. Nominal gain is zero and the crisis gain is not
+      (review-findings.md #8), which is why the fidelity closure must be evaluated against the
+      degraded and crisis envelopes: this loop is invisible at 28 V in a healthy thermal balance
+      and decisive under radiator isolation. Thermal mass makes it slow and self-damping, so no
+      latch on the cycle.
+
+      **Its members were wrong until the linter checked whether a declared cycle closes.** The
+      third member was `E-BUS-GNC` — bus to the avionics computer, which leads nowhere near the
+      coldplate — so the declaration named three edges, only two of which were on the loop, and
+      the cycle did not close at all. The correct path back to the coldplate is the thermal one,
+      through the pumps, the coolant loop and the transport delay, and those five edges are what
+      the loop is. The check that found it asks a question nobody had asked of any of the five
+      cycles: does the back-edge's `to` actually reach its `from` through the other members?
+    stability:
+      hysteresis_required: false
+      note: "thermal mass, not a comparator: no latch on this cycle"
+
+  # Charge and discharge are the same converter in two directions, so the loop is real: the bus
+  # voltage sets the charge current, and the stored energy sets the bus voltage. It is broken by
+  # the stock itself — `battery_charge_j` cannot change within a tick, so what the bus sees is
+  # last tick's energy. The back-edge is therefore the *discharge* path, which is the same choice
+  # `C-REACTANT-DRAW-O2` makes and for the same reason: the consumed quantity reads the stock as
+  # it stood, and the flow that changes the stock is computed forward.
+  - id: C-BAT-BUS
+    name: "battery charge versus bus voltage"
+    members: [E-BUS-BAT, E-BAT-BUS]
+    back_edge: E-BAT-BUS
+    delay_ticks: 1
+    closing_mechanism: >-
+      charging draws from the bus and discharging supports it: a bus held high by the fuel cells
+      charges the battery, a bus dragged down by load discharges it, and the storage interface is
+      the same converter in both directions
+    note: >-
+      the second two-edge loop in this graph and the second found by deriving the schedule rather
+      than by reading it. `C-COMM-BUS` was the first, and it was found because the domain order
+      had no total order; this one was found because a *reversed* total order hides a missing
+      source rather than a missing edge. Both are the same lesson arriving twice: the schedule is
+      a check on the graph, not a presentation of it
+  - id: C-COMM-BUS
+    name: "transmitter load versus bus voltage"
+    members: [E-AMP-LOAD, E-BUS-COMM]
+    back_edge: E-BUS-COMM
+    delay_ticks: 1
+    closing_mechanism: >-
+      the amplifier's DC input is a bus load, and the bus voltage sets the transmitter's output:
+      switching the power amplifier on is a 36 W step on the bus, and a sagging bus is a weaker
+      link
+    note: >-
+      **Found by deriving the schedule, not by reading the graph.** `E-AMP-LOAD` and `E-BUS-COMM`
+      form a two-edge loop between `comms` and `power`, and neither edge appeared in any declared
+      cycle — so the domain order had no valid total order and `plant.md`'s promise that the
+      linter emits one could not be kept. The latch is worse than that, because it is silent: a
+      domain-level cycle looks exactly like a domain-level dependency until somebody tries to
+      order it.
+
+      The delay is on the bus-to-link edge, and the choice is physical rather than conventional.
+      The amplifier's draw follows from the *commanded* transmitter state, which is a service
+      state and therefore exogenous; the bus is a stiff regulated source that responds to its
+      load within the tick; and the link's signal-to-noise ratio is a consequence of both. So
+      `comms` precedes `power` in the schedule, the load is known before the bus is solved, and
+      the link reads the bus voltage as it stood one tick ago. Twenty milliseconds of lag on a
+      stiff 28 V bus is not a modelling compromise — and the alternative, an algebraic solve of a
+      two-node loop across two domains, is what `C-RAD-COOL` does *within* one domain and cannot
+      do across two.
+    stability:
+      hysteresis_required: false
+      note: >-
+        the loop gain through this pair alone is nominally zero, because the draw is driven by the
+        commanded state and not by the link's signal-to-noise ratio — a lower bus voltage does not
+        make the amplifier draw less, which is the positive-feedback path and it runs through the
+        *thermal* route rather than this one. That path is `C-AMP-BUS-PUMP`, and it carries the
+        hysteresis requirement for both.
+
+  # Two cycles, not one. The original entry was named "fuel-cell reactant availability versus
+  # consumption" and declared only the oxygen half — `E-O2-FC` and `E-FC-DRAW-O2` — which left
+  # `E-H2-FC` (h2_csm -> fuel_cell) as a consumables-to-power edge with no back-edge and therefore
+  # a `power <-> consumables` loop in the schedule. The hydrogen path is the same physics through
+  # a second tank, so it is the same cycle shape and it needs its own declaration rather than a
+  # mention. Found by deriving the schedule, like `C-COMM-BUS`.
+  - id: C-REACTANT-DRAW-O2
+    name: "fuel-cell oxygen availability versus consumption"
+    members: [E-O2-FC, E-FC-DRAW-O2]
+    back_edge: E-O2-FC
+    delay_ticks: 1
+    note: >-
+      Availability limits the cell and the cell drains the tank. Under Gauss-Seidel one of the two
+      must read last tick's value, and it is the availability edge: the cell's output at t is
+      computed from the stock as it stood at the end of t-1. The alternative — an instantaneous
+      mutual solve — is not physical either, because the tank's contents are a state and not a
+      function of this tick's demand.
+    stability:
+      hysteresis_required: false
+      note: "no latched state on this cycle; it is a slow mass balance rather than a comparator loop"
+
+  - id: C-REACTANT-DRAW-H2
+    name: "fuel-cell hydrogen availability versus consumption"
+    members: [E-H2-FC, E-FC-DRAW-H2]
+    back_edge: E-H2-FC
+    delay_ticks: 1
+    note: >-
+      The same loop as the oxygen one through a second tank, and it is a separate cycle in the
+      schedule because the two gases are separate stocks: the cell needs both, either can limit
+      it, and a fleet that has run out of one has not run out of the other. The 8:1 oxygen-to-
+      hydrogen mass ratio the cell consumes them in is what makes the pair diagnostic — a
+      hydrogen tank draining at the oxygen rate is a leak in the wrong tank, and the ratio is
+      published on `E-H2-FC` for exactly that comparison.
+    stability:
+      hysteresis_required: false
+      note: "as the oxygen cycle: a slow mass balance, no latched state, no chatter to prevent"
+
+  - id: C-WATER-BUDGET
+    name: "evaporative rejection versus the water it spends"
+    members: [E-WATER-RAD, E-RAD-WATER]
+    back_edge: E-WATER-RAD
+    delay_ticks: 1
+    note: >-
+      Water availability caps rejection and rejection consumes water. The same one-tick
+      convention as C-REACTANT-DRAW, and it matters for the same reason: a dry feed does not
+      stop the heat, it only stops the rejection, so the failure mode of this cycle running
+      out is a temperature rise rather than a valve closing.
+      stability:
+        hysteresis_required: false
+
+# --------------------------------------------------------------------------------------
+# Failure chains, as data. apollo_diode.md:325-343 gives fifteen as prose: primary fault,
+# physical secondary effect, operational third-order consequence, observable clues. They
+# are paths through this graph plus the evidence a correct diagnosis would use, and they
+# are what the scenario ladder is built from. `first_published_clue` is the channel an
+# agent should be able to notice first — if a chain has no such channel, it is an
+# information-design bug, not a physics bug (apollo_diode.md:204-216).
+# --------------------------------------------------------------------------------------
+failure_chains:
+
+  - id: F-01-cryo-o2-electrical
+    apollo: "329"
+    primary: "cryogenic O2 tank electrical fault"
+    secondary: "O2 pressure loss -> fuel-cell reactant starvation"
+    third_order: "bus undervoltage -> load shedding -> reduced comm/GNC/thermal capability"
+    first_published_clue: power.bus_a_current_a
+    observable_clues: [power.bus_a_current_a, power.dc_bus_a_v, eclss.o2_supply_pressure_psi, comm.rx_frame_loss_pct]
+    history: "Apollo 13; apollo_diode.md:345"
+    scenario_use: crisis
+  - id: F-02-coolant-pump-stall
+    apollo: "330"
+    primary: "coolant pump stalls"
+    secondary: "coolant flow collapses -> coldplate temperatures rise"
+    third_order: "comm amplifier or avionics overheats -> degraded link / computer faults"
+    first_published_clue: thermal.primary_flow_l_min
+    observable_clues: [thermal.pump_1_state, thermal.primary_flow_l_min, thermal.avionics_plate_c, thermal.comm_amp_c, thermal.coolant_return_c]
+    scenario_use: degraded
+  - id: F-03-hga-weak-bus
+    apollo: "331"
+    primary: "high-gain amplifier switched on during weak-bus condition"
+    secondary: "electrical load step -> voltage sag"
+    third_order: "marginal pump/contactors drop out -> thermal rise"
+    first_published_clue: power.bus_a_current_a
+    observable_clues: [power.bus_a_current_a, power.dc_bus_a_v, thermal.pump_1_state, thermal.primary_flow_l_min]
+    scenario_use: degraded
+    note: "the amplifier is the trigger that exposes a latent problem, never the root fault"
+  - id: F-04-rcs-stuck-on
+    apollo: "332"
+    primary: "RCS thruster stuck on"
+    secondary: "attitude rate + excess propellant use"
+    third_order: "high-gain antenna leaves beam -> communication degradation"
+    first_published_clue: gnc.body_rate_xyz_deg_s
+    observable_clues: ["rcs.thruster_[n]_valve", "rcs.thruster_[n]_pressure_switch", structure.accel_xyz_g, gnc.body_rate_xyz_deg_s, comm.snr_db]
+    scenario_use: crisis
+  - id: F-05-rcs-pressure-switch
+    apollo: "333"
+    primary: "RCS pressure switch failure"
+    secondary: "false 'no thrust' indication"
+    third_order: "operators unnecessarily isolate a healthy thruster -> control authority loss"
+    first_published_clue: "rcs.thruster_[n]_pressure_switch"
+    observable_clues: ["rcs.thruster_[n]_pressure_switch", structure.accel_xyz_g, rcs.propellant_remaining_pct]
+    scenario_use: degraded
+    note: "a single discrepant switch must not condemn a thruster; corroboration before condemnation (rcs_diode.md:944)"
+  - id: F-06-cabin-leak
+    apollo: "334"
+    primary: "cabin leak"
+    secondary: "regulator increases O2 flow"
+    third_order: "O2 inventory depletion; in the CSM, reduced fuel-cell reserve"
+    first_published_clue: eclss.cabin_pressure_psia
+    observable_clues: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s, eclss.o2_supply_pressure_psi, res.o2_remaining_kg]
+    scenario_use: degraded
+  - id: F-07-absorber-saturation
+    apollo: "335"
+    primary: "LiOH/absorber saturation"
+    secondary: "CO2 rises"
+    third_order: "crew procedures constrained / emergency configuration"
+    first_published_clue: eclss.co2_pp_mmhg
+    observable_clues: [eclss.co2_pp_mmhg, eclss.absorber_capacity_pct, cw.active_lights]
+    scenario_use: degraded
+  - id: F-08-feed-sensor-stuck
+    apollo: "336"
+    primary: "feed-pressure sensor stuck high"
+    secondary: "true feed starvation hidden"
+    third_order: "underburn -> trajectory error -> larger correction-burn demand"
+    first_published_clue: prop.chamber_pressure_pct
+    observable_clues: [prop.chamber_pressure_pct, structure.accel_xyz_g, prop.feed_pressure_pct, prop.accumulated_dv_m_s]
+    scenario_use: crisis
+    note: "the sensor disagrees with chamber pressure and acceleration, which is the only way to see it"
+  - id: F-09-frozen-line
+    apollo: "337"
+    primary: "frozen/trapped propellant line"
+    secondary: "thermally driven pressure growth"
+    third_order: "relief/mechanical failure risk"
+    first_published_clue: prop.pressurant_pressure_psi
+    observable_clues: [prop.pressurant_pressure_psi, thermal.coolant_supply_c, structure.relief_valve_state]
+    history: "Apollo 11 trapped line; apollo_diode.md:347. The transducer tops out at 300 psia while the true pressure is 700-800: publish 300.0 + SATURATED, never the truth (apollo_diode.md:215)."
+    scenario_use: crisis
+  - id: F-10-imu-degradation
+    apollo: "338"
+    primary: "IMU/reference degradation"
+    secondary: "navigation uncertainty grows"
+    third_order: "burn error -> extra propellant and degraded return margin"
+    first_published_clue: gnc.nav_position_sigma_m
+    observable_clues: [gnc.nav_position_sigma_m, gnc.nav_velocity_sigma_m_s, gnc.imu_alignment_error_deg, gnc.radar_range_rate_m_s]
+    scenario_use: degraded
+  - id: F-11-antenna-gimbal
+    apollo: "339"
+    primary: "antenna/gimbal fault"
+    secondary: "pointing error grows"
+    third_order: "telemetry gaps -> controllers lose evidence during another anomaly"
+    first_published_clue: comm.hga_pointing_error_deg
+    observable_clues: [comm.hga_pointing_error_deg, comm.snr_db, comm.rx_frame_loss_pct]
+    scenario_use: degraded
+  - id: F-12-bus-tie-fault
+    apollo: "340"
+    primary: "bus tie closed into a fault"
+    secondary: "redundant bus becomes electrically coupled to the failed side"
+    third_order: "loss of previously healthy loads"
+    first_published_clue: power.bus_a_current_a
+    observable_clues: [power.bus_tie_state, power.bus_a_current_a, power.dc_bus_a_v, power.dc_bus_b_v]
+    scenario_use: crisis
+  - id: F-13-radiator-isolation
+    apollo: "341"
+    primary: "radiator isolation / poor attitude"
+    secondary: "heat rejection falls"
+    third_order: "battery/electronics temperatures increase"
+    first_published_clue: thermal.radiator_rejection_w
+    observable_clues: [thermal.radiator_rejection_w, thermal.avionics_plate_c, power.battery_temp_c]
+    scenario_use: degraded
+    note: "the chain that makes C-BAT-THERMAL visible"
+  - id: F-14-instrumentation-power
+    apollo: "342"
+    primary: "instrumentation power fault"
+    secondary: "selected channels freeze or drop out"
+    third_order: "false confidence, or inability to diagnose another fault"
+    first_published_clue: avionics.instrumentation_power_w
+    observable_clues: [avionics.instrumentation_power_w, avionics.telemetry_frame_sync, avionics.oldest_sample_age_ms, avionics.redundancy_disagreement]
+    scenario_use: degraded
+    note: "the failure that attacks the experiment rather than the mission; the publisher must show age and dropout, never a frozen value that reads as fresh"
+  - id: F-15-premature-staging
+    apollo: "343"
+    primary: "premature staging / pyro"
+    secondary: "physical configuration changes irreversibly"
+    third_order: "propulsion, thermal and communications geometry permanently altered"
+    first_published_clue: structure.stage_state
+    observable_clues: [structure.stage_state, "structure.pyro_continuity_[n]", power.dc_bus_a_v]
+    scenario_use: crisis
+    irreversible: true
+    note: "the only chain no command can undo, and so the one that must be arm/commit protected"
+
+# --------------------------------------------------------------------------------------
+# What this file still owes. The linter (tools/check_vehicle.py) fails the build and names
+# the wanting edge for each UNCONFIGURED above; this list is the human-readable version.
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  # This debt named two edges and one coefficient, and the three turned out not to be the same
+  # size of thing. E-FC-BUS asked for a "V per W" droop, but the source regulator is specified as
+  # a *regulated* output (electrical_diode.md:249: 24-32 V over 25-100 % of 1.2 kW, >=94 %,
+  # <10 ms transient) and a regulated source has no proportional droop to configure — the edge is
+  # a unity carry and is now closed at 1.0 V per V, with the residual recorded below as the
+  # resistance it actually is. E-BAT-BUS is *not* closed and should not be, because it is not the
+  # same kind of unknown: `battery_energy` advances exactly one state, `battery_charge_j`, and a
+  # stock of joules cannot be an algebraic source of volts. There is no pack-voltage state, no
+  # open-circuit-voltage curve and no bidirectional converter in the model, so the edge couples
+  # from a node that cannot produce the quantity it carries. The fix is a state, not a number.
+  - "Source internal resistance (the residual sag on E-FC-BUS and the tie drop across E-TIE-BUSA). electrical_diode.md:247-251 gives ratings and efficiencies but no source or conductor resistance, and the droop is bounded rather than determined by what is published: the undervoltage ladder asserts at 26.5 V (apollo_diode.md:73), so a 28 V bus at the 1.2 kW rating cannot sag more than 1.5 V without a healthy converter tripping its own alarm — an upper bound of 1.25e-3 V per W. The bound is the useful half; the number is still owed."
+  - "A pack-voltage state on `battery_energy` (E-BAT-BUS, and the reason that edge cannot close). The node advances stored energy and nothing else, so an algebraic edge from it to `bus_a` has no quantity to be a function of. What is missing is the chain stored energy -> open-circuit voltage -> bidirectional converter -> bus (electrical_diode.md:250 gives the converter as 20-36 V battery to 28 V bus, >=94 %), and the honest OCV is flat enough over most of the usable band that the regulated bus barely moves: the coupling is closer to *availability* than to volts. Declared here rather than guessed, because adding a state changes the schedule and the schedule is derived."
+  - "Every thermal time constant and conductance (tau on E-PUMP-COOL, E-TRANSPORT-PLATE, E-PLATE-*). thermal_diode.md:965 declares them all UNSPECIFIED and refuses to infer them."
+  - "Loop transit delay in ticks (E-COOL-TRANSPORT). Needs loop volume and flow; apollo_diode.md:97 gives ~24 gal/h."
+  - "Throttle-to-thrust law for main propulsion (E-PROP-ENG). Isp and mass flow are supplied (vehicle.yaml#propulsion, Apollo 11 tables) and the RCS rate edge is now closed at 2843.9 N per kg/s; what main propulsion still owes is the shape — build-up, tailoff and the descent engine's 65-92.5 % non-operating region, which `domains/propulsion/` refuses to interpolate across."
+  - "Inertia tensor and centre of mass (E-RCS-DYN, E-GNC-RCS). The masses are supplied; the rotational properties are not, and without them the vehicle cannot tumble. Landing `domains/rcs/` turned this from one unknown into two named ones: the inertia, and the thrusters' geometry — forty-four unit thrust directions and lever arms, which are what the allocator's wrench matrix is built from."
+  - "Per-edge crisis-point gains for the power->thermal->power loop (E-BUS-PUMP especially). Required before the fidelity closure means anything at the crisis operating point."
+  - "A `regimes` table for the four remaining bus-driven edges (E-BUS-GNC, E-BUS-INST, E-BUS-COMM) and E-BAT-BUS's availability half. `regimes:` now exists and is enforced: a `discrete` coupling leaving physical equipment must declare one, `E-BUS-RCS` and `E-STRUCT-PLATE` are converted, and `E-GNC-ENG`/`E-GNC-RCS` closed outright by promoting guidance to a service node — they had been coupling from `nav_state`, the navigation solution, to ask a question only a decision can answer. A consumer's draw is constant inside the 24-32 V envelope and then stops; that envelope is already the undervoltage ladder in domains/power/profiles.yaml, so a `1 per V` here would model a load that grows without bound as the bus sags, which is the opposite of what a load does. E-GNC-RCS is not a scalar under any form — rcs_dode.md:685-693 maps a wrench to thruster pulses through B = [F_i d_i ; r_i x F_i d_i], so its sensitivity is a matrix over forty-four thrust directions and lever arms that are themselves unpublished. The closing move is a `regimes:` table on a discrete edge whose bands are checked against the thresholds that already exist, which would connect the coupling graph to the ladders it currently ignores."

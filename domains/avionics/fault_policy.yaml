@@ -1,0 +1,488 @@
+# domains/avionics/fault_policy.yaml — eleven faults that attack the experiment.
+#
+# ## The thesis, and why this file is different from the other seven
+#
+# Every other domain's faults attack the *vehicle*. This domain's attack the fleet's ability to
+# know what the vehicle is doing, and F-14's note states the requirement exactly:
+#
+#   "the failure that attacks the experiment rather than the mission; the publisher must show
+#    age and dropout, **never a frozen value that reads as fresh**"
+#
+# A dead instrument that keeps publishing its last value is indistinguishable from a healthy one
+# by value alone. Every fault below is either an instrument that has stopped being right
+# (AVI-03, AVI-04, AVI-05), an instrument that has stopped being *alive* (AVI-01, AVI-02,
+# AVI-11), or a mechanism that has stopped being trustworthy (AVI-06 to AVI-10). The first group
+# is diagnosed by comparing the reading against something else. The second is diagnosed by
+# looking at the *age*, which is why `avionics.oldest_sample_age_ms` exists and why the whole
+# freshness apparatus landed in the registry before this domain did.
+#
+# ## The fault that is not a fault
+#
+# AVI-03 is a sensor that has drifted. It produces every quality code except the one that would
+# reveal it — the vehicle assigns GOOD, correctly, because the sample is finite, in range, fresh
+# and not bit-failed, and `simulator-design.md:383-385` is explicit that this is not a defect of
+# the quality function but the point of it. The drift is visible only in the CUSUM statistic, and
+# only after enough evidence has accumulated to distinguish a bias from noise. That is the
+# domain's contribution to the experiment in one fault: **the vehicle cannot tell a fleet that an
+# instrument has drifted; it can only publish a statistic that accumulates until the fleet
+# notices.**
+#
+# ## The corroboration rule, inherited from the RCS domain
+#
+# `apollo_diode.md:333` and `rcs_dode.md:944` say a single discrepant pressure switch must not
+# condemn a thruster. The same rule runs the other way here: AVI-04 produces a single
+# instrumentation failure, and AVI-05 produces a *disagreement*, and the vehicle's response to
+# the second is to stop voting rather than to pick a winner. A fleet that treats a disagreement
+# as a sensor failure has skipped the step where it finds out which one is wrong.
+
+domain: avionics
+
+faults:
+
+  - id: AVI-01-instrumentation-power
+    component: instrumentation_power
+    mechanism: "the instrument set loses power or is fed a degraded supply: a bus sag, an open breaker, a failing converter"
+    kind: sustained
+    seeding:
+      hazard: 3.0e-4
+      unit: per_h
+      trigger: "E-BUS-INST: the bus falls below the instrument set's hold threshold"
+    perturbs: [avionics.instrumentation_power_w, avionics.telemetry_frame_sync,
+               avionics.oldest_sample_age_ms, avionics.redundancy_disagreement,
+               "avionics.sensor_health_[class]"]
+    detection:
+      evidence: >-
+        F-14's chain, and its first clue is the power channel itself: apollo's "zero" event on
+        `avionics.instrumentation_power_w`. What makes it hard is everything after that — the
+        channels do not all stop at once, and the ones that stop first stop *silently*. A frozen
+        value at a plausible number is the failure mode, and the evidence that catches it is
+        `avionics.oldest_sample_age_ms` rising while the values it aggregates still look fine
+      latency: >-
+        seconds to the power channel, and much longer to the realisation that a subset of the
+        picture is dead. The gap between those two is the fault
+      false_positive_risk: >-
+        a commanded instrument-set change looks similar for one frame — `set_instrumentation_mode`
+        drops channels on purpose. The separation is the *power* channel: a commanded reduction
+        lowers the draw and keeps the frame coherent, and an uncommanded one does neither
+    response:
+      kind: service
+      note: >-
+        the vehicle sheds instrumentation to protect the bus and publishes the dropout. There is
+        no S0 safe action that helps, because nothing is dangerous — this is the one fault class
+        where the correct vehicle response is to keep publishing what still works and to say
+        clearly what stopped. F-14's third-order effect is "false confidence, or inability to
+        diagnose another fault", and both arrive only if the fleet does not notice the dropout
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:342"
+      note: >-
+        apollo's chain and its note: "instrumentation power loss is the failure that destroys
+        evidence rather than hardware". The `coupling.yaml` entry makes the same point from the
+        graph side — E-BUS-INST is the edge where a power fault becomes an epistemic one
+
+  - id: AVI-02-frozen-publisher
+    component: telemetry_publisher
+    mechanism: "a publication stage stops updating: the ring's writer stalls, a serialiser fails, a channel is dropped from the frame while its neighbours continue"
+    kind: instrument
+    seeding:
+      on_demand_p: 2.0e-3
+      trigger: "any fault that removes a publisher's input without removing the publisher"
+    perturbs: [avionics.oldest_sample_age_ms, avionics.telemetry_frame_sync,
+               "avionics.sensor_health_[class]", avionics.redundancy_disagreement]
+    detection:
+      evidence: >-
+        age, and only age. The value is the last good one, the quality code is GOOD because the
+        sample *was* good when it was taken, and every other channel in the frame is live. The
+        vehicle's aggregate `avionics.oldest_sample_age_ms` is the detector, and the per-point
+        `max_decision_age_ms` in `channels.yaml` is what turns it into a decision: a value whose
+        age exceeds one publish period is a value the publisher was obliged to refresh and did
+        not, so the executive's freshness guard refuses to let anything depend on it
+      latency: "one publish period to detect, which is the fastest any staleness detector can be"
+      false_positive_risk: >-
+        none by value and plenty by interpretation. A publisher that has stopped and a publisher
+        that has been deliberately narrowed are the same age signal, which is why the instrument
+        profile is published: a fleet that knows it selected `minimal` will not read a higher
+        aggregate age as a fault
+    response:
+      kind: advisory
+      note: >-
+        nothing on the vehicle side, and deliberately so: the publisher is the thing that would
+        report its own failure and it has failed. The executive's freshness guard is the defence,
+        which is why it had to exist before this fault could; the fleet's move is to fall back to
+        the channels that are still live and to treat the frozen ones as absent rather than as
+        current
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:342"
+      note: >-
+        F-14's note made into a fault with its own entry. It is separated from AVI-01 because the
+        *responses* differ: AVI-01 is a power problem with a power fix, and this one has no fix,
+        only a way of not being deceived. The whole freshness mechanism in `channels.yaml` and
+        `mission.yaml` is the vehicle's answer to this fault, and this fault is the reason those
+        fields are not decoration
+
+  - id: AVI-03-sensor-drift
+    component: sensor_health
+    mechanism: "an instrument develops a systematic bias: a transducer ages, a reference shifts, a bridge circuit drifts with temperature"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      bias_walk: 0.02
+    perturbs: [avionics.oldest_sample_age_ms, "avionics.drift_statistic_[group]",
+               "avionics.drift_state_[group]"]
+    detection:
+      evidence: >-
+        the CUSUM statistic, and *only* the CUSUM statistic. This is the fault that justifies
+        `avionics_diode.md`'s presence in the vehicle: every other diagnostic on this vehicle is
+        a comparison against a band or against a sibling, and a slow bias passes both — the value
+        stays in range, the quality stays GOOD, and the redundant member is drifting at its own
+        rate so the vote sees two plausible numbers. A cumulative sum of (sample − expectation)
+        against an allowance accumulates what a threshold cannot see, which is why `plant.md` §4's
+        statement that the nominal cabin leak is below its instrument's own quantum and "must
+        still happen" is a requirement this domain can finally meet
+      latency: >-
+        hours, and the latency is the point rather than a defect: a CUSUM's decision threshold is
+        a false-alarm rate, and the evidence needed to distinguish a 2 % bias from noise is
+        genuinely large. A fleet that wants a faster answer is asking for a higher false-alarm
+        rate and should have to say so
+      false_positive_risk: >-
+        a model error, not an instrument error, and the two are indistinguishable from the
+        statistic alone. This is the same composite problem the consumables ledger pair has
+        (CNS-11) and it has the same shape of answer: the drift is real evidence, the attribution
+        needs a third source, and the domain publishes the statistic rather than the conclusion
+    response:
+      kind: advisory
+      note: >-
+        the monitor latches and the fleet is told a bias exists. What it does about it is a
+        decision the vehicle deliberately does not make: `select_sensor` can move the vehicle to
+        the other member of a redundant group, `set_instrumentation_mode` can drop the class, and
+        neither is automatically correct — a fleet that always switches on a drift alarm will
+        eventually switch to the worse sensor
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:420-428 — `cusum_rule`, whose own comment is 'run positive and negative accumulators for deterministic bias detection'"
+      note: >-
+        the word *deterministic* in that comment is doing real work: a CUSUM is not a statistical
+        test with a p-value, it is a recurrence, so the same sequence of samples produces the same
+        statistic in the same order. That matters for `plant.md`'s determinism tier and it is why
+        the accumulator is a quantized stock rather than a float
+
+  - id: AVI-04-instrument-failure
+    component: sensor_health
+    mechanism: "an instrument fails outright: an open transducer, a shorted bridge, a sensor that reads pinned at a rail or out of its engineering range"
+    kind: discrete
+    seeding:
+      hazard: 5.0e-4
+      unit: per_h
+    perturbs: ["avionics.sensor_health_[class]", avionics.redundancy_disagreement,
+               avionics.oldest_sample_age_ms]
+    detection:
+      evidence: >-
+        `avionics_diode.md:371-388`'s four conditions, in the order the function tests them:
+        not finite, pinned, out of range, stale. The trip counter is what separates it from a
+        glitch — `trip_count` consecutive implausible samples — and the counters exist because a
+        single bad sample from a real transducer is normal and a run of them is not. On this
+        vehicle the failure is *easy* to detect and that is deliberate: the corpus's hard faults
+        are the quiet ones, and a domain needs at least one that behaves
+      latency: "trip_count samples, which is 3 at the worst and 0.3 s at the fastest point"
+      false_positive_risk: >-
+        low, and the risk is in the other direction: a sensor whose range is misconfigured reads
+        as failed forever, and the configuration is the `eng_min`/`eng_max` the sample is tested
+        against. That is why the range lives in the registry with the point rather than in the
+        monitor
+    response:
+      kind: service
+      note: >-
+        the class is marked `fault`, the redundancy vote drops the member, and the consumer falls
+        back to the surviving source or to a degraded mode. The interesting part is what the
+        vehicle does *not* do: it does not substitute the other member silently. A substitute is a
+        quality code (`SUBSTITUTED`, naming the source) and a silent substitution is a fleet
+        reasoning about one instrument while reading another
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:371-388, and vocabulary §5's SATURATED/OUT_OF_RANGE split which the document's single range test cannot make"
+
+  - id: AVI-05-redundancy-disagreement
+    component: redundancy_vote
+    mechanism: "two members of a redundant group part company: they are both working and they disagree, or one of them is failing in a way the trip counter has not yet condemned"
+    kind: instrument
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any redundant group with two or more live members"
+    perturbs: [avionics.redundancy_disagreement, "avionics.sensor_health_[class]",
+               "avionics.drift_statistic_[group]"]
+    detection:
+      evidence: >-
+        `avionics_diode.md:390-411`: the median of the healthy members, and any member further
+        from it than `max(abs_tol, sigma_factor * sigma)` for `trip_cycles` consecutive samples.
+        The comparison against the *larger* of a fixed tolerance and a sigma-scaled one is the
+        detail that matters and it is easy to skim past: a fixed tolerance alone flags a
+        high-precision sensor for normal noise, and a sigma-scaled one alone trusts a sigma that
+        may itself be wrong
+      latency: "trip_cycles samples; the count is published on the first disagreement, which is earlier"
+      false_positive_risk: >-
+        a genuine physical asymmetry — two pressure sensors in different places reading
+        different pressures — is a disagreement that is not a fault. The separation is the
+        drift statistic: an asymmetry is stable and a failing sensor accumulates
+    response:
+      kind: service
+      note: >-
+        below two healthy members the vote returns `degraded` and *stops voting*, which is the
+        function's most important line. A median of one is a measurement wearing a vote's
+        clothes. And `select_sensor` is refused while the disagreement stands, so a fleet cannot
+        resolve the ambiguity by asserting an answer — the protection `rcs_dode.md:944` states
+        for pressure switches, applied to every redundant group on the vehicle
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:390-411, and `apollo_diode.md:333`'s 'a single discrepant switch must not condemn a thruster' generalised to every redundant group"
+
+  - id: AVI-06-clock-drift
+    component: clock_offset
+    mechanism: "the vehicle's clock loses its reference or drifts against it: a missed sync, an oscillator aging, a reference that is itself wrong"
+    kind: instrument
+    seeding:
+      hazard: 1.5e-4
+      unit: per_h
+      drift_ms_per_h: UNCONFIGURED
+    perturbs: [avionics.clock_offset_ms, avionics.time_sync_state,
+               "mission.met_s"]
+    detection:
+      evidence: >-
+        `avionics_diode.md:474-483`'s three clauses, and the third is the one this vehicle needs:
+        an offset over the limit, *or an uncertainty over its limit*. `apollo_diode.md:526` makes
+        the one-way light time 1.3 s, so a clock synchronised against Earth is synchronised
+        against a signal that left 1.3 s ago — a `time_health` that only compared the offset
+        would call that SYNC. The offset channel is apollo's and its ">100" event is the first
+        clause
+      latency: "one sync interval to the offset, which is the interval the reference provides"
+      false_positive_risk: >-
+        a reference that is itself wrong produces a *decreasing* offset, and the vehicle would
+        report itself as recovering. The separation is the uncertainty term: a clock whose
+        reference is bad has an uncertainty that grows while its offset shrinks, and the two
+        channels together show the divergence
+    response:
+      kind: service
+      note: >-
+        the verdict gates irreversible commands — `requires_time_sync` on the structure domain's
+        two one-shot verbs — and that is the whole reason this fault matters. Everything else on
+        the vehicle is relative and survives a drifted clock. A pyro event with a time-tagged
+        deadline does not: its deadline is measured against the clock, so a drifted clock is a
+        one-shot with an unknown arming window
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:183, :526"
+      note: >-
+        apollo's offset channel and its light-time figure; `avionics_diode.md:474-483` and
+        :496-508 supply the verdict and the gate. The `requires_time_sync` flag is the one term
+        of the document's authorization chain that `mission_diode.md`'s eight-term predicate
+        does not have
+
+  - id: AVI-07-computer-reset
+    component: computer_mode
+    mechanism: "the guidance computer restarts: a watchdog, a program alarm that the executive resets, a power transient on the computer rail"
+    kind: discrete
+    seeding:
+      hazard: 4.0e-4
+      unit: per_h
+      trigger: "any program alarm, or a bus transient below the computer's hold threshold"
+    perturbs: [avionics.computer_mode, avionics.program_alarm_code, avionics.exec_margin_pct,
+               gnc.guidance_mode, gnc.estimator_rejection_reason]
+    detection:
+      evidence: >-
+        apollo's "restart/mode change" event on `avionics.computer_mode` and its "any non-null"
+        event on `avionics.program_alarm_code`. The *code* is the evidence and the mode is the
+        consequence: a 1202 is an executive overflow and a 1201 is a memory-exhaustion alarm, and
+        the correct response differs — Apollo 11's flight controllers told the crew to continue
+        on the first and would have aborted on a sustained run of them. A vehicle that published
+        "the computer restarted" would have deleted the distinction
+      latency: "immediate on the alarm, one frame on the mode"
+      false_positive_risk: >-
+        none for the alarm and one for the attribution: a reset caused by a power transient and
+        one caused by a software fault produce the same alarm. The separation is the bus channel,
+        which the power domain publishes
+    response:
+      kind: service
+      note: >-
+        the computer returns to `standby` and the vehicle's command surface narrows while it
+        comes back. `reset_computer` is the fleet's verb for the deliberate version, and it is
+        A2 for the reason its help text gives: the restart destroys the record of what raised
+        the alarm, and on this vehicle the record is the experiment
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:176, :178"
+      note: >-
+        apollo's two events and the 1202/1201 distinction from the Apollo 11 chronology
+        (`apollo_diode.md:26`, which lists the program alarms among the observations a
+        controller had to interpret without labels)
+
+  - id: AVI-08-sensor-bus-degradation
+    component: sensor_bus_errors
+    mechanism: "the sensor bus degrades: a chafed harness, a marginal connector, a driver whose thresholds have moved"
+    kind: sustained
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      rate_per_s: UNCONFIGURED
+    perturbs: [avionics.sensor_bus_errors_s, "avionics.sensor_health_[class]",
+               avionics.redundancy_disagreement, avionics.telemetry_frame_sync]
+    detection:
+      evidence: >-
+        apollo's ">0" event on `avionics.sensor_bus_errors_s` — the strictest threshold on the
+        vehicle, and the strictness is the design. A digital link with error detection that
+        reports one error has told you something about the harness; a domain that treated it as
+        a noise figure would wait for a rate and miss the onset
+      latency: "one error. This is the fastest-detected fault on the vehicle and the only one whose threshold is a single event"
+      false_positive_risk: >-
+        a single cosmic-ray-induced bit flip in a long mission is not a degrading harness. The
+        vehicle does not try to separate them at the first error — it reports it, and the
+        *rate* is what a fleet watches afterwards. That is the right division: the threshold is
+        apollo's and the interpretation is the fleet's
+    response:
+      kind: advisory
+      note: >-
+        nothing automatic, and the reason is worth stating: the vehicle cannot know which
+        instruments are behind the failing path, and a bus error that has corrupted a sample is
+        visible in that sample's quality code while a bus error that has corrupted a *frame* is
+        visible in `avionics.telemetry_frame_sync`. The two together are the whole response
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:181"
+
+  - id: AVI-09-compute-margin-collapse
+    component: compute_margin
+    mechanism: "the guidance computer runs out of throughput: a task set that has grown, a rail voltage that has sagged, a coldplate that has gone hot and forced the clock down"
+    kind: emergent
+    seeding:
+      coupled_to: "E-BUS-GNC (a bus sag below the contactor-hold threshold) and E-PLATE-CRITICAL (an avionics coldplate above 50 C)"
+      trigger: "avionics.exec_margin_pct below apollo's <10 event"
+    perturbs: [avionics.exec_margin_pct, avionics.computer_mode,
+               gnc.estimator_rejection_reason, gnc.nav_position_sigma_m]
+    detection:
+      evidence: >-
+        apollo's "<10" event, and the two edges behind it are the flagship cascade's two halves:
+        a sagging bus and a hot coldplate. The margin is one number on purpose — the computer
+        does not care which of them is taking its headroom — and attributing the loss is the
+        fleet's job, which it does with `power.dc_bus_a_v` and `thermal.avionics_plate_c`
+      latency: "one second to the alarm; the underlying cause is already visible in the power or thermal channel"
+      false_positive_risk: >-
+        a legitimate task-set increase (an instrument profile change, a rendezvous's navigation
+        load) lowers the margin without anything being wrong. `set_instrumentation_mode`
+        publishes what it selected, so the separation is whether the fleet asked for the load
+    response:
+      kind: service
+      note: >-
+        the computer sheds tasks in priority order, and the *order* is the interesting part:
+        navigation and control are held last, the engineering channels that explain the vehicle
+        go first. That is `design.md` §8's rule arriving as a resource decision — a vehicle that
+        sheds its own instrumentation to save throughput has traded its explanation for its
+        function, which is the right trade and one a fleet should have to watch it make
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:105, :177"
+      note: >-
+        apollo's event and the two crisis edges. `review-findings.md` #7 simulates the E-BUS-GNC
+        half of this chain: below the contactor-hold threshold the guidance platform drops out,
+        and the margin is what makes the drop-out a physics chain rather than a scripted event
+
+  - id: AVI-10-actuator-feedback-failure
+    component: actuator_tracking
+    mechanism: "an actuator's feedback path fails while the actuator works: a position transducer, a pressure switch, a driver's sense line"
+    kind: instrument
+    seeding:
+      hazard: 2.5e-4
+      unit: per_h
+    perturbs: ["avionics.sensor_health_[class]", "rcs.thruster_[n]_health",
+               prop.chamber_pressure_pct, rcs.control_authority_margin,
+               structure.relief_valve_state]
+    detection:
+      evidence: >-
+        `avionics_diode.md:430-441`: |command − feedback| against a warn and a critical error,
+        *after the command's settle deadline*. That clause is the whole function — without it
+        every command is a fault for the first tick, because a valve told to open has not opened
+        yet. RCS-05 states the same rule from the other side ("past transit time") and this is
+        the shared implementation
+      latency: "one settle deadline past the command"
+      false_positive_risk: >-
+        a settle deadline that is too short makes every slow actuator look failed, and the
+        deadline is a configuration value the corpus does not supply for this vehicle's valves.
+        That is why this fault is *declared* and its trip settings are owed: the mechanism is
+        known and the timing is not
+    response:
+      kind: advisory
+      note: >-
+        the affected actuator's health conclusion feeds its own domain — RCS-02 and RCS-05 both
+        consume this rule — and this domain's contribution is that there is one implementation
+        of it. Two implementations of "is the valve late" is how two domains come to disagree
+        about whether a valve is late, and the disagreement would arrive as a fleet seeing a
+        healthy thruster in one channel and a failed one in another
+    provenance:
+      basis: historical
+      source: "avionics_diode.md:430-441 — `actuator_tracking`, including the `TRANSIENT` return before the settle deadline"
+
+  - id: AVI-11-frame-sync-loss
+    component: frame_sync
+    mechanism: "the telemetry stream loses coherence: a dropped frame, an interleaved publisher, a ring writer that has fallen behind"
+    kind: discrete
+    seeding:
+      hazard: 3.0e-4
+      unit: per_h
+    perturbs: [avionics.telemetry_frame_sync, avionics.oldest_sample_age_ms,
+               avionics.sensor_bus_errors_s]
+    detection:
+      evidence: >-
+        apollo's "sync loss" event on a boolean, and it is the *earliest* evidence in F-14: a
+        dropout arrives as a loss of frame coherence before it arrives as a missing channel,
+        because the missing channel is missing from a frame that still claims to be complete.
+        The 200 ms assert dwell is chosen and short for exactly that reason — a sync bit that
+        needed a second before reporting would arrive after the frozen values it exists to warn
+        about
+      latency: "200 ms, the shortest assert dwell in the avionics registry"
+      false_positive_risk: >-
+        a single dropped frame at the ring's wrap boundary is not a coherence failure. The
+        symmetric-recovery design (`latched: false`, no clear dwell) means the vehicle reports
+        it and stops reporting it, rather than latching an alarm on a one-frame event
+    response:
+      kind: service
+      note: >-
+        the vehicle marks the affected frame's points and continues. What a fleet must not do is
+        what the fault invites: treat the frame as complete. `avionics.oldest_sample_age_ms`
+        answers "is any part of this picture old" and this channel answers "is this picture
+        coherent", and a fleet that reads neither is reading a frozen vehicle as a live one
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:180, :342"
+      note: >-
+        apollo's channel and its event. `diode-contract.md`'s ring is the mechanism this fault
+        attacks: a fixed ring whose sequence gaps are visible is the design's answer to a
+        publisher that has fallen behind (`communcations_diode.md:705`)
+
+coverage:
+  note: >-
+    Every channel this domain publishes is perturbed by at least one fault above except
+    `avionics.imu_power`, which is perturbed by AVI-01 through the shared instrumentation
+    supply, and the four diagnostic *channels* whose perturbations are the faults themselves —
+    `drift_statistic`, `drift_state`, `sensor_health` and `time_sync_state` are all moved by
+    AVI-03, AVI-04, AVI-06 and AVI-10.
+  unperturbed: []
+  cross_domain:
+    note: >-
+      six of the eleven faults perturb a channel outside `avionics.*`, which is the highest
+      cross-domain reach of any domain on the vehicle and is the natural consequence of what
+      this domain is: an instrument layer does not fail in its own channels, it fails in the
+      channels of everything it instruments. `gnc.nav_position_sigma_m` and
+      `gnc.estimator_rejection_reason` for the innovation test (F-10),
+      `rcs.thruster_[n]_health` and `rcs.control_authority_margin` for the actuator rule,
+      `prop.chamber_pressure_pct` for the same rule on the engine, and `mission.met_s` for the
+      clock. The one direction that does not appear is the reverse — no avionics fault perturbs
+      a channel in a domain it does not instrument, because the instrument set is bounded by
+      what apollo's 277 analogue channels actually monitored.
+  shared_rules:
+    note: >-
+      two of the nine diagnostic functions are *declared here and implemented elsewhere*, on
+      purpose and once each: `power_rule` is the power domain's task-shedding ladder and
+      `thermal_rule` is the thermal domain's hysteresis. They are recorded in
+      `components.yaml#diagnostics` so that the vehicle has one written statement of each rule,
+      and they are not implemented here because two implementations of one rule is how two
+      domains come to disagree. `actuator_tracking` is the exception that proves it: RCS and
+      propulsion both consume it and neither owns it, so this domain does.

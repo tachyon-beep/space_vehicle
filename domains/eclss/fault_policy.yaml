@@ -1,0 +1,331 @@
+# domains/eclss/fault_policy.yaml — the faults that have minutes rather than hours.
+#
+# ## The one thing this domain does that no other can
+#
+# Every other domain's faults are diagnosed by comparing channels that move at comparable rates.
+# ECLSS has one fault whose two available channels move on timescales three orders of magnitude
+# apart: **a cabin leak** shows up on the pressure channel within seconds as a slope, and on the
+# supply tank over hours as a level. An agent that watches levels sees it late; an agent that
+# watches slopes sees it early and cannot tell it from a thermal transient; an agent that watches
+# both has to reason about which is which. That is the domain's contribution to the experiment,
+# and ECL-01 is built to produce it.
+#
+# ## Two statistics, two faults
+#
+# ECL-04 is an absorber blower failure and CNS-08 in the consumables domain is a channelled bed.
+# They are different mechanical causes with similar signatures — CO2 rising while the capacity
+# channel says there is capacity left — and telling them apart requires a third observation:
+# a blower failure stops consuming capacity, a channelled bed consumes it at the normal rate
+# while removing nothing. The pair is deliberate.
+
+domain: eclss
+faults:
+  - id: ECL-01-cabin-leak
+    component: csm_cabin_volume
+    mechanism: "a seal fails: gas leaves the cabin faster than the regulator replaces it, and the rate grows as the seal opens"
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      rate_kg_per_h: 0.05
+    perturbs: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s, eclss.o2_supply_pressure_psi,
+               eclss.pp_o2_mmhg, res.o2_remaining_kg]
+    detection:
+      evidence: >-
+        a pressure slope that the temperature channel does not explain, and a supply tank that
+        falls over the following hours. The temperature term is what makes this hard: a 1 K cabin
+        change moves the pressure by 117 Pa (0.017 psia), which is twice the instrument's
+        precision and comparable to a small leak's first hour
+      latency: "seconds on the pressure slope, an hour or more on the supply tank, and the leak-rate channel needs both"
+      false_positive_risk: >-
+        a cooling cabin and a leaking cabin are the same pressure observation. The separation is
+        the temperature channel and the direction of the supply tank, and a fleet that does not
+        look at either will chase a leak every time the vehicle passes into shadow
+    response:
+      kind: service
+      note: >-
+        the service closes the regulator on a depressurisation below the emergency level. That is
+        the one service-owned protective action in this domain, because the alternative is
+        spending the whole oxygen supply into a hole
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:334, :94"
+      note: >-
+        apollo's cabin-leak chain: 'cabin leak -> regulator increases O2 flow -> O2 inventory
+        depletion; in the CSM, reduced fuel-cell reserve'. The last clause is the coupling worth
+        noticing — the same oxygen feeds the fuel cells, so a leak that the regulator compensates
+        for is a leak that shortens the mission's electrical life
+
+  - id: ECL-02-regulator-stuck-open
+    component: o2_regulator
+    mechanism: "the regulator jams open: oxygen enters the cabin at the high band regardless of pressure"
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any regulator mode transition"
+    perturbs: [eclss.cabin_pressure_psia, eclss.cabin_regulator_state, eclss.pp_o2_mmhg,
+               res.o2_remaining_kg, eclss.o2_supply_pressure_psi]
+    detection:
+      evidence: "cabin pressure rising with the regulator commanded to a lower band, and the supply tank falling faster than the metabolic rate explains"
+      latency: "minutes on the pressure channel, hours on the resource"
+      false_positive_risk: "a commanded high band looks identical from the pressure channel; the commanded state is the separation"
+    response:
+      kind: service
+      note: "the service closes the supply upstream. A regulator that will not stop needs a valve rather than a command."
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:334, :95"
+      note: >-
+        in apollo's leak chain the regulator's increased flow is the *response*. Here it is the
+        fault. Same physics, different first cause — and the pair is worth having together
+        because a fleet that has met one will misread the other until it checks the tank
+
+  - id: ECL-03-regulator-stuck-closed
+    component: o2_regulator
+    mechanism: "the regulator does not open: the cabin is sealed to its supply and the crew's consumption drains it"
+    kind: discrete
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any regulator transition after a long cold soak"
+    perturbs: [eclss.cabin_pressure_psia, eclss.pp_o2_mmhg, eclss.o2_supply_pressure_psi,
+               eclss.cabin_regulator_state]
+    detection:
+      evidence: >-
+        a supply tank that holds while the cabin pressure falls. The tank's stillness is the
+        evidence, and it is evidence by absence — the kind a fleet has to think to look for,
+        because every channel that is moving is moving the way a leak makes it move
+      latency: "tens of minutes, because the cabin's oxygen stock is small: 2.65 kg at 5 psia is about two days of three crew"
+      false_positive_risk: "ECL-01 exactly. A leak and a closed regulator produce the same cabin pressure slope and are separated only by the tank"
+    response:
+      kind: service
+      note: "the service switches to the emergency regulator, which is the mode that exists for this"
+    provenance:
+      basis: chosen
+      reason: >-
+        the mirror of ECL-02 and the fault that makes the supply tank worth watching. Its
+        detection window is short by this domain's standards — 2.65 kg of cabin oxygen against
+        0.91 kg per crew-day is about two days for three — which is the same order as Apollo 13's
+        consumable race and is why the cabin's oxygen load is a modelled stock rather than a
+        constant
+
+  - id: ECL-04-absorber-blower-failure
+    component: lioh_bed_primary
+    mechanism: "the bed's blower stops: air no longer passes through the lithium hydroxide and CO2 accumulates with the capacity untouched"
+    kind: discrete
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+    perturbs: [eclss.co2_pp_mmhg, eclss.co2_pp_1h_avg_mmhg, eclss.absorber_capacity_pct,
+               cw.active_lights]
+    detection:
+      evidence: >-
+        CO2 rising while the capacity channel says there is plenty left — and, the sharper part,
+        capacity that stops being consumed. A bed that is not being used does not deplete, so
+        the *absence* of depletion is the diagnosis
+      latency: "minutes: the CO2 channel is at 0.5 Hz and the crew's production is fast"
+      false_positive_risk: >-
+        CNS-08's channelled bed produces the same CO2 rise with a *normal* consumption rate. The
+        two are separated by whether capacity is being spent, which is a difference in a rate of
+        change rather than in a level
+    response:
+      kind: advisory
+      note: "switch paths with set_absorber_path. The alternative bed is the answer while it lasts, and how long it lasts is a consumables question."
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:335, :84"
+      note: >-
+        the mechanical half of apollo's absorber chain. The chemistry half is CNS-08, and the
+        deliberate pairing is what turns 'the CO2 is rising' into a diagnosis with two candidates
+        and one distinguishing observation
+
+  - id: ECL-05-pressure-sensor-bias
+    component: cabin_pressure_sensor_1
+    mechanism: "one of the two pressure transducers develops a walking bias: it reads a little high, then a little higher"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      bias_walk_pa_per_h: 30
+    perturbs: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s]
+    detection:
+      evidence: >-
+        the two redundant channels parting company, slowly. Below the disagreement threshold the
+        bias is invisible; above it the vehicle knows a sensor is wrong and not which one, and
+        the tie-break is the leak-rate channel — a real gas loss shows on the supply tank and a
+        sensor bias does not
+      latency: "hours, and the discovery is the disagreement rather than the bias"
+      false_positive_risk: "total, until the channels diverge: a single biased sensor in a single-sensor vehicle is undetectable, which is why there are two"
+    response:
+      kind: service
+      note: >-
+        the pressure_sensor_disagreement interlock arms and the leaking channel acquires SUSPECT
+        only on the redundancy vote — never because the simulator knows which one is broken
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:365, :688"
+      note: "the random-walk bias mode from apollo's sensor model, applied to the channel every other diagnosis in this domain rests on"
+
+  - id: ECL-06-pressure-sensor-stuck
+    component: cabin_pressure_sensor_1
+    mechanism: "a transducer freezes at its last value: the cabin changes and the channel does not"
+    kind: instrument
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any rapid pressure change"
+    perturbs: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s]
+    detection:
+      evidence: >-
+        a pressure reading that never varies at all on a vehicle whose regulator cycles
+        continuously. The signature is an absence of variance, which is the same 'watch the
+        variance not the level' habit that catches the power domain's stuck current sensor and
+        the thermal domain's stuck flow
+      latency: "until the redundancy vote fires or the leak-rate channel stops closing"
+      false_positive_risk: "none from the stuck channel; the two-sensor arrangement is the entire detection mechanism"
+    response:
+      kind: advisory
+      note: "the vehicle can still fly on the second channel, and the decision is whether to trust it — which is a judgement, not a protection action"
+    provenance:
+      basis: chosen
+      reason: >-
+        the same instrument-fault family as ECL-05 with a harder signature. It is worth having
+        separately because a *stuck* sensor is the one that makes a leak invisible: the pressure
+        channel stops moving, the leak-rate inference has no slope to work from, and only the
+        supply tank is left
+
+  - id: ECL-07-suit-loop-fan-failure
+    component: ventilation_fan
+    mechanism: "the suit-circuit fan stops: the loop's flow collapses and the crew's suits lose cooling and CO2 removal"
+    kind: discrete
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+    perturbs: [eclss.suit_loop_flow_cfm, eclss.co2_pp_mmhg, power.bus_a_current_a]
+    detection:
+      evidence: "flow to zero with the fan commanded on, and the bus current stepping down as an 85 W load leaves"
+      latency: "seconds — the fastest consequence in the vehicle"
+      false_positive_risk: "a bus sag that dropped the fan's contactor is a different fault with the same flow signature; the bus voltage and current separate them"
+    response:
+      kind: advisory
+      note: "the crew's problem is the next ten minutes, and the vehicle's is to tell them which fan stopped"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:92, :84"
+      note: >-
+        apollo's <20 cfm event on a 27-33 cfm loop, and its note that the same ECS caution could
+        mean glycol pump, water separator or suit fan. This is the suit-fan member of that
+        ambiguity, and it is the one with the shortest fuse
+
+  - id: ECL-08-vent-valve-stuck-open
+    component: o2_regulator
+    mechanism: "the vent valve does not reseat: the cabin bleeds to vacuum through a path the regulator cannot outrun"
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any vent or repressurisation cycle"
+    perturbs: [eclss.cabin_pressure_psia, eclss.pp_o2_mmhg, eclss.leak_rate_g_s,
+               eclss.o2_supply_pressure_psi]
+    detection:
+      evidence: >-
+        a pressure fall far too fast to be a seal leak, with the supply tank emptying as the
+        regulator tries to keep up. The rate is the diagnosis: a seal leak is 0.05 kg/h and a
+        stuck vent is orders of magnitude more, so this is the fault where the *magnitude*
+        separates it rather than a second channel
+      latency: "seconds"
+      false_positive_risk: "a large breach and a stuck vent are the same observation, and the difference is whether the crew can hear it"
+    response:
+      kind: service
+      note: "emergency regulator and suit loop, in that order: hold what pressure can be held, then put the crew in suits"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:238"
+      note: >-
+        apollo lists set_vent_valve and the emergency regulator's job is stated as holding the
+        cabin above 3.5 psia long enough to don suits (apollo_diode.md:84) — which is a
+        procedure written for exactly this fault
+
+  - id: ECL-09-emergency-regulator-overpressure
+    component: o2_regulator
+    mechanism: "the emergency regulator fails open: the cabin climbs toward the supply pressure"
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any emergency regulator activation"
+    perturbs: [eclss.cabin_pressure_psia, eclss.pp_o2_mmhg, eclss.cabin_regulator_state,
+               structure.cabin_dp_psi]
+    detection:
+      evidence: "cabin pressure climbing with the regulator commanded to closed, and the differential channel agreeing with it"
+      latency: "tens of seconds"
+      false_positive_risk: "a stuck-open primary regulator looks similar; the commanded mode is the separation"
+    response:
+      kind: service
+      note: "isolate the supply and vent. The second half is what makes this the one fault in the domain whose correct response involves deliberately losing cabin gas"
+    provenance:
+      basis: historical
+      source: >-
+        the Apollo 1 fire, which happened in a pressurised pure-oxygen cabin on the pad. This
+        fault is the flight version of the same hazard: a 5 psia oxygen cabin is survivable and a
+        16 psia one is not, and a regulator that will not close is how a vehicle gets from one to
+        the other
+
+  - id: ECL-10-nitrogen-dilution
+    component: csm_cabin_n2_kg
+    mechanism: "the wrong gas is added during a repressurisation: the total pressure recovers and the oxygen fraction falls"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any repressurisation from the diluent supply"
+    perturbs: [eclss.pp_o2_mmhg, eclss.cabin_pressure_psia, eclss.co2_pp_mmhg]
+    detection:
+      evidence: >-
+        total pressure nominal and oxygen partial pressure falling. It is the one fault in the
+        vehicle whose signature is a *composition* change at a constant level, and a fleet
+        watching pressure alone will not see it at all
+      latency: "minutes on the ppO2 channel"
+      false_positive_risk: "a genuine oxygen consumption event lowers ppO2 too, but it lowers it with the total pressure holding — which is this fault's signature, so the separation is the supply tank and the regulator's history"
+    response:
+      kind: advisory
+      note: "add oxygen, or accept a thinner cabin. The interesting version of the decision is that a *lower* ppO2 is the right answer to a fire and the wrong one to a leak"
+    provenance:
+      basis: chosen
+      reason: >-
+        the fault that justifies modelling nitrogen as its own stock. A single-gas atmosphere
+        cannot express a dilution, and a dilution is the fire risk that the fire-risk threshold
+        exists to catch — so a model without it has a threshold nothing can trip except a
+        depressurisation, which is a different hazard
+
+  - id: ECL-11-condensing-exchanger-failure
+    component: condensing_heat_exchanger
+    mechanism: "the exchanger's water removal falls away: cabin humidity climbs and the crew feel it before any channel moves"
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+    perturbs: [eclss.cabin_temp_c, "thermal.zone_[id]_t_c", cw.active_lights]
+    detection:
+      evidence: >-
+        nothing on the atmosphere channels worth the name, and a crew member who says the cabin
+        feels damp. This is the fault that exists to make the crew sensor necessary: it is real,
+        it is diagnosable, and the instrument suite this vehicle publishes cannot see it
+      latency: "whenever somebody mentions it"
+      false_positive_risk: "none from the channels, because there are none — the risk is a fleet that has learned to ignore the crew"
+    response:
+      kind: advisory
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226-227, :369-370"
+      note: >-
+        apollo publishes crew.available and a coarse workload state, and simulator-design.md §5
+        argues the crew are the most interesting sensor on the vehicle because they can report an
+        *unanticipated* observation. A damp cabin is exactly that: it is on no channel, it is
+        real, and a fleet that only reads channels will never know
+
+coverage:
+  note: >-
+    Every eclss channel is perturbed by at least one fault above except `eclss.cabin_temp_c`
+    and the CO2 exposure average, both of which are derived from channels that are perturbed
+    directly.
+  unperturbed: [eclss.cabin_temp_c, eclss.co2_pp_1h_avg_mmhg]
+  unperturbed_reason: >-
+    cabin_temp_c belongs to the thermal domain and reaches this one through E-ZONE-ATM; the
+    one-hour average is a statistic over a channel that is already perturbed. Declared rather
+    than papered over.

@@ -1,0 +1,378 @@
+# domains/thermal/components.yaml — the thermal control subsystem, and the parameters nobody
+# would give us.
+#
+# ## The debt this file exists to pay
+#
+# `thermal_diode.md:965` is explicit: with no standalone TCS predecessor, "prior TCS-specific
+# values — temperature limits, heater ratings, radiator sizing, thermal-zone definitions,
+# sensor accuracies, sampling rates, pump characteristics, valve timings, thermal-control
+# algorithms and TCS command IDs — are **UNSPECIFIED**. This report does not infer them from
+# the communications, propulsion, GNC, ECLSS or power specifications." `corpus-review.md` §6
+# named the consequence: `thermal`'s own equation has `C_i` and `Q` terms with no way to
+# populate them.
+#
+# So the parameters below are **derived** wherever a published geometry plus a standard
+# material property determines them, and `chosen` only where a lumped value has to be picked.
+# Every derivation states its relation, so the linter can re-derive it and disagree, and every
+# chosen value states its reason. Two of them are worth reading because they are the whole
+# reason the thermal domain is interesting:
+#
+#   * **The transport delay.** 25 litres of coolant at the published 200 lb/hr takes 17
+#     minutes to go round the loop. That delay is what separates "the pump stalled just now"
+#     from "the pump has been degrading for an hour" (`review-findings.md` #12), and a lumped
+#     RC network cannot express it at all. It is modelled as a tick-indexed ring, not as a
+#     chain of small nodes, so no node has a residence time below dt.
+#   * **The environment is a heat source with a geometry.** At the published radiator area, a
+#     solar-illuminated radiator absorbs about 2.5 kW — comparable to its own rejection
+#     capacity. That is why `apollo_diode.md:341` lists "radiator isolation / poor attitude"
+#     as a failure chain, and why attitude is a thermal command surface rather than only a
+#     pointing one.
+
+domain: thermal
+
+# The fastest thermal constant here is about four minutes, so integrating at 50 Hz is 12,000
+# ticks per time constant. Declared honestly as 1 Hz rather than as the rate the scheduler
+# currently uses: the declaration is what makes the multi-rate optimisation a scheduler change
+# rather than a rewrite (plant.md §10).
+natural_rate_hz: 1
+
+reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_thrust,
+        structure_config, water_cooling]
+writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
+         cabin_zone_t, lm_cabin_zone_t]
+
+# --------------------------------------------------------------------------------------
+# State. Thermal has no conserved stocks on purpose: energy is not asserted here. A fuel cell
+# has exact stoichiometric mass ratios and a float efficiency, so mass conserves exactly and
+# heat gets a tolerance band and a trend, never an assertion (review-findings.md #14). A
+# universal conservation assertion applied to a thermal margin is a category error
+# (simulator-design.md:248).
+# --------------------------------------------------------------------------------------
+state:
+  - id: zone_csm_cabin_t
+    method: lag
+    node: cabin_zone_t
+    unit: K
+    tau_s: 2880
+    provenance:
+      basis: derived
+      relation: "C/G. C = 400 kg aluminium-equivalent x 900 J/kg-K = 360,000 J/K; G = 125 W/K, sized so a 1 kW cabin load sits about 8 K above the coolant supply, which is the order apollo's cabin-to-coolant difference implies. tau = 360,000/125 = 2,880 s"
+      note: "the cabin air alone is 2.4 kg (5.9 m3 at 5 psia and 295 K) and would have a thermal mass of 1,724 J/K, 0.5 % of the lumped value — which is why a bare-air cabin model has a time constant of seconds and is wrong. The structure, the equipment and the ECS water are the mass."
+  - id: zone_csm_avionics_t
+    method: lag
+    node: coldplate_t
+    unit: K
+    tau_s: 406
+    provenance:
+      basis: derived
+      relation: "C/G. C = 60 kg aluminium-equivalent = 54,000 J/K; G = 133 W/K, sized so an 800 W electronics load sits about 6 K above the plate. tau = 54,000/133 = 406 s"
+      note: "apollo_diode.md:97: electronics were directly cooled by coldplates, so the coldplate and its boxes are one lump"
+  - id: zone_csm_service_t
+    method: lag
+    node: internal
+    unit: K
+    tau_s: 7200
+    provenance:
+      basis: chosen
+      reason: "the service bay is unregulated and its mass is dominated by propellant and structure, which is a much larger lump than the cabin; twice the cabin's time constant because the propellant is the mass and the tank wall is the path"
+  - id: zone_lm_cabin_t
+    method: lag
+    node: lm_cabin_zone_t
+    unit: K
+    tau_s: 2880
+    provenance:
+      basis: derived
+      relation: "as the CSM cabin: 6.7 m3 at about 5 psia, so the same lumped mass and conductance within the precision of either figure"
+  - id: zone_lm_descent_t
+    method: lag
+    node: internal
+    unit: K
+    tau_s: 10800
+    provenance:
+      basis: chosen
+      reason: "an exposed, unregulated stage whose mass is mostly propellant and structure with a poor path to the loop; the longest constant in the vehicle, and the one that makes the frozen-line chain slow enough to be diagnosable"
+  - id: zone_radiator_t
+    method: lag
+    node: internal
+    unit: K
+    tau_s: 300
+    provenance:
+      basis: derived
+      relation: "the panel's own lumped mass over its radiation conductance: a 9.1 m2 aluminium panel at 2.7 kg/m2 is 25 kg = 22,500 J/K, and its linearised radiation conductance at 285 K is 4 x 2,588/285 = 36 W/K, giving 625 s. Chosen at 300 s because the linearised conductance overstates damping at the cold end; the value sits inside the range the two estimates bracket."
+      note: "the radiator itself is an observable with no command interface (simulator-design.md:158) — it has a temperature and a rejection curve, and nothing an agent can command acts on it directly"
+  - id: comm_amp_t
+    method: lag
+    node: internal
+    unit: K
+    tau_s: 265
+    provenance:
+      basis: derived
+      relation: "C/G. C = 5 kg travelling-wave tube assembly = 4,500 J/K; G = 17 W/K, sized so a 250 W dissipation runs about 15 K above the coldplate. tau = 4,500/17 = 265 s"
+      note: "apollo_diode.md:106 publishes comm_amp_c with a >60 C event. It gets its own node rather than sharing the avionics lump because it is the component the flagship chain overheats, and its smaller mass is what makes it the first to go"
+  - id: coolant_loop_t
+    method: lag
+    node: coolant_supply_t
+    unit: K
+    tau_s: 45
+    provenance:
+      basis: derived
+      relation: "the loop's own mass over its mixing conductance: 25 L of 62.5/37.5 glycol-water at 1,050 kg/m3 is 26.25 kg, with c_p about 3,600 J/kg-K, so C = 94,500 J/K; at the published 200 lb/hr = 0.0252 kg/s the through-flow refreshes that mass every 1,042 s, and one well-mixed volume has a mixing time constant near C/(2 x mdot x c_p) = 94,500/181 = 522 s. Chosen at 45 s because the loop is modelled as well mixed at each node, and this entry represents only the sensor and mixing lag rather than the transit."
+      note: "the transit is the delay element below, not this lag. Two different things that a single lumped node would fuse into one wrong number."
+  - id: coolant_flow_kg_s
+    method: lag
+    node: coolant_flow
+    unit: "kg/s"
+    tau_s: 8
+    provenance:
+      basis: chosen
+      reason: "pump spin-up: a centrifugal pump reaches speed in a few seconds, and 8 s is long enough that a bus sag lasting one tick cannot produce an instant flow loss. This is the lag that makes the flagship chain a ramp rather than a step"
+  - id: pump_1_speed_rpm
+    method: lag
+    node: coolant_flow
+    unit: rpm
+    tau_s: 8
+    provenance:
+      basis: chosen
+      reason: "as coolant_flow_kg_s; the pump has its own speed state because a blocked loop and a slowing pump produce the same flow with different speeds, and that difference is the diagnosis"
+  - id: loop_transport_t
+    method: delay
+    node: loop_transport
+    unit: K
+    delay_s: 1042
+    provenance:
+      basis: derived
+      relation: "25 L at the published 200 lb/hr = 90.7 kg/h, i.e. 1.44 L/min of glycol-water at 1,050 kg/m3, gives 17.4 min = 1,042 s of transit"
+      note: "implemented as a tick-indexed ring buffer, exact and deterministic, rather than as a chain of small nodes — which would create nodes with residence times below dt and reintroduce the stiffness the exponential map exists to remove (review-findings.md #12)"
+  - id: radiator_rejection_w
+    method: algebraic
+    node: radiator_reject
+    unit: W
+    provenance:
+      basis: derived
+      relation: "epsilon x sigma x A_eff x T^4, minus the absorbed environmental load; see the radiators block below"
+      note: "algebraic because rejection is a function of the current surface temperature, not an integral of it — which is exactly why C-RAD-COOL is an algebraic loop solved to consistency rather than a delayed cycle"
+  - id: heater_bank_duty
+    method: algebraic
+    node: internal
+    unit: "-"
+    provenance:
+      basis: chosen
+      reason: "heater duty is commanded and then limited by the zone's own hard limits; there is no state to integrate, and treating it as a state would let a heater command persist through a mode change"
+
+# --------------------------------------------------------------------------------------
+# Components.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: loop_primary
+    kind: flow
+    class: loop
+    vehicle: csm
+    fluid: "62.5 % ethylene glycol / 37.5 % water"
+    flow_l_min: [1.3, 1.7]
+    volume_l: 25
+    provenance:
+      basis: historical
+      source: "TN D-6718 and NR ch.14 give the 200 lb/hr primary flow and the fluid; the volume is chosen — a 1-inch line 30 m long is 15 L, and a two-panel loop with coldplates is 15-30 L, with no published total coolant mass (only a 1 gal reservoir)"
+  - id: loop_secondary
+    kind: flow
+    class: loop
+    vehicle: csm
+    fluid: "62.5 % ethylene glycol / 37.5 % water"
+    flow_l_min: [1.0, 1.5]
+    volume_l: 18
+    provenance:
+      basis: chosen
+      reason: "apollo_diode.md:97 names two water-glycol loops with primary and secondary pumps; the secondary's figures are scaled from the primary because no source gives them"
+  - id: loop_lm
+    kind: flow
+    class: loop
+    vehicle: lm
+    fluid: "65 % water / 35 % inhibited ethylene glycol"
+    flow_l_min: [1.5, 1.9]
+    volume_l: 11
+    coolant_mass_kg: 11.3
+    provenance:
+      basis: historical
+      source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F"
+  - id: pump_1
+    kind: flow
+    class: pump
+    loop: loop_primary
+    rated_w: 250
+    inrush_w: 420
+    provenance:
+      basis: chosen
+      reason: "its electrical figures are the power domain's csm_coolant_pump_1; the mechanical side is what this domain owns"
+  - id: pump_2
+    kind: flow
+    class: pump
+    loop: loop_primary
+    rated_w: 250
+    inrush_w: 420
+    provenance:
+      basis: chosen
+      reason: "the redundant pump on the primary loop"
+  - id: pump_lm
+    kind: flow
+    class: pump
+    loop: loop_lm
+    rated_w: 200
+    inrush_w: 340
+    provenance:
+      basis: chosen
+      reason: "the LM's single coolant pump; it has no redundancy, which is the LM's whole character"
+  - id: radiator_csm
+    kind: flow
+    class: radiator
+    panels: 2
+    area_m2: 9.1
+    provenance:
+      basis: historical
+      source: "NR and TN D-6718: two panels of about 49 sq ft each, about 4,415 Btu/hr per panel = 1,294 W"
+  - id: evaporator_csm
+    kind: flow
+    class: evaporator
+    rejection_w: 2345
+    fluid: water
+    provenance:
+      basis: historical
+      source: "NR: about 8,000 Btu/hr = 2,345 W"
+  - id: sublimator_lm
+    kind: flow
+    class: evaporator
+    rejection_w: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "the LM sublimator's rejection capacity and water consumption are NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented"
+  - id: heater_bank_csm
+    kind: flow
+    class: heater
+    rated_w: 300
+    provenance:
+      basis: chosen
+      reason: "the power domain's csm_heaters load; the thermal side owns which zones it serves and under what limits"
+  - id: heater_bank_lm
+    kind: flow
+    class: heater
+    rated_w: 200
+    provenance:
+      basis: chosen
+      reason: "as above, for the LM"
+  - id: bypass_valve
+    kind: discrete
+    class: valve
+    loop: loop_primary
+    states: [radiator, bypass]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:239"
+      note: "apollo lists set_radiator_bypass as an operator control; a valve that routes the loop around the radiator is the only thermal actuator with a fast, large and reversible effect"
+
+# --------------------------------------------------------------------------------------
+# The radiator's physics, derived from the published rejection rather than asserted.
+# --------------------------------------------------------------------------------------
+radiator_model:
+
+  law: "Q = epsilon * sigma * A_eff * T_rad^4  -  Q_absorbed"
+  csm:
+    area_geometric_m2: 9.1
+    emissivity: 0.85
+    effectiveness: 0.89
+    area_effective_m2: 8.1
+    radiating_temperature_k: 285
+    rejection_w: 2588
+    absorbed_environment_w: UNCONFIGURED
+    provenance:
+      basis: derived
+      relation: >-
+        epsilon = 0.85 is a standard white thermal-control coating; the published rejection of
+        2 x 1,294 W at a 285 K radiating surface then implies an effective area of 8.1 m2
+        against a geometric 9.1 m2, i.e. 89 % effectiveness, which is what fin efficiency and
+        view-factor losses give on a real panel. The three figures that are published — area,
+        per-panel rejection and inlet temperature — therefore determine the fourth, and the
+        derivation closes on them instead of on a guessed emissivity.
+      source: "NR and TN D-6718 for the area and rejection; the coating emissivity is standard, not vehicle-specific"
+  environment:
+
+    solar_flux_w_m2: 1361
+    absorptivity: 0.2
+    projected_area_m2: 9.1
+    solar_load_w_at_bad_attitude: 2477
+    lunar_ir_w_m2: UNCONFIGURED
+    albedo_load_w: UNCONFIGURED
+    provenance:
+      basis: derived
+      relation: >-
+        1361 W/m2 x 0.2 absorptivity x 9.1 m2 of radiator presented to the sun = 2,477 W —
+        comparable to the radiator's own 2,588 W rejection capacity. That is the whole reason
+        `apollo_diode.md:341` lists "radiator isolation / poor attitude" as a failure chain:
+        attitude alone can cancel the radiator. The lunar surface terms are declared unset
+        because the surface-phase geometry is not yet parameterised.
+  note: >-
+    This is the block that makes F-13 a physics chain rather than a scripted event, and it is
+    also why the thermal domain reads `structure_config`: a staging event permanently changes
+    the radiating area and its view of the sun (apollo_diode.md:343).
+
+    # --------------------------------------------------------------------------------------
+    # Zones. `thermal_diode.md:131` requires paired heat/cool thresholds with a minimum dwell for
+    # any regulated zone, and `:765-772` requires that a zone at a hard limit is not commanded
+    # further in the same direction.
+    # --------------------------------------------------------------------------------------
+zones:
+
+  - id: csm_cabin
+    vehicle: csm
+    volume_m3: 5.9
+    regulated: true
+    source: heater_bank_csm
+    provenance:
+      basis: historical
+      source: "NR: CSM cabin 210 cu ft habitable = 5.9 m3 at 5 psia"
+  - id: csm_avionics_bay
+    vehicle: csm
+    regulated: true
+    source: heater_bank_csm
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:105"
+      note: "avionics_plate_c with a >50 C event"
+  - id: csm_service_bay
+    vehicle: csm
+    regulated: false
+    provenance:
+      basis: chosen
+      reason: "unregulated; it matters through the propellant and pressurant it contains"
+  - id: lm_cabin
+    vehicle: lm
+    volume_m3: 6.7
+    regulated: true
+    source: heater_bank_lm
+    provenance:
+      basis: historical
+      source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3"
+  - id: lm_descent_bay
+    vehicle: lm
+    regulated: false
+    provenance:
+      basis: chosen
+      reason: "exposed and unregulated; the frozen-line chain lives here"
+  - id: radiator_loop
+    vehicle: csm
+    regulated: false
+    provenance:
+      basis: chosen
+      reason: "an observable with no command interface"
+
+load_budget:
+
+  note: >-
+    The thermal domain's heat inputs are the power domain's loads: every watt an agent
+    switches on becomes a watt this domain has to reject, and the split between what leaves
+    through the radiator and what leaves through the evaporator is the vehicle's thermal
+    budget. The numbers live in `domains/power/components.yaml#loads` and are not duplicated
+    here, because two copies of one figure is how a vehicle changes mass between two files.
+  total_rejection_capacity_w: 4933
+  provenance:
+    basis: derived
+    relation: "2,588 W of radiator plus 2,345 W of evaporator, against a 1,723 W CSM demand — so the vehicle has a comfortable nominal margin and no margin at all if the radiator is sunlit and the evaporator is dry"

@@ -1,0 +1,223 @@
+# domains/structure/profiles.yaml — structural limits, and the interlocks that guard the
+# irreversible.
+#
+# ## The arm window is a threshold, and it is the most interesting one in the vehicle
+#
+# An armed irreversible event carries a token with a short life: `apollo_diode.md:487-509` gives
+# the arm token an expiry, and everything about the pattern depends on that expiry being short
+# enough that an arm cannot sit around waiting to be consumed by somebody who has since changed
+# their mind. So the arm's time-to-live is a threshold in this file, with the same hysteresis and
+# dwell machinery as every other limit — and it is the only threshold whose *expiry* is the
+# safety property rather than the hazard.
+#
+# ## One-way states have no chatter problem and do have an accident problem
+#
+# Every other discrete state on this vehicle is protected against oscillating. A staging event
+# cannot oscillate: it happens once and the vehicle is different. What it can do is happen by
+# accident, and the only protection against that is the two-step. So the profiles below contain
+# no hysteresis for the one-way states — there is nothing to band — and instead carry the guard
+# conditions that a `execute_event` must satisfy at the moment of effect.
+
+domain: structure
+profiles:
+  - id: default
+    revision: 1
+    description: "structural limits and the arm window, from apollo's channel events"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:206-213, :476-509"
+      note: >-
+        the channel events are apollo's; the arm window's length is chosen, and its length is the
+        only number in this file that is a safety parameter rather than a physical limit
+
+thresholds:
+  # --- the pressure vessel ------------------------------------------------------------------
+  - id: cabin_dp_low
+    point: structure.cabin_dp_psi
+    comparator: below
+    assert: 3.5
+    clear: 4.2
+    dwell_assert_ms: 0
+    dwell_clear_s: 10
+    latched: true
+    severity: EMERGENCY
+    point_units: "psid, against a nominal 5"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:84"
+      note: >-
+        the same 3.5 psia apollo's emergency regulator is built to hold — stated here as a
+        differential rather than as a cabin pressure, because it is the vessel that has to hold
+        it. No assert dwell: this is the level at which a crew have minutes.
+  - id: cabin_dp_high
+    point: structure.cabin_dp_psi
+    comparator: above
+    assert: 6.0
+    clear: 5.6
+    dwell_assert_ms: 1000
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    point_units: "psid"
+    provenance:
+      basis: derived
+      relation: >-
+        0.8 psi above apollo's stated 5.2 psia upper bound. An overpressure is the trapped-line
+        chain's endpoint (F-09) and the relief valve's reason to exist; the threshold is set
+        where the valve should already have opened, so that a silent valve is itself an event.
+
+  # --- latches and hatches ------------------------------------------------------------------
+  - id: latch_disagreement
+    point: structure.docking_latches
+    comparator: below
+    assert: 12
+    clear: 12
+    dwell_assert_ms: 2000
+    dwell_clear_s: 5
+    latched: false
+    interlock: true
+    severity: CAUTION
+    point_units: "engaged latches, where the interface has twelve"
+    gated_by: "the latch count, which components.yaml declares UNCONFIGURED; the twelve here is a placeholder shape and the number is owed"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:208"
+      note: >-
+        apollo's "latch disagreement" event, expressed as a count so that a partial dock is
+        visible. `latched: false` and equal assert and clear on purpose: this is not a
+        threshold that bands, it is a readiness condition — the interface is either fully seated
+        or it is not, and there is nothing in between to debounce.
+  - id: hatch_open_with_pressure
+    point: structure.cabin_dp_psi
+    comparator: above
+    assert: 0.5
+    clear: 0.5
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: EMERGENCY
+    point_units: "psid, evaluated only while a hatch is not closed"
+    gated_by: "any hatch in the `open` or `latched` position"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:207"
+      note: >-
+        apollo's "incompatible with pressure" event, made into an interlock rather than an alarm.
+        It is the guard that stops the vehicle from letting a crew member open a hatch against a
+        pressurised cabin — which is a life-safety interlock and therefore service-owned, never
+        an agent-writable gate (D-03).
+
+  # --- pyro and relief ----------------------------------------------------------------------
+  - id: pyro_continuity_loss
+    point: "structure.pyro_continuity_[n]"
+    comparator: below
+    assert: 1
+    clear: 1
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: WARNING
+    point_units: "continuity, true until fired"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:212"
+      note: >-
+        "lost continuity", and deliberately an interlock rather than an alarm: a continuity loss
+        means the device is either fired or dead, and the vehicle must not accept a `execute_event`
+        for a device whose state it cannot establish. The distinction between the two causes is
+        made against the command record, which is the record's job.
+  - id: relief_valve_unexpected
+    point: structure.relief_valve_state
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 500
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    point_units: "open, where normally closed"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:213"
+      note: >-
+        "unexpected opening". It latches because a relief valve that has opened has told you
+        something about the pressure behind it, and clearing the alert does not unlearn it.
+
+  # --- the arm window ------------------------------------------------------------------------
+  - id: arm_expiry
+    point: "structure.arm_state_[event]"
+    comparator: above
+    assert: 120
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "seconds since arming, against a 120 s window"
+    provenance:
+      basis: chosen
+      reason: >-
+        apollo gives the arm token a short expiry (apollo_diode.md:493) without a number. Two
+        minutes is chosen as the longest window in which a fleet can still be said to be acting
+        on the same situation: the command queue's own maximum age for a normal verb is 30-120 s,
+        and an arm that outlived its queue age would be an arm issued against a world that has
+        moved. It is the one threshold in the vehicle whose *expiry* is the safety property.
+  - id: arm_reuse
+    point: "structure.arm_state_[event]"
+    comparator: above
+    assert: 1
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "number of consumes against one arm"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:509"
+      note: >-
+        one arm, one execution, and the token is consumed rather than reused. A token that could
+        fire twice would make the second firing indistinguishable from a replay, which is the
+        anti-replay property at the level of a single agent's own commands.
+
+  - id: uncommanded_acceleration
+    point: structure.accel_xyz_g
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 200
+    dwell_clear_s: 5
+    latched: true
+    severity: WARNING
+    point_units: "g, above the largest component the configured thrust can explain"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:210"
+      note: >-
+        apollo's event on this channel is exactly "uncommanded impulse", and its absence was the
+        most consequential hole the event audit found: **F-04's first clue is a body rate and its
+        corroboration is this channel**, so the accelerometer was registered, is on two crew
+        positions' perceivable lists, and had no alarm on the one condition it exists to detect.
+        The value is owed — it needs a noise floor and the smallest impulse the vehicle can
+        produce, and the second of those is the minimum impulse bit that
+        `domains/rcs/` records as unpublished
+
+profile_selection:
+  selectable_by: A1
+  note: >-
+    An agent may select a profile and may never edit one (D-05). This is the domain where that
+    rule is least negotiable: the arm window is a safety parameter, and a fleet that could widen
+    it could make an arm persist across a change of mind — which is the one thing the whole
+    pattern exists to prevent.
+  alternatives:
+    - id: strict
+      revision: 1
+      description: "halve the arm window, for a fleet that wants the two-step to be strictly a two-step"
+      factor: 0.5
+      provenance:
+        basis: chosen
+        reason: "the factor only ever shortens the window, so the profile is monotonically safe: a shorter arm can make an accidental firing less likely and cannot make it more so"

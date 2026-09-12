@@ -1,0 +1,332 @@
+# domains/structure/fault_policy.yaml — the faults with no second attempt.
+#
+# ## What makes a structural fault different
+#
+# Every other domain's faults are recoverable in principle: a bus can be re-tied, a pump swapped,
+# a burn re-flown, a tank refilled from another. A structural fault is recoverable **or it is
+# not**, and which one it is depends on a device that fires once. That is why this domain's fault
+# list is short and why three of its eleven are about the *pyrotechnics* rather than about the
+# structure: the interesting structural failures on a crewed lunar mission are the ones where the
+# vehicle cannot become what the mission needs it to become.
+#
+# ## The pair that cannot be told apart at the time
+#
+# STR-04 (a pyro fires prematurely) and STR-05 (a pyro fails to fire) produce the **same
+# observation** — `structure.pyro_continuity_[n]` goes false — and opposite consequences. One
+# separates a stage that should have stayed; the other leaves a stage that must go. The vehicle
+# cannot distinguish them from the channel, and neither can the crew until they look out of a
+# window. That is `apollo_diode.md:342`'s information problem in its purest form, and it is the
+# reason `structure.stage_state` reports the vehicle's *configuration* rather than its intent.
+
+domain: structure
+faults:
+  - id: STR-01-hatch-seal-leak
+    component: hatch_crew_lm
+    mechanism: "a hatch seal degrades: the cabin loses gas through the seal rather than through a hull breach"
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      rate_kg_per_h: 0.02
+    perturbs: [structure.leak_estimate_g_s, eclss.lm_cabin_pressure_psia,
+               eclss.leak_rate_g_s, res.o2_remaining_kg]
+    detection:
+      evidence: >-
+        a total leak that is larger than the plumbing accounts for, with the structural share
+        rising. The elimination is the diagnosis: the vehicle can measure the total and can
+        account for the plumbing, and what is left is the seal
+      latency: "hours on the leak-rate channel; the pressure slope is faster but does not localise"
+      false_positive_risk: >-
+        every other leak in the vehicle produces the same residual. The separation is whether the
+        leak changes when the hatch is cycled — a seal leak moves, a plumbing leak does not, and
+        finding that out costs an atmosphere
+    response:
+      kind: advisory
+      note: "re-seat the hatch, or accept the loss and plan around it. Both are decisions with a consumable consequence, which is why this is a resource problem wearing a structural hat."
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:207, :94"
+      note: >-
+        the structural member of the leak family. The ECLSS domain's ECL-01 is a breach in the
+        compartment and the consumables domain's CNS-01 is a tank; this is the third, and the
+        three are separated by *where* the gas is going rather than by how fast
+
+  - id: STR-02-latch-fails-to-engage
+    component: docking_interface
+    mechanism: "one latch does not seat: the interface is mechanically connected and not pressure-tight"
+    kind: discrete
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any docking or re-docking attempt"
+    perturbs: [structure.docking_latches, eclss.cabin_pressure_psia, eclss.lm_cabin_pressure_psia,
+               structure.leak_estimate_g_s]
+    detection:
+      evidence: >-
+        a count below the full complement after an engage command, and — if the crew press on —
+        two atmospheres that will not equalise. The count is the first evidence and the equalisation
+        failure is the confirmation
+      latency: "seconds on the count; minutes if the crew pressurise the tunnel to find out"
+      false_positive_risk: "a latch that is slow rather than stuck looks identical for the first few seconds, which is what the dwell is for"
+    response:
+      kind: advisory
+      note: "re-seat, or undock and try again — which costs a docking cycle and, after the descent, cannot be done at all"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:208"
+      note: >-
+        apollo's 'latch disagreement'. On the return leg this fault is survivable; after
+        undocking it is the difference between a rendezvous and a crew who cannot get back into
+        the vehicle that takes them home, which is why the latch count is one of the numbers this
+        domain declares it is owed
+
+  - id: STR-03-latch-fails-to-release
+    component: docking_interface
+    mechanism: "a latch will not release: the interface is stuck closed"
+    kind: discrete
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any undocking attempt"
+    perturbs: [structure.docking_latches, structure.stage_state, eclss.cabin_pressure_psia]
+    detection:
+      evidence: "a release command, a count that does not fall, and a stage state that does not change. The absence of a transition is the whole signature"
+      latency: "seconds, and unambiguous"
+      false_positive_risk: "low. This is the one structural fault whose observation is not ambiguous, which makes it the domain's easiest diagnosis and its hardest decision"
+    response:
+      kind: advisory
+      note: >-
+        the undocking can be forced with the separation pyro, which converts a stuck latch into a
+        fired device — an irreversible action taken to fix a reversible problem. That trade is
+        the most interesting decision this domain offers
+      provenance:
+        basis: chosen
+        reason: >-
+          the failure that makes the arm/commit pattern necessary rather than decorative. A fleet
+          that has not thought about the trade will either not make it or make it casually, and
+          both are observable
+    provenance:
+      basis: chosen
+      reason: >-
+        the mirror of STR-02 and the fault that justifies the pyro fallback existing. It is the
+        clearest case on the vehicle of an irreversible action being the *remedy* for a
+        reversible problem, which is exactly the situation a two-step exists for
+
+  - id: STR-04-pyro-premature
+    component: pyro_lm_separation
+    mechanism: "a separation initiator fires without a command: an electrostatic or thermal path closes the circuit"
+    kind: discrete
+    seeding:
+      on_demand_p: 5.0e-5
+      trigger: "any thermal excursion of the stage above its qualified range"
+      schedule: "crisis scenario seeds this deliberately"
+    perturbs: ["structure.pyro_continuity_[n]", structure.stage_state,
+               structure.accel_xyz_g, eclss.cabin_pressure_psia]
+    detection:
+      evidence: >-
+        a continuity channel going false with no arm and no execute in the record, and the vehicle
+        changing configuration. The *record* is the diagnosis: the channel cannot distinguish a
+        fired pyro from a failed one, and the absence of a command is the only thing that can
+      latency: "instantaneous, and the consequence is already complete when it is observed"
+      false_positive_risk: "none — and that is the problem: the observation is certain and the cause is not"
+    response:
+      kind: service
+      note: "the service latches the affected event type and refuses further arming of it, because a circuit that fired on its own is not one to command"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:343"
+      note: >-
+        apollo's F-15: 'premature staging/pyro -> physical configuration changes irreversibly ->
+        propulsion, thermal and communications geometry permanently altered'. It is the one chain
+        in the corpus whose consequence no command can address
+
+  - id: STR-05-pyro-fails-to-fire
+    component: pyro_lm_separation
+    mechanism: "the initiator circuit is intact and the device does not fire: the stage will not separate"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any execute_event on a separation device"
+    perturbs: ["structure.pyro_continuity_[n]", structure.stage_state, structure.accel_xyz_g]
+    detection:
+      evidence: >-
+        an execute_event that completed, a continuity channel that went false, and a stage state
+        that did not change. Three observations that disagree, and the disagreement is the
+        diagnosis — a fired pyro that produced no separation is a mechanical failure behind a
+        working circuit
+      latency: "seconds on the stage state, and the crew can confirm it is still attached"
+      false_positive_risk: "STR-04 exactly, from the continuity channel alone; the stage state separates them and it is the channel that reports what the vehicle *is*"
+    response:
+      kind: advisory
+      note: >-
+        there is no retry for a device with one initiator, and on the ascent stage there is no
+        other way off the surface. This is the fault that ends a mission, and the vehicle's job
+        is to make it unambiguous rather than survivable
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:364, :343"
+      note: >-
+        apollo's failure-on-demand mechanism at 1e-4 per activation, applied to the device whose
+        failure has no recovery. It is the pairing with STR-04 that matters: same channel, opposite
+        meaning, and the pair is what makes the continuity channel worth publishing honestly
+
+  - id: STR-06-relief-valve-stuck-open
+    component: relief_valve
+    mechanism: "the valve does not reseat: the cabin vents through the relief path"
+    kind: latent_then_acute
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any relief valve actuation"
+    perturbs: [structure.relief_valve_state, structure.cabin_dp_psi, eclss.cabin_pressure_psia,
+               eclss.o2_supply_pressure_psi]
+    detection:
+      evidence: "a valve reporting open when it should be closed, and a cabin pressure that keeps falling however hard the regulator works"
+      latency: "seconds on the valve state, minutes on the pressure"
+      false_positive_risk: "a slow leak and a stuck relief valve both empty the cabin; the valve channel is the separation, and it is why the channel exists"
+    response:
+      kind: service
+      note: "isolate the relief path with set_relief_valve, which accepts the overpressure risk in exchange for holding the atmosphere — a trade the service makes in one direction only"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:213"
+      note: "the valve's 'unexpected opening' event, with the consequence a relief valve's failure has: it was there to save the vessel and it is now emptying it"
+
+  - id: STR-07-relief-valve-stuck-closed
+    component: relief_valve
+    mechanism: "the valve will not open: the relief path is blocked and the pressure behind it has nowhere to go"
+    kind: latent_then_acute
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+    perturbs: [structure.relief_valve_state, structure.cabin_dp_psi, prop.pressurant_pressure_psi]
+    detection:
+      evidence: >-
+        nothing at all, until something else raises the pressure. The valve's position channel is
+        quiet because the valve has not been asked to do anything — this is a latent fault in the
+        strict sense, and its discovery is a *different* fault's emergency
+      latency: "the whole mission, or until F-09's trapped line needs it"
+      false_positive_risk: "none, and that is the problem: there is no observation to false-positive on"
+    response:
+      kind: advisory
+      note: "there is no way to test a relief valve without relieving pressure through it, which is itself a decision"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:337"
+      note: >-
+        the latent half of the relief pair and the reason the trapped-line chain ends badly: the
+        Apollo 11 event was a pressure rise behind a system with no path out, and a valve that
+        would not have opened is that event with nowhere for the energy to go
+
+  - id: STR-08-tunnel-volume-leak
+    component: tunnel
+    mechanism: "the docking tunnel's seal weeps while the tunnel is pressurised: an intermittent loss that only appears during crew transfers"
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      rate_kg_per_h: 0.01
+    perturbs: [structure.leak_estimate_g_s, eclss.cabin_pressure_psia, structure.docking_latches]
+    detection:
+      evidence: >-
+        a leak that correlates with hatch operations rather than with time. Correlation is the
+        diagnosis, and it requires a fleet to have kept a record of when the hatches moved —
+        which is the kind of habit this vehicle rewards
+      latency: "days, and only if somebody correlates"
+      false_positive_risk: "STR-01 produces a similar residual; the correlation with hatch cycles is the separation"
+    response:
+      kind: advisory
+    provenance:
+      basis: chosen
+      reason: >-
+        the fault that makes the tunnel's existence matter. It is modelled as a third volume with
+        two hatches rather than as a length of corridor because its failures are all about
+        *when* it is pressurised, and a fault whose signature is a correlation is a different
+        kind of problem from one whose signature is a level
+
+  - id: STR-09-accel-sensor-bias
+    component: pressure_vessel_csm
+    mechanism: "the accelerometer develops a bias: the vehicle reads a structural load that is not there"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      bias_walk_g_per_h: 0.0005
+    perturbs: [structure.accel_xyz_g, prop.thrust_pct_estimated, prop.accumulated_dv_m_s]
+    detection:
+      evidence: >-
+        an acceleration with no command behind it, and — the sharper version — a thrust estimate
+        that disagrees with chamber pressure during a burn. The accelerometer is the independent
+        witness PRP-01 relies on, so a biased accelerometer corrupts the corroboration that
+        catches the feed-sensor fault
+      latency: "hours on the uncommanded-impulse event; one burn on the thrust discrepancy"
+      false_positive_risk: "a real uncommanded impulse is the same reading, and the vehicle has that event because RCS leaks exist"
+    response:
+      kind: advisory
+      note: >-
+        nothing protective. The value of this fault is that it removes the vehicle's second
+        opinion, and a fleet that has been trusting one witness will discover it during a burn
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:210, :336"
+      note: >-
+        the instrument fault that attacks the *diagnosis* rather than the mission. PRP-01 is a
+        stuck feed sensor corrupting the thrust estimate; this is a biased accelerometer
+        corrupting the corroboration, and the two together are a fleet with no reliable witness
+        at all — which is the state apollo_diode.md:806 calls 'the most important third-order
+        mechanism for your experiment'
+
+  - id: STR-10-hatch-indication-failure
+    component: hatch_crew_lm
+    mechanism: "the hatch position switch sticks: the channel reports closed while the hatch is not"
+    kind: instrument
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any hatch cycle"
+    perturbs: [structure.hatch_state, eclss.lm_cabin_pressure_psia]
+    detection:
+      evidence: >-
+        a cabin that will not hold pressure with every hatch reporting closed, and a pressure that
+        behaves like an open hatch. The two channels disagree and the *pressure* is right
+      latency: "minutes, because the pressure consequence is immediate"
+      false_positive_risk: "STR-01 and STR-06 both fit the pressure observation; the hatch channel is what would normally separate them and it is the channel that is lying"
+    response:
+      kind: service
+      note: "the hatch_open_with_pressure interlock cannot arm on a channel that says closed, so the service falls back to the pressure consequence — which is what a real vehicle does too"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:342, :669"
+      note: >-
+        the 'reversed/discrete indication' mode from apollo's eleven sensor faults, applied to the
+        discrete channel that a life-safety interlock reads. It is the fault that makes the case
+        for an interlock being evaluated on consequence rather than on indication
+
+  - id: STR-11-structural-thermal-cycling
+    component: pressure_vessel_csm
+    mechanism: "repeated thermal cycling works a seal: the leak grows slowly with each lunar day-night transition"
+    kind: continuous_degradation
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      rate_kg_per_h_growth: 0.002
+    perturbs: [structure.leak_estimate_g_s, eclss.leak_rate_g_s, eclss.cabin_pressure_psia]
+    detection:
+      evidence: "a leak that grows monotonically rather than appearing, with the growth correlating with the thermal cycles rather than with time"
+      latency: "days, and it is the slowest fault on the vehicle"
+      false_positive_risk: "a leak that is merely small looks the same over a short run; this one is only distinguishable over a mission"
+    response:
+      kind: advisory
+    provenance:
+      basis: chosen
+      reason: >-
+        the fault that gives the mission's *length* a consequence. Every other fault in the
+        vehicle is diagnosable inside a few hours; this one requires the fleet to have kept a
+        trend across days, which is the behaviour the endurance harness exists to make possible
+        and the review panel's `context_pressure` exists to warn about
+
+coverage:
+  note: >-
+    Every structure channel is perturbed by at least one fault above except the two arm/commit
+    service channels, which are the executive's state rather than the structure's.
+  unperturbed: ["structure.arm_state_[event]", "structure.event_count_[event]"]
+  unperturbed_reason: >-
+    both are records of what the fleet commanded rather than measurements of the vehicle. A fault
+    that perturbed them would be a fault in the executive, which is a different domain and a
+    different problem.

@@ -1,0 +1,242 @@
+# domains/structure/commands.yaml — the only two-step verbs on the vehicle.
+#
+# ## Why `arm_event` and `execute_event` are the pattern's only instance
+#
+# Conflict register C-16 resolved this deliberately, and the resolution is worth restating
+# because it is a case of a safety pattern being *over*-applied elsewhere: **arm/commit is for
+# actions that cannot be undone.**
+#
+# `main_propulsion_diode.md:293-296` requires arm-TTL and commit for every burn. A burn is
+# interruptible — `stop_burn` exists, the engine has a shutdown state, and the consequence of
+# stopping early is a trajectory error a later burn can fix. Requiring arm/commit for one does not
+# add safety; it adds a delay between a fleet that has decided and a vehicle that has acted, on
+# the one action where the mission clock is running.
+#
+# A staging event is the opposite in every respect. There is no `stop_separation`, no shutdown
+# state, and no later command that undoes it. So the two-step lives here, and here only — and
+# `apollo_diode.md:487-509` gives it three properties that are all load-bearing:
+#
+# 1. **The token is bound to the specific action.** `arm_event(lm_undocking)` does not authorise
+#    `descent_stage_separation`; the token names its event.
+# 2. **The service generates it, and it is short-lived.** Two minutes, from `profiles.yaml`.
+# 3. **The token is not a security credential.** `apollo_diode.md:509` says so explicitly: it is
+#    "an operational forcing function that makes accidental or ambiguous irreversible commands
+#    less likely". The interlocks are still the interlocks.
+
+domain: structure
+commands:
+  - verb: arm_event
+    argument_schema:
+      event:
+        type: enum
+        values: [lm_undocking, descent_stage_separation, lm_ascent_jettison, pyro_fire]
+    authority: A2
+    gate:
+      kind: preference
+      variable: arm_<event>_enable
+    interlocks: [latch_disagreement, pyro_continuity_loss, arm_reuse]
+    conflict_domain: structure.<event>.arm
+    allowed_phases: [lunar_orbit, descent, surface, ascent_rendezvous, lunar_orbit_docked]
+    irreversible: false
+    requires_time_sync: true
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Arm an irreversible event. Arming does nothing physical: it returns a short-lived token
+      bound to this specific event, and it is the only verb on the vehicle whose result carries
+      a credential. Arming twice re-arms and invalidates the earlier token, which is deliberate
+      — a fleet that has changed its mind should be able to say so by arming again rather than by
+      waiting out the window.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:476-509"
+      note: >-
+        apollo's arm_event, with the token, the binding and the short expiry. The result file
+        carries the token because that is the only channel the contract gives a command for
+        returning a value (diode-contract.md:83-96), and `structure.arm_state_[event]` publishes
+        the state for everything that is not the caller.
+
+  - verb: execute_event
+    argument_schema:
+      event:
+        type: enum
+        values: [lm_undocking, descent_stage_separation, lm_ascent_jettison, pyro_fire]
+      arm_token:
+        type: string
+        max_length: 16
+    authority: A2
+    gate:
+      kind: preference
+      variable: execute_<event>_enable
+    interlocks: [arm_expiry, arm_reuse, hatch_open_with_pressure, latch_disagreement]
+    conflict_domain: structure.<event>.execute
+    allowed_phases: [lunar_orbit, descent, surface, ascent_rendezvous, lunar_orbit_docked]
+    irreversible: true
+    requires_time_sync: true
+    idempotent: false
+    execution_class: armed
+    maximum_queue_age_s: 10
+    help: >-
+      Fire an armed irreversible event. Every guard is evaluated here, at the moment of effect,
+      and never at the moment of arming — this is the property `diode-contract.md:145-148` calls
+      the single most important in the interface, and it is the reason an event armed in a
+      healthy vehicle and executed in a failing one is refused. Ten seconds of queue age: an
+      irreversible command that arrives late has arrived against a world nobody inspected.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:497-509"
+      note: >-
+        apollo's execute_event requiring the matching token, with the service still owning every
+        physical interlock. The `irreversible: true` and `idempotent: false` flags are not
+        decoration: they are what the executive reads to decide that this verb's result must be
+        written before its effect is attempted, so that a crash between the two leaves a record
+        rather than an ambiguity.
+
+  - verb: set_hatch_valve
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      hatch:
+        type: enum
+        values: [crew_csm, crew_lm, tunnel]
+      state:
+        type: enum
+        values: [closed, latched, open]
+    authority: A2
+    gate:
+      kind: preference
+      variable: hatch_<hatch>_enable
+    interlocks: [hatch_open_with_pressure, cabin_dp_low]
+    conflict_domain: structure.<hatch>
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 30
+    help: >-
+      Open, close or latch a hatch. Not arm-protected, because a hatch closes again — but the
+      gas it costs does not, and that is the distinction: an EVA is a consumable decision even
+      though it is not a one-way configuration change.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:207, :238"
+      note: "apollo's set_hatch_valve, with its 'incompatible with pressure' event as the interlock rather than the alarm it is published as"
+
+  - verb: set_docking_latch
+    argument_schema:
+      interface:
+        type: enum
+        values: [csm_lm_forward]
+      latch:
+        type: enum
+        values: [all, one]
+      state:
+        type: enum
+        values: [engage, release]
+    authority: A2
+    gate:
+      kind: preference
+      variable: latch_<interface>_enable
+    interlocks: [cabin_dp_low, hatch_open_with_pressure]
+    conflict_domain: structure.<interface>.latch
+    allowed_phases: [translunar_coast, lunar_orbit, ascent_rendezvous, lunar_orbit_docked]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 60
+    help: >-
+      Engage or release the docking interface's latches. `all` or `one` rather than a latch
+      identifier, because the decision available to a crew is whether to re-seat the whole
+      interface or work a single latch, and the vehicle publishes the count rather than the
+      individual positions for the same reason.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:208"
+      note: "apollo's set_docking_latch; the `all`/`one` argument shape is chosen so the verb's parameter list agrees with the channel it moves, which diode-contract.md:169-170 makes a documentation obligation"
+
+  - verb: set_relief_valve
+    argument_schema:
+      vehicle:
+        type: enum
+        values: [csm, lm]
+      state:
+        type: enum
+        values: [auto, open, isolated]
+    authority: A2
+    gate:
+      kind: preference
+      variable: relief_<vehicle>_enable
+    interlocks: [cabin_dp_low]
+    conflict_domain: structure.<vehicle>.relief
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast, entry]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 10
+    help: >-
+      Controls the relief valve's mode. `auto` lets the valve do its job; `open` vents
+      deliberately; `isolated` holds pressure and accepts the consequence. Ten seconds, because
+      the only reason to command this is that the valve is already doing something and the
+      decision is whether to let it.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:213"
+      note: >-
+        not in apollo's verb table, which publishes only the valve's *state*. It is added because
+        F-09's trapped-line chain ends with a mechanical failure whose only counter is a decision
+        about the valve, and a chain whose endpoint is uncommandable is a chain the fleet can
+        only watch.
+
+  - verb: set_stage_heater
+    argument_schema:
+      stage:
+        type: enum
+        values: [lm_descent, lm_ascent, csm_service]
+      state:
+        type: enum
+        values: [on, off]
+    authority: A2
+    gate:
+      kind: preference
+      variable: stage_heater_<stage>_enable
+    interlocks: [cabin_dp_high]
+    conflict_domain: structure.<stage>.heater
+    allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
+                     lunar_orbit_docked, transearth_coast]
+    irreversible: false
+    idempotent: true
+    execution_class: declarative
+    maximum_queue_age_s: 300
+    help: >-
+      Stage heaters. It is a structure verb because it heats *hardware* — a line, a tank, a
+      mechanism — and it is the only structural command that reaches into the thermal domain.
+      Its consequence is the frozen-line chain (F-09) and its cost is an electrical load, which
+      makes it the shortest bridge on the vehicle between three domains.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:337, :798-802"
+      note: >-
+        the frozen/trapped-line chain's only counter. apollo describes the Apollo 11 event as
+        fuel freezing in a helium heat exchanger during a venting sequence; the prevention is
+        heat, and heat is a command, so the chain has a head as well as a tail.
+
+# --------------------------------------------------------------------------------------
+# Deliberately absent.
+# --------------------------------------------------------------------------------------
+not_implemented:
+  - verb: cancel_arm
+    why: >-
+      arming again already invalidates the previous token, and the window expires on its own.
+      A third mechanism for the same outcome would be a third thing to get wrong — and the
+      useful experimental fact is what a fleet does with a two-minute window, not what it does
+      with a cancel button.
+  - verb: set_pyro_continuity
+    why: >-
+      the channel is a measurement of a circuit, not a control. A verb that set it would be a
+      verb that lied to the vehicle about its own hardware, and the whole point of the
+      continuity channel is that it is one of the few things on this vehicle nobody can talk
+      their way around.

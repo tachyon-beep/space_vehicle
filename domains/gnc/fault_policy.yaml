@@ -1,0 +1,535 @@
+# domains/gnc/fault_policy.yaml — eleven faults, and the domain where a fault is a trajectory.
+#
+# ## Why this domain's faults are different from every other domain's
+#
+# Seven of the ten landed domains have faults that damage the vehicle or its evidence. This one
+# has faults that damage its *future*: a navigation error does not stop the vehicle working, it
+# makes the next burn the wrong size in the wrong direction, and the consequence arrives hours
+# later as a trajectory that cannot be flown. That is F-10's third order verbatim — "burn error ->
+# extra propellant and degraded return margin" — and it is why the domain's most important channel
+# is a *ladder* rather than a number. A sigma alone tells a fleet how well the vehicle knows where
+# it is; only `gnc.nav_integrity` tells it whether the answer is still worth acting on.
+#
+# ## The clock, and why it is the domain's sharpest concept
+#
+# Apollo 13 flew a large part of a mission on a platform that had not been aligned since a burn.
+# That is not a curiosity: it is the normal case for a vehicle that loses its absolute reference,
+# and it has a property no other fault on this vehicle has — **the vehicle looks completely
+# normal.** The attitude is right, the rates are right, the guidance is producing a reference, and
+# the only thing wrong is a clock nobody is watching. `gnc.coast_elapsed_s` exists to make that
+# clock visible, and GNC-02 is the fault that starts it.
+#
+# ## The two faults that are not instrument failures at all
+#
+# GNC-08 and GNC-09 are worth separating from the rest: one is a *gravity model* that is wrong for
+# the region the vehicle is in, and one is a *trajectory* that was flown correctly and arrived
+# somewhere the mission cannot use. Neither has a broken component, both produce a legitimate
+# navigation or guidance signature, and the second is the only fault in the whole vehicle whose
+# cause is entirely correct behaviour applied to a bad plan. The mission's Δv budget is what makes
+# the second expensive: the SPS has 12.9 % reserve and the LM ascent engine has 4.9 %, so a
+# trajectory error is a withdrawal from the smallest account on the vehicle.
+
+domain: gnc
+
+faults:
+
+  - id: GNC-01-imu-drift
+    component: imu_platform
+    mechanism: "the inertial platform drifts: a gyro's bias walks with temperature, a bearing wears, a torquer loses calibration"
+    kind: instrument
+    seeding:
+      hazard: 2.5e-4
+      unit: per_h
+      drift_deg_per_h: UNCONFIGURED
+    perturbs: [gnc.imu_alignment_error_deg, "gnc.gyro_bias_xyz_deg_s",
+               gnc.nav_position_sigma_m, gnc.estimator_rejection_reason,
+               gnc.nav_integrity]
+    detection:
+      evidence: >-
+        F-10's chain, and its three observables arrive in a fixed order that is worth knowing
+        because it is the *only* thing that makes the fault diagnosable early. First
+        `gnc.gyro_bias_xyz_deg_s` — the filter notices the gyro disagreeing with everything else,
+        and a *growing* bias estimate is an instrument while a steady one is a calibration.
+        Then `gnc.imu_alignment_error_deg`, as the accumulated bias becomes an attitude error.
+        Then `gnc.nav_position_sigma_m`, as the filter loses confidence in a solution it can no
+        longer correct. A fleet that watches only the sigma is watching the third symptom of a
+        fault whose first symptom was published an hour earlier
+      latency: >-
+        the bias estimate moves in minutes, the alignment error in tens of minutes, the sigma in
+        hours. The ordering is the diagnosis and the whole reason all three channels exist rather
+        than the sigma alone
+      false_positive_risk: >-
+        a temperature-driven bias that reverses when the vehicle warms is not a failing gyro, and
+        the two look identical over a single orbit. The separation is the drift's persistence
+        across a thermal cycle, which is what `domains/avionics/`'s CUSUM accumulator on the
+        `bus_source` group is for — the same mechanism, arriving from a different domain
+    response:
+      kind: service
+      note: >-
+        the ladder moves — `nominal` to `degraded` to `coasting` — and the vehicle keeps flying on
+        a solution it is honest about. The fleet's decision is when to spend a star sighting or a
+        ground uplink on realigning, and the interesting part is that the vehicle will not make it:
+        an alignment costs crew time and a specific attitude, and `request_imu_alignment` is A2
+        because a fleet that realigns at the wrong moment has spent the maneuver it was about to
+        fly. F-10's third order is the cost of getting that wrong: "burn error -> extra propellant
+        and degraded return margin"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:338"
+      note: >-
+        apollo's chain. `gnc_diode.md:755-850` supplies the mechanism that makes it a *filter*
+        problem rather than an attitude problem: the error-state formulation estimates `b_g`
+        alongside the attitude, so the drift is observable before it is large — which is the one
+        piece of good news in a fault whose whole character is that it is quiet
+
+  - id: GNC-02-coast-without-update
+    component: nav_integrity
+    mechanism: "the vehicle loses its absolute reference and propagates on gyros: the uplink is occulted, the radar has no lock, the crew are asleep, a star is behind the Earth"
+    kind: emergent
+    seeding:
+      coupled_to: "domains/comms/'s occultation — 39 % of every lunar revolution has no uplink — and any fault that removes the radar or the crew's availability"
+      trigger: "no absolute measurement accepted for longer than the phase's coast limit"
+    perturbs: ["gnc.coast_elapsed_s", gnc.nav_integrity, gnc.nav_position_sigma_m,
+               gnc.estimator_rejection_reason]
+    detection:
+      evidence: >-
+        `gnc.coast_elapsed_s` rising, and nothing else. This is the fault whose *entire* evidence
+        is a clock, and the reason it needs its own entry rather than being the tail of GNC-01:
+        a coast is not a failure of anything. The platform is fine, the filter is working, the
+        attitude is right, and the vehicle is simply not being corrected — which means the
+        ordinary instrumentation reports an ordinary vehicle right up to the moment the ladder
+        says otherwise. What a fleet has to reason about is the *activity*, not the vehicle: a
+        coast during a translunar coast is free and the same coast entering a powered descent is
+        the scenario `gnc.nav_integrity` exists to expose
+      latency: >-
+        the coast limit, which is owed (`profiles.yaml#coast_limit_exceeded`) and derivable in
+        principle from the gyro's drift rate and the phase's accuracy need — two figures nobody
+        has published, so the limit is a name rather than a number
+      false_positive_risk: >-
+        none, which is unusual and is the point: a coast is a fact about measurements, and there
+        is no ambiguity about whether absolute updates have stopped. The ambiguity is entirely in
+        what it *means*, and that is a function of the phase
+    response:
+      kind: service
+      note: >-
+        the ladder moves to `coasting` and the flight rule in `profiles.yaml` says what may
+        continue: a coasting vehicle may continue the current activity and an invalid one may not.
+        The distinction is the domain's most operationally important line, and a fleet that treats
+        a coast as a failure will abort activities that were never at risk — which is F-10's third
+        order arriving as a decision rather than as an error
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:666-691 — the COASTING state, its 'coast limit / covariance limit' exit, and the reacquisition path"
+      note: >-
+        the document's ladder supplies the state; `apollo_diode.md:903`'s occultation supplies the
+        reason it is a *scheduled* condition on this vehicle rather than an accident. Apollo 13
+        supplies the operational shape of it: a vehicle flying on a platform that had not been
+        aligned since a burn, with elapsed time as the governing fact
+
+  - id: GNC-03-star-sighting-unavailable
+    component: star_tracker
+    mechanism: "the absolute attitude reference is unavailable: a star is behind the Earth or the Sun, the optics are obstructed, the crew are unavailable to take a sighting"
+    kind: discrete
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      trigger: "any geometry where the required star is occulted or sun-blinded, or any period with the crew unable to work"
+    perturbs: [gnc.nav_integrity, "gnc.coast_elapsed_s", gnc.estimator_rejection_reason]
+    detection:
+      evidence: >-
+        an absence rather than an anomaly: the sightings stop arriving and the coast clock starts.
+        It is the clearest case on this vehicle of a fault whose evidence is the *rate of a
+        process that is not happening* — the same shape as `cw.acknowledged`'s heartbeat problem
+        and `avionics.program_alarm_code`'s, arriving in a domain where the process is a person
+        looking through an eyepiece. There is no channel that says "a sighting did not happen";
+        `gnc.coast_elapsed_s` is what says it instead
+      latency: "one sighting interval, which is a crew schedule rather than a sensor rate"
+      false_positive_risk: >-
+        none by observation and considerable by attribution. A coast caused by geometry, by crew
+        fatigue, by an occulted star and by a broken telescope are the same reading, and the
+        separation is `domains/crew/`'s availability and `domains/comms/`'s blackout state —
+        both published, and neither in this domain
+    response:
+      kind: advisory
+      note: >-
+        no vehicle-side action, because there is nothing to fix: a star behind the Sun is a
+        geometry. The fleet's options are to wait, to use a different reference (`request_imu_alignment`
+        takes `sun`, `moon_horizon` and `stored` for exactly this reason), or to accept the coast.
+        The argument enum is the response
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:123, :52"
+      note: >-
+        apollo gives this vehicle an IMU, star sightings and radar and nothing else (C-15 prunes
+        GNSS, LiDAR and terrain-relative navigation). So the absolute attitude reference is a
+        person with a telescope, which makes this fault a *crew scheduling* problem as much as an
+        instrument one — and it is why `domains/crew/`'s CRW-01 through CRW-04 move the navigation
+        ladder without touching a GNC channel
+
+  - id: GNC-04-radar-failure
+    component: landing_radar
+    mechanism: "the landing radar fails or loses lock: a transmitter, a receiver, a gimbal, or a surface the radar cannot see"
+    kind: discrete
+    seeding:
+      hazard: 3.0e-4
+      unit: per_h
+      trigger: "any powered descent, where the radar is the only absolute range source"
+    perturbs: [gnc.radar_altitude_m, gnc.radar_range_rate_m_s, gnc.nav_integrity,
+               gnc.nav_position_sigma_m, gnc.maneuver_state]
+    detection:
+      evidence: >-
+        a range that stops updating during a descent, and the threshold that catches it is
+        `radar_out_of_range`'s saturation rather than a value crossing. The reason this fault is
+        the most serious in the domain is not the radar: it is that a descent flown without it is
+        a descent flown on a coasting platform, and `gnc.nav_integrity` will say so — which makes
+        this the one GNC fault whose first symptom is a *ladder* rather than an instrument. Apollo
+        11's commander took over manually in the last minutes and what he had was this radar's two
+        numbers; a fleet in the same position has the same two numbers and no hands
+      latency: "one radar update interval, and the descent's own timeline is the clock"
+      false_positive_risk: >-
+        a radar that has not acquired yet looks like a radar that has failed, and the separation is
+        `set_radar`'s `acquire_altitude_m` — a radar searching the wrong altitude range finds
+        nothing, reports nothing, and is indistinguishable from a broken one. That is why the
+        acquisition altitude is an argument rather than a constant
+    response:
+      kind: service
+      note: >-
+        the descent may continue on the platform if the platform is good, and the ladder says
+        whether it is. The flight rule is what matters: an `invalid` navigation solution during a
+        powered descent is a vehicle descending to a point it cannot identify, and the abort
+        decision is the fleet's — `mission.yaml`'s descent phase exit is "landing contact, or an
+        abort to the ascent stage", and this fault is what makes the second branch reachable
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121, :166"
+      note: >-
+        apollo's channel, and the LM's radar is the vehicle's only absolute range measurement —
+        which is why its acquisition range is the figure whose absence blocks a *phase* rather
+        than a threshold. The radar's range is owed in `components.yaml`
+
+  - id: GNC-05-estimator-divergence
+    component: nav_covariance
+    mechanism: "the filter diverges: a modelling error, a mis-set process noise, a measurement that is wrong in a way the innovation test cannot see"
+    kind: emergent
+    seeding:
+      coupled_to: "any sustained sensor disagreement, and the gravity model's accuracy in the region the vehicle is in"
+      trigger: "normalized innovation squared above the trip threshold, k times in m"
+    perturbs: [gnc.nav_position_sigma_m, gnc.nav_velocity_sigma_m_s,
+               gnc.estimator_rejection_reason, gnc.nav_integrity]
+    detection:
+      evidence: >-
+        the innovation test — `nu' S^-1 nu` against a trip threshold with a k-of-m history — and
+        the k-of-m part is what separates a divergence from a bad measurement. One large
+        innovation is an outlier and the filter correctly rejects it; *k* of the last *m* is a
+        model that has stopped matching the world. `gnc.estimator_rejection_reason` publishes
+        which and `domains/avionics/`'s `innovation_window` counts them, which makes this the one
+        fault on the vehicle whose primary detector lives in another domain's state
+      latency: "k measurements, which is a configuration value and a deliberate trade against false alarms"
+      false_positive_risk: >-
+        *high*, and in the direction that matters. A filter that rejects good measurements
+        diverges for the same reason a filter with a bad model does — the covariance grows and
+        the estimate stops tracking — so the fault and the *over-conservative response to a
+        different fault* are indistinguishable from the sigma alone. The separation is the
+        rejection reason: `innovation` rejections that continue past k of m are a model; a run of
+        `redundancy` or `out_of_range` rejections is a sensor
+    response:
+      kind: service
+      note: >-
+        the ladder moves and the vehicle stops trusting its own solution. The fleet's lever is
+        `select_nav_source` — and the interlock on that verb refuses it while this fault is
+        active, which is the protection worth understanding: a fleet that picks a source while the
+        estimator is diverging can pick the wrong one and remove the evidence that it did. The
+        correct sequence is to wait for the ladder to recover or to realign, not to assert a
+        source
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:413-418 and :755-850 — the normalized innovation test with its k-of-m history, and the error-state filter that produces the innovation"
+      note: >-
+        the mathematical content is the document's and it is the strongest thing in it: an
+        innovation test is what makes a filter's *disagreement with the world* an observable
+        rather than an internal matter, and the k-of-m history is what makes it an observable
+        that does not cry wolf
+
+  - id: GNC-06-gyro-saturation
+    component: imu_platform
+    mechanism: "a rate gyro saturates: a rate beyond its range, a tumble after a separation transient, a stuck thruster the RCS domain is fighting"
+    kind: discrete
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any body rate beyond the gyro's range, which includes every F-04 stuck-thruster event"
+    perturbs: [gnc.body_rate_xyz_deg_s, "gnc.gyro_bias_xyz_deg_s", gnc.nav_integrity,
+               gnc.estimator_rejection_reason]
+    detection:
+      evidence: >-
+        a rate at the instrument's limit, which per vocabulary §5 must be published as
+        `SATURATED` rather than as the hidden number: "publish 300.0 + SATURATED, never the hidden
+        750" (`apollo_diode.md:215`). That convention is what makes this fault diagnosable at all
+        — an unsaturated gyro reporting the true rate and a saturated one reporting its limit are
+        the same number until the quality code separates them, and a fleet that reads the value
+        without the code will believe a tumbling vehicle is rotating steadily at exactly its
+        gyro's range
+      latency: "immediate, and the quality code is the whole latency"
+      false_positive_risk: >-
+        none for the saturation and one for the cause. A saturated gyro is caused by a rate, and
+        the rate is caused by a torque — F-04's stuck thruster is the most likely source on this
+        vehicle and `rcs.thruster_[n]_health` is where that shows. This fault is where the RCS
+        domain's crisis meets the navigation domain's, and the two arrive in a fixed order:
+        rate, then saturation, then a ladder that no longer knows the attitude
+    response:
+      kind: service
+      note: >-
+        the attitude estimate loses its rate input and the ladder degrades. What a fleet must not
+        do is act on the published rate: a saturated gyro's value is an inequality, and a control
+        decision made against it is a decision made against a number the instrument is not
+        measuring. The response is to remove the torque and let the rate come back into range,
+        which means the RCS domain's problem must be solved first
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:118, :215"
+      note: >-
+        apollo's rate channel and vocabulary §5's SATURATED rule. The two together are the whole
+        entry: the corpus's single most load-bearing quality code exists for exactly this case,
+        and it is the one code `crew_diode`'s quality enum cannot express (C-20)
+
+  - id: GNC-07-radar-false-lock
+    component: landing_radar
+    mechanism: "the radar locks onto the wrong thing: a return from the CSM, a sidelobe off a crater rim, a range gate set on noise"
+    kind: instrument
+    seeding:
+      hazard: 1.5e-4
+      unit: per_h
+      bias_m: UNCONFIGURED
+    perturbs: [gnc.radar_altitude_m, gnc.radar_range_rate_m_s, gnc.nav_position_sigma_m,
+               gnc.maneuver_state]
+    detection:
+      evidence: >-
+        a radar reading that *agrees with itself* and disagrees with everything else, which is the
+        most dangerous shape an instrument fault can have: a false lock is stable, precise and
+        wrong. The estimator is the detector — the innovation test will reject the range if the
+        platform and the trajectory are both good — and that is the interesting dependency, since
+        it means a false lock during a *coasting* descent is accepted rather than rejected. The
+        radar is the measurement the vehicle would most like to believe precisely when it has the
+        least ability to check it
+      latency: "one radar update if the platform is good, indefinitely if it is not"
+      false_positive_risk: >-
+        a genuine terrain feature — a crater rim the radar correctly sees — is not a false lock,
+        and during a landing the surface is not flat. The separation is the *rate*: a range rate
+        that is inconsistent with the vehicle's own accelerometer and throttle is a false lock,
+        and the three-way comparison is what a fleet has to make
+    response:
+      kind: service
+      note: >-
+        the vehicle rejects the measurement through the innovation test and publishes the
+        rejection. What the fleet must decide is whether to keep descending on a platform-only
+        solution, and the honest answer depends on the coast clock: a shallow coast is a descent
+        that will land near where it aimed, and a long one is a descent to a point nobody can
+        name. That decision is the mission's and the vehicle will not make it
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121, :166"
+      note: >-
+        apollo's radar channels and its "disagrees with acceleration" event, which is stated for
+        the pressure switch at `:150` and applies here by the same argument: a single instrument's
+        reading must not be believed against the vehicle's own motion
+
+  - id: GNC-08-gravity-model-mismatch
+    component: nav_solution
+    mechanism: "the force model is wrong for the region the vehicle is in: a patched-conic boundary crossed, a mascon, a lunar gravity field coarser than the trajectory needs"
+    kind: emergent
+    seeding:
+      coupled_to: "`mission.yaml#initial_state` — the vehicle has no state vector, because the published geometry does not close as an Earth-centred conic and the design that would close it is owed"
+      trigger: "entry into a region where the model's assumptions fail, most sharply the lunar sphere of influence and the descent"
+    perturbs: [gnc.nav_position_sigma_m, gnc.nav_velocity_sigma_m_s, gnc.nav_integrity,
+               gnc.trajectory_residual_m]
+    detection:
+      evidence: >-
+        the *shape* of the covariance growth, which is the only signature a force-model error has.
+        A sensor problem grows the position and velocity sigmas unevenly and the innovation test
+        fires; a model error grows both together, steadily, and every individual measurement is
+        *accepted* because each one is plausible — the model is what is wrong, and the filter
+        cannot tell a model error from a slow real acceleration without a third opinion. The
+        signature is therefore `gnc.nav_velocity_sigma_m_s` and `gnc.nav_position_sigma_m` rising
+        together while `gnc.estimator_rejection_reason` stays `none`, and that combination is
+        unique to this fault on the vehicle
+      latency: >-
+        hours, because the error integrates: a 1 % gravity error over a translunar coast is a
+        position error that takes most of the coast to become visible, and by then the trajectory
+        is wrong rather than the estimate
+      false_positive_risk: >-
+        a real but unmodelled acceleration — a small leak, an attitude thruster's asymmetry —
+        produces the same signature and is a different fault in a different domain. The separation
+        is a mass or impulse accounting: `domains/consumables/`'s ledger and
+        `rcs.total_impulse_ns` will show a leak and will not show a gravity error
+    response:
+      kind: advisory
+      note: >-
+        there is no vehicle-side fix, which is the honest statement: the model is the
+        configuration, and the response is a trajectory correction the fleet has to plan and spend
+        propellant on. This is the fault that makes the mission's Δv reserves real — the SPS has
+        12.9 % and the LM ascent engine has 4.9 %, and a gravity-model error is one of the things
+        that spends them
+    provenance:
+      basis: derived
+      relation: "`apollo_diode.md:743` asks for Earth and Moon gravity in a rigid-body 6-DOF model and names no model; `mission.yaml#initial_state` records that the published geometry does not close as an Earth-centred conic; and `gnc_diode.md:1175-1177` — the corpus's only concrete trajectory — places the vehicle 14.1 km below the lunar mean radius, which C-23 discards"
+      note: >-
+        the one fault in this domain whose *cause* is a missing configuration item rather than a
+        hardware failure, and it is recorded as a fault rather than as a caveat because it has a
+        distinct signature and a distinct cost. The corpus's own attempt at this trajectory is
+        wrong by 14 km (C-23), which is the strongest available evidence that the model matters
+        and that nobody has one
+
+  - id: GNC-09-trajectory-error
+    component: maneuver_state
+    mechanism: "a burn delivers the wrong Δv in the wrong direction: a magnitude error from mass or Isp, a pointing error from the platform, a timing error from the clock"
+    kind: emergent
+    seeding:
+      coupled_to: "correlated with every navigation fault above, and with `prop.thrust_pct_estimated` for the magnitude term"
+      trigger: "terminal tolerances not met at the end of a maneuver"
+    perturbs: [gnc.trajectory_residual_m, gnc.maneuver_state, gnc.velocity_xyz_m_s,
+               prop.accumulated_dv_m_s]
+    detection:
+      evidence: >-
+        `gnc.trajectory_residual_m` at the `verifying` state, which is the vehicle's only channel
+        that reports an *outcome* rather than a condition, and the document's two exits from
+        `verifying` are what make it a diagnosis rather than a failure: "terminal tolerances pass"
+        is `complete`, and "correctable residual" returns to planning. So the residual's
+        *magnitude* is what separates a burn that went well from one that went well enough, and
+        its *decomposition* is what a fleet has to do — the velocity term against
+        `prop.accumulated_dv_m_s` separates a mass error from a guidance error, because a burn
+        that delivered the right Δv to the wrong place and one that delivered the wrong Δv to the
+        right place are different faults with different fixes
+      latency: "the end of the maneuver, by construction"
+      false_positive_risk: >-
+        a residual inside the mission's tolerance and outside a fleet's expectation is not an
+        error. This is the one fault on the vehicle whose *threshold* is a mission decision rather
+        than a physical limit, and `mission.yaml`'s objectives are where it would live
+    response:
+      kind: service
+      note: >-
+        the state machine returns to planning for a correctable residual, which is the vehicle
+        saying "another burn can fix this" without saying whether the mission can afford it. The
+        modelling of the correction is `rigid-body 6-DOF` and the cost is in
+        `mission.yaml#delta_v_budget`, so the vehicle's contribution is the residual and the
+        fleet's is the decision — which is the correct division and the one the LM's 4.9 % ascent
+        reserve punishes
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:658-663 — the VERIFYING state, its two exits, and the terminal tolerances that decide between them"
+      note: >-
+        the fault is the document's state machine made into an outcome, and it is the only one in
+        this domain whose cause is entirely correct behaviour applied to a bad plan. That is why
+        it belongs here rather than in the propulsion domain: the engine did what it was told and
+        the vehicle went where it was aimed, and the trajectory was wrong before the burn started
+
+  - id: GNC-10-ground-uplink-loss
+    component: nav_solution
+    mechanism: "the ground's navigation updates stop arriving: an occultation, a station handover, a link too thin to carry the uplink"
+    kind: discrete
+    seeding:
+      coupled_to: "domains/comms/'s blackout state — 39 % of every lunar revolution — and any link degradation"
+      trigger: "comm.blackout_state becomes occulted, or the link falls below the uplink's rate"
+    perturbs: [gnc.nav_integrity, "gnc.coast_elapsed_s", gnc.nav_position_sigma_m,
+               gnc.estimator_rejection_reason]
+    detection:
+      evidence: >-
+        the uplink's absence, which is `domains/comms/`'s to publish and this domain's to
+        experience. What makes it worth its own entry is that it is **scheduled**: an occultation
+        is a geometric fact with a derived duration (46.5 minutes per 117.8), and a fleet that
+        knows when it is coming can decide what to do about it in advance. That is the difference
+        between this fault and GNC-03 — a star behind the Sun and a spacecraft behind the Moon are
+        both loss of reference, and only one of them appears in an ephemeris
+      latency: "immediate at the link, and the coast clock is what it starts"
+      false_positive_risk: >-
+        none, because `comm.blackout_state` separates a scheduled silence from an unexplained one.
+        The whole reason `domains/comms/` publishes its geometry is so that this fault is a plan
+        rather than a surprise, and the two domains together are the best example on the vehicle
+        of one domain's *expected condition* being another's *trigger*
+    response:
+      kind: service
+      note: >-
+        the ladder moves to `coasting` for the duration, and the flight rule decides what may
+        continue. The operational content is in the *planning*: a blackout that falls during a
+        coast is free and the same blackout during a powered descent is the reason
+        `domains/comms/`'s faults note that nobody has budgeted which manoeuvres land in the dark
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:903, :526"
+      note: >-
+        apollo's occultation property and its 1.3 s one-way light time. The two together are the
+        reason `select_nav_source`'s `ground_uplink` member is a real option on this vehicle
+        rather than a formality: the flight controller has a link for 61 % of every lunar
+        revolution, and one that is 1.3 seconds stale when it arrives
+
+  - id: GNC-11-state-vector-error
+    component: nav_solution
+    mechanism: "the loaded state vector is wrong: a tracking error, a transcription error, an epoch that does not match the position, a sigma that understates the truth"
+    kind: instrument
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any load_state_vector command"
+    perturbs: [gnc.nav_position_sigma_m, gnc.nav_velocity_sigma_m_s, gnc.nav_integrity,
+               gnc.maneuver_state, gnc.trajectory_residual_m]
+    detection:
+      evidence: >-
+        a filter that *converges* to a solution its measurements do not support. The mechanism is
+        the interesting part and it is the reason this fault is here: a loaded state vector
+        initialises the covariance from the fleet's own `position_sigma_m`, so a fleet that states
+        a small sigma and a wrong position has told the filter to trust a lie — every later
+        measurement is then rejected as an innovation, `gnc.estimator_rejection_reason` fills with
+        `innovation`, and the vehicle looks like it has a *sensor* problem. The fault is in the
+        load and the symptom is in the sensors, which is the vehicle's most complete example of a
+        fault whose evidence points away from its cause
+      latency: >-
+        one measurement cycle to the rejections, and as long as the fleet takes to suspect the
+        load rather than the sensors
+      false_positive_risk: >-
+        the reverse case is worse and is not a fault: a fleet that states a *large* sigma gets a
+        filter that converges slowly and correctly. Understating confidence is the dangerous
+        direction, which is why `position_sigma_m` is an argument the fleet supplies rather than a
+        default the vehicle assumes
+    response:
+      kind: advisory
+      note: >-
+        the fleet's, and the recovery is the same verb that caused it: a second
+        `load_state_vector` with an honest sigma. That is worth stating because it means the verb
+        is idempotent in effect and not in consequence — loading the same vector twice with two
+        different sigmas produces two different filters, and the vehicle will not tell a fleet
+        which of its own statements to believe
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:240, :119"
+      note: >-
+        apollo's verb and the reason its argument schema carries a sigma. This is the fault that
+        `domains/gnc/commands.yaml`'s help text is written against: `load_state_vector` changes
+        what the vehicle believes and never where it is, and a fleet that has misunderstood that
+        will read this fault as the vehicle being in the wrong place
+
+coverage:
+  note: >-
+    Every channel this domain publishes is perturbed by at least one fault above. The two
+    thresholds in `profiles.yaml` with no fault of their own are `alignment_error_high` and
+    `covariance_high` — both are the *consequence* channels of GNC-01 and GNC-02, and the ladder's
+    middle rungs exist precisely so that a consequence can be published before its cause has been
+    attributed.
+  unperturbed: []
+  cross_domain:
+    note: >-
+      five of the eleven faults perturb a channel outside `gnc.*`, and this domain has the
+      vehicle's *largest* cross-domain reach in one direction and its smallest in the other: every
+      fault here is about the vehicle's knowledge of itself, so they show up in the domains that
+      act on that knowledge — `prop.accumulated_dv_m_s` for a burn's magnitude, `rcs.thruster_[n]_health`
+      for the torque behind a saturated gyro, `mission.met_s` for the clock, and
+      `domains/comms/`'s blackout for a coast's start. What does *not* appear is the reverse:
+      almost nothing outside this domain perturbs a `gnc.*` channel, because navigation is a
+      consumer of the vehicle rather than a component of it. The exceptions are the whole point of
+      the domain — F-04's stuck thruster arrives here as a rate, and GNC-06 is where it becomes a
+      navigation fault.
+  ladder_coupling:
+    note: >-
+      seven of the eleven faults move `gnc.nav_integrity`, which makes it the most-perturbed
+      channel on the vehicle and the reason it is P0. That is not a modelling convenience: it is
+      the domain's thesis. Every navigation fault eventually reduces to "the vehicle no longer
+      knows where it is", and a ladder says *how much* in a way that a sigma cannot — because a
+      sigma is a number a fleet has to interpret and a ladder is a state a flight rule can gate
+      on. `profiles.yaml#flight_rules` is where that happens, and it is the GNC domain's
+      contribution to the executive rather than to a threshold.

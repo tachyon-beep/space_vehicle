@@ -1,0 +1,316 @@
+# domains/power/profiles.yaml — thresholds, dwells and hysteresis, as versioned data.
+#
+# ## The re-anchoring this file exists to record
+#
+# `review-findings.md:188-196` recommends generalising `electrical_diode.md:814-890` as the
+# hysteresis template for the whole vehicle. It cannot be used as written, and the reason is
+# the sharpest finding of the corpus review: that ladder fires DEGRADED at `<25.5 V for
+# 200 ms`, while apollo fires an **event** at `<26.5 V for 0.5 s` (`apollo_diode.md:73`).
+# Adopting it unchanged produces a plant whose protective state machine believes the bus is
+# healthy across a 2 V band in which its own telemetry says an event has occurred.
+#
+# So the ladder below is re-anchored: apollo's event threshold is the top of the ladder, and
+# the shed tiers sit below it, each with a recovery gap wide enough that a restored load
+# cannot re-trip the tier it came from. That last rule is `review-findings.md` #7's
+# refinement of `consumables_diode.md:613`: the recovery-minus-assert gap must exceed the
+# load delta the transition itself causes, or the ladder oscillates at the recovery dwell.
+#
+# ## Versioned, not writable
+#
+# These are profiles, not settings. Ordinary agents select a versioned pre-certified profile
+# and never a threshold (D-05, `thermal_diode.md:823-826`), because the model that reasons
+# about the spacecraft must not also be able to rewrite the limits by which its reasoning is
+# constrained. The executive enforces the selected revision; `profiles.revision` is published
+# in `state.json` so a run can be interpreted against the limits that were actually in force.
+
+domain: power
+profiles:
+  - id: default
+    revision: 1
+    description: "the vehicle's own limits, re-anchored to apollo's bus band"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:73-80"
+      note: "the event conditions are apollo's; the tier values below them are chosen so the ladder is monotone and each tier's recovery gap exceeds the load delta it sheds"
+
+thresholds:
+
+  # --- the ladder, from apollo's event threshold downward ---------------------------------
+  - id: bus_a_undervoltage
+    point: power.dc_bus_a_v
+    comparator: below
+    assert: 26.5
+    clear: 27.2
+    dwell_assert_ms: 500
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:73"
+      note: "apollo's own event: <26.5 V for 0.5 s. This tier does not shed load; it tells the crew that the bus is in the band where things start dropping out, and it is the tier electrical_diode.md's ladder omits entirely."
+  - id: bus_a_shed_p3
+    point: power.dc_bus_a_v
+    comparator: below
+    assert: 25.5
+    clear: 26.4
+    dwell_assert_ms: 200
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: chosen
+      reason: "the first shed tier, set 1 V below apollo's event because a vehicle that has already been warned for 0.5 s should not also lose its discretionary loads at the same instant; recovery at 26.4 V restores the tier while leaving the warning standing"
+  - id: bus_a_shed_p2
+    point: power.dc_bus_a_v
+    comparator: below
+    assert: 24.5
+    clear: 26.0
+    dwell_assert_ms: 300
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: chosen
+      reason: "1 V below the P3 tier and with a 1.5 V recovery gap: P2 loads include the second coolant pump and the heaters, and restoring them is itself a load step, so the gap has to be wider than the step (review-findings.md #7)"
+  - id: bus_a_survival
+    point: power.dc_bus_a_v
+    comparator: below
+    assert: 23.5
+    clear: 25.5
+    dwell_assert_ms: 100
+    dwell_clear_s: 60
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: chosen
+      reason: "survival: only P0 loads remain. The shortest assert dwell and the widest recovery gap, because the cheapest error here is being slow to shed and the most expensive is oscillating back and forth between survival and P2"
+
+  # --- the same ladder on bus B, offset by the tie's asymmetry ----------------------------
+  - id: bus_b_undervoltage
+    point: power.dc_bus_b_v
+    comparator: below
+    assert: 26.5
+    clear: 27.2
+    dwell_assert_ms: 500
+    dwell_clear_s: 30
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:74"
+      note: "apollo gives bus B the same event condition as bus A"
+
+  # --- margin, state of charge, temperature ----------------------------------------------
+  - id: load_margin_low
+    point: power.load_margin_w
+    comparator: below
+    assert: 100
+    clear: 250
+    dwell_assert_ms: 500
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:80"
+      note: "apollo's own thresholds: <100 W and negative, with >250 W preferred. The gap is apollo's, and it is wide on purpose: margin is an estimate, and an estimate that flickers across a threshold will shed twice"
+  - id: load_margin_negative
+    point: power.load_margin_w
+    comparator: below
+    assert: 0
+    clear: 150
+    dwell_assert_ms: 200
+    dwell_clear_s: 60
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:80"
+  - id: battery_soc_low
+    point: power.battery_soc_pct
+    comparator: below
+    assert: 30
+    clear: 40
+    dwell_assert_ms: 1000
+    dwell_clear_s: 300
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:77"
+      note: "<30 % then <15 %; the 10-point gap is chosen because SOC is an estimate with a slow bias, and a 1-point gap would trip on its own noise"
+  - id: battery_soc_critical
+    point: power.battery_soc_pct
+    comparator: below
+    assert: 15
+    clear: 30
+    dwell_assert_ms: 1000
+    dwell_clear_s: 300
+    latched: true
+    severity: EMERGENCY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:77"
+  - id: battery_overtemp
+    point: power.battery_temp_c
+    comparator: above
+    assert: 45
+    clear: 40
+    dwell_assert_ms: 1000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:78"
+      note: "apollo's event is >45 C or a rise faster than 2 C/min. The clear is 5 C below the assert because battery capacity does not recover the instant the temperature does"
+  - id: battery_thermal_runaway_rate
+    point: power.battery_temp_c
+    comparator: above
+    assert: 2.0
+    clear: 0.5
+    dwell_assert_ms: 60000
+    dwell_clear_s: 300
+    latched: true
+    severity: WARNING
+    point_units: "degC/min, not degC — a rate threshold on a level channel"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:78"
+      note: "the second half of apollo's event condition, and a rate rather than a level. It is the channel that catches a thermal runaway before the level does, which is why it exists as its own threshold with a 60 s dwell to average out the sensor noise"
+
+  # --- interlocks (service-owned, never agent-writable) -----------------------------------
+  - id: tie_dv_limit
+    point: power.dc_bus_a_v
+    comparator: above
+    assert: 1.0
+    clear: 0.5
+    dwell_assert_ms: 200
+    dwell_clear_s: 5
+    latched: true
+    interlock: true
+    severity: ADVISORY
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:880 requires |dV| <= 1.0 V before the tie closes. Modelled here as a threshold on the difference between buses; expressed against bus A because the profile schema keys on a single channel, and the linter's job is to check the hysteresis, not the arithmetic"
+  - id: lcl_overcurrent
+    point: "power.lcl_[n]_current_a"
+    comparator: above
+    assert: 313
+    clear: 263
+    dwell_assert_ms: 2
+    dwell_clear_s: 5
+    latched: true
+    interlock: true
+    severity: ADVISORY
+    point_units: "A: 125 % of the 250 W pump rating at 28 V, and 105 % for the clear"
+    provenance:
+      basis: chosen
+      reason: "electrical_diode.md:254: a 110-125 % limit with a >200 % hard short tripping in <=2 ms. The 2 ms assert dwell is the reason this threshold cannot be evaluated on the 20 ms tick at all — it belongs to the sub-tick event queue (plant.md §5)"
+
+  # --- the events the dictionary promised and nothing implemented -------------------------
+  # Three of these came out of an audit of `channels.yaml`'s `events` field against the
+  # thresholds: 53 channels declared events that no threshold watched, and after classifying
+  # them by kind (alarm, notification, or envelope field) these are the ones that turned out to
+  # be genuine missing alarms rather than publications. A dictionary that promises an alarm the
+  # vehicle does not raise is worse than one that promises nothing: a fleet reads the promise and
+  # waits.
+  - id: bus_a_current_high
+    point: power.bus_a_current_a
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: CAUTION
+    point_units: "A, above the configured bus capacity"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:74"
+      note: >-
+        apollo's event is "> configured bus capacity" and the configured capacity is owed: the
+        28 V bus's current rating is not in any source reached, and `vehicle.yaml#electrical`
+        carries the source models rather than the distribution limit. What makes this alarm worth
+        having before the number exists is that it is the *only* channel that sees a load step
+        without waiting for the voltage to sag: the bus voltage is the consequence and this is
+        the cause, one tick earlier
+
+  - id: source_current_anomaly
+    point: power.source_1_current_a
+    comparator: below
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 500
+    dwell_clear_s: 5
+    latched: true
+    severity: CAUTION
+    point_units: "A, below the configured minimum for a commanded-on source"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:72"
+      note: >-
+        apollo's two events on this channel are "unexpected zero" and "overload", and they are one
+        threshold because they are one question: is this source delivering roughly what it was
+        asked for. A source commanded on and reading zero is an open circuit or a failed converter;
+        the same source reading far above its share is a short downstream. The pair is the
+        diagnosis and the single threshold is the alarm
+
+  - id: lcl_state_trip
+    point: "power.lcl_[n]_state"
+    comparator: above
+    assert: 1
+    clear: 1
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: false
+    severity: CAUTION
+    point_units: "ordinal: closed = 0; tripped, retrying and latched are all above it"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:47"
+      note: >-
+        a *discrete occurrence* rather than a band crossing, so it carries no dwell and no
+        recovery edge — the same shape as the avionics program alarm and the sensor-bus error
+        count. The distinction it preserves is the one `power.lcl_[n]_current_a`'s threshold
+        cannot make: `lcl_overcurrent` fires while the current is high and clears when it falls,
+        and an LCL that tripped and then *latched* has no high current left to watch. Without this
+        threshold, a load that tripped and stayed tripped is visible only as a load that stopped
+
+  - id: load_shed_event
+    point: power.load_shed_class
+    comparator: above
+    assert: 0
+    clear: 0
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    severity: CAUTION
+    point_units: "ordinal: none = 0, any shed class above it"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:48"
+      note: >-
+        apollo's events are "any shed" and "any restore", and the shed is the half that alarms.
+        `power/profiles.yaml` already carries the ladder that *decides* to shed, and this is the
+        announcement that it did — a different statement, published at a different layer, and the
+        one a fleet needs when it comes back from a conversation turn to find four loads gone
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    An agent may select a profile revision and may never edit one. The `tight` profile below
+    exists so that an agent that wants a wider margin has somewhere legitimate to go, rather
+    than a reason to wish the thresholds were writable.
+alternatives:
+
+    - id: tight
+      revision: 1
+      description: "every threshold tightened by the same factor, for a fleet that wants to be warned early"
+      factor: 0.9
+      provenance:
+        basis: chosen
+        reason: "a profile an agent can select to trade margin for warning time; it can only ever make the envelope narrower, never wider, which is the monotonicity the min(agent, operator) ceiling requires"

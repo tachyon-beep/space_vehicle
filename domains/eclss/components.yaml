@@ -1,0 +1,270 @@
+# domains/eclss/components.yaml — the atmosphere, which is the only domain where a fault has
+# minutes rather than hours.
+#
+# ## Why the atmosphere is modelled as stocks of gas rather than as a pressure
+#
+# The obvious model is a pressure state with a leak rate subtracted from it. It is wrong, and
+# the way it is wrong is the experiment: pressure is `nRT/V`, so a cabin that heats up gains
+# pressure without gaining gas and a cabin that cools loses it without leaking. A leak diagnosis
+# built on a pressure state alone will read every thermal transient as a mass change, and the
+# thermal domain has transients by design.
+#
+# So the conserved quantities are the **gas masses** — oxygen, diluent, carbon dioxide and water
+# vapour — and pressure is derived from them. That makes the leak a mass loss rather than a
+# pressure decay, which is what `eclss.leak_rate_g_s` actually is (`apollo_diode.md:94`), and it
+# makes the thermal coupling of `E-ZONE-ATM` physical rather than a correction term.
+#
+# ## The band that had to be derived rather than guessed
+#
+# The cabin sits at 4.8-5.2 psia of essentially pure oxygen (`apollo_diode.md:88`), which is
+# **248-269 mmHg** of oxygen partial pressure. The first version of `eclss.pp_o2_mmhg` in the
+# registry carried 140-180 — the value a mixed atmosphere at 14.7 psia would give — and the
+# correction matters because the failure modes are opposite: 140 is hypoxic at 5 psia, and 269
+# is a fire risk that a sea-level band would hide. It is the kind of error no range check catches
+# and a fire-risk threshold does.
+#
+# ## Two compartments, and the switch between them
+#
+# The crew live in the CSM from translunar coast to undocking and in the LM from undocking to
+# docking, and the two atmospheres cannot equalise in between because the vehicles are separate.
+# Which compartment is crewed is a mission-phase fact, so it comes from `mission.yaml` rather
+# than from this domain — the domain models both and the phase decides which one has people in it.
+
+domain: eclss
+
+# Metabolic rates are the fastest thing in this domain: a crew of three consumes about
+# 3.16e-5 kg/s of oxygen, so a cabin's oxygen stock changes measurably over minutes. One hertz is
+# already two orders of magnitude finer than the cabin's own mixing time, and the 0.5 Hz
+# publication of the CO2 channel is what the alarm thresholds are sized against.
+natural_rate_hz: 1
+
+reads: [o2_csm, o2_lm, absorber_capacity, crew_state, cabin_zone_t, lm_cabin_zone_t]
+writes: [cabin_atm, lm_cabin_atm, cabin_regulator]
+
+# --------------------------------------------------------------------------------------
+# State. Four conserved gases per compartment, one commanded regulator, and three derived
+# quantities. The quanta are set by the smallest flow each stock must represent, and the
+# smallest flow in a crewed cabin is the leak — which is the same figure the whole ledger-pair
+# design exists to detect.
+# --------------------------------------------------------------------------------------
+state:
+  - id: csm_cabin_o2_kg
+    node: cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.4e-6
+    provenance:
+      basis: derived
+      relation: "quantum 1 mg because the smallest flow this stock must represent is the nominal cabin leak, 0.023 kg/h = 6.4e-6 kg/s (vehicle.yaml#consumables, from the Apollo 11 flight figure). The crew's metabolic draw is five times larger; the leak is what sets the quantum."
+  - id: csm_cabin_n2_kg
+    node: cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.4e-6
+    provenance:
+      basis: derived
+      relation: "the diluent. Apollo flew an essentially pure-oxygen cabin at 5 psia, so the nitrogen load is small; it is modelled separately anyway because a repressurisation that adds the wrong gas is a fault worth being able to express, and because 'the cabin lost pressure' and 'someone diluted the oxygen' are different problems."
+  - id: csm_cabin_co2_kg
+    node: cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 3.16e-5
+    provenance:
+      basis: derived
+      relation: "quantum 1 mg against the crew's production of 0.91 kg per crew-day for three, 3.16e-5 kg/s. This is the fastest stock in the domain, and it is the one the absorber's man-hour accounting is denominated against."
+  - id: csm_cabin_h2o_kg
+    node: cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-5
+    min_flow_per_s: 1.0e-5
+    provenance:
+      basis: chosen
+      reason: "water vapour, removed by the condensing heat exchanger. Modelled because humidity is what a condensing exchanger is for and because a failed exchanger is a cabin fault an agent can feel rather than read; the quantum is coarser because the flows are larger and the precision of any humidity channel is poor."
+  - id: lm_cabin_o2_kg
+    node: lm_cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.4e-6
+    provenance:
+      basis: derived
+      relation: "as the CSM compartment, for the LM's own 6.7 m3 at about 5 psia (vehicle.yaml#thermal)"
+  - id: lm_cabin_co2_kg
+    node: lm_cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 3.16e-5
+    provenance:
+      basis: derived
+      relation: "as the CSM compartment. On the LM this is the stock Apollo 13's improvised cartridge kept below 1 mmHg, and it is the one whose exhaustion constrains how long a surface stay can be extended."
+  - id: lm_cabin_n2_kg
+    node: lm_cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.4e-6
+    provenance:
+      basis: derived
+      relation: "as the CSM compartment"
+  - id: cabin_regulator_position
+    node: cabin_regulator
+    method: discrete
+    unit: "enum[closed,primary,emergency,isolated]"
+    dwell:
+      min_on_s: 1
+      min_off_s: 1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:95"
+      note: "apollo publishes cabin_regulator_state as primary/emergency/isolated with an 'unexpected mode' event. The dwell is one second each way because the regulator is a valve with a mechanical transit and a fleet must not be able to chatter it by re-commanding every tick."
+  - id: suit_loop_flow_cfm
+    node: internal
+    method: lag
+    unit: ft3/min
+    tau_s: 5
+    provenance:
+      basis: chosen
+      reason: "the suit loop is a fan-driven circuit, so it spins up in seconds. apollo_diode.md:92 publishes the flow at 27-33 cfm with a <20 event, and five seconds is long enough that a fan commanded on cannot be declared failed within one tick."
+  - id: co2_removal_kg_s
+    node: internal
+    method: algebraic
+    unit: "kg/s"
+    provenance:
+      basis: derived
+      relation: "the absorber bed's removal rate, which is its rated man-hour capacity converted through the metabolic production rate. Algebraic because the rate follows the bed's state and the blower's flow rather than accumulating."
+  - id: csm_cabin_pressure_pa
+    node: internal
+    method: algebraic
+    unit: Pa
+    provenance:
+      basis: derived
+      relation: "P = (sum of n_i) R T / V, from the four gas stocks and E-ZONE-ATM's temperature. Derived rather than stated, which is the whole reason the stocks exist."
+  - id: lm_cabin_pressure_pa
+    node: internal
+    method: algebraic
+    unit: Pa
+    provenance:
+      basis: derived
+      relation: "as the CSM compartment, over the LM's own volume"
+
+# --------------------------------------------------------------------------------------
+# Components.
+# --------------------------------------------------------------------------------------
+components:
+  - id: csm_cabin_volume
+    kind: state
+    class: volume
+    vehicle: csm
+    volume_m3: 5.9
+    provenance:
+      basis: historical
+      source: "NR: CSM cabin 210 cu ft habitable = 5.9 m3 at 5 psia"
+  - id: lm_cabin_volume
+    kind: state
+    class: volume
+    vehicle: lm
+    volume_m3: 6.7
+    provenance:
+      basis: historical
+      source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3, roughly 160 cu ft habitable"
+  - id: o2_regulator
+    kind: discrete
+    class: regulator
+    modes: [closed, primary, emergency, isolated]
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:95"
+      note: "primary, emergency and isolated, with an emergency regulator that could hold the cabin above 3.5 psia long enough to don suits (apollo_diode.md:84)"
+  - id: cabin_pressure_sensor_1
+    kind: flow
+    class: sensor
+    range_psia: [0, 10]
+    precision_psia: 0.01
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:88"
+      note: "the published precision is 0.01 psia, which is 69 Pa — and a 1 K cabin temperature change moves the pressure by about 117 Pa without any gas moving. The instrument is therefore *more* precise than the thermal noise it has to survive, which is exactly why the stocks are masses."
+  - id: cabin_pressure_sensor_2
+    kind: flow
+    class: sensor
+    range_psia: [0, 10]
+    precision_psia: 0.01
+    provenance:
+      basis: chosen
+      reason: "apollo's instrumentation carried redundant channels (`avionics_diode.md:390-411`'s redundant_vote is one of the only two mechanisms allowed to assign SUSPECT). Two sensors are the minimum for a disagreement to be detectable at all, and a single pressure sensor is a fault that hides its own failure."
+  - id: co2_sensor
+    kind: flow
+    class: sensor
+    range_mmhg: [0, 20]
+    precision_mmhg: 0.1
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:90"
+  - id: lioh_bed_primary
+    kind: stock
+    class: absorber
+    rated_man_hours: 41
+    provenance:
+      basis: historical
+      source: "NR and PSR: an LM primary cartridge is 41 man-hours of CO2 removal. The capacity is denominated in man-hours because no kg-CO2 figure is published, and a stock denominated in the unit the sources give cannot drift from its evidence."
+  - id: lioh_bed_secondary
+    kind: stock
+    class: absorber
+    rated_man_hours: 78
+    provenance:
+      basis: historical
+      source: "NR and PSR: an LM secondary cartridge is 78 man-hours"
+  - id: condensing_heat_exchanger
+    kind: flow
+    class: exchanger
+    removal_kg_h: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "the humidity removal rate is not published; what the vehicle publishes is the consequence, which is a cabin humidity an agent can feel rather than read. Declared unset rather than invented."
+  - id: ventilation_fan
+    kind: flow
+    class: fan
+    vehicle: csm
+    cfm: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "the cabin fan's flow is not published. main_propulsion_diode.md:165's principle applies here in a different form: what matters is not the fan's rating but that the same ECS caution light can mean a glycol pump, a water separator or a suit fan (apollo_diode.md:84), so the domain needs a ventilation state without needing its rated flow."
+
+# --------------------------------------------------------------------------------------
+# The atmosphere model, stated so the plant can implement it and the linter can check the
+# units of everything that feeds it.
+# --------------------------------------------------------------------------------------
+atmosphere_model:
+  law: "P = (sum_i n_i) R T / V, with n_i = m_i / M_i, and pp_i = P * n_i / sum_j n_j"
+  volume_m3:
+    csm: 5.9
+    lm: 6.7
+  temperature_from: cabin_zone_t, lm_cabin_zone_t
+  gases:
+    - id: o2
+      molar_mass_kg_per_mol: 0.032
+      source: "the cryogenic supply through the regulator, and the crew's metabolic consumption"
+    - id: n2
+      molar_mass_kg_per_mol: 0.028
+      source: "the diluent load; small on this vehicle because the cabin is essentially pure oxygen at 5 psia"
+    - id: co2
+      molar_mass_kg_per_mol: 0.044
+      source: "crew metabolism, removed by the lithium-hydroxide beds"
+    - id: h2o
+      molar_mass_kg_per_mol: 0.018
+      source: "crew respiration and perspiration, removed by the condensing heat exchanger"
+  check:
+    total_pressure_at_5_psia: "34,474 Pa over 5.9 m3 at 295 K is 82.9 mol; at 32 g/mol that is 2.65 kg of oxygen, which is the initial load the mission starts with"
+    provenance:
+      basis: derived
+      relation: "the ideal-gas relation applied to the published cabin volume and pressure. It is stated here so that the initial load is a computed consequence of two published figures rather than a third invented one."
+
+open_debts:
+  - "The condensing heat exchanger's removal rate and the ventilation fan's flow are unpublished; both are declared unset above. Without them the humidity stock has no sink and the ventilation state has no magnitude, so the model can express a humid cabin and cannot yet dry it."
+  - "The suit loop is modelled as a single flow channel rather than as a circuit with the PLSS, because apollo publishes suit_loop_flow_cfm and nothing about the portable life support's own consumables. EVA is therefore a phase whose atmosphere consequences are not yet modelled."
+  - "Repressurisation and depressurisation are not modelled. A hatch opening on the surface is a real event with a real gas cost, and `structure.hatch_state` exists without an atmosphere consequence behind it."

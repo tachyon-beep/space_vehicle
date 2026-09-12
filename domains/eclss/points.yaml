@@ -1,0 +1,145 @@
+# domains/eclss/points.yaml — what the atmosphere publishes.
+#
+# The organising fact of this domain is that **pressure is derived and the gases are conserved**.
+# Everything below follows from that: `cabin_pressure_psia` is computed from four masses and a
+# temperature, `pp_o2_mmhg` is a mole fraction of that, and `leak_rate_g_s` is inferred from the
+# mass balance rather than from a pressure slope. An agent that reads the pressure as the
+# primary quantity has the right instinct and the wrong model, and the domain is built so that
+# the difference is discoverable.
+
+domain: eclss
+points:
+  - channel: eclss.cabin_pressure_psia
+    from: csm_cabin_pressure_pa
+    layer: measurement
+    derivation: "the ideal-gas pressure from the four gas stocks and E-ZONE-ATM's cabin temperature, converted to psia"
+    note: >-
+      apollo's band is 4.8-5.2 psia with a <4.5 caution and a <3.5 emergency. The instrument's
+      0.01 psia precision is 69 Pa, and a 1 K cabin temperature change is about 117 Pa — so the
+      pressure channel is finer than the thermal noise it has to survive, which is precisely why
+      a pressure *slope* is not a leak rate.
+  - channel: eclss.cabin_temp_c
+    from: cabin_zone_t
+    layer: measurement
+    derivation: "the thermal domain's cabin zone temperature, published here because the crew's own channels read it in these units"
+    note: "one physical quantity, one owner: `thermal.zone_[id]_t_c` and this channel are two views of `cabin_zone_t`, and the node is what makes that a fact rather than a coincidence."
+  - channel: eclss.co2_pp_mmhg
+    from: csm_cabin_co2_kg
+    layer: measurement
+    derivation: "the CO2 mole fraction of the cabin's total pressure"
+    note: "apollo's instantaneous alarm at >7.6 mmHg. The 3 mmHg one-hour average is a different statistic and lives on the derived channel below."
+  - channel: eclss.co2_pp_1h_avg_mmhg
+    from: csm_cabin_co2_kg
+    layer: estimate
+    inputs: [eclss.co2_pp_mmhg]
+    derivation: "a rolling one-hour mean of the instantaneous channel"
+    note: >-
+      eclss_diode.md:735 adopts NASA's one-hour-average limit of 3 mmHg, and conflict register
+      C-05 keeps it as a *separate* channel rather than letting it contaminate the instantaneous
+      alarm. Two statistics, two channels, one gas.
+  - channel: eclss.pp_o2_mmhg
+    from: csm_cabin_o2_kg
+    layer: measurement
+    derivation: "the oxygen mole fraction of the cabin's total pressure"
+    note: >-
+      248-269 mmHg at a 5 psia oxygen cabin, derived rather than chosen: 5 psia is 258.6 mmHg.
+      The two failure modes are opposite and only one band covers both — below 200 is hypoxic,
+      above 300 is the fire risk that killed the Apollo 1 crew on the ground.
+  # ------------------------------------------------------------------------------------
+  # The LM's three, and they were missing. The linter's producer check found them: every one
+  # is a threshold's point (`lm_cabin_high`, `lm_cabin_low`, `lm_co2_caution`, `lm_ppo2_hypoxia`)
+  # and every one is on the LM crew positions' perceivable lists — so the vehicle had three
+  # alarms and two display panels watching numbers that nothing computed. They are not the CSM's
+  # channels under another name: the LM is a separate compartment with its own four gas masses
+  # (`lm_cabin_o2_kg`, `lm_cabin_n2_kg`, `lm_cabin_co2_kg`, `lm_cabin_h2o_kg`), and the reason
+  # they exist as separate published points is the same reason the compartments do — a crew in
+  # the LM cannot see the CSM's gauges and a fleet cannot average the two.
+  # ------------------------------------------------------------------------------------
+
+  - channel: eclss.lm_cabin_pressure_psia
+    from: lm_cabin_pressure_pa
+    layer: measurement
+    derivation: "the LM compartment's total pressure, from its four conserved gas masses and its volume"
+    note: >-
+      the LM's own cabin pressure, and the number the crew read during the descent while the CSM's
+      was somebody else's vehicle. The compartment is 6.7 m3 against the CSM's 5.9, and it holds
+      the same 4.8-5.2 psia of essentially pure oxygen — so the ppO2 band is the same 248-269 mmHg
+      and the *volume* is what differs.
+  - channel: eclss.lm_co2_pp_mmhg
+    from: lm_cabin_co2_kg
+    layer: measurement
+    derivation: "the LM compartment's CO2 partial pressure"
+    note: >-
+      the channel Apollo 13's crisis turned on, and the one whose LM path is a different absorber
+      from the CSM's. The third-order clue in apollo_diode.md:335 is a rising trend *despite*
+      normal pressure and oxygen, which is why this is published separately from the pressure
+      rather than derived from it by a fleet.
+  - channel: eclss.lm_cabin_temp_c
+    from: lm_cabin_zone_t
+    layer: measurement
+    derivation: "the LM compartment's temperature, from the thermal domain's zone node"
+    note: >-
+      published here and produced by the thermal domain, which is the arrangement the CSM's cabin
+      temperature already has — and the arrangement that made the duplication
+      `eclss.cabin_temp_c` vs `thermal.zone_csm_cabin_t` hard to see. What changed is that the
+      zone family no longer claims the cabins: apollo names them, so apollo's names are the ones
+      a fleet reads, and `thermal.zone_[id]_t_c` covers the zones apollo is silent about.
+
+  - channel: eclss.lm_pp_o2_mmhg
+    from: lm_cabin_o2_kg
+    layer: measurement
+    derivation: "the LM compartment's oxygen partial pressure"
+    note: >-
+      the same band as the CSM's and a different compartment, which is the point: during the
+      surface phase the LM is the crewed vehicle and the CSM is empty and cold, so a fleet that
+      watched only `eclss.pp_o2_mmhg` would be watching the wrong spacecraft for three days.
+
+  - channel: eclss.o2_supply_pressure_psi
+    from: o2_csm
+    layer: measurement
+    derivation: "the cryogenic supply tank's pressure, from the consumables domain's stock"
+    note: "apollo's 750-950 psi with a low-pressure event and a >5 psi/min fall. It is the channel that corroborates a leak: the tank falls while the cabin pressure is held by the regulator, and reading the two together is how a leak is distinguished from a regulator fault."
+  - channel: eclss.suit_loop_flow_cfm
+    from: suit_loop_flow_cfm
+    layer: measurement
+    derivation: "the suit circuit's fan-driven flow"
+    note: "27-33 cfm with a <20 event. It is the fastest life-support channel on the vehicle and the only one whose loss is measured in seconds."
+  - channel: eclss.absorber_capacity_pct
+    from: absorber_capacity
+    layer: estimate
+    derivation: "remaining man-hours of CO2 removal as a percentage of the loaded beds"
+    note: >-
+      The denominator is man-hours, from the published 41 and 78 (vehicle.yaml#consumables),
+      which is what makes this channel well defined. It was not, when the corpus left the
+      denominator unnamed — and a percentage of nothing is a number an agent will still plan
+      against.
+  - channel: eclss.leak_rate_g_s
+    from: csm_cabin_pressure_pa
+    layer: estimate
+    inputs: [eclss.cabin_pressure_psia, eclss.o2_supply_pressure_psi, eclss.cabin_temp_c]
+    derivation: "the mass balance: gas added through the regulator minus gas consumed and removed, against the observed mass change, with the thermal term removed using the measured temperature"
+    note: >-
+      The slow-leak channel, and the sharpest illustration of why the ledger pair exists: the
+      nominal leak is 0.0064 g/s against a published precision of 0.01 g/s, so the instrument
+      cannot see a nominal leak at all. What it can see is a *growing* one, and the temperature
+      term is what stops a cold night from reading as one.
+  - channel: eclss.cabin_regulator_state
+    from: cabin_regulator_position
+    layer: service
+    derivation: "the commanded and actual regulator position"
+
+not_published:
+  - channel: ["eclss.cabin_o2_kg", "eclss.cabin_n2_kg", "eclss.cabin_co2_kg", "eclss.cabin_h2o_kg"]
+    why: >-
+      hidden truth. What the cabin *contains* is the thing the crew have to infer from pressure,
+      temperature and the composition channels — which is the epistemic situation apollo
+      describes at :40, where an LM quantity had to be inferred from pressure and temperature
+      behaviour rather than read from a mass sensor. Publishing the gas masses would make the
+      atmosphere a solved problem and the leak a subtraction.
+  - channel: "eclss.true_leak_location"
+    why: "a conclusion. The evidence is a mass balance that does not close, a supply tank that falls, and whatever a crew member says they can hear."
+  - channel: "eclss.absorber_remaining_man_hours"
+    why: >-
+      the raw man-hour count is the consumables stock, published there as
+      `res.status_[resource]`. Here it is a percentage, because that is the unit apollo's
+      threshold is expressed in — one quantity, one owner, two views.

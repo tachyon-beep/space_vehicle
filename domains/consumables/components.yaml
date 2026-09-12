@@ -1,0 +1,329 @@
+# domains/consumables/components.yaml — the resource accounting model, and the two things the
+# corpus got right that the design has to be careful not to lose.
+#
+# ## Why this domain is different from the other two
+#
+# Power has a topology and thermal has a physics; consumables has an **ontology**, and it is the
+# corpus's single best artifact. `consumables_diode.md:19-30` enumerates seven abstract
+# behaviours so that a kilogram of oxygen, a kilowatt-hour of battery, a spare canister and a
+# communications window can share one accounting model "without pretending that all of them
+# behave like kilograms in a tank". That is a real piece of engineering and the design adopted
+# it — but `simulator-design.md:244` names four of the seven and silently drops three
+# (`corpus-review.md` §8). The `ontology` block below names all seven and says where each lives,
+# because a behaviour that is dropped without a note is a behaviour nobody will notice is
+# missing.
+#
+# ## The two things the design has to be careful not to lose
+#
+# 1. **The ledger and the observation publish as a pair.** `consumables_diode.md:55-65`:
+#    `delta_recon = observed - ledger`. The residual is evidence — it is how a slow leak first
+#    becomes visible — and `simulator-design.md:250-252` is right that hiding it "deletes the
+#    exact inference the experiment exists to observe". So the ledger, the observation and the
+#    residual are three published channels, not one reconciled number.
+# 2. **Claims are declined, and declining them means stripping fields** (D-04).
+#    `simulator-design.md:254-257` declines the claims lifecycle on the grounds that "exposing
+#    reservations as verbs hands the fleet a ready-made deconfliction primitive". The reasoning
+#    is right and the scope was wrong: `reserved`, `allocated`, `committed` and
+#    `available_to_new` are *required* fields of the schema being adopted
+#    (`consumables_diode.md:1568-1575`), and `available_to_new` is precisely the aggregate other
+#    agents' claims leave behind. So this domain publishes `observed`, `ledger`, `usable`,
+#    `uncertainty`, `forecast` and `status` — and **no claim quantities at all**. There is no
+#    `RESERVE_RESOURCE`, and there is no field that would tell one agent what another has
+#    already spoken for.
+
+domain: consumables
+natural_rate_hz: 1
+
+reads: [fuel_cell, radiator_reject, crew_state, thrust_main, rcs_thrust, battery_energy]
+writes: [o2_csm, o2_lm, h2_csm, water_potable, water_cooling, prop_main, prop_rcs,
+         pressurant_he, absorber_capacity]
+
+# --------------------------------------------------------------------------------------
+# The ontology. All seven behaviours from `consumables_diode.md:19-30`, each with where it
+# lives on this vehicle. A behaviour that is not modelled says so and says why.
+# --------------------------------------------------------------------------------------
+ontology:
+  - behaviour: Stock
+    model: "conserved quantity with inflows, outflows, loss and adjustment"
+    on_this_vehicle: "the nine stocks below"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:836-847"
+      note: "apollo names the conserved stocks and requires them to be strictly conserved with no reset, restart or telemetry rewrite replenishing them"
+  - behaviour: Rate/capacity
+    model: "instantaneous capacity minus demand and reserve"
+    on_this_vehicle: "not owned here: bus capacity and margin are the power domain's, downlink rate is the comms domain's, cooling capacity is thermal's"
+    provenance:
+      basis: chosen
+      reason: "the corpus's own catalog lists electrical power, downlink rate, cooling capacity and CPU throughput as Rate/capacity resources; all four already have owning domains in this vehicle, and duplicating them here would put one figure in two files"
+  - behaviour: Buffer
+    model: "finite capacity with occupancy, ingress, egress and drops"
+    on_this_vehicle: UNCONFIGURED
+    debt: >-
+      the recorder's data storage is a real Buffer on this vehicle and it is not yet modelled:
+      during a lunar occultation the vehicle must store telemetry and replay it, which is
+      apollo_diode.md:903's operational fact rather than an interruption. It needs a node in
+      coupling.yaml and a producer in the comms domain, neither of which exists yet.
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:898-903"
+      note: "apollo's telemetry profiles exist because behind the Moon there was no direct contact and stored telemetry was replayed later; a Buffer is exactly what that is"
+  - behaviour: Inventory
+    model: "discrete serialized or fungible items with condition"
+    on_this_vehicle: "the LiOH canisters, counted and consumed by the man-hour"
+    provenance:
+      basis: historical
+      source: "NR and PSR: an LM primary cartridge is 41 man-hours, a secondary 78, with 6 spares. A canister is a countable item whose capacity is denominated in man-hours, which is Inventory and Stock in one object and is exactly why the ontology separates them"
+  - behaviour: Entitlement
+    model: "limited rights with scope, expiry, checkout and release"
+    on_this_vehicle: "not modelled, and deliberately"
+    provenance:
+      basis: chosen
+      reason: "consumables_diode.md's entitlement examples are software licences, seat counts and cryptographic-use quotas — all of which exist in its catalogue to serve the CRA's generic multi-tenant case. This vehicle has none of them, and the corpus review flagged the entitlement rows as the part of that document written to justify its own serialization apparatus"
+  - behaviour: Margin
+    model: "derived distance to a configured limit; generally not conserved"
+    on_this_vehicle: "propellant against the remaining delta-v budget, and time-to-limit across all stocks"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:1022"
+      note: "apollo's outcome margin is 'trajectory, power, oxygen, thermal, propellant and entry margins at mission end', and it is the closest thing the corpus has to a scoring function"
+  - behaviour: Opportunity
+    model: "time-bounded availability that cannot necessarily be stored"
+    on_this_vehicle: "not owned here: communications windows and charging intervals belong to the comms and power domains"
+    provenance:
+      basis: chosen
+      reason: "an Opportunity is a window, and every window on this vehicle is a comms or thermal one; modelling it in the consumables domain would mean the domain owning a schedule it does not produce"
+
+# --------------------------------------------------------------------------------------
+# State: the stocks. Each carries its own quantum, and the quantum is not a round number — it
+# is derived from the smallest flow the stock must be able to represent, because a fixed-point
+# stock whose quantum exceeds `smallest_flow x dt` has a dead zone that silently deletes the
+# phenomenon (review-findings.md #1, plant.md §4). The linter refuses a stock whose declared
+# minimum flow falls below its own quantum.
+# --------------------------------------------------------------------------------------
+state:
+
+  - id: o2_csm_kg
+    node: o2_csm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.4e-6
+    provenance:
+      basis: derived
+      relation: "quantum 1 mg because the smallest flow this stock must represent is the nominal cabin leak, 0.023 kg/h = 6.4e-6 kg/s (vehicle.yaml#consumables, from the Apollo 11 flight figure). A coarser quantum would round the leak to zero every tick and the leak would never happen — which is the failure review-findings.md #1 worked through numerically"
+  - id: o2_lm_kg
+    node: o2_lm
+    method: stock
+    unit: kg
+    quantum: 1.0e-6
+    min_flow_per_s: 6.3e-6
+    provenance:
+      basis: derived
+      relation: "as o2_csm_kg; the LM's own leak was 0.05 lb/hr actual against a 0.2 lb/hr specification"
+  - id: h2_csm_kg
+    node: h2_csm
+    method: stock
+    unit: kg
+    quantum: 1.0e-5
+    min_flow_per_s: 1.28e-4
+    provenance:
+      basis: derived
+      relation: "quantum 10 mg against the cell's standby hydrogen draw of 0.46 kg/h = 1.28e-4 kg/s (vehicle.yaml#electrical)"
+  - id: water_potable_kg
+    node: water_potable
+    method: stock
+    unit: kg
+    quantum: 1.0e-5
+    min_flow_per_s: 7.9e-5
+    provenance:
+      basis: derived
+      relation: "quantum 10 mg against the crew's 2.27 kg per crew-day for three, 7.9e-5 kg/s. The fuel cell produces into this stock at a far higher rate; the quantum is set by the smallest flow, not the largest"
+  - id: water_cooling_kg
+    node: water_cooling
+    method: stock
+    unit: kg
+    quantum: 1.0e-4
+    min_flow_per_s: 8.9e-4
+    provenance:
+      basis: derived
+      relation: "quantum 100 mg against the evaporator's full rate, 2,345 W x 3.8e-7 kg/s per W = 8.9e-4 kg/s. The evaporator is the fastest consumer in the domain, which is why this stock has the coarsest quantum"
+  - id: prop_main_kg
+    node: prop_main
+    method: stock
+    unit: kg
+    quantum: 1.0e-4
+    min_flow_per_s: 29.57
+    provenance:
+      basis: derived
+      relation: "quantum 0.1 g against the SPS's full-thrust flow of 29.57 kg/s (20,500 lbf at Isp 314.5 s). The SPS is not throttleable, so the smallest non-zero flow and the largest are the same number"
+  - id: prop_rcs_kg
+    node: prop_rcs
+    method: stock
+    unit: kg
+    quantum: 1.0e-5
+    min_flow_per_s: 0.1565
+    provenance:
+      basis: derived
+      relation: "quantum 10 mg against a single thruster's flow, 445 N at Isp 290 s = 0.1565 kg/s. The minimum impulse bit is unpublished (vehicle.yaml#propulsion), so the finest *pulse* this stock can express is not yet known; the quantum is set by the flow, which is"
+  - id: pressurant_he_kg
+    node: pressurant_he
+    method: stock
+    unit: kg
+    quantum: 1.0e-5
+    min_flow_per_s: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "the helium load and its regulated flow are not published for either vehicle; apollo_diode.md:139 gives pressurant_pressure_psi as 'vehicle dependent'. The stock exists so the F-09 trapped-line chain has somewhere to happen, and its magnitudes are owed"
+  - id: absorber_man_hours
+    node: absorber_capacity
+    method: stock
+    unit: man_hours
+    quantum: 1.0e-4
+    min_flow_per_s: 8.3e-4
+    provenance:
+      basis: derived
+      relation: "quantum 0.0001 man-hours against the consumption of three crew at one man-hour each per hour, 8.3e-4 man-hours/s. Modelled in man-hours rather than kilograms because no kg-CO2 capacity is published, and a stock denominated in the unit the sources actually give is one that cannot drift from its evidence"
+
+# --------------------------------------------------------------------------------------
+# Consumers. Every draw on a stock, with the edge it corresponds to in coupling.yaml or the
+# reason it has none.
+# --------------------------------------------------------------------------------------
+consumers:
+
+  - id: fuel_cell_o2
+    stock: o2_csm
+    edge: E-FC-DRAW-O2
+    rate_kg_s: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "the cell's kg-per-kWh reactant figure is NOT published; vehicle.yaml#electrical carries only the standby sustain flow of 4.72 kg O2/h"
+  - id: fuel_cell_h2
+    stock: h2_csm
+    edge: E-FC-DRAW-H2
+    rate_kg_s: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "as above; the 8:1 O2:H2 mass ratio fixes the relationship, not the magnitude"
+  - id: fuel_cell_product_water
+    stock: water_potable
+    edge: E-FC-WATER
+    rate_kg_s: 0.45
+    provenance:
+      basis: derived
+      relation: "0.45 kg of product water per kg of reactants consumed (vehicle.yaml#propulsion's relation for the same reaction)"
+  - id: crew_metabolic_o2
+    stock: o2_csm
+    rate_kg_s: 3.16e-5
+    provenance:
+      basis: historical
+      source: "0.91 kg per crew-day for three crew (vehicle.yaml#consumables, from the NR planning rates for a 154 lb man)"
+  - id: cabin_leak
+    stock: o2_csm
+    rate_kg_s: 6.4e-6
+    provenance:
+      basis: historical
+      source: "the Apollo 11 LM flight leak of 0.05 lb/hr against a 0.2 lb/hr specification"
+  - id: evaporator_water
+    stock: water_cooling
+    edge: E-RAD-WATER
+    rate_kg_s: 8.9e-4
+    provenance:
+      basis: derived
+      relation: "the latent heat of vaporisation at about 280 K, 2.45e6 J/kg, applied to the published 2,345 W evaporator capacity"
+  - id: crew_potable_water
+    stock: water_potable
+    rate_kg_s: 7.9e-5
+    provenance:
+      basis: historical
+      source: "2.27 kg per crew-day for three (vehicle.yaml#consumables)"
+  - id: sps_burn
+    stock: prop_main
+    edge: E-PROP-ENG
+    rate_kg_s: 29.57
+    provenance:
+      basis: derived
+      relation: "20,500 lbf at Isp 314.5 s, mdot = F/(Isp g0)"
+  - id: rcs_firings
+    stock: prop_rcs
+    edge: E-RCSP-RCS
+    rate_kg_s: 0.1565
+    provenance:
+      basis: derived
+      relation: "445 N at Isp 290 s, per thruster"
+  - id: pressurant_blowdown
+    stock: pressurant_he
+    edge: E-PRESS-PROP
+    rate_kg_s: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: "regulated blowdown; the regulator's behaviour is owed (vehicle.yaml#open_debts)"
+  - id: co2_removal
+    stock: absorber_capacity
+    rate_kg_s: 8.3e-4
+    provenance:
+      basis: derived
+      relation: "three crew at one man-hour of removal each per hour"
+
+# --------------------------------------------------------------------------------------
+# The ledger pair. For each stock that has an independent observation, both terms and the
+# residual are published. Where there is no observation there is no residual, and saying so is
+# better than publishing a residual computed against the ledger itself — which would always be
+# zero and would look like perfect agreement.
+# --------------------------------------------------------------------------------------
+ledgers:
+
+  - resource: prop_main
+    ledger_channel: "res.ledger_main_propellant_kg"
+    observed_channel: prop.propellant_remaining_pct
+    residual_channel: "res.recon_main_propellant_kg"
+    observed_how: "inferred from tank pressure and temperature, which is what Apollo had: an RCS or main quantity had to be inferred rather than read from a mass sensor (apollo_diode.md:40)"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:40, :197"
+  - resource: o2_csm
+    ledger_channel: "res.ledger_o2_kg"
+    observed_channel: eclss.o2_supply_pressure_psi
+    residual_channel: "res.recon_o2_kg"
+    observed_how: "inferred from tank pressure and temperature; the residual is the classic Apollo 13 signature, a quantity indication that disagrees with the bookkeeping hours before anything else does"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:26"
+      note: "apollo's crisis scenario seeds exactly this: 'one cryogenic quantity sensor occasionally reads suspiciously high' (:1174)"
+  - resource: water_potable
+    ledger_channel: "res.ledger_water_potable_kg"
+    observed_channel: res.water_potable_kg
+    residual_channel: "res.recon_water_potable_kg"
+    observed_how: "tank quantity where a sensor exists, otherwise not observed at all — water is the resource whose ledger is most often the only number available"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:195"
+      note: "apollo marks water_potable_kg as 'I/A depending sensor', which is the honest description of a resource that may have no instrument"
+  - resource: prop_rcs
+    ledger_channel: "res.ledger_rcs_propellant_kg"
+    observed_channel: res.rcs_propellant_kg
+    residual_channel: "res.recon_rcs_propellant_kg"
+    observed_how: "inferred from feed pressure and total impulse; the LM flew thousands of short firings (apollo_diode.md:143), so the accounting error accumulates rather than jumping"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151-152"
+
+# --------------------------------------------------------------------------------------
+# Reconciliation policy.
+# --------------------------------------------------------------------------------------
+reconciliation:
+
+  tolerance_kg: UNCONFIGURED
+  note: >-
+    consumables_diode.md:852 is explicit that "no universal numerical tolerance is
+    appropriate", and it is right: the tolerance has to exceed the observation's own
+    uncertainty, which differs per resource and per sensor. A single number here would be the
+    invented-threshold failure the whole artifact is built to avoid, so the tolerance is
+    declared per resource as a debt rather than chosen once.
+    on_mismatch:
+      action: "publish a RECONCILIATION_MISMATCH event and leave both numbers alone"
+      never: "rewrite the ledger, or adjust the observation, or average them"
+    provenance:
+      basis: apollo
+      ref: "consumables_diode.md:60-64"
+      note: "a mismatch is evidence, not permission to silently rewrite the ledger. Any correction must be an authorised adjustment carrying evidence, reason, signer and before/after values"

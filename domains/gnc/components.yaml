@@ -1,0 +1,420 @@
+# domains/gnc/components.yaml — where the vehicle is, and how well it knows.
+#
+# ## The domain that had to be pruned hardest
+#
+# Conflict C-15 is blunt about it: `gnc_diode.md` is written for a different vehicle class, and
+# the parts that are not this vehicle have to go before anything can be kept. Pruned:
+#
+#   reaction wheels, CMGs, magnetorquers, momentum dump (`:117`, `:317`, `:557`, `:1001`)
+#   GNSS (`:118`), LiDAR and terrain-relative navigation (`:528-530`), aerosurfaces (`:952`)
+#   the QP control allocator (`:870-928`) — attitude control is `domains/rcs/`'s, and this
+#     vehicle has no wheels for a QP to trade against, so a QP here would be a second allocator
+#     for one job
+#   the quaternion feedback law (`:852-869`) — likewise RCS's, and `rcs_dode.md`'s phase-plane
+#     treatment is the one that fits an on/off thruster
+#
+# What survives is the **navigation** half, and it is real mathematics: a frame registry with
+# declared conventions, an error-state EKF with a Joseph-form covariance update, a 15-state error
+# vector, a quintic trajectory segment with exact coefficients, and two state machines — one for
+# a maneuver's lifecycle and one for navigation integrity. `apollo_diode.md:52` gives this
+# vehicle an IMU, star sightings and radar, and that is exactly the sensor suite the surviving
+# filter is written for.
+#
+# ## The four conventions, which are the document's most valuable export
+#
+# `gnc_diode.md:382-409` fixes four things that are *conventions* rather than quantities, and a
+# vehicle can get every one of them silently wrong:
+#
+#   quaternion component order          `[w,x,y,z]`
+#   rotation direction                  `attitude_ref_from_body`, BODY into reference
+#   angular velocity resolution frame   stated, not implied
+#   covariance units                    per block, not one generic unit
+#
+# `apollo_diode.md:117` publishes `gnc.attitude_q[0..3]` and says nothing about which component
+# is first. Two agents can disagree about that while both being right about the physics, and
+# nothing downstream reports the disagreement — the attitude is simply wrong, in a way that looks
+# like a control problem. So the four are declared once in `vehicle.yaml#conventions` and this
+# domain is what they bind to.
+#
+# ## The 100 Hz question, answered rather than re-litigated
+#
+# `gnc_diode.md:1054-1080` runs a 100 Hz GNC major cycle with a 10 Hz guidance update inside it.
+# C-07 keeps the plant at 50 Hz and `vehicle.yaml:127` records the disposition: "a GNC inner loop
+# is sub-stepped rather than the plant re-rated". This domain makes that concrete, and the
+# distinction that makes it honest is the one `rcs_dode.md:189` states — **sample time is not
+# publish time**. The estimator's *propagation* runs at 100 Hz inside the tick through the
+# sub-tick event queue; its *measurement updates* cannot, because they are bounded by the sensors
+# that produce them. A 100 Hz filter with a 50 Hz IMU has fifty propagations and fifty updates
+# per second, not a hundred of either.
+#
+# ## The state vector the vehicle does not have
+#
+# `mission.yaml#initial_state` declares the true state UNCONFIGURED and records the published
+# geometry beside it — parking orbit, post-injection speed, both lunar orbits, the descent
+# perilune — because the arithmetic does not close as an Earth-centred conic. That debt is this
+# domain's, and one thing about it is worth stating precisely here because it is easy to get
+# backwards:
+#
+# **`load_state_vector` is not the fix.** It loads a state vector into the *navigation solution*
+# — it is the vehicle being told where to believe it is, and it does not move the vehicle. A run
+# whose truth is unset cannot be started by a fleet calling a verb, and a vehicle whose estimate
+# could be made true by assertion would be a vehicle a fleet could fly by insisting. The debt is
+# the plant's and the verb is the fleet's, and conflating them would delete the distinction the
+# whole experiment rests on.
+
+domain: gnc
+
+# 50, not the document's 100: C-07 keeps the plant's rate and the GNC major cycle is a sub-step
+# through the event queue. See the header.
+natural_rate_hz: 50
+
+reads: [thrust_main, rcs_thrust, bus_a, imu, command_executive]
+writes: [vehicle_dynamics, nav_state, imu, guidance]
+
+# --------------------------------------------------------------------------------------
+# The error-state vector. Fifteen states, and the shape is the document's (`:815-825`): the
+# filter estimates *errors*, not the state itself, so the covariance has five 3-vectors with
+# five different units and the attitude block is a small-angle rotation rather than a quaternion.
+# --------------------------------------------------------------------------------------
+estimator:
+
+  formulation: "error-state / multiplicative EKF, with the global attitude carried as a unit quaternion and the filter estimating a small rotation about it"
+  error_vector: [delta_position, delta_velocity, delta_theta, accel_bias, gyro_bias]
+  dimension: 15
+  covariance_update: "Joseph form: P+ = (I - K H) P- (I - K H)^T + K R K^T"
+  covariance_units_per_block:
+    delta_position: m^2
+    delta_velocity: "(m/s)^2"
+    delta_theta: rad^2
+    accel_bias: "(m/s^2)^2"
+    gyro_bias: "(rad/s)^2"
+  innovation_test: "normalized innovation squared, nu' S^-1 nu, against a warn and a trip threshold with a k-of-m history"
+  provenance:
+    basis: historical
+    source: "gnc_diode.md:755-850 — propagation, residual, gain, update, and the Joseph form at :802-806; the error-state vector at :815-825"
+    note: >-
+      the Joseph form is chosen over the simpler `(I-KH)P` because it is symmetric by
+      construction and stays positive semi-definite under finite-precision arithmetic, and this
+      vehicle's runs are eight days long at 50 Hz — 34.56 million covariance updates, which is
+      exactly the regime where the asymmetric form drifts. The document cites WMAP for the
+      attitude-and-gyro-bias formulation, and `domains/avionics/`'s `innovation_window` state has
+      been waiting for this block since it landed: a normalized innovation needs `S^-1`, and `S`
+      is this covariance
+  sub_stepping:
+    major_cycle_hz: 100
+    guidance_update_hz: 10
+    plant_tick_hz: 50
+    note: >-
+      the major cycle is a sub-step inside the 50 Hz tick through the plant's integer-microsecond
+      event queue, not a second plant rate (C-07). The propagation can genuinely run at 100 Hz;
+      the measurement updates cannot, because they are bounded by the sensors — a 100 Hz filter
+      reading a 50 Hz IMU has fifty measurements per second and a hundred propagations, and the
+      difference is `rcs_dode.md:189`'s rule that sample time is not publish time
+
+# --------------------------------------------------------------------------------------
+# The quintic trajectory segment. The coefficients are exact, they are the document's, and
+# they are the vehicle's only closed-form trajectory generator: `mission.yaml`'s Δv budget
+# says *how much* and this says *in what shape*.
+# --------------------------------------------------------------------------------------
+trajectory_segment:
+
+  form: "quintic per Cartesian degree of freedom, p(s) = a0 + a1 s + a2 s^2 + a3 s^3 + a4 s^4 + a5 s^5, with s = t/T"
+  boundary_conditions: "position, velocity and acceleration at both ends: (p0, v0, alpha0) and (pf, vf, alpha_f)"
+  coefficients:
+    a0: "p0"
+    a1: "T*v0"
+    a2: "T^2*alpha0/2"
+    a3: "10*(pf-p0) - 6*T*v0 - 4*T*vf - 1.5*T^2*alpha0 + 0.5*T^2*alpha_f"
+    a4: "15*(p0-pf) + 8*T*v0 + 7*T*vf + 1.5*T^2*alpha0 - T^2*alpha_f"
+    a5: "6*(pf-p0) - 3*T*(v0+vf) - 0.5*T^2*alpha0 + 0.5*T^2*alpha_f"
+  validity_check:
+    note: >-
+      "the service evaluates the complete segment against velocity, acceleration, jerk, pointing,
+      keep-out and actuator-authority limits before marking it `PLAN_VALID`" (`gnc_diode.md:753`).
+      Six evaluations, and each one needs a limit this vehicle declares somewhere: velocity and
+      acceleration are the configuration's, jerk is owed (no source gives a structural or
+      crew limit), pointing is `domains/comms/`'s 9.4-degree beam through `rcs.attitude_error_deg`,
+      keep-out is owed with the plume geometry, and actuator authority is
+      `rcs.control_authority_margin`. So `plan_valid` is currently evaluable in three of its six
+      terms and the other three are named
+  provenance:
+    basis: historical
+    source: "gnc_diode.md:724-753 — the quintic segment and its coefficients"
+    note: >-
+      adopted verbatim and for a specific reason: it is *deterministic*. Two runs given the same
+      boundary conditions produce the same trajectory, which `plant.md`'s determinism tier
+      requires and which an optimization-based generator would not guarantee without more
+      machinery than this vehicle needs. The document itself notes that optimization is
+      preferable "for complex orbital or proximity operations" — which is a statement about a
+      different mission, and the quintic is what fits a sequence of eight burns
+
+# --------------------------------------------------------------------------------------
+# What the vehicle navigates with. `apollo_diode.md:52` — IMU, star sighting and radar, and
+# nothing else. No GNSS, no terrain-relative navigation, no LiDAR.
+# --------------------------------------------------------------------------------------
+components:
+
+  - id: imu
+    kind: state
+    class: inertial_platform
+    drift_deg_per_h: UNCONFIGURED
+    alignment_budget_deg: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the platform, which C-15 keeps and which is the vehicle's only continuous attitude
+        reference. Both figures are owed and neither is published: the drift rate sets how fast a
+        coasting vehicle's attitude estimate decays, and the alignment budget sets how well a
+        burn's attitude is known at ignition. `gnc.imu_alignment_error_deg` is the observation
+        and there is nothing yet for it to be an observation *against* — which is the same shape
+        as the RCS minimum impulse bit, arriving in the domain where it matters most, because a
+        Δv error is a trajectory error and the trajectory is the mission
+
+  - id: star_tracker
+    kind: state
+    class: optical
+    update_rate_hz: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:52, :123"
+      note: >-
+        the absolute attitude reference: a sextant and a telescope on this vehicle, which is why
+        the update rate is not a sensor figure but a *crew* figure — a star sighting is a person
+        looking through an eyepiece and marking a line, and it happens when somebody does it.
+        That is the honest model and it is also the interesting one: a coasting vehicle's
+        reacquisition depends on a crew being awake and on the vehicle being in a geometry where
+        the star is not behind the Earth or the Sun
+
+  - id: landing_radar
+    kind: measurement
+    class: radar
+    range_km: UNCONFIGURED
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121, :166"
+      note: >-
+        the LM's landing radar, and the vehicle's only absolute *range* measurement. Its range is
+        owed and it is the one figure whose absence blocks a phase rather than a threshold: a
+        radar that cannot see the surface from the descent orbit cannot be the source that takes
+        the estimator out of `coasting` during a powered descent, and a powered descent flown on
+        a coasting platform is the scenario `gnc.nav_integrity` exists to make visible
+
+  - id: sextant
+    kind: state
+    class: optical
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:123"
+      note: >-
+        listed separately from the star tracker because on this vehicle they are two instruments
+        with two uses: the telescope brings a star into the field, and the sextant measures the
+        angle between it and a landmark. Navigation by star-horizon and star-Moon angles is what
+        made an Apollo midcourse correction possible without a ground uplink, and it is the
+        capability that makes `select_nav_source` a real choice rather than a formality
+
+# --------------------------------------------------------------------------------------
+# State. Twelve, and the split is the domain's whole content: four are the truth, four are the
+# estimate, two are the platform, and two are ladders.
+# --------------------------------------------------------------------------------------
+state:
+
+  - id: orbital_state
+    node: vehicle_dynamics
+    method: dynamics
+    unit: "m, m/s"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:117-120"
+      note: >-
+        the truth: where the vehicle is and how fast, integrated from the two edges that act on
+        it — `E-ENG-DYN` (main thrust, whose sensitivity is 1/m(t) and whose masses are supplied
+        per configuration) and `E-RCS-DYN` (the RCS wrench). `vehicle_dynamics`'s unit is "m, m/s,
+        quat" and this state advances the translational half. The gravity model is
+        `apollo_diode.md:743`'s — Earth and Moon in a rigid-body 6-DOF integration — and
+        `mission.yaml#initial_state` is what it starts from, which is the unset vector the header
+        describes
+
+  - id: attitude
+    node: vehicle_dynamics
+    method: dynamics
+    unit: dimensionless
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:117"
+      note: >-
+        the truth's rotational half, with the conventions of `vehicle.yaml#conventions`:
+        `[w,x,y,z]`, `attitude_ref_from_body` rotating BODY into the named reference frame.
+        `apollo_diode.md:117` publishes `gnc.attitude_q[0..3]` and fixes neither, which is why
+        the conventions are declared in `vehicle.yaml` rather than in a channel: a channel's
+        `unit` field can hold `dimensionless` and cannot hold a rotation direction
+
+  - id: body_rate
+    node: vehicle_dynamics
+    method: dynamics
+    unit: deg/s
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:118"
+      note: >-
+        `gnc.body_rate_xyz_deg_s`, whose resolved frame is BODY per
+        `vehicle.yaml#conventions.angular_velocity`. It is the quantity F-04's first clue is
+        measured in and the one the RCS controller damps, and it is a *truth* state here while
+        `nav_state` holds the estimate of it — the distinction the whole domain rests on, since
+        an unexplained rate is the one observation where truth and estimate disagree in a way
+        that matters to a fleet rather than to a filter
+
+  - id: nav_solution
+    node: nav_state
+    method: algebraic
+    unit: "m, m/s, dimensionless"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:119-122"
+      note: >-
+        the estimate: what the vehicle believes, produced from the truth through the sensor suite
+        and the filter. Every published navigation channel comes from here —
+        `gnc.position_xyz_km`, `gnc.velocity_xyz_m_s`, `gnc.attitude_q[0..3]` — and the reason
+        the published attitude is the *estimate* rather than the truth is
+        `apollo_diode.md:34-38`'s A/I distinction: an IMU output is an estimate and a platform
+        alignment is an inference, so a vehicle that published truth as navigation would be
+        publishing an answer it does not have
+
+  - id: nav_covariance
+    node: internal
+    method: dynamics
+    unit: "matrix[m^2, (m/s)^2, rad^2, (m/s^2)^2, (rad/s)^2]"
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:790-806 — P- = F P+ F^T + Q, and the Joseph-form update"
+      note: >-
+        the filter's own uncertainty, 15x15, with five blocks of five different units. It is a
+        *dynamics* state rather than algebraic because it has memory: the covariance propagates
+        between measurements and that propagation is the whole content of `coasting` — a vehicle
+        with no absolute update is a vehicle whose covariance grows, and the growth rate is set
+        by the gyro's drift, which is the figure nobody has published. Its determinant is what
+        the integrity ladder watches, and publishing `nav_position_sigma_m` without the state
+        that produces it would be publishing one diagonal of a matrix and calling it the matrix
+
+  - id: imu_platform
+    node: imu
+    method: dynamics
+    unit: dimensionless
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:123"
+      note: >-
+        the platform's own attitude, which is not the vehicle's: the IMU is a physical object
+        with a gimbal or a strapdown frame, and its alignment error is the angle between where it
+        thinks it is pointing and where it is. `gnc.imu_alignment_error_deg` is that error and
+        this is what it is an error of. F-10's second observable is on this state, and the reason
+        it is separate from `attitude` is that a *misaligned platform* and a *vehicle that
+        rotated* produce the same attitude channel and different physical situations — the first
+        is an instrument to realign and the second is a maneuver that happened
+
+  - id: gyro_bias
+    node: internal
+    method: lag
+    unit: deg/s
+    tau_s: UNCONFIGURED
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:815-825 — `b_g` in the error-state vector, and WMAP's precedent for estimating attitude and gyro bias together"
+      note: >-
+        the estimate of how wrong the gyro is. A lag rather than an algebraic relation because a
+        bias estimate is filtered: it is inferred by comparing the gyro against everything else
+        over time, and a bias estimate that jumped would be a filter trusting one measurement.
+        The time constant is owed, and it is the parameter that trades responsiveness against
+        noise — a short tau gives a vehicle that notices a drifting gyro quickly and reports a
+        noisy bias, and a long one gives the reverse
+
+  - id: nav_integrity
+    node: internal
+    method: discrete
+    unit: "enum[nominal,degraded,coasting,invalid,reacquire]"
+    dwell:
+      min_on_s: 10
+      min_off_s: 10
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:666-691 — the navigation-integrity state machine"
+      note: >-
+        the ladder, and the document's own sentence about why it is a state rather than a
+        number: "a high covariance can therefore be an operational state transition, not merely
+        a number in telemetry." Ten seconds of dwell in both directions (chosen): the ladder's
+        transitions are driven by covariance thresholds that have their own dwell, so this is
+        the debounce on the *verdict*, and a vehicle that can be declared `invalid` and back
+        inside one control frame is a vehicle whose guidance mode cannot be trusted to have
+        stopped
+
+  - id: guidance_mode
+    node: guidance
+    method: discrete
+    unit: "enum[coast,burn,landing,rendezvous,alignment,free_drift]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:124"
+      note: >-
+        apollo's six modes, and they are *guidance* modes rather than control modes — which is
+        why they can coexist with `rcs.mode`'s three without either being redundant. `coast` and
+        `burn` are the two the mission spends its time in, `alignment` is the mode a star sighting
+        requires, and `free_drift` appears in both enums for a reason worth noting: in
+        `gnc.guidance_mode` it means guidance is producing no reference at all, and in `rcs.mode`
+        it means the attitude service is not holding one. A vehicle can be in either without the
+        other, and a fleet that reads them as the same word will misread a coast as a drift
+
+  - id: maneuver_state
+    node: internal
+    method: discrete
+    unit: "enum[idle,target_loaded,plan_valid,plan_invalid,armed,executing,verifying,complete]"
+    dwell:
+      min_on_s: 5
+      min_off_s: 5
+    provenance:
+      basis: historical
+      source: "gnc_diode.md:628-663 — the maneuver state machine, and :753 for what marks a plan valid"
+      note: >-
+        a maneuver's own lifecycle, and it is the fourth state machine on the vehicle (V-02's
+        command chain, the engines' machines, the mission posture). It earns its place because
+        `plan_valid` and `plan_invalid` answer a question none of the others can: the propulsion
+        domain's guards ask whether the *engine* can fly a burn, and this asks whether the
+        *trajectory* is flyable at all — six evaluations of a quintic segment against velocity,
+        acceleration, jerk, pointing, keep-out and actuator-authority limits. A burn that is
+        requested and not flyable is a different situation from one that is merely waiting, and
+        `verifying` is the state where the vehicle finds out which it got
+
+  - id: imu_alignment
+    node: internal
+    method: discrete
+    unit: "enum[unaligned,aligning,aligned,drifted]"
+    dwell:
+      min_on_s: 30
+      min_off_s: 10
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:125"
+      note: >-
+        the platform's alignment state, and `request_imu_alignment` is the verb. Four values
+        rather than a boolean because `drifted` is the one that matters and it is not the same as
+        `unaligned`: an unaligned platform has never been aligned and a drifted one *was*, which
+        is the difference between a vehicle that cannot start a burn and a vehicle that has been
+        flying on an alignment that has quietly stopped being true. Thirty seconds of dwell in
+        and ten out: alignment is a procedure that takes minutes, and a state that could report
+        `aligned` ten seconds after it began would be reporting an intention rather than a result
+
+  - id: radar
+    node: internal
+    method: algebraic
+    unit: m
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:121, :166"
+      note: >-
+        the landing radar's range to the surface and its rate, and the vehicle's only absolute
+        range measurement. `apollo_diode.md:1044` records that the LM pilot kept the commander
+        informed about navigational information, which on Apollo meant reading the radar out
+        loud during the final approach — so this state's published form is read by a crew member
+        before it is read by a fleet, and its precision (0.5 m on altitude, 0.05 m/s on rate) is
+        set by what a person can call out rather than by what the instrument can measure

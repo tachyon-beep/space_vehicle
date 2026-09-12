@@ -1,0 +1,107 @@
+# domains/propulsion/points.yaml — what the engines publish, and the one pair that carries the
+# diagnosis.
+#
+# `prop.thrust_pct_commanded` and `prop.thrust_pct_estimated` are the most informative two
+# channels in the vehicle, and they are apollo's idea, not this project's. A single newton-valued
+# thrust channel cannot express a discrepancy between what was asked for and what arrived;
+# conflict register C-11 records that `main_propulsion_diode.md:195` offers exactly that single
+# channel and that apollo's pair wins. Nearly every fault below is detected by the pair
+# disagreeing — or, more subtly, by the pair agreeing while something else does not.
+
+domain: propulsion
+points:
+  - channel: prop.main_armed
+    from: sps_state
+    layer: service
+    derivation: "the armed state of the main engine, per vehicle"
+    note: "apollo's channel, and the one that makes 'unexpected arm' an event: an engine that is armed is a vehicle that can change its trajectory in the next tick"
+  - channel: prop.chamber_pressure_pct
+    from: chamber_pressure_pct
+    layer: measurement
+    derivation: "chamber pressure as a percentage of nominal, 0 off and 95-105 firing"
+    note: "apollo's <90 event after ignition is the fastest available evidence that a burn did not start, and it is faster than the thrust estimate because the estimate has to integrate"
+  - channel: prop.thrust_pct_commanded
+    from: dps_throttle_pct
+    layer: service
+    derivation: "the throttle that was asked for, not the thrust that resulted"
+  - channel: prop.thrust_pct_estimated
+    from: thrust_main_n
+    layer: estimate
+    inputs: [prop.chamber_pressure_pct, structure.accel_xyz_g, prop.feed_pressure_pct]
+    derivation: "the onboard estimate, from chamber pressure and the accelerometer, and wrong in an interesting direction when the feed pressure is lying"
+    note: >-
+      Marked an estimate rather than a measurement, because no engine carries a thrust meter.
+      The >5 % discrepancy event is apollo's and it is the single most valuable alarm in the
+      domain: it fires when the commanded and the believed disagree, which covers a stuck
+      throttle, a degraded injector and a lying feed sensor without distinguishing them — and
+      distinguishing them is the work.
+  - channel: prop.feed_pressure_pct
+    from: feed_pressure_pct
+    layer: measurement
+    derivation: "the feed line pressure as a percentage of nominal"
+    note: "the channel the F-08 chain makes dangerous: a feed sensor stuck high hides a real starvation, and the corroboration is that chamber pressure and acceleration disagree with it"
+  - channel: prop.pressurant_pressure_psi
+    from: pressurant_pressure_psi
+    layer: measurement
+    derivation: "the helium pressurant tank pressure"
+    note: >-
+      the trapped-line channel. During the Apollo 11 post-landing event the transducer topped
+      out at 300 psia while the true pressure was estimated at 700-800, and the correct
+      publication is `300.0` with quality SATURATED rather than the truth (apollo_diode.md:215,
+      :347). It is the corpus's single best example of an honest instrument and it is why
+      SATURATED is a load-bearing quality code.
+  - channel: prop.propellant_remaining_pct
+    from: prop_main
+    layer: estimate
+    derivation: "the resource model's inference, published here in the unit the engine's own thresholds use"
+    note: "read from the consumables domain rather than owned here: one stock, one owner, and the percentage is a view of it"
+  - channel: prop.accumulated_dv_m_s
+    from: accumulated_dv_m_s
+    layer: estimate
+    derivation: "the integral of achieved acceleration over the burn, accumulated across the mission"
+    note: >-
+      Apollo's channel, and the one C-12 exists for: main_propulsion_diode.md:645 cuts off on
+      duration, plan or GNC request and has no delta-v cutoff, so this channel would have had
+      no producer and no consumer. It has both now — `set_burn_cutoff` sets the target and
+      `prop.cutoff_mode` says which trigger fired.
+  - channel: prop.sps_burn_count
+    from: sps_burn_count
+    layer: service
+    derivation: "the number of restarts used, against the 50 the engine was qualified for"
+  - channel: prop.dps_throttle_pct
+    from: dps_throttle_pct
+    layer: service
+    derivation: "the commanded throttle, against a published operating band of 10.5-92.5 % with a non-operating region from 65 %"
+  - channel: prop.cutoff_mode
+    from: accumulated_dv_m_s
+    layer: service
+    derivation: "which cutoff trigger fired: duration, plan, gnc_request, dv_target, abort or depletion"
+    note: >-
+      Six values where the corpus offers three, and the extra three are the interesting ones.
+      `dv_target` is C-12's missing trigger; `abort` is the one that says somebody stopped a
+      burn on purpose; and `depletion` is the one that says the engine stopped because the
+      tank did, which is the difference between a decision and a failure.
+  - channel: prop.leak_state
+    from: pressurant_pressure_psi
+    layer: service
+    derivation: "the evidence-counting leak state machine: nominal, suspect, corroborating, confirmed, isolated, uncontained"
+    note: >-
+      `main_propulsion_diode.md:695-702`'s addition to apollo, and a real one: it distinguishes
+      'one sensor said something' from 'three agree', which is exactly the corroboration the
+      RCS pressure-switch chain needs (apollo_diode.md:333). Its states are evidence counts
+      rather than magnitudes, which is why it is a state machine and not a threshold.
+
+not_published:
+
+  - channel: "prop.true_thrust_n"
+    why: >-
+      hidden truth. The commanded-versus-estimated pair is the observable, and publishing the
+      achieved thrust would collapse the discrepancy event into a subtraction anybody could do
+      — which is the difference between a fleet that diagnoses and a fleet that reads.
+  - channel: "prop.injector_damage"
+    why: "a conclusion. The evidence is a thrust estimate falling away from its command at a constant feed pressure, and design.md:211-214 forbids publishing the conclusion."
+  - channel: "prop.pressurant_mass_kg"
+    why: >-
+      hidden truth, and on this vehicle it is not even well defined: the helium load is
+      unpublished (vehicle.yaml#open_debts). The observable is the pressure, and the trapped-line
+      chain depends on the pressure being the *only* thing available.

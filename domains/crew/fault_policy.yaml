@@ -1,0 +1,232 @@
+# domains/crew/fault_policy.yaml — the faults that are about people.
+#
+# ## The rule that governs this file
+#
+# **They can be wrong without being broken.** `simulator-design.md:383-385` puts it as the third
+# property no gauge has: "a biased transducer is a fault; a crew member who says 'it's cold in
+# here' when the coldplate is fine is a person in a draught. That is a different epistemic class
+# from `SUSPECT` quality."
+#
+# So the crew faults below do not attach quality codes to crew reports, because there is no
+# quality channel for a sentence. What they do is generate reports that are *plausible and
+# wrong*, and the fleet's only defence is the cross-check it would apply to any other evidence:
+# does this agree with something measurable?
+#
+# ## Why three of these are indistinguishable from honesty
+#
+# CRW-02, CRW-03 and CRW-04 all produce a report a crew member could truthfully make. A
+# misheard number, an observation about the wrong panel, and a genuine observation of something
+# the instruments cannot see are the same artifact — a sentence — and the difference is whether
+# the world behind it agrees. That is the domain's contribution to the experiment, and it is why
+# the perception bound has to be exact rather than approximate: an *approximate* bound produces
+# reports that are sometimes impossible, and an impossible report is a tell that lets a fleet
+# learn to distrust the crew instead of learning to cross-check them.
+
+domain: crew
+faults:
+  - id: CRW-01-incapacitation
+    component: crew_availability
+    mechanism: "a crew member is injured or hypoxic: they stop answering, or answer less often"
+    kind: discrete
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any cabin depressurisation below the emergency level, or an EVA suit fault"
+    perturbs: [crew.available, crew.workload, "crew.location_[id]"]
+    detection:
+      evidence: >-
+        a crew member who does not answer, or answers slowly. `crew.available` carries the state
+        and the four values let a silence have a reason — and the reason is the diagnosis, because
+        resting and on-suit and incapacitated imply very different responses
+      latency: "immediate on `crew.available`, and the hard part is that a silence is indistinguishable from an unanswered question unless the state channel is watched"
+      false_positive_risk: >-
+        a crew member who is simply busy produces the same silence. `crew.workload` is the
+        separation, which is why a coarse workload state is worth having at all
+    response:
+      kind: service
+      note: >-
+        the service marks the crew member unavailable and the fleet has to redistribute. This is
+        the fault that makes the *organisation* the thing under test: three crew and ten agents
+        means a procedure that needs two crew in the LM cannot be run by a fleet that has not
+        thought about who is where
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:226-227, :754"
+      note: >-
+        `crew.available` is apollo's channel and the reason it exists. Crew physiology is out of
+        scope, so the cause of an incapacitation is not modelled and the *state* is — which is the
+        right boundary: the vehicle needs to know nobody is answering, and it does not need to
+        know why
+
+  - id: CRW-02-misheard
+    component: crew_location
+    mechanism: "a crew member reads a gauge aloud wrongly: a digit transposed, a decimal shifted, an analogue needle read on the wrong scale"
+    kind: instrument
+    seeding:
+      on_demand_p: 0.02
+      trigger: "any ask_crew whose answer is a number"
+      schedule: "seeded perturbation of the perceivable subset, per components.yaml#display_contract.wrongness"
+    perturbs: ["cw.alert_[id]_state", crew.workload, "crew.location_[id]"]
+    detection:
+      evidence: >-
+        a number that disagrees with its channel — and crucially, the perturbation is applied to a
+        value the position can actually see, so the wrong number is *possible*: 850 becoming 580
+        is a plausible misreading and 850 becoming 12,000 is not. That plausibility is what makes
+        this hard
+      latency: "one question, then a comparison"
+      false_positive_risk: "total, against a truthful report of a real anomaly. The comparison with the channel is the only separation"
+    response:
+      kind: advisory
+      note: >-
+        ask again, or ask somebody else at a different position, or read the channel. All three
+        cost something, and which one a fleet reaches for is the observable
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md's `misheard` failure mode for the crew instrument, weighted highest (0.4) in
+        components.yaml#display_contract.wrongness because it is the commonest error a person
+        makes reading a gauge aloud
+
+  - id: CRW-03-misattributed
+    component: crew_location
+    mechanism: "an observation is attached to the wrong source: frost reported on a panel that is fine, a noise attributed to the wrong module"
+    kind: instrument
+    seeding:
+      on_demand_p: 0.015
+      trigger: "any ask_crew whose answer is an observation rather than a reading"
+    perturbs: ["cw.alert_[id]_state", crew.workload]
+    detection:
+      evidence: >-
+        a report that is *consistent with something else*. The frost is real and on a different
+        panel; the noise is real and from the other vehicle. Correcting the attribution requires
+        knowing what else is nearby, which is a spatial inference rather than a comparison
+      latency: "one question plus a physical check, and the check may not be available"
+      false_positive_risk: >-
+        a correctly attributed report of a genuine problem is the same sentence. This is the fault
+        that punishes a fleet for accepting an observation without asking where it was made from
+    response:
+      kind: advisory
+      note: "ask a second crew member at a different position whether they can see the same thing, which is what the geometry of the display contract makes possible"
+    provenance:
+      basis: historical
+      source: "crew_diode.md's `misattributed` mode, weighted 0.3, and the reason observability has geometry rather than being a global truth channel"
+
+  - id: CRW-04-forgot
+    component: crew_location
+    mechanism: "a crew member noticed something an hour ago and has not mentioned it: an observation made and not reported"
+    kind: instrument
+    seeding:
+      on_demand_p: 0.01
+      trigger: "any observation the crew make outside a asked question"
+    perturbs: ["cw.active_lights", crew.workload, "cw.alert_[id]_state"]
+    detection:
+      evidence: >-
+        nothing, until somebody asks an *open* question. "Did you notice anything unusual?" is the
+        only query that can recover it, which is why that question is the one the verb's help text
+        puts first — and a fleet that only ever asks for specific numbers will never ask it
+      latency: "however long it takes somebody to ask the open question, or never"
+      false_positive_risk: "none: the observation is real and the only question is whether it is ever elicited"
+    response:
+      kind: advisory
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md's `forgot` mode, weighted 0.2, and the direct implementation of
+        simulator-design.md:396-403's rule that a crew answer is "truthful, still lossy,
+        positioned, human-bandwidth". The loss here is the *elicitation*, not the perception, and
+        it is the one crew failure a fleet can reduce by asking better questions
+
+  - id: CRW-05-wrong-module-attempt
+    component: crew_location
+    mechanism: "a question asked of a position that cannot perceive its subject: the LM commander is asked about the CSM's cabin pressure"
+    kind: procedural
+    seeding:
+      on_demand_p: 1.0
+      trigger: "any ask_crew whose subject is outside the position's perceivable set"
+    perturbs: ["crew.location_[id]", crew.workload]
+    detection:
+      evidence: >-
+        the answer is a statement of inability, not an error: "there is no readout for that in this
+        module". It is the one crew fault that is *correct* behaviour, and it is listed here
+        because the alternative — a GM that answers anyway — is the leak D-06 exists to prevent
+      latency: "immediate"
+      false_positive_risk: "none, and there must not be any: this is the control case that proves the perception bound is exact"
+    response:
+      kind: advisory
+      note: "ask somebody who is in the right place, which costs mission time and relocates the sensor"
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md's `wrong module` failure mode, which components.yaml#display_contract.wrongness
+        lists in order to *exclude* it: it must be impossible by construction, because a
+        perturbation model that produced it would be a leak in the perception bound rather than a
+        crew error. This fault is therefore the assertion that the bound holds
+
+  - id: CRW-06-alarm-storm
+    component: alert_lifecycle
+    mechanism: "a cascading failure asserts many alerts at once: the panel becomes unreadable and the crew's attention is the scarce resource"
+    kind: emergent
+    seeding:
+      coupled_to: "any fault that trips more than three domains"
+      trigger: "more than eight simultaneous alerts"
+    perturbs: [cw.master_alarm, cw.active_lights, "cw.alert_[id]_state", crew.workload,
+               "cw.decision_output_[alert]"]
+    detection:
+      evidence: >-
+        not a channel but a *condition*: eight alerts at once. The `alert_storm` threshold fires
+        and says the fleet has an aggregation problem rather than a fault, which is a different
+        kind of statement from every other alert on the vehicle
+      latency: "immediate, and the consequence is a slow response rather than a failure"
+      false_positive_risk: "none: the storm is real"
+    response:
+      kind: advisory
+      note: >-
+        triage. `crew_diode.md:369-371` requires that grouping and correlation must not suppress
+        independent safety-significant conditions, so the vehicle will not aggregate the storm for
+        the fleet — the fleet has to invent its own triage, and whether it does is one of the
+        things the crisis posture exists to observe
+    provenance:
+      basis: historical
+      source: >-
+        crew_diode.md:369-371's nuisance-alert requirement, and apollo_diode.md:26's crisis
+        chronology, in which the observation sequence was distributed across current, voltage,
+        acceleration, tank pressure, failed instrumentation, a telemetry interruption and alarms —
+        all of it at once, and none of it labelled
+
+  - id: CRW-07-crew-sensor-bias
+    component: crew_workload
+    mechanism: "a crew member's judgement drifts: they report cold when the cabin is nominal, or calm when it is not, without being wrong about anything they measured"
+    kind: instrument
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      bias_walk: 0.02
+    perturbs: [crew.workload, "cw.alert_[id]_state"]
+    detection:
+      evidence: >-
+        nothing in the report, because the report is a judgement and judgements do not have
+        channels. The exposure is a fleet that has begun to weight a crew member's impressions
+        against the instruments, which is a *learning* behaviour and therefore a finding rather
+        than a fault
+      latency: "hours, and the detection mechanism is a disagreement with an instrument that the fleet has to decide to trust"
+      false_positive_risk: >-
+        a person in a draught. simulator-design.md:383-385 says explicitly that this is a
+        different epistemic class from SUSPECT quality and must be modelled as its own thing — so
+        it is: nothing attaches a quality code to a crew report, ever
+    response:
+      kind: advisory
+    provenance:
+      basis: historical
+      source: >-
+        simulator-design.md:379-386, which is the design's own statement of the problem. It is
+        implemented as a fault rather than as a quality flag precisely because a quality flag would
+        be the vehicle answering the question the fleet is supposed to answer
+
+coverage:
+  note: >-
+    Every crew channel is perturbed by at least one fault above except the two crew-only control
+    surfaces, which report what a person did rather than what is happening to them.
+  unperturbed: [controls.switches, controls.breakers]
+  unperturbed_reason: >-
+    a switch position is a crew *action*, and the faults in this file are about crew judgement
+    and availability. A switch that moved by itself would be a structure fault, which is where
+    the hatch and latch faults live.

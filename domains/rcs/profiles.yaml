@@ -1,0 +1,323 @@
+# domains/rcs/profiles.yaml — the limits the attitude-control service enforces on itself.
+#
+# ## What belongs here, and what does not
+#
+# `rcs_dode.md:1030` opens its threshold section with the right rule: **absolute thresholds belong
+# in configuration**, and what an implementation can make executable is the *semantics* of a
+# threshold. The consequences of that rule are visible in what this file does not contain.
+#
+# The FDIR rules of `rcs_dode.md:944-968` are **not** here. "Commanded legal pulse + drive
+# evidence + no response, after ignition-response-max plus sensor-latency margin" is not a scalar
+# comparison, it is a corroboration rule over four channels and two timeouts, and reducing it to
+# `pressure_switch == false -> failed` is exactly the error `apollo_diode.md:333` and
+# `rcs_dode.md:944` both warn about. So it lives in `fault_policy.yaml` as detection evidence,
+# where the reasoning can be read, and this file keeps the comparisons that genuinely are
+# comparisons.
+#
+# What remains divides into three families, and the split is deliberate:
+#
+#   - **apollo's channel events**, adopted verbatim: the feed-pressure band, the two propellant
+#     thresholds, the impulse use rate. These are the vehicle's published alarms and they are
+#     not up for renegotiation.
+#   - **the service's own health limits** — authority margin, allocation residual, estimator
+#     uncertainty — which are `rcs_dode.md`'s additions and are the *predictive* half. They fire
+#     while the vehicle can still do something.
+#   - **one interlock**, `rcs_authority_floor`, which is evaluated at the moment a wrench is
+#     requested rather than published as an alert. A vehicle that has lost an axis must refuse a
+#     translation *before* it fires rather than report a residual afterwards.
+
+domain: rcs
+
+profiles:
+
+  - id: default
+    revision: 1
+    description: "apollo's RCS channel events plus the service health limits of rcs_dode.md"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:147-153"
+      note: >-
+        the four apollo entries are that document's events at that document's values. Everything
+        marked `historical` below is `rcs_dode.md`: the reserve judgement net of uncertainty
+        (:1063), the authority and residual limits (:1055-1056), and the safe-hold trigger set
+        (:1068). The one thing not taken from either is a *number* for any of the service limits
+        — `rcs_dode.md:1032` gives them as `AUTHORITY_MIN(mode)` and `WRENCH_RESIDUAL_MAX(mode)`,
+        which is a shape with no value in it, and this file keeps the shape
+
+thresholds:
+
+  # --- apollo's feed-pressure band, both ends ----------------------------------------------
+  - id: rcs_feed_low
+    point: "rcs.quad_[a-d]_feed_pressure_pct"
+    comparator: below
+    assert: 90
+    clear: 93
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: CAUTION
+    gated_by: "the string is commanded and the vehicle is not in free drift"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:148"
+      note: >-
+        apollo's `<90` event on a channel whose nominal range is 95-105. The 1 s assert dwell and
+        the 3-point recovery band are chosen: a regulated blowdown pressure moves slowly, so a
+        second of low pressure is a real event rather than a transient, and a band narrower than
+        the regulator's own deadband would chatter. `gated_by` matters because the event is only
+        meaningful when something is being asked of the string — a vehicle in free drift with a
+        low quad pressure has a fact, not a fault
+
+  - id: rcs_feed_high
+    point: "rcs.quad_[a-d]_feed_pressure_pct"
+    comparator: above
+    assert: 105
+    clear: 103
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: CAUTION
+    gated_by: "the string is commanded and the vehicle is not in free drift"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:148"
+      note: >-
+        apollo's nominal range is 95-105 **Sim** and the upper edge is the half that matters: an
+        over-pressure feed is a regulator that has failed open, and on a helium-pressurized
+        system that is the precursor to a burst disc rather than to a soft degradation. Equal
+        dwell and a 2-point band, because the recovery direction is the one where a slow
+        regulator can be believed
+
+  # --- apollo's propellant thresholds ------------------------------------------------------
+  - id: rcs_propellant_advisory
+    point: rcs.propellant_remaining_pct
+    comparator: below
+    assert: 25
+    clear: 28
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: true
+    severity: ADVISORY
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151"
+      note: >-
+        apollo's first propellant event. Unlatched dwell because the quantity is an estimate of a
+        slowly moving stock: there is nothing to debounce that the estimator's own smoothing has
+        not already smoothed, and `latched: true` is what stops a noisy estimate re-announcing
+        the crossing every frame
+
+  - id: rcs_propellant_reserve
+    point: rcs.propellant_remaining_pct
+    comparator: below
+    assert: 10
+    clear: 13
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:151"
+      note: >-
+        apollo's second propellant event, and the one that should change behaviour: below it the
+        remaining impulse is a rescue resource rather than an operating one. `rcs_dode.md:1064`
+        restricts discretionary translations and dumps at the reserve judgement; this vehicle has
+        no wheels to dump, so what is restricted is translation alone
+
+  - id: rcs_impulse_rate_high
+    point: rcs.total_impulse_ns
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: UNCONFIGURED
+    dwell_clear_s: UNCONFIGURED
+    latched: true
+    severity: CAUTION
+    point_units: "N*s/s, an excess-use-rate guard"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:152"
+      note: >-
+        apollo publishes the event "excessive use rate" on a monotonically rising total and does
+        not publish what excessive means. The threshold cannot be filled from any source reached,
+        and it is the *rate* rather than the total that matters: 1.7e6 N*s is the SM's whole
+        capacity, but by the time a fleet has spent it the diagnosis is over. What would set this
+        number is a duty cycle the thruster is qualified for, which is the same unpublished
+        constant as `components.yaml#capability.minimum_firing_time`. Left unset rather than
+        guessed, because a use-rate alarm with an invented limit either never fires or fires on
+        every rendezvous
+
+  # --- the service's own health limits -----------------------------------------------------
+  - id: rcs_propellant_uncertainty_high
+    point: rcs.propellant_sigma_pct
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: UNCONFIGURED
+    dwell_clear_s: UNCONFIGURED
+    latched: true
+    severity: ADVISORY
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:1063 — 'estimated mass minus uncertainty/reserve below configured margin'"
+      note: >-
+        the threshold that makes the sigma channel worth publishing. `rcs_dode.md:1063` judges the
+        reserve *net of uncertainty*, so 12 % remaining means nothing without knowing whether the
+        interval is ±1 % or ±8 %, and the trigger is therefore on the uncertainty rather than on
+        the percentage. What sets it is a mission rule about how confident a reserve decision has
+        to be, which is the mission's to make, so it is unset here and named
+
+  - id: rcs_authority_margin_low
+    point: rcs.control_authority_margin
+    comparator: below
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: UNCONFIGURED
+    dwell_clear_s: UNCONFIGURED
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:1056 — `required_axis_authority < AUTHORITY_MIN(mode)`"
+      note: >-
+        the predictive alarm, and the reason this domain publishes a margin at all: it fires
+        while the vehicle can still hold an attitude, which is the only moment at which a fleet
+        can choose to stop spending authority. `AUTHORITY_MIN(mode)` is a function of the mode,
+        so the eventual value is a small table and not a scalar — `rcs_dode.md:1032` supplies the
+        shape and deliberately no numbers, because the numbers come from the inertia tensor that
+        nobody has
+
+  - id: rcs_allocation_residual_high
+    point: rcs.allocation_residual
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: UNCONFIGURED
+    dwell_clear_s: UNCONFIGURED
+    latched: true
+    severity: WARNING
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:1055 — `weighted_residual > WRENCH_RESIDUAL_MAX(mode)`"
+      note: >-
+        the retrospective half of the same pair: authority margin says what is left, the residual
+        says what was already missed. The hysteresis band of this threshold and the
+        `constrained` value of `rcs.allocation_status` are the same two numbers seen from the
+        alert side and the telemetry side, which is why both are declared rather than one being
+        derived from the other at runtime
+
+  - id: rcs_uncommanded_rate
+    point: gnc.body_rate_xyz_deg_s
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: UNCONFIGURED
+    dwell_clear_s: UNCONFIGURED
+    latched: true
+    severity: WARNING
+    point_units: "deg/s, the largest body-rate component"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:332"
+      note: >-
+        F-04's first clue, and it is in another domain on purpose: a thruster stuck on produces a
+        body rate, and the rate is the *first* unmistakable evidence because the valve still
+        reads as commanded. This threshold watches a `gnc` channel from the `rcs` domain because
+        the FDIR conclusion is RCS's and the measurement is not — the same asymmetry as the
+        pressure-switch chain, where the vehicle's own acceleration is the corroboration. What
+        sets the number is a rate above which the vehicle cannot be flown, which is a GNC
+        question and is owed there
+
+  # --- the one interlock -------------------------------------------------------------------
+  - id: rcs_authority_floor
+    point: rcs.control_authority_margin
+    comparator: below
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 0
+    dwell_clear_s: 0
+    latched: false
+    interlock: true
+    severity: ADVISORY
+    point_units: "normalized, checked at request time"
+    provenance:
+      basis: historical
+      source: "rcs_dode.md:726 and :1058 — the allocator refuses a request the actuator set cannot achieve, rather than failing it after the fact"
+      note: >-
+        equal assert and clear because an interlock has no recovery semantics: either the wrench
+        can be produced or the request is refused, and a band between those two states would be a
+        band in which a fleet is told yes and given less. This is the RCS domain's one
+        `interlock: true` entry and it is the reason `request_translation` can be A2 rather than
+        A3 — the service can say no.
+
+  - id: attitude_error_out_of_band
+    point: rcs.attitude_error_deg
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 10
+    latched: true
+    severity: CAUTION
+    point_units: "deg, above the envelope a controller profile tolerates"
+    provenance:
+      basis: chosen
+      reason: >-
+        the deadband's fire boundary expressed as an *alarm* rather than as a control decision:
+        `rcs.deadband_deg` is the band the controller runs inside and this is the band the vehicle
+        should not be outside for long. The value is owed with the deadband derivation — it needs
+        the inertia tensor that `vehicle.yaml` records unset — and the alarm is worth declaring
+        before the number exists because RCS-10 (attitude divergence) has been detectable with no
+        threshold to detect it since the RCS domain landed
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    an agent may select a profile and may never edit one (D-05). The profiles below are the
+    only knob this domain offers on its own stability loop, and all three are *signed*: a fleet
+    chooses between postures somebody qualified, and never writes a gain. `rcs_dode.md:678` says
+    the same thing in the command vocabulary — ordinary agents select profile IDs, and
+    `set_control_gain` is not a verb this vehicle has.
+
+  alternatives:
+
+    - id: conservative
+      revision: 1
+      description: "a wider deadband and a lower authority floor: hold attitude with fewer pulses and give up pointing accuracy"
+      factor: 1.5
+      provenance:
+        basis: historical
+        source: "rcs_dode.md:1071 and :1102 — the agent layer may request a degraded posture at an eligible window, and the trusted service still decides the pulses"
+        note: >-
+          the profile a fleet wants when it has decided the propellant matters more than the
+          pointing. It is *not* a way to save propellant during a burn: no deadband setting
+          changes the impulse a translation costs, only the impulse attitude control costs
+
+    - id: tight
+      revision: 1
+      description: "a narrow deadband for a phase that needs pointing accuracy, at the cost of valve cycles"
+      factor: 0.6
+      provenance:
+        basis: historical
+        source: "rcs_dode.md:658 — the controller interface supports approved profiles including quaternion PD/PID and phase-plane, selected by ID"
+        note: >-
+          what a fleet selects before a docking or a landing, where the pointing budget is real.
+          The cost is valve cycles and propellant, and the vehicle publishes both, so the trade
+          is observable rather than advised
+
+    - id: safe_vector
+      revision: 1
+      description: "the safe-mode profile: acquire and hold a configured safe vector with rate damping"
+      factor: 1.0
+      provenance:
+        basis: historical
+        source: "rcs_dode.md:660 and :1105-1112 — SAFE_VECTOR is a controller profile, and the safe target is configuration data (SUN_SAFE, EARTH_SAFE, COMM_SAFE, INERTIAL_SAFE)"
+        note: >-
+          the profile the ladder's `safe_hold` rung uses. Its existence is the reason
+          `rcs_dode.md:1107` insists that no generic specification can say Sun pointing is always
+          safe: the target is a *choice* the mission makes for power and thermal reasons, and on
+          this vehicle the choice is unset because which vector is safe depends on the thermal
+          and power margins at the time — which is a decision the fleet has the evidence to make
+          and the profile merely executes

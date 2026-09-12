@@ -1,0 +1,284 @@
+# domains/comms/profiles.yaml — the link's limits, and the one resource the fleet allocates.
+#
+# ## Bandwidth is the domain's scarce resource, and the profiles are how it is spent
+#
+# `apollo_diode.md:885-899` gives five telemetry profiles — `emergency`, `low`, `normal`, `high`,
+# `burst` — and then states the rule that makes them mean something (`:901`): "when
+# communications degrade, the simulator should actually have to choose which data arrives. Do not
+# merely set `comm.degraded=true` while delivering every telemetry field normally."
+#
+# That sentence is a *fidelity requirement on the plant*, not a UI preference, and it is why
+# `E-LINK-TEL` is the coupling graph's only `one_way: true` edge that is not an irreversible
+# event: the link can drop or delay content, and it can never invent it. The profiles are what a
+# fleet chooses with, and the interesting one is `emergency`, which is not "fewer channels" but a
+# deliberate statement about what is worth knowing: event and alarm channels plus essential
+# power, ECLSS and GNC.
+#
+# ## The two limits that are not apollo's
+#
+# Everything below except `recorder_fill_high` and `tx_power_high` is apollo's channel events
+# adopted verbatim — the pointing band, the two SNR levels, the frame-loss limit, the mode and
+# antenna events. Those two are this vehicle's, and both exist because the domain's *resource*
+# has a bound the corpus never states: a recorder that fills, and a transmitter whose DC draw is
+# the flagship cycle's trigger.
+
+domain: comms
+
+profiles:
+
+  - id: default
+    revision: 1
+    description: "apollo's link events, plus the recorder and transmitter-load limits"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:161-168"
+      note: >-
+        the six apollo thresholds are its own channel events at its own values. The dwells are
+        chosen and argued where they appear, and in this domain they are mostly short: a link
+        that is failing fails fast, and a comms alarm with a long dwell arrives after the gap it
+        was meant to explain.
+
+thresholds:
+
+  # --- pointing: apollo's two-sided wording, taken literally ------------------------------
+  - id: hga_pointing_warning
+    point: comm.hga_pointing_error_deg
+    comparator: above
+    assert: 2
+    clear: 1.5
+    dwell_assert_ms: 2000
+    dwell_clear_s: 10
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:163"
+      note: >-
+        apollo says 0-2 degrees is a "good link" and warns above 2 — and with the derived
+        9.4-degree beamwidth, 2 degrees off boresight is 0.54 dB down, so apollo's wording is
+        exactly right and the warning is about *pointing* rather than about the link. A fleet
+        that treats it as a link alarm will chase a margin it has not lost; a fleet that ignores
+        it will discover the pattern's quadratic shape over the next seven degrees, where the
+        loss goes from 0.5 dB to 12. Two seconds to assert because the gimbal is chasing, ten to
+        recover because a pointing error that has stopped growing is a gimbal that has caught up
+  - id: hga_scan_limit
+    point: comm.hga_pointing_error_deg
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 10
+    latched: true
+    severity: WARNING
+    point_units: "deg, the gimbal's mechanical limit"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:163"
+      note: >-
+        apollo's second event on the same channel, "scan limit", and it is a *different* alarm
+        from the first: 2 degrees is a pointing error, and the scan limit is the gimbal reaching
+        the edge of where it can point at all. Past it the error grows with the vehicle's
+        attitude and no amount of gimbal motion helps, which is the difference between a control
+        problem and a geometry problem. The value is owed with the gimbal's range
+        (`components.yaml#open_debts`) and it cannot be guessed, because a scan limit is a
+        mechanical fact about a specific antenna
+
+  # --- the link itself --------------------------------------------------------------------
+  - id: snr_degraded
+    point: comm.snr_db
+    comparator: below
+    assert: 8
+    clear: 10
+    dwell_assert_ms: 1000
+    dwell_clear_s: 5
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:164"
+      note: >-
+        apollo's "<8 degraded" on a band whose nominal is 8-30 dB, with a 2 dB recovery band
+        (chosen) narrower than the 5 dB gap to the loss threshold. The narrowness is deliberate:
+        between 8 and 3 dB there is a real operating region — a thin link that still carries
+        `emergency` — and a recovery band wide enough to swallow it would make the two alarms
+        one alarm with two names
+
+  - id: snr_loss
+    point: comm.snr_db
+    comparator: below
+    assert: 3
+    clear: 6
+    dwell_assert_ms: 500
+    dwell_clear_s: 10
+    latched: true
+    severity: WARNING
+    gated_by: "comm.blackout_state is clear"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:164"
+      note: >-
+        apollo's "<3 loss". The gate is the domain's central operational decision: **this alarm
+        does not fire behind the Moon.** A loss of signal at a predicted occultation is the
+        vehicle working correctly, and an alarm every orbit is how a fleet learns to ignore
+        communications alarms — after which the one that matters arrives into a habit of
+        dismissal. The gate is a threshold-level declaration rather than an executive rule
+        because it is part of what the alarm *means*
+
+  - id: frame_loss_high
+    point: comm.rx_frame_loss_pct
+    comparator: above
+    assert: 2
+    clear: 1
+    dwell_assert_ms: 5000
+    dwell_clear_s: 30
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:166"
+      note: >-
+        apollo's ">2 %" on a band whose nominal is 0-0.5 %. The assert dwell is the longest in
+        this file and the reason is in the channel's own definition: frame loss is a *fraction of
+        a count*, so it is noisy at short windows and meaningful at long ones. Five seconds at
+        51.2 kbit/s is a quarter of a million bits, which is enough for 2 % to be a rate rather
+        than an accident. The 30-second recovery is the same argument in the other direction: a
+        link that has just recovered should not be declared healthy on the first clean window
+
+  # --- the transmitter as a load ----------------------------------------------------------
+  - id: tx_power_high
+    point: comm.tx_power_w
+    comparator: above
+    assert: UNCONFIGURED
+    clear: UNCONFIGURED
+    dwell_assert_ms: 2000
+    dwell_clear_s: 10
+    latched: true
+    severity: CAUTION
+    point_units: "W DC, above the configured draw for the selected transmitter and mode"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:168"
+      note: >-
+        apollo's "high draw" event, and the number cannot be a constant because the draw is a
+        function of which transmitter is on and at what power — 36 W for the CSM transceiver,
+        72 W with the amplifier, 20 or 90 W for the LM. So the limit belongs with
+        `set_power_amplifier` and `set_comm_mode`, which are the two verbs that change it. This
+        threshold is the *early* half of the flagship cycle: a hot amplifier drawing more current
+        for the same output raises this channel before the bus notices, and `E-AMP-LOAD` says the
+        bus will notice at 1/28 A per watt
+
+  # --- the recorder ----------------------------------------------------------------------
+  - id: recorder_fill_high
+    point: comm.recorder_fill_pct
+    comparator: above
+    assert: 80
+    clear: 60
+    dwell_assert_ms: 10000
+    dwell_clear_s: 60
+    latched: true
+    severity: CAUTION
+    provenance:
+      basis: chosen
+      reason: >-
+        the vehicle's, not apollo's, and the 80 % is chosen with its consequence stated: below it
+        there is room to ride out an occultation, above it the recorder is approaching the point
+        where the vehicle must choose what to forget. The choice is the interesting failure and
+        the threshold exists to make it visible *before* it happens rather than after — a fleet
+        that sees 80 % can spend the next blackout on `emergency`, and a fleet that sees 99 % has
+        already lost the argument. The capacity it is a percentage of is owed
+        (`components.yaml#open_debts`), which is why the number is a fraction rather than a
+        duration
+
+  # --- the link's discrete state, where the *change* is the event -------------------------
+  - id: carrier_lock_loss
+    point: comm.carrier_lock
+    comparator: below
+    assert: 0.5
+    clear: 0.5
+    dwell_assert_ms: 1000
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    gated_by: "comm.blackout_state is clear"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:162"
+      note: >-
+        a boolean compared against a half, the same shape the avionics and structure domains use
+        for `false`. One second to assert because lock acquisition is a search, none to recover
+        because the recovery direction is unambiguous. Gated on the blackout for the same reason
+        `snr_loss` is: behind the Moon the receiver is *supposed* to lose the carrier, and
+        announcing it would be announcing the orbit
+
+  - id: link_mode_none
+    point: comm.link_mode
+    comparator: below
+    assert: 1
+    clear: 1
+    dwell_assert_ms: 2000
+    dwell_clear_s: 0
+    latched: false
+    severity: WARNING
+    point_units: "ordinal: none = 0, vhf = 1, sband_low = 2, sband_high = 3"
+    gated_by: "comm.blackout_state is clear"
+    provenance:
+      basis: apollo
+      ref: "apollo_diode.md:161"
+      note: >-
+        an enum compared against its own ordinal, which is a compromise the threshold machinery
+        forces and the ordering is not arbitrary: `vhf` is the LM-to-CSM and EVA channel, so a
+        vehicle that has fallen back to it can talk to the other spacecraft and not to Earth. The
+        alarm fires when even that is gone — the vehicle has no link at all — which is a
+        different statement from "the link to Earth is degraded" and the only reason to express
+        the enum as a number
+
+profile_selection:
+
+  selectable_by: A1
+  note: >-
+    an agent may select a telemetry profile and may never edit one (D-05). This is the only
+    domain where the profile *is* the domain, rather than a limit the domain enforces: choosing a
+    profile is choosing how much of the vehicle the fleet gets to see, and the ceiling is
+    operator-owned because a fleet that could widen its own ceiling would be allocating the
+    operator's bandwidth to itself. `rcs_dode.md:366` states the same rule for the same verb —
+    `SET_TELEMETRY_PROFILE` is "bounded by operator ceiling".
+
+  alternatives:
+
+    - id: emergency
+      revision: 1
+      description: "event and alarm channels plus essential power, ECLSS and GNC at low rate"
+      factor: 0.15
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:891"
+        note: >-
+          apollo's own first profile, and the only one that is a *statement about what is worth
+          knowing* rather than a rate. Its channel list is the interesting content: power, ECLSS
+          and GNC, because those three are what keeps a crew alive, and no engineering channels at
+          all. A fleet that selects it during a blackout is deciding that it will diagnose the
+          vehicle later from the recorder rather than now from the link, which is a real decision
+          with a real cost and the profile's job is to make it available
+
+    - id: low
+      revision: 1
+      description: "a ~1 Hz critical subset, Apollo-inspired reduced mode"
+      factor: 0.35
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:892"
+        note: "the profile that matches 1,600 bit/s, apollo's low-rate mode."
+
+    - id: burst
+      revision: 1
+      description: "temporary high-rate selected channels; bandwidth expensive"
+      factor: 2.0
+      provenance:
+        basis: apollo
+        ref: "apollo_diode.md:895"
+        note: >-
+          the one profile whose factor is above one, and the only verb-shaped resource on the
+          vehicle that a fleet can *overspend*. It is bounded by the operator ceiling and, at
+          this vehicle, by `maximum_queue_age_s` on `set_telemetry_profile`: a burst that does
+          not expire is a permanent reduction in the link's margin for everything else, and the
+          link's margin is what a fleet needs when something goes wrong

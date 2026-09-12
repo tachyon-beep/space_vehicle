@@ -1,0 +1,110 @@
+# domains/structure/points.yaml — what the vehicle's body reports about itself.
+#
+# Two of these channels are unusual on this vehicle and both for the same reason: they report
+# something that **cannot be undone**. `structure.pyro_continuity_[n]` is the only channel whose
+# interesting transition is one-way at the instrument level — a continuity check that reads false
+# will never read true again — and `structure.stage_state` is the only channel that reports the
+# vehicle's *configuration* rather than its condition. Everything else on this vehicle can go
+# back; these cannot, and the whole domain is organised around that.
+
+domain: structure
+points:
+  - channel: structure.cabin_dp_psi
+    from: cabin_dp_psi
+    layer: measurement
+    derivation: "the differential across the pressure vessel: the ECLSS compartment's pressure against vacuum"
+    note: >-
+      It reads the same number as `eclss.cabin_pressure_psia` and it is a separate channel on
+      purpose. A cabin pressure is a life-support quantity and a differential is a structural
+      one: the same 5 psia is comfortable to a crew and a load on a vessel, and a fleet that
+      reasons about the second has to notice that the vessel is the thing holding it.
+  - channel: structure.hatch_state
+    from: hatch_state
+    layer: service
+    derivation: "the commanded and actual position of each crew hatch"
+    note: >-
+      apollo's event is "incompatible with pressure", which is a structural interlock stated in
+      atmosphere terms — and it is the cleanest example on the vehicle of a discrete state whose
+      *consequence* lives in another domain. The hatch domain publishes the position; ECLSS
+      publishes what it costs.
+  - channel: structure.docking_latches
+    from: docking_latch_state
+    layer: service
+    derivation: "each latch's position, with count-and-disagreement collapsed into one published value"
+    note: >-
+      apollo's channel is a count with a "latch disagreement" event. The count is what is
+      published and the individual positions are hidden truth, because a count is what a crew
+      can act on: the decision available is "re-seat the interface", not "drive latch seven".
+  - channel: structure.leak_estimate_g_s
+    from: structural_leak_g_s
+    layer: estimate
+    inputs: [eclss.leak_rate_g_s, eclss.cabin_pressure_psia]
+    derivation: "the structural share of the compartment's total leak, inferred by elimination: total leak minus the plumbing and hatch shares that the vehicle can account for"
+    note: >-
+      The elimination is lossy and the channel says so by being an estimate: what an agent gets
+      is a total and a structural share, and the residual between them is an unattributed leak —
+      which is a real state and one worth being able to notice.
+  - channel: structure.accel_xyz_g
+    from: cabin_dp_psi
+    layer: measurement
+    derivation: "the accelerometer's reading, which is the vehicle's only structural-force evidence and its only independent witness to a burn"
+    note: >-
+      It is registered under structure because a load is a structural quantity, and it is the
+      independent witness the propulsion domain needs: PRP-01's stuck feed sensor corrupts the
+      thrust estimate, and the accelerometer is the one channel that sensor cannot reach. That
+      makes this the most cross-domain channel on the vehicle.
+  - channel: structure.stage_state
+    from: configuration
+    layer: service
+    derivation: "the vehicle's configuration: what is attached to what"
+    note: >-
+      The only channel on the vehicle that reports what the vehicle *is* rather than what it is
+      doing. Every domain downwind of a staging event has to re-read its own state when this
+      changes, which is why the one-way taxonomy in components.yaml lists consequences as
+      configuration changes.
+  - channel: "structure.pyro_continuity_[n]"
+    from: pyro_fired
+    layer: measurement
+    derivation: "the continuity of each initiator's circuit, true until it fires"
+    note: >-
+      The instrument-level one-way channel. A continuity check reads true, then false, and never
+      true again; and the published event is "lost continuity", which is deliberately ambiguous
+      between *fired on purpose* and *failed open* — the two are distinguishable only against the
+      command record, and a fleet that reads the channel alone will not know which it is looking
+      at.
+  - channel: structure.relief_valve_state
+    from: relief_valve_state
+    layer: service
+    derivation: "open or closed, normally closed"
+    note: >-
+      The one component whose correct action is to lose cabin gas. Its "unexpected opening"
+      event is the last visible step before the trapped-line chain becomes a burst, and an agent
+      that sees it has a bounded amount of time to decide whether the valve is saving the
+      vehicle or emptying it.
+  - channel: "structure.arm_state_[event]"
+    from: arm_state
+    layer: service
+    derivation: "whether an irreversible event is armed, expired or its token consumed"
+    note: >-
+      Published because the arm/commit pattern's whole purpose is deliberation, and an agent
+      cannot deliberate about a state it cannot see. Three of the six verbs in this domain set
+      it, and one of them is the only verb on the vehicle whose result carries a credential.
+  - channel: "structure.event_count_[event]"
+    from: lm_separation_state
+    layer: service
+    derivation: "how many times each irreversible event has fired"
+    note: "a count rather than a flag, because the LM separates twice for two different reasons and a boolean would make the second one invisible."
+
+not_published:
+  - channel: "structure.latch_[id]_position"
+    why: >-
+      hidden truth, and the count above is what is published. An agent that could see which latch
+      failed would skip the decision the count exists to present: whether to re-seat the whole
+      interface or leave it.
+  - channel: "structure.vessel_stress"
+    why: >-
+      finite-element structural mechanics is explicitly out of scope (`apollo_diode.md:753`).
+      The observable is the differential pressure and the leak; a stress field would be a
+      different simulator.
+  - channel: "structure.pyro_true_state"
+    why: "a device that has fired and a circuit that has opened are the same observation from the vehicle's side, and the ambiguity is the point."

@@ -1,0 +1,429 @@
+# presentation.yaml — the vehicle's side of the frozen window.
+#
+# ## Why this file exists
+#
+# Everything else in this folder defines *what the vehicle knows*. This file defines **what the
+# fleet is told**, and until now nothing did. `channels.yaml` declares 145 points and the
+# seventy-domain registries declare 58 verbs, and not one of them said which of those appear in
+# `state.json`, which appear in the telemetry ring, what shape a frame has, or how a verb becomes
+# a line in `HELP.md`. The other half of the window — `docs/diode-contract.md` — is **frozen**,
+# so a vehicle that has not been introduced to it is a vehicle that may satisfy nothing.
+#
+# Two examples of the gap, both of which this file closes:
+#
+# - `diode-contract.md` §3 requires that **every verb's gate variable appears in `HELP.md` and
+#   `state.json`**, and §9's check 5 turns that into a conformance test: "a closed gate is
+#   refused by name, and its variable is published". Every verb in this vehicle declares a
+#   `gate.variable` and nothing collected them into a published set.
+# - §5.1 says "every published field is one of three things" — A, I or T — and the registry
+#   declares **four** kinds (`measurement`, `estimate`, `service`, and `vehicle.yaml`'s own
+#   conventions). Resolving that is not a formality: it decides how a commanded valve position is
+#   labelled to a fleet that must not mistake it for a measurement.
+#
+# ## What is deliberately not here
+#
+# The *executive's* state — the budget counters, the queue, the intake ledger. `state.json` carries
+# those (D-02, `communcations_diode.md:436-452`) and they belong to the far side of the window,
+# not to the vehicle. This file declares the keys and the vehicle's contribution to each, which is
+# all a vehicle can honestly claim.
+
+schema_version: 1
+contract: docs/diode-contract.md
+contract_status: frozen
+contract_probe: contract/diode_probe.py
+
+# --------------------------------------------------------------------------------------
+# The epistemic layers. The contract names three; the registry declares four kinds, and the
+# resolution is the point of this block.
+#
+#   measurement  -> A   what the instrument reports: authoritative about the report, not the world
+#   estimate     -> I   derived from readings or a model; may be wrong with no sensor having failed
+#   service      -> A   the vehicle's own software state — and A is *exactly* right for it
+#   truth        -> T   never published, anywhere
+#
+# The `service` case is the one worth arguing. `docs/diode-contract.md:200` defines A as
+# "authoritative *about the report*, not about the world. It may be wrong, drifting, saturated,
+# stuck, or lying about a fault." A commanded valve position is authoritative about the report in
+# precisely that sense — the vehicle really did command it — and it is not a claim about the world,
+# because the valve may not have moved. So a service state is an A with a *different subject*, not
+# a fourth layer, and the distinction the registry draws between `measurement` and `service` is
+# about what the report is about rather than about how much to trust it.
+#
+# That is not a relabelling exercise. It tells the publisher what to do: a service channel carries
+# no quality code beyond GOOD, because there is nothing to be uncertain about in a statement of
+# what the vehicle did; and it must be *named* so a fleet can tell it from a reading, which is why
+# every service channel on this vehicle names its subject (`rcs.mode`, `structure.hatch_state`,
+# `mission.posture`) rather than its quantity.
+# --------------------------------------------------------------------------------------
+epistemic_layers:
+
+  mapping:
+    measurement: A
+    estimate: I
+    service: A
+  truth: "never published in any file — `docs/diode-contract.md:202`, and every domain's `points.yaml#not_published` section is where the vehicle says which truths it is withholding"
+  service_resolution: >-
+    a service state is layer A with a different subject, not a fourth layer. The contract's three
+    layers answer "how much should I trust this"; the registry's four kinds answer "what is this a
+    report about". Collapsing them would be harmless if the consequence were cosmetic, and it is
+    not: it decides whether a commanded valve position carries a quality code.
+  quality_on_service: >-
+    GOOD only. A quality code says how much to trust a *reading*, and there is nothing uncertain
+    about a statement of what the vehicle did — a fleet that saw SUSPECT on `rcs.mode` would go
+    looking for a sensor fault in a mode enum.
+  provenance:
+    basis: apollo
+    ref: "docs/diode-contract.md:193-217"
+    note: >-
+      the three layers are the contract's; `eclss_diode.md:65` supplies the fourth kind the
+      registry uses, and vocabulary §5 already recorded that addition. What this block adds is the
+      mapping between them, which neither document states because neither knows about the other.
+
+# --------------------------------------------------------------------------------------
+# The six files. Each entry says what the *vehicle* contributes; the executive's contributions
+# are named and marked as the far side's.
+# --------------------------------------------------------------------------------------
+surface:
+
+  - file: console.json
+    direction: uplink
+    vehicle_contribution: >-
+      the `variables` the vehicle must *read*: every gate variable in `commands.yaml` is
+      console-writable, because a gate is an agent-writable preference (D-03) and a gate that
+      could not be lowered from the console would be an interlock wearing a preference's name.
+    declared_by: "commands.yaml — every verb's `gate.variable`"
+    far_side: "the claim, the allowance accounting, the batch atomicity"
+
+  - file: "output/<stamp>_<slug>_<cmd>.txt"
+    direction: downlink
+    vehicle_contribution: >-
+      the verb's `help` text, its `refusal_reason` from the canonical chain (V-02), and — for a
+      refused command — the *name* of what refused it. §9's check 4 requires an unknown verb to be
+      refused by name and check 5 requires a closed gate to be refused by name, so the refusal text
+      is a contract surface and not a diagnostic convenience.
+    declared_by: "commands.yaml — `help`, `gate`, `interlocks`, `allowed_phases`"
+    far_side: "the filename, the stamp, the atomic write, one file per command with refusals included"
+
+  - file: state.json
+    direction: downlink
+    vehicle_contribution: "the mirror — see `mirror` below"
+    declared_by: "this file's `mirror` block, plus `channels.yaml`'s `service` layer at P0/P1"
+    far_side: "`budget`, `queue_depth`, `published_at`, and the rewrite cadence"
+
+  - file: telemetry/NNN.json
+    direction: downlink
+    vehicle_contribution: "the ring of frames — see `frame` and `ring` below"
+    declared_by: "this file's `frame` and `ring` blocks, plus `channels.yaml#rate_hz`"
+    far_side: "the slot count, the bonding, the sequence numbers"
+
+  - file: HELP.md
+    direction: downlink
+    vehicle_contribution: >-
+      one entry per verb: the name, the arguments, the authority, the irreversibility, the phases,
+      the gate variable, and the help text. §8 makes this the only document in which a verb name
+      may appear, which means `HELP.md` is *generated* from `commands.yaml` and hand-editing it
+      would create a second source of truth for the vocabulary.
+    declared_by: "commands.yaml — the whole registry, and the `not_implemented` list as the absent half"
+    far_side: "the voice, the ordering, the file itself"
+
+  - file: pending.json
+    direction: vehicle-internal
+    vehicle_contribution: >-
+      the deferred commands' records — a verb with `execution_class: deferred` produces at least one
+      entry here, and every one carries the tick it was accepted on and the tick it is due, because
+      §4's effect-time revalidation needs both to be exact.
+    declared_by: "commands.yaml — `execution_class` and `maximum_queue_age_s`"
+    far_side: "the file, the ledger, the restart behaviour"
+
+# --------------------------------------------------------------------------------------
+# The frame envelope. apollo's own (`apollo_diode.md:600-627`) and *not* channels, which is why
+# they are declared here rather than registered in `channels.yaml`: a frame field is metadata about
+# the frame, and a registry entry for one would put `seq` in the same namespace as `power.dc_bus_a_v`.
+# --------------------------------------------------------------------------------------
+frame:
+
+  schema: "aurora.capsule.telemetry.v1"
+  fields:
+    - {name: schema, unit: string, note: "the frame's own identity, so a consumer can refuse a version it does not know"}
+    - {name: seq, unit: count, note: "monotonic within a boot; with `boot_id` it is what separates loss from a restart (V-07, C-21)"}
+    - {name: boot_id, unit: opaque, note: "the restart identity, present because six of twelve specs cannot express a restart"}
+    - {name: sim_step, unit: count, note: "the plant's own tick, which is not MET and is not `seq`"}
+    - {name: met_s, unit: s, note: "the vehicle clock (apollo_diode.md:227); monotonic and it cannot jump backward"}
+    - {name: sensor_time_s, unit: s, note: "when the sampled values were taken, which is earlier than the publish time"}
+    - {name: publish_time_s, unit: s, note: "when the frame was written"}
+    - {name: state_revision, unit: count, note: "which revision of the vehicle's state this frame describes"}
+    - {name: vehicle, unit: enum, note: "[csm, lm] — which spacecraft, because on this mission there are two and one of them is sometimes empty"}
+    - {name: phase, unit: enum, note: "mission.yaml's phase ids, verbatim; mission.phase is the same value as a channel, and the duplication is apollo's"}
+    - {name: values, unit: "map[channel_id, number|bool|string]", note: "the readings and estimates for this frame"}
+    - {name: quality, unit: "map[channel_id, code]", note: "the per-sample quality codes, parallel to `values` and never merged into it (V-03)"}
+    - {name: injected, unit: bool, note: "a white-team injection is distinguishable from a fault without being announced to the fleet"}
+  provenance:
+    basis: apollo
+    ref: "apollo_diode.md:600-627"
+    note: >-
+      the seven extra fields beyond apollo's — `boot_id`, `state_revision`, `vehicle`, `injected`,
+      `sensor_time_s` and the two the contract adds — come from C-21, D-01 and §5.1. `phase` is
+      carried twice, as a frame field and as `mission.phase`, and that duplication is deliberate:
+      the field is what a consumer reads without parsing `values`, and the channel is what a guard
+      ages. Removing either would break one of the two readers.
+
+# --------------------------------------------------------------------------------------
+# The mirror. `state.json` is rewritten every cycle, so its bound is a real constraint and not a
+# style preference: a mirror that grows into the ring's job is a file written hundreds of times a
+# minute to say nothing.
+# --------------------------------------------------------------------------------------
+mirror:
+
+  rule: >-
+    the mirror carries the vehicle's own **software state** and the mission envelope — `layer:
+    service` channels at P0 and P1 — plus the executive's keys. It carries no measurements and no
+    estimates: a reading belongs in the ring, where a fleet can see what it did over time, and a
+    mirror that carried readings would give a fleet one current number and no history.
+  member_count: 19
+  bound: 24
+  members_from: "channels.yaml — every channel with `layer: service` and `priority` in {P0, P1}"
+  bound_reason: >-
+    24 is a chosen ceiling and it is not arbitrary: `state.json` is rewritten every cycle, so every
+    member is a cost paid at the ring's cadence, and the contract's own example carries six keys.
+    The bound exists so that adding a twentieth service channel is a decision with a number attached
+    rather than a silent growth, and the linter refuses a mirror that exceeds it.
+  executive_keys: [published_at, available_commands, variables, budget, queue_depth]
+  vehicle_keys:
+    - {key: vehicle, contents: "mission.phase, mission.posture, mission.abort_latched — the three that answer 'where am I and may I act'", declared: "channels.yaml" }
+    - {key: available_commands, contents: "the verbs whose phase gate is open and whose gates are not all closed, derived from the registries", declared: "commands.yaml + mission.yaml" }
+    - {key: variables, contents: "every gate variable, with its current value; §3 requires the set to be published in full", declared: "commands.yaml" }
+  variables_are_templated: >-
+    58 verbs declare 58 gate variables and they are *not* 58 names a fleet sees: many are templates
+    — `reserve_floor_<resource>_enable`, `burn_load_<engine>_enable`, `rcs_group_<group>_enable` —
+    so the published map is the expansion against the registries' own enumerations, and a verb is
+    closed when *any* instantiation it needs is closed. That matters for §9's check 5 more than it
+    looks: the check says a closed gate is refused by name, and a refusal that named the template
+    rather than the instantiation — `reserve_floor_<resource>_enable` instead of
+    `reserve_floor_water_cooling_enable` — would be a name a fleet cannot act on.
+  capability_snapshot:
+    location: "a section of state.json (vocabulary §1, communcations_diode.md:436-452)"
+    fields: [verb, available, irreversible, deferrable, argument_schema, availability_reason]
+    declared_by: "commands.yaml — `argument_schema`, `irreversible`, `execution_class`, `allowed_phases`, `gate`, `interlocks`"
+    derivation: >-
+      every capability field is already in the registry, which is why the snapshot is a projection
+      rather than a second declaration. `available` is the phase gate and the gate variable;
+      `deferrable` is `execution_class: deferred`; `availability_reason` is the name of whatever
+      closed it — the phase, the gate variable, or the interlock.
+  hidden_verbs: >-
+    none, and the reason is worth stating: §3 says a hidden verb must be **inert** — text only, no
+    egress, no spend, no state change — because it bypasses gate evaluation by construction. This
+    vehicle has no inert verbs: every one of its 58 does something, and a verb that did nothing
+    would be a name in `HELP.md` that costs a fleet a command cycle to discover is empty. What the
+    vehicle hides instead is *channels* (`points.yaml#not_published`, four in this file's own
+    registries' debt lists), and hiding a channel is safe in a way that hiding a verb is not.
+
+# --------------------------------------------------------------------------------------
+# The plant's own envelope. Six channels that no domain owns and every fleet needs, and whose
+# absence was invisible until the producer check ran: they are registered, several are thresholds'
+# points, and nothing published them.
+#
+# They are not a domain's because they are not *about* a subsystem — they are about the mission
+# the subsystems are flying, and the plant computes them directly. `mission.phase` and
+# `mission.met_s` are also frame fields (apollo carries both in the envelope,
+# `apollo_diode.md:605-609`); the other four are not, and declaring all six here gives the vehicle
+# one authoritative list rather than two partial ones.
+# --------------------------------------------------------------------------------------
+plant_published:
+
+  - channel: mission.met_s
+    why: >-
+      mission elapsed time from `met_epoch_utc`. Also carried as the frame's `met_s`, and both
+      exist because they serve different readers: the frame field is what a consumer reads without
+      parsing `values`, and the channel is what a guard ages.
+  - channel: mission.phase
+    why: >-
+      the phase id, also carried as the frame's `phase`. Every verb's `allowed_phases` is written
+      against this value, so a fleet that cannot read it cannot tell why a verb is refused.
+  - channel: mission.phase_entry_seq
+    why: "which entry into the current phase this is, so a fleet returning from a gap can tell a state from a snapshot."
+  - channel: mission.posture
+    why: >-
+      the execution posture. No domain owns it because it is not a subsystem's state: it is
+      whether the *mission* is running, held, aborting or over, and a descent that has been held
+      for a fault is a different situation from one that is running.
+  - channel: mission.posture_entry_seq
+    why: "how many times the mission has changed posture, which is how a hold-and-resume cycle becomes visible rather than invisible."
+  - channel: mission.abort_latched
+    why: >-
+      the abort latch. P0, and the one condition that overrides every other transition
+      (`mission_diode.md:1303`, invariant E). It is the plant's because the safety kernel sets it
+      and no subsystem can.
+
+# --------------------------------------------------------------------------------------
+# The ring. The slot count and the bonding are the far side's; what the vehicle declares is the
+# *cadence structure*, because §5 requires the distinction between a fast control variable and a
+# slow resource trend to be visible in the publication and not just in the registry.
+# --------------------------------------------------------------------------------------
+ring:
+
+  cadence_classes:
+    - {class: fast, rule: "rate_hz >= 5", members: 21, note: "rates, voltages, chamber pressure — the quantities a transient lives in, and the ones a slow rate turns into a step change that looks like nothing happened"}
+    - {class: control, rule: "1 <= rate_hz < 5", members: 85, note: "the engineering channels a fleet plans against, and by far the largest class: 59 % of the registry"}
+    - {class: slow, rule: "0.5 <= rate_hz < 1", members: 8, note: "consumables and thermal trends — the quantities whose next value the previous one predicts"}
+    - {class: resource, rule: "0 < rate_hz < 0.5", members: 28, note: "the ledger residuals and reconciliation quantities, whose unit is hours"}
+    - {class: event, rule: "rate_hz == 0", members: 4, note: "a channel with no period: `rcs.thruster_[n]_pulse_width_us`, `avionics.program_alarm_code`, `structure.stage_state` and `cw.acknowledged`. Three of the four are *states* published only when they change, which is why each declares a `max_decision_age_ms` heartbeat — without one a fleet cannot tell 'nothing has happened' from 'the publisher has stopped'"}
+  members_total: 146
+  burst: >-
+    around events, and `on_event: true` is what the registry uses to say which channels have an
+    event worth bursting around. §5's reason is that "the interesting failures are transients, and
+    a slow rate turns them into a step change that looks like nothing happened" — which is F-14's
+    failure mode arriving from the other side: a frozen value and a slow rate look the same.
+  frame_contains: >-
+    the cadence class of a frame is not fixed. A frame carries the values whose period has elapsed,
+    so a `resource` channel appears in one frame in twenty and a `fast` one in most of them, and the
+    `values` map's *membership* is itself information. A fleet that reads a frame as a complete
+    snapshot will treat an absent slow channel as a dropout.
+  provenance:
+    basis: apollo
+    ref: "apollo_diode.md:7, :593-627"
+    note: >-
+      apollo publishes a fixed ring and a 51.2 / 1.6 kbit/s rate distinction; the multirate
+      structure is the contract's §5 and the vehicle's own `rate_hz`. The membership rule — a frame
+      carries what is due — is this file's, because it is the only way to reconcile a fixed ring
+      with 145 channels at four cadences, and stating it is what stops a fleet inventing a rule.
+
+# --------------------------------------------------------------------------------------
+# What the vehicle side makes satisfiable. `diode_probe.py` walks twelve properties against an
+# implementation; this table says which of them the vehicle's own configuration decides, and what
+# it does about each. A property the vehicle cannot influence is the executive's and is marked so.
+# --------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# §9's twelve checks, and a *status* per check that says who owns the property. Until
+# `tools/console.py` existed every status was a claim: the vehicle had never been walked through
+# a single check, because there was nothing to point `contract/diode_probe.py` at. It has now
+# been run, and the statuses below split three ways where they used to split two:
+#
+#   demonstrated              the probe exercised it against this vehicle and it passed
+#   satisfied_by_configuration the property holds by construction, and the construction is named
+#   far_side / shared / vacuous  as before
+#
+# The distinction matters because "satisfied_by_configuration" was doing two jobs — some of these
+# were argued from the registries and some were merely asserted — and only running the instrument
+# tells them apart. What the run added is not conformance but *evidence*: 14 passed, 0 failed, 1
+# skipped, where the skip is check 9 and is honest, because no deferring verb is reachable at the
+# phase the probe runs in and a vehicle that invented one to satisfy a check would be worse.
+# --------------------------------------------------------------------------------------
+conformance:
+
+  - check: 4
+    property: "an unknown verb is refused by name"
+    vehicle: "the closed vocabulary is the registry: 58 verbs, and `FORBIDDEN_VERB` refuses the forms this vehicle must never have"
+    status: demonstrated
+    evidence: >-
+      the probe submitted `zzz_definitely_not_a_verb probe` and read the result body: "refused:
+      unknown verb 'zzz_definitely_not_a_verb'. This vehicle's vocabulary is closed..." A refusal
+      that merely named the verb would pass the probe and tell a fleet less, so the text says
+      *unknown* as well
+
+  - check: 5
+    property: "a closed gate is refused by name, and its variable is published"
+    vehicle: >-
+      every verb declares `gate.variable`, every gate is console-writable, and the set is published
+      in `state.json.variables`. The linter refuses a verb with no gate (D-03), which is what makes
+      this check satisfiable by construction rather than by care
+    status: demonstrated
+    evidence: >-
+      the probe found **226** gate variables published, which is the number the templates expand to
+      and not the 58 the registries declare — the instantiated names, which is what the check is
+      about. The refusal half was exercised by hand rather than by the probe: closing
+      `reserve_floor_water_cooling_enable` refuses `set_reserve_policy` with a body naming that
+      instantiation and not the template `reserve_floor_<resource>_enable`. That distinction is the
+      whole of `mirror.variables_are_templated`, and it is now a test rather than a paragraph.
+      One hazard is recorded here rather than fixed, because fixing it would change HELP.md's voice
+      to suit a heuristic: `diode_probe.py#published_gates` returns an *empty* list the moment
+      HELP.md is absent and never falls through to `state.json.variables`, and its verb fallback
+      scans HELP.md for lines of the form ``- `name` `` — which in this vehicle's HELP.md is the
+      form used for **arguments**, so the fallback would read `mode` and `group` as verbs. The
+      vehicle meets the contract by publishing `available_commands` and `variables` in
+      `state.json`; the probe's HELP.md path is never taken. What it does mean is that the console
+      writes `state.json` and `HELP.md` **before** it creates `console.json`, so a reader attaching
+      at any instant finds a vehicle that can already answer
+
+  - check: 6
+    property: "a hidden verb produces text and no wider effect"
+    vehicle: "vacuous for this vehicle — there are no hidden verbs, and `mirror.hidden_verbs` says why"
+    status: vacuous
+    evidence: >-
+      nothing to demonstrate, and worth being explicit that this is a *design* answer rather than a
+      gap: `mirror.hidden_verbs` declines the feature because §3 requires a hidden verb to be
+      inert, and this vehicle has no inert verbs. A hidden verb added later would move this row to
+      `demonstrated` and require the inertness proof with it
+
+  - check: 7
+    property: "state.json is not read back: corrupting it changes nothing"
+    vehicle: >-
+      the mirror carries no input. Every gate variable is read from `console.json`, and the only
+      vehicle state in `state.json` is a projection of the plant's own — so there is nothing in the
+      mirror for a corrupting agent to reach
+    status: demonstrated
+    evidence: >-
+      the probe overwrote `state.json` with `{"available_commands": ["everything_is_open"],
+      "budget": {"limit_per_window": 999999}}`, waited one and a half cycles, and found both that
+      the doctored text was gone and that `everything_is_open` had not become an available verb.
+      The second half is the one that matters: the first only shows the file is rewritten, and a
+      vehicle that read the file back *and* rewrote it would pass that and fail this
+
+  - check: 9
+    property: "a deferred command is re-checked when it is due, not when it was scheduled"
+    vehicle: >-
+      every verb declares `allowed_phases`, `gate`, `interlocks` and `maximum_queue_age_s`, and
+      every one of those four is re-read at effect time. `mission.yaml#transition_evidence` names
+      the evidence each hazardous transition needs and how old it may be, which is the freshness
+      half of the same property (invariant D)
+    status: satisfied_by_configuration
+
+  - check: 12
+    property: "telemetry advances on its own, and a frame exists for a period when nothing was submitted"
+    vehicle: >-
+      the vehicle is not reactive: every channel has a `rate_hz` and the plant integrates whether or
+      not anybody asked. The `ring.cadence_classes` are what make the property visible — a frame
+      with nothing new in it still carries its `seq`, its `met_s` and the channels that came due
+    status: demonstrated
+    evidence: >-
+      the probe counted the ring twice without submitting anything and found it larger the second
+      time ("28 frame(s), then 35"). This is the one check that could not have been argued from a
+      registry: a vehicle that only published when asked would satisfy every other row here and
+      fail this one, and the difference is visible only to an instrument that waits
+
+  - check: 1
+    property: "a submitted batch is claimed, and the console is left with `variables` preserved and `commands` empty"
+    vehicle: "the variables the executive must preserve are this vehicle's gate variables"
+    status: far_side
+
+  - check: 2
+    property: "every command in a batch produces exactly one result file, refusals included"
+    vehicle: "the refusal *reason* is the vehicle's (V-02, the canonical chain); the file is the executive's"
+    status: far_side
+
+  - check: 3
+    property: "a non-string element refuses the whole batch and runs none of it"
+    vehicle: "nothing — batch atomicity is the intake's"
+    status: far_side
+
+  - check: 8
+    property: "an allowance may be lowered by the console and never raised"
+    vehicle: "the ceilings that matter are the registries' own: `maximum_queue_age_s`, the profile ceilings, the reserve floors. No verb can raise one"
+    status: shared
+
+  - check: 10
+    property: "output/ grows and never overwrites"
+    vehicle: "nothing — the result directory is the executive's"
+    status: far_side
+
+  - check: 11
+    property: "a result filename carries no separator or traversal sequence"
+    vehicle: "the verb names are the vehicle's and every one is lowercase snake case, checked by the linter (V-06); the filename is built by the executive"
+    status: shared
+
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  - "The ring's slot count and the burst window's duration. §5 requires both and neither is the vehicle's: a slot count is a memory decision and a burst duration is a bandwidth decision, and this file declares the cadence *structure* they operate on without pretending to set them."
+  - "`state.json`'s `available_commands` is derived here from three registries and it is the one mirror key with an algorithm behind it: the intersection of a verb's `allowed_phases` with the current phase, its gate variable's value, and its interlock list against the live thresholds. Written out, that is a rule; not written out, it is a thing two implementations will disagree about."
+  - "The `HELP.md` generator is written (`tools/generate_help.py`) and its coverage is a test rather than a hope: every registered verb gets an entry, every gate variable is named, and every refusal in a domain's declined list is documented. The runtime half is now written too: `tools/console.py` calls the generator and writes `<slug>/HELP.md`, and it calls *that* generator rather than one of its own — its first version hand-rolled a second HELP.md, which is hand-editing with extra steps and exactly what this file warns against. What remains owed is not the file but its `not_published` half: four channels are hidden from the fleet and the registry that lists them is the same one HELP.md is generated from, so a hidden channel and an unregistered one still look alike from the outside."
+  - "`state.json`'s capability snapshot and gate variable map are emitted by `tools/plant.py --state`, and the emission is what closed this debt. Writing the generator found three things the specification had assumed rather than checked. First, the expansion rule: 58 gate variables are 58 *templates* and they instantiate to **226 published names**, and the binding is by name — the first rule tried was positional and it publishes `power_amplifier_True_enable`, because `set_power_amplifier` declares `state` before `transmitter`. Second, ten verbs could not be expanded at all: eight wrote a bare `<id>` where the argument was `antenna`, `source`, `load`, `breaker`, `battery`, `engine`, `pump`, `hatch` or `loop`, and two — `set_load` and `set_breaker` — declared their values as a *sentence* (`[any id in components.yaml#loads]`), which instantiates to nothing. Both are linter refusals now, because a gate the mirror cannot publish is a closed gate a fleet cannot name and §9's check 5 is exactly that check. Third, and the reason this stayed a debt so long: nothing was checking that a template *could* expand, so the failure was invisible until something tried to publish the map. What remains owed here is not the generator but the far side's keys — `budget`, `queue_depth`, `published_at` are the executive's and a vehicle that filled them would be writing the executive's record for it."
