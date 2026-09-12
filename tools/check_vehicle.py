@@ -671,6 +671,86 @@ def load(path: Path, report: Report) -> dict[str, Any] | None:
     return data
 
 
+# The edge kinds a stock can have *flowing into it*. A stock is a conserved quantity, so the only
+# thing an inbound edge can be is a flux — or a transfer of the same quantity, which is what
+# `conserve` is. `lag`, `algebraic` and `delay` relate a stock's quantity to a *different* quantity,
+# and `discrete` and `service` carry authority rather than matter.
+STOCK_INFLOW_KINDS = {"rate", "conserve", "accumulate"}
+
+
+def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str | None, str]:
+    """How an edge's flux into a stock is established, or why it cannot be.
+
+    Returns `("per_second" | "per_hour", "")` when the plant can integrate the edge, and
+    `(None, reason)` when it cannot. **The linter and the plant call this same function**, in the
+    pattern `derive_schedule` already set, so a rule about what a stock edge means cannot come
+    apart from the rule that computes it.
+
+    It exists because the plant's stock integrator had never run — the schedule stops at the first
+    `algebraic` state, long before it reaches a stock — and when it was finally exercised it summed
+    `sensitivity * dt` over every incoming edge and never read a driver. Handed `lm_cabin_o2_kg` it
+    returned the same mass whether one crew member was aboard or three, having added
+    `116.86 Pa per K` (a lag relation), `1.0 kg O2 per kg O2` (a ratio whose flux is the tank's
+    outflow) and `0.03792 kg/h per crew`. Adding pascals-per-kelvin to kilograms-per-hour and
+    calling the result a mass is a dimension error wearing a number.
+
+    The three bases are the three things an inbound edge can legitimately be, and the refusals name
+    what a correct model would have to declare rather than defaulting to something plausible:
+
+      * **a rate with a time denominator** — `kg/s per W`, `kg/h per crew`. The driver multiplies
+        it; the time basis converts it. This is the case a stock integrator is for.
+      * **a same-dimension ratio** — `kg O2 per kg O2`. The driver is a *level* and the sensitivity
+        is a transfer fraction, so the flux is the source's own outflow times that ratio, and the
+        outflow belongs to whichever state produces it. A level cannot be converted into a rate.
+      * **a relation between two different quantities** — `Pa per K`, `J per K`. These land on a
+        stock node because the *channel* hangs off the node, not because anything flows into it.
+    """
+    sensitivity = edge.get("sensitivity") or {}
+    unit = str(sensitivity.get("unit") or "")
+    tokens = unit.replace("^", "").split()
+    where = f"{edge.get('id')}"
+
+    if sensitivity.get("value") in (None, "UNCONFIGURED"):
+        return None, f"{where} carries no sensitivity value, so nothing establishes its flux"
+
+    if edge.get("kind") not in STOCK_INFLOW_KINDS:
+        return None, (
+            f"{where} is a {edge.get('kind')!r} edge into a stock. A stock is a conserved quantity, "
+            "so the only thing an inbound edge can be is a flux: this one relates the stock's "
+            "quantity to a different physical quantity, and it lands on the stock node because the "
+            "*channel* hangs off the node rather than because anything flows into it"
+        )
+
+    per_hour = any(token.endswith("/h") for token in tokens)
+    per_second = any(token.endswith("/s") for token in tokens) or "s" in tokens[1:]
+    if per_hour and per_second:
+        return None, (
+            f"{where} declares the unit {unit!r}, which names a per-second and a per-hour basis at "
+            "once, so nothing can tell which one the sensitivity is in"
+        )
+
+    if not per_hour and not per_second:
+        sides = unit.split(" per ")
+        shared = (
+            len(sides) >= 2
+            and sides[0].split()
+            and sides[1].split()
+            and sides[0].split()[0] == sides[1].split()[0]
+        )
+        if shared:
+            return None, (
+                f"{where} carries the dimensionless ratio {unit!r} into a stock, so its flux is the "
+                "source's own outflow multiplied by that ratio — and the outflow is a flow this "
+                "edge does not declare. A level cannot be converted into a rate"
+            )
+        return None, (
+            f"{where} declares {unit!r}, which does not establish a flux: it relates the stock's "
+            "quantity to a different quantity, and nothing says which state produces the flow"
+        )
+
+    return ("per_hour" if per_hour else "per_second"), ""
+
+
 def check_basis(where: str, basis: str | None, extra: dict[str, Any], report: Report) -> None:
     """Every value that matters records where it came from, and a claim needs support.
 
@@ -1086,6 +1166,28 @@ def check_coupling(
                 "declares `exhausted_at` without `accumulates`, so the rating belongs to a stock "
                 "that is held rather than counted and the reader cannot tell which",
             )
+
+    # Every edge that lands on a stock, classified by the one function the plant also calls.
+    #
+    # This is a *debt* rather than a refusal because the vehicle genuinely is not there yet: eleven
+    # of its fourteen stock edges cannot be integrated as written, and eight of those are structural
+    # rather than unset. Refusing would refuse the corpus. But leaving them unreported was worse
+    # than either, because **the plant's refusals were unreachable**: the schedule stops at the
+    # first `algebraic` state, so no tool ever reached a stock and the eight were invisible to the
+    # linter, to `--strict`, and to the debt count. A defect that only a code path nobody reaches
+    # can see is a defect nobody has.
+    #
+    # Unset values are skipped here: they are already debts, reported by the edge walk with the
+    # recipe the edge owes, and saying it twice would double-count the same obligation.
+    stock_nodes = {name for name, node in node_of.items() if node.get("kind") == "stock"}
+    for edge in edges:
+        if edge.get("to") not in stock_nodes:
+            continue
+        if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
+            continue
+        basis, reason = stock_flux_basis(edge, node_of)
+        if basis is None:
+            report.debt(f"coupling.yaml:edge {edge.get('id')}", reason)
 
     edge_ids: dict[str, dict[str, Any]] = {}
     for edge in edges:

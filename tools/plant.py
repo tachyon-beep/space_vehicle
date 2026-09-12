@@ -56,7 +56,11 @@ from typing import Any
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_vehicle import Report, derive_schedule  # noqa: E402  (a sibling tool, not a package)
+from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
+    Report,
+    derive_schedule,
+    stock_flux_basis,
+)
 
 # The parameters each integrator class owes, from `plant.md` §3. A method absent from this table
 # owes none *by name* — which is not the same as owing nothing, and `advance()` is where the
@@ -707,49 +711,25 @@ def stock_flux(world: World, edge: Edge, values: dict[str, Any], dt: float) -> f
     The refusals are the useful output. Each names the edge and what a correct model would have to
     declare, which turns the vehicle's largest silent wrongness into a build order.
     """
-    unit = str((edge.sensitivity or {}).get("unit") or "")
-    tokens = unit.replace("^", "").split()
+    # The classification is the linter's, imported rather than repeated, in the pattern
+    # `derive_schedule` already set: a rule about what a stock edge means cannot come apart from the
+    # rule that checks it.
+    basis, reason = stock_flux_basis(
+        {"id": edge.id, "kind": edge.kind, "sensitivity": edge.sensitivity}, {}
+    )
+    if basis is None:
+        # The shared classifier prefixes its reason with the edge id because the linter reports it
+        # under a heading that does not name the edge again; this file's `where` already does, so
+        # only that prefix comes off. Splitting on the first colon instead would cut the reason at
+        # its own first colon and keep the half without the explanation in it.
+        prefix = f"{edge.id} "
+        raise Unconfigured(
+            f"coupling.yaml:edge {edge.id}",
+            reason[len(prefix) :] if reason.startswith(prefix) else reason,
+        )
+
+    per_hour = basis == "per_hour"
     where = f"coupling.yaml:edge {edge.id}"
-
-    if not edge.usable:
-        raise Unconfigured(
-            where,
-            f"drives {edge.target} and carries no sensitivity value, so the plant cannot apply it",
-        )
-
-    per_hour = any(token.endswith("/h") for token in tokens)
-    per_second = any(token.endswith("/s") for token in tokens) or "s" in tokens[1:]
-    if per_hour and per_second:
-        raise Unconfigured(
-            where,
-            f"declares the unit {unit!r}, which names a per-second and a per-hour basis at once, so "
-            "the plant cannot tell which one the sensitivity is in",
-        )
-
-    if not per_hour and not per_second:
-        # Either a same-dimension ratio or a relation between two different quantities, and the
-        # distinction is which side of "per" carries the same unit symbol.
-        sides = unit.split(" per ")
-        shared = (
-            len(sides) >= 2
-            and sides[0].split()
-            and sides[1].split()
-            and sides[0].split()[0] == sides[1].split()[0]
-        )
-        if shared:
-            reason = (
-                f"carries the dimensionless ratio {unit!r} into a stock, so its flux is the "
-                "source's own outflow multiplied by that ratio — and the outflow is a flow this "
-                "edge does not declare. A level cannot be converted into a rate"
-            )
-        else:
-            reason = (
-                f"declares {unit!r}, which is not a flux into a stock: it relates the node's "
-                "quantity to a different physical quantity, and the configuration does not say "
-                "which state produces the flow. Summing it into the stock would add "
-                "incommensurable units"
-            )
-        raise Unconfigured(where, reason)
 
     driver = values.get(edge.source)
     if driver is None:

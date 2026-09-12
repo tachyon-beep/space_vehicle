@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 237 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 237 declared debts and every
+verbs and 128 classified events across the eleven directories, with 245 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **237** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1596,8 +1596,14 @@ temperature; those edges land on the stock node because the *channel* hangs off 
 absorber pair is the sharper case, because `man-hours per kg CO2` is a conversion whose driver
 should be the CO2 *removal rate* rather than the cabin's inventory.
 
-The refusals are the output, and they are recorded as a `coupling.yaml:open_debts` entry that names
-all eleven. Where the two repairs diverge — a declared `flux_node` on the edge, or promoting the
+**The refusals were unreachable, and that is the part that mattered.** The schedule stops at the
+first `algebraic` state, so no tool ever reached a stock — which means the eight structural defects
+were invisible to the linter, to `--strict`, and to the debt count. A defect that only a code path
+nobody reaches can see is a defect nobody has. The classification now lives in
+`check_vehicle.stock_flux_basis` and **both tools call it**, in the pattern `derive_schedule` already
+set, so a rule about what a stock edge means cannot come apart from the rule that checks it: the
+linter reports each of the eight as a named debt, the plant refuses the same eight with the same
+words, and **237 became 245.** Where the two repairs diverge — a declared `flux_node` on the edge, or promoting the
 producing state to a channel the edge can read — is a **graph decision rather than a patch**, and it
 is the largest single thing standing between this folder and a plant that walks a tick.
 
