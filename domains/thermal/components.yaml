@@ -40,7 +40,7 @@ reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_th
         structure_config, water_cooling]
 writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
          cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm, cabin_eq_csm,
-         cabin_eq_lm]
+         cabin_eq_lm, environment_heat]
 
 # --------------------------------------------------------------------------------------
 # State. Thermal has no conserved stocks on purpose: energy is not asserted here. A fuel cell
@@ -114,6 +114,25 @@ state:
         as the CSM's, over the LM cabin's larger heat load: 827 W over the same 125 W/K conductance is
         6.616 K above the same 280.35 K supply. The two cabins differ by 0.75 K at equilibrium, and
         the whole of that difference is the 94 W between their equipment
+  - id: environment_heat_w
+    node: environment_heat
+    method: algebraic
+    unit: W
+    total_w: 2477.0
+    provenance:
+      basis: derived
+      computation: "1361 * 0.2 * 9.1"
+      relation: >-
+        the absorbed solar load at a bad attitude: 1361 W/m2 of flux, 0.2 absorptivity on a
+        white thermal-control coating, and 9.1 m2 of radiator presented to the sun. 1,361 x 0.2 x 9.1
+        = **2,477 W**, against the radiator's own 2,588 W of rejection capacity. Algebraic because it
+        follows the vehicle's attitude rather than accumulating — and it is the *first* term of the
+        thermal balance, which is why its absence left the radiator's temperature a function of
+        nothing
+      note: >-
+        the lunar surface terms — `lunar_ir_w_m2` and `albedo_load_w` — are still `UNCONFIGURED` in
+        `radiator_model.environment`, and they are owed *here* now: the node exists, so a value that
+        lands there has an edge to travel down rather than a block no tool reads
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t
@@ -160,7 +179,7 @@ state:
       reason: "an exposed, unregulated stage whose mass is mostly propellant and structure with a poor path to the loop; the longest constant in the vehicle, and the one that makes the frozen-line chain slow enough to be diagnosable"
   - id: zone_radiator_t
     method: lag
-    node: internal
+    node: radiator_reject
     unit: K
     tau_s: 300
     provenance:
@@ -542,11 +561,14 @@ unheated:
 # --------------------------------------------------------------------------------------
 # The zone temperatures the coupling graph cannot reach.
 #
-# Six zones are declared and all six carry a state; five carry a *driver*. Two sit on the `internal`
+# Six zones are declared and all six carry a state; four carry a *driver*. Two sit on the `internal`
 # sentinel, which is not a node, so no edge can terminate on them — `internal` has no inbound edge at
 # all — and they are undrivable by construction. The two crewed cabins were in exactly this position
-# until round 55, when `cabin_heat_csm` and `cabin_heat_lm` gave them one. The radiator was here too
-# and moved onto `radiator_reject` in round 70, where a node already existed and was already driven.
+# until round 55 gave them heat-rate nodes, and the radiator was in it until round 71 gave the
+# *environment* one: round 70 had moved `zone_radiator_t` onto `radiator_reject` and moved it back,
+# because its only inbound edge there was `E-WATER-RAD`, a back-edge that neither the linter nor the
+# plant counts as a driver. `E-ENV-RAD` is the forward edge that was missing, so the radiator's
+# temperature is a function of the heat the environment puts into it.
 #
 # What closes the two below is the same thing one step further: a heat-rate node per zone, fed by the
 # loads `heat_inputs` already assigns (630 W to the service bay, 180 W to the descent stage). The
@@ -555,14 +577,6 @@ unheated:
 # driver" is a recorded gap rather than something a reader derives from where a state happens to live.
 # --------------------------------------------------------------------------------------
 zones_not_on_nodes:
-  radiator_loop: >-
-    moved onto `radiator_reject` in round 70 and moved back in the same round: its only inbound edge
-    there is `E-WATER-RAD`, which is `C-WATER-BUDGET`'s **back-edge**, and neither the linter nor the
-    plant counts a back-edge as a driver. So the node gave the state a home without giving it an
-    input, and the linter said so twice — first that `E-WATER-RAD` needed an `advances`, then that
-    `radiator_reject` was undriven. What the radiator's surface temperature actually needs is a
-    forward edge from the environment it faces, and `environment` is a block in `vehicle.yaml` with
-    no node
   csm_service_bay: >-
     unregulated and uninstrumented in the graph: no edge can drive it while its state is on the
     sentinel. Its 630 W of loads and its -20 to 60 C band are both declared, so the heat-rate node

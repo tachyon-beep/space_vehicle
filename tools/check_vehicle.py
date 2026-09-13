@@ -2443,10 +2443,18 @@ def check_domain(
     # operating point is derived from other files' published figures — the leak from `vehicle.yaml`
     # and the metabolic rate from the corpus — so a change to either lands here.
     for state in (docs.get("components.yaml") or {}).get("state") or []:
-        if isinstance(state, dict) and state.get("nominal_kg_s") is not None:
+        if not isinstance(state, dict):
+            continue
+        # A state that declares the operating point it is sized at, in whatever unit its subject
+        # takes: `nominal_kg_s` for the ECLSS flows, `total_w` for the thermal ones. Both are
+        # re-derived against their own `computation`, and a new one is added here rather than given
+        # a re-derivation of its own so that "a derived value states its arithmetic" stays one rule.
+        for field in ("nominal_kg_s", "total_w"):
+            if state.get(field) is None:
+                continue
             rederive(
                 f"domains/{name}/components.yaml:state {state.get('id')}",
-                state.get("nominal_kg_s"),
+                state.get(field),
                 (state.get("provenance") or {}).get("computation"),
                 report,
             )

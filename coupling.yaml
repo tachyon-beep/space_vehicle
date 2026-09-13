@@ -268,7 +268,29 @@ nodes:
       tick of lag on the quantity the whole thermal domain is built on
   coolant_supply_t:  {domain: thermal, kind: state, unit: K, apollo: "101"}
   coldplate_t:       {domain: thermal, kind: state, unit: K, apollo: "105"}
-  radiator_reject:   {domain: thermal, kind: flow,  unit: W, apollo: "107"}
+  radiator_reject:
+    domain: thermal
+    kind: flow
+    unit: W
+    apollo: "107"
+    # Two states, and the order is physical rather than alphabetical: rejection is
+    # `epsilon x sigma x A x T^4` against the absorbed load, so the surface temperature is what it is
+    # a function of. The frozen lexicographic tiebreak sorts `radiator_rejection_w` first and would
+    # compute the rejection from last tick's temperature — a one-tick error in a quantity that enters
+    # every thermal edge on the vehicle.
+    state_order: [zone_radiator_t, radiator_rejection_w]
+  environment_heat:
+    domain: thermal
+    kind: flow
+    unit: W
+    note: >-
+      the heat the environment puts *into* the radiator, which is the quantity `E-RAD-THERM` rejects
+      against and which had no node until round 71. `radiator_model.environment` declares it —
+      1361 W/m2 of solar flux, 0.2 absorptivity, 9.1 m2 presented at a bad attitude = 2,477 W,
+      comparable to the radiator's own 2,588 W capacity — so attitude alone can cancel the vehicle's
+      rejection, which is the whole reason `apollo_diode.md:341` lists "radiator isolation / poor
+      attitude" as a failure chain. The lunar surface terms are still owed, and are owed *here* now
+      rather than in a block no edge could read
   lm_cabin_zone_t:   {domain: thermal, kind: state, unit: K,
                       note: "the LM cabin's thermal state, the second compartment's input to its own pressure"}
   cabin_zone_t:      {domain: thermal, kind: state, unit: K,
@@ -796,6 +818,24 @@ edges:
     to: lm_cabin_zone_t
     kind: lag
     advances: zone_lm_cabin_t
+  - id: E-ENV-RAD
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "W per W"
+      basis: derived
+      relation: "every watt the environment absorbs reaches the radiator surface, so the transfer is one for one in both the balance and the state it drives"
+      at: "bad attitude, full sun"
+      note: >-
+        **the forward edge `radiator_reject` did not have.** Round 70 moved `zone_radiator_t` onto
+        this node, found its only inbound edge was `E-WATER-RAD` — a back-edge, which neither the
+        linter nor the plant counts as a driver — and moved the state back. With the environment in
+        the graph the node has an input, and the radiator's temperature has something to be a
+        function of
+    from: environment_heat
+    to: radiator_reject
+    kind: algebraic
+    advances: radiator_rejection_w
   - id: E-WATER-RAD
     sensitivity:
       value: 4.0816e-07
@@ -813,6 +853,7 @@ edges:
     from: water_cooling
     to: radiator_reject
     kind: rate
+    advances: radiator_rejection_w
   - id: E-PROP-ENG
     sensitivity:
       value: 0.00032423409

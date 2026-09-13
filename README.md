@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 131 states over 52 scheduled nodes, 141
+**All eleven domains have landed** — 148 channels, 132 states over 53 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 68 of the 131 states need code before the plant can
+rules the configuration deliberately does not carry**, so 69 of the 132 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-131 states, by what blocks them:
+132 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -2241,41 +2241,36 @@ round 68 paired a channel that was published for one, and this round found a *ga
 not hold. Each was an asymmetry between two compartments that cannot equalise, and each was invisible
 because nothing compared the two sides.
 
-## A zone's temperature lives on a node, or the zone says why it has none
+## The environment is in the graph, and the radiator has something to be a function of
 
-Six zones are declared and all six carry a temperature state; five carry a *driver*. The gap was
-invisible because of **where the states lived**: two sat on the `internal` sentinel, which is not a
-node, so no edge could terminate on them — `internal` has no inbound edge at all. The two crewed
-cabins were in exactly that position until round 55 gave them heat-rate nodes, and the radiator was
-in it until this round moved `zone_radiator_t` onto `radiator_reject`, where a node already existed
-and was already driven.
+Round 70 moved `zone_radiator_t` onto `radiator_reject` and moved it back, because its only inbound
+edge there was `E-WATER-RAD` — a **back-edge**, which neither the linter nor the plant counts as a
+driver. What was missing was a *forward* edge, and what the radiator's temperature is a function of is
+**the heat the environment puts into it.**
 
-| zone | node | driver |
-|---|---|---|
-| `csm_cabin` | `cabin_zone_t` | `E-CABIN-EQ-CSM` |
-| `lm_cabin` | `lm_cabin_zone_t` | `E-CABIN-EQ-LM` |
-| `csm_avionics_bay` | `coldplate_t` | `E-FC-HEAT`, `E-TRANSPORT-PLATE`, `E-STRUCT-PLATE` |
-| `csm_service_bay` | *sentinel* | **none — declared** |
-| `lm_descent_bay` | *sentinel* | **none — declared** |
-| `radiator_loop` | *sentinel* | **none — declared** |
+`environment_heat` is a node now, produced by a grounded state:
 
-The radiator was moved onto `radiator_reject` and **moved back in the same round**, which is the
-round's most useful result: its only inbound edge there is `E-WATER-RAD`, and that is
-`C-WATER-BUDGET`'s **back-edge**. Neither the linter nor the plant counts a back-edge as a driver, so
-the node gave the state a home without giving it an input — and the linter said so **twice**, first
-that `E-WATER-RAD` needed an `advances`, then that `radiator_reject` was undriven. What the radiator's
-surface temperature needs is a forward edge from the environment it faces, and `environment` is a
-block in `vehicle.yaml` with no node.
+```
+1361 W/m2  x  0.2 absorptivity  x  9.1 m2 presented at a bad attitude  =  2477 W
+```
 
-And I reintroduced the round-48 crash: the new check takes both `vehicle.yaml` and the thermal domain,
-so when `vehicle.yaml` will not parse it dereferenced `None` — the exact shape the cross-file checks
-were guarded against. `test_an_unloadable_vehicle_refuses_instead_of_crashing` caught it, which is
-what it is for.
+against the radiator's own 2,588 W of rejection capacity. That is the whole reason
+`apollo_diode.md:341` lists *"radiator isolation / poor attitude"* as a failure chain — attitude alone
+can cancel the vehicle's rejection — and it was declared in `radiator_model.environment` all along
+while no edge could read it.
 
-The two bays are declared in `zones_not_on_nodes` with their reasons rather than left implicit: their
-630 W and 180 W are assigned, their bands are declared, and the heat-rate node round 55 built for the
-cabins is what they need. `lm_descent_bay` is the one whose missing driver has a consequence the
-mission cares about — it is where the frozen-line chain lives.
+`E-ENV-RAD` drives `radiator_reject`, so the zone moved onto that node for real this time, with a
+`state_order` because rejection is `epsilon x sigma x A x T^4` and the frozen lexicographic tiebreak
+sorts `radiator_rejection_w` **first** — computing the rejection from last tick's temperature. A
+one-tick error in a quantity that enters every thermal edge on the vehicle.
+
+**Four of six zones now carry a driver**, against three before. The two that remain are declared in
+`zones_not_on_nodes`, and the lunar surface terms (`lunar_ir_w_m2`, `albedo_load_w`) are still
+`UNCONFIGURED` — but they are owed *here* now, where an edge can carry them, rather than in a block
+no tool reads.
+
+The re-derivation hook reads `total_w` as well as `nominal_kg_s` now, so a state that declares the
+operating point it is sized at has its arithmetic checked whichever unit its subject takes.
 
 ## Authoring convention: no flow mappings
 
@@ -2647,7 +2642,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 131 states, 73 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 132 states, 74 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is
