@@ -4269,6 +4269,90 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
             )
 
 
+def check_cabin_equilibrium(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The cabin's equilibrium temperature has to lie inside the cabin's own limit band.
+
+    Four declarations have to agree for that to be true, and they live in three files: the heat the
+    compartment's equipment puts into it (`domains/thermal/components.yaml#heat_inputs`, summed from
+    the *power* domain's load inventory), the cabin's lumped conductance (the same file's
+    `conductance_w_per_k`), the coolant supply temperature (`vehicle.yaml#thermal.loops`), and the
+    zone's own `limit_c` (`vehicle.yaml#thermal.zones`). Nothing joined them, and the arithmetic is
+    one line: **T = supply + Q/G**.
+
+    Writing it found a swapped pair of fields. `loop_primary` declared `supply_c: [2.8, 7.2]` and
+    `evaporator_outlet_c: 5.3`, while its own source reads *"mixed supply 45 F = 7.2 C, evaporator
+    outlet 41.5 F = 5.3 C over a 37-45 F range"* — so the supply carried the evaporator's span and
+    the evaporator carried the midpoint of the span it should have been. Taken at face value the
+    lower end of that band is a 2.8 C supply, and at 2.8 C:
+
+      * `csm_cabin`: 2.8 + 733/125 = **8.66 C**, against a 10 C floor
+      * `lm_cabin`:  2.8 + 827/125 = **9.42 C**, against a 10 C floor
+
+    Both below. The vehicle would have tripped its own cabin-low alarm on every cold pass of a
+    nominal mission, and the cause was a field name rather than a physical impossibility: the cabin
+    supply is the *mixed* supply at 7.2 C, which puts the two cabins at 13.06 C and 13.82 C, inside
+    their bands with margin. The check is what makes the difference visible, because either
+    assignment is plausible in isolation.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    if not thermal or not vehicle:
+        return
+    zones = {str(z.get("id")): z for z in (vehicle.get("thermal") or {}).get("zones") or []}
+    loops = {
+        str(loop.get("id")): loop for loop in (vehicle.get("thermal") or {}).get("loops") or []
+    }
+    # Which loop serves which compartment. Declared here rather than inferred because the two loops
+    # are the CSM's and the LM's and nothing in either file says so.
+    served = {"csm_cabin": "loop_primary", "lm_cabin": "loop_lm"}
+    states = {str(s.get("id")): s for s in thermal.get("state") or [] if isinstance(s, dict)}
+    for zone, loop_id in sorted(served.items()):
+        zone_doc = zones.get(zone)
+        loop = loops.get(loop_id)
+        if not zone_doc or not loop:
+            continue
+        bands = zone_doc.get("limit_c") or [None, None]
+        supply = loop.get("supply_c")
+        if not isinstance(supply, (int, float)):
+            report.refuse(
+                f"vehicle.yaml#thermal.loops.{loop_id}",
+                f"serves {zone} and states no single `supply_c` figure. A band here is the "
+                "evaporator outlet's range rather than the mixed supply the cabin sees, and the "
+                "difference is several kelvin of cabin temperature",
+            )
+            continue
+        heat = states.get(f"cabin_heat_{zone.split('_')[0]}_w")
+        cabin = states.get(
+            next(
+                (
+                    sid
+                    for sid, s in states.items()
+                    if str(s.get("node"))
+                    == ("cabin_zone_t" if zone == "csm_cabin" else "lm_cabin_zone_t")
+                ),
+                "",
+            )
+        )
+        if not heat or not cabin or not cabin.get("conductance_w_per_k"):
+            continue
+        equilibrium = float(supply) + float(heat.get("total_w") or 0) / float(
+            cabin["conductance_w_per_k"]
+        )
+        low, high = (bands + [None, None])[:2]
+        if isinstance(low, (int, float)) and equilibrium < low:
+            report.refuse(
+                f"vehicle.yaml#thermal.zones.{zone}",
+                f"has a {low} C floor and its equipment's {heat.get('total_w')} W over a "
+                f"{cabin['conductance_w_per_k']} W/K conductance puts it at {equilibrium:.2f} C on a "
+                f"{supply} C supply. The vehicle would trip its own cabin-low alarm in a nominal "
+                "mission, which means one of the four declarations is wrong",
+            )
+        if isinstance(high, (int, float)) and equilibrium > high:
+            report.refuse(
+                f"vehicle.yaml#thermal.zones.{zone}",
+                f"has a {high} C ceiling and its equilibrium at {equilibrium:.2f} C is above it",
+            )
+
+
 def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """One machine, two files, and no sentence saying so.
 
@@ -5233,6 +5317,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
+    check_cabin_equilibrium(root, vehicle, report)
     if mission is not None:
         if vehicle is not None:
             check_mission(mission, vehicle, report)

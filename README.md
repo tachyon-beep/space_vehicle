@@ -1860,6 +1860,39 @@ its state toward its single driver, so the cabin now relaxes toward **Q/G absolu
 **coolant + Q/G**. The offset is 8 K at a 1 kW load, and it is missing in the direction that makes a
 warm cabin look nominal.
 
+## The cabin's equilibrium, and two fields that were the wrong way round
+
+Four declarations have to agree for a cabin to be a habitable cabin, and they live in three files: the
+heat its equipment puts in (`heat_inputs`, summed from the *power* domain's load inventory), the
+lumped conductance, the coolant supply temperature, and the zone's own `limit_c`. Nothing joined them,
+and the arithmetic is one line: **T = supply + Q/G**.
+
+`check_cabin_equilibrium` writes that line, and it found a swapped pair immediately. `loop_primary`
+declared `supply_c: [2.8, 7.2]` with `evaporator_outlet_c: 5.3` — while its own source reads *"mixed
+supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range."* **The supply carried the
+evaporator's span and the evaporator carried that span's midpoint.** Taken at face value the lower end
+is a 2.8 C supply, and at 2.8 C:
+
+| | equilibrium | floor |
+|---|---|---|
+| `csm_cabin` | 2.8 + 733/125 = **8.66 C** | 10 C |
+| `lm_cabin` | 2.8 + 827/125 = **9.42 C** | 10 C |
+
+**The vehicle would have tripped its own cabin-low alarm on every cold pass of a nominal mission**,
+and the cause was a field name rather than a physical impossibility: the cabin supply is the *mixed*
+supply at 7.2 C, which puts the two cabins at 13.06 C and 13.82 C, inside their bands with margin.
+
+`loop_lm` was worse, and the widened check caught it on the same pass. Its `supply_c: [1.7, 12]` was
+the **magnitude of the operating range's cold end with the sign lost** — the source gives +29 to
++120 F = −1.7 to 48.9 C as an *operating range* — paired with an upper bound from nowhere. It is
+`chosen` at the CSM's mixed supply now, with the reason recorded, because both loops serve a cabin at
+5 psia through the same 125 W/K conductance. The alternative considered is that discarded cold end,
+−1.7 C: it puts the LM cabin at 4.9 C against its own 10 C floor.
+
+The conductance moved out of prose and into `conductance_w_per_k` while I was there, because a number
+the linter cannot read is a number that drifts — and this one now has four other declarations resting
+on it.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

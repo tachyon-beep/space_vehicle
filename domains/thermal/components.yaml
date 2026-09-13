@@ -87,6 +87,7 @@ state:
     node: cabin_zone_t
     unit: K
     tau_s: 2880
+    conductance_w_per_k: 125
     provenance:
       basis: derived
       relation: "C/G. C = 400 kg aluminium-equivalent x 900 J/kg-K = 360,000 J/K; G = 125 W/K, sized so a 1 kW cabin load sits about 8 K above the coolant supply, which is the order apollo's cabin-to-coolant difference implies. tau = 360,000/125 = 2,880 s"
@@ -113,6 +114,7 @@ state:
     node: lm_cabin_zone_t
     unit: K
     tau_s: 2880
+    conductance_w_per_k: 125
     provenance:
       basis: derived
       relation: "as the CSM cabin: 6.7 m3 at about 5 psia, so the same lumped mass and conductance within the precision of either figure"
