@@ -4311,6 +4311,59 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
             )
 
 
+def check_metabolic_rules(
+    root: Path, vehicle: dict[str, Any], mission: dict[str, Any], report: Report
+) -> None:
+    """What a cabin's equipment must remove is what the crew in it produce.
+
+    Three declarations in three files have to agree, and until round 66 nothing joined them: the
+    crew count (`mission.yaml#crew`), the metabolic production rate
+    (`vehicle.yaml#consumables.metabolic`), and the removal rate the ECLSS domain declares for each
+    compartment. The arithmetic is one line per cabin — **rate = crew x kg_per_crew_day / 86400** —
+    and it is the same three-way join as the cabin equilibrium's, applied to a different quantity.
+
+    The two figures are not the same figure, which is the point of the round-63 split: the CSM
+    element removes what `size` crew produce and the LM cartridge what `surface_party` produce, so
+    the LM's rate is two thirds of the CSM's on the same metabolic constant. A single shared state
+    could not have expressed either.
+    """
+    eclss = load(root / "domains" / "eclss" / "components.yaml", report) or {}
+    states = {str(s.get("id")): s for s in eclss.get("state") or [] if isinstance(s, dict)}
+    crew = (mission or {}).get("crew") or {}
+    metabolic = ((vehicle or {}).get("consumables") or {}).get("metabolic") or {}
+    per_day = metabolic.get("co2_kg_per_crew_day")
+    if not crew or not per_day:
+        report.debt(
+            "domains/eclss/components.yaml",
+            "declares removal rates and either mission.yaml#crew or the metabolic rate is absent, "
+            "so what the crew produce cannot be compared with what the equipment removes",
+        )
+        return
+    for state_id, key in (
+        ("co2_removal_csm_kg_s", "size"),
+        ("co2_removal_lm_kg_s", "surface_party"),
+    ):
+        state = states.get(state_id)
+        if state is None:
+            continue
+        headcount = crew.get(key)
+        if not isinstance(headcount, (int, float)):
+            report.refuse(
+                "mission.yaml#crew",
+                f"states no {key!r}, which is the crew count {state_id} is sized against",
+            )
+            continue
+        expected = headcount * float(per_day) / 86400.0
+        declared = state.get("nominal_kg_s")
+        if not isinstance(declared, (int, float)) or abs(declared - expected) > expected * 0.01:
+            report.refuse(
+                f"domains/eclss/components.yaml:state {state_id}",
+                f"declares {declared!r} kg/s and {headcount} crew at {per_day} kg per crew-day is "
+                f"{expected:.6g} kg/s. A cabin's equipment that removes a different amount from what "
+                "its crew produce is a cabin whose CO2 either climbs or falls with nobody in it",
+            )
+
+
 def check_cabin_equilibrium(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The cabin's equilibrium temperature has to lie inside the cabin's own limit band.
 
@@ -5380,6 +5433,7 @@ def main(argv: list[str] | None = None) -> int:
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
     check_cabin_equilibrium(root, vehicle, report)
+    check_metabolic_rules(root, vehicle, mission, report)
     if mission is not None:
         if vehicle is not None:
             check_mission(mission, vehicle, report)

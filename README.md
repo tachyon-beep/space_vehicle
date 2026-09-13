@@ -2132,6 +2132,31 @@ already had, or it refused four correctly-declared tanks.
 
 **No stock-flux refusal is left anywhere in the vehicle.**
 
+## What a cabin removes is what its crew produce
+
+Three declarations in three files, joined for the first time in round 66: the crew count
+(`mission.yaml#crew`), the metabolic production rate (`vehicle.yaml#consumables.metabolic`), and the
+removal rate the ECLSS domain declares per compartment. One line each —
+**rate = crew × kg_per_crew_day / 86400** — and it is the cabin equilibrium's three-way join applied
+to a different quantity.
+
+| | crew | rule | rate |
+|---|---|---|---|
+| `csm_cabin` | `crew.size` = 3 | `3 × 0.91 / 86400` | 3.159722e-05 kg/s |
+| `lm_cabin` | `crew.surface_party` = 2 | `2 × 0.91 / 86400` | 2.106481e-05 kg/s |
+
+**The two figures are deliberately not the same figure**, which is the point of the round-63 split:
+the LM's rate is exactly two thirds of the CSM's on one metabolic constant, and the test asserts that
+ratio against the crew declaration rather than against the arithmetic.
+
+Moving the crew count to three, or the metabolic rate to 1.2 kg per crew-day, refuses the domain's
+rate with the reason: *"a cabin's equipment that removes a different amount from what its crew produce
+is a cabin whose CO2 either climbs or falls with nobody in it."*
+
+That is now **two of the 68 rule-owing states** with a completely specified rule — the cabin
+equilibrium (round 57) and this pair — and both are specified because their inputs were already
+declared and nothing had joined them.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -172,8 +172,10 @@ state:
     node: co2_removal_csm
     method: algebraic
     unit: "kg CO2/s"
+    nominal_kg_s: 3.159722e-05
     provenance:
       basis: derived
+      computation: "3 * 0.91 / 86400"
       relation: >-
         the CSM element's removal rate: its remaining man-hour capacity converted through the
         metabolic production rate, capped by the blower's flow. Algebraic because the rate follows
@@ -188,8 +190,10 @@ state:
     node: co2_removal_lm
     method: algebraic
     unit: "kg CO2/s"
+    nominal_kg_s: 2.106481e-05
     provenance:
       basis: derived
+      computation: "2 * 0.91 / 86400"
       relation: >-
         as the CSM's, at the cartridge: the LM's own remaining capacity, its own cabin's CO2 and the
         same two crew whose metabolic production it is sized against. The LM carries two crew during
