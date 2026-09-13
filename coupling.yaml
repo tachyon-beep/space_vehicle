@@ -853,7 +853,7 @@ edges:
       value: UNCONFIGURED
       unit: "K per W"
       basis: UNCONFIGURED
-      relation: "the service bay's steady-state rise per watt, which is 1/G for the bay's own conductance"
+      relation: "the service bay's steady-state rise per watt: 1/G, with G = C/tau and tau declared as 7,200 s. So the single missing scalar is the lumped mass C = m x c_p — the propellant and structure the state's own reason names — and this value follows from it by division rather than by a second choice"
       at: "service bay, lumped"
       note: >-
         the zone's driver, and its value is owed: `thermal_diode.md:965` declares every thermal
@@ -869,7 +869,7 @@ edges:
       value: UNCONFIGURED
       unit: "K per W"
       basis: UNCONFIGURED
-      relation: "as E-BAY-HEAT-CSM, for the descent stage"
+      relation: "as E-BAY-HEAT-CSM: 1/G with G = C/tau over the declared 10,800 s, so the lumped mass of the descent stage's propellant and structure is the one scalar that closes it"
       at: "descent bay, lumped"
       note: >-
         the frozen-line chain's zone, and the one of the two whose missing conductance has a

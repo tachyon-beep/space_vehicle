@@ -175,8 +175,15 @@ state:
       relation: "C/G. C = 60 kg aluminium-equivalent = 54,000 J/K; G = 133 W/K, sized so an 800 W electronics load sits about 6 K above the plate. tau = 54,000/133 = 406 s"
       note: "apollo_diode.md:97: electronics were directly cooled by coldplates, so the coldplate and its boxes are one lump"
   - id: zone_csm_service_t
+    # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
+    # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
+    # watt is, and it follows from this mass by division once `c_p` is stated with it
     method: lag
     node: service_bay_zone_t
+    # `C = m x c_p` and `G = C / tau`, so ONE number closes the edge above: the lumped mass. The
+    # propellant is the mass and the tank wall is the path, which is what the state's own reason
+    # says; what is owed is that mass, not the conductance, because `tau` is already declared.
+    lumped_mass_kg: UNCONFIGURED
     unit: K
     tau_s: 7200
     provenance:
@@ -192,8 +199,12 @@ state:
       basis: derived
       relation: "as the CSM cabin: 6.7 m3 at about 5 psia, so the same lumped mass and conductance within the precision of either figure"
   - id: zone_lm_descent_t
+    # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
+    # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
+    # watt is, and it follows from this mass by division once `c_p` is stated with it
     method: lag
     node: descent_bay_zone_t
+    lumped_mass_kg: UNCONFIGURED
     unit: K
     tau_s: 10800
     provenance:

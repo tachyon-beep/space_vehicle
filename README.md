@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 249 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -182,11 +182,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **247** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **249** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **191** the plant
+charging efficiency). The **193** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -2269,6 +2269,23 @@ that closed them, and the linter composed. It checks both directions now, the sa
 direction was added first.
 
 `zones_not_on_nodes` is empty and gone, and six of six zones carry a driver.
+
+## One unknown is one debt
+
+The two bays' time constants are **chosen** where the cabin's is `derived`: the cabin's relation gives
+`C = 400 kg × 900 J/kg-K = 360,000 J/K` and `G = 125 W/K`, so `tau = C/G = 2,880 s` follows. The bays
+have a tau and a qualitative reason — *"the propellant is the mass and the tank wall is the path"* —
+and nothing else, which is why their edges carried `UNCONFIGURED` and the debt was vague.
+
+**And naming both the mass and the conductance would be two debts for one unknown**, since either
+determines the other given tau. So the states declare `lumped_mass_kg` alone, and the edges' relations
+say how `1/G` follows from it by division. What is owed is **one scalar per bay** — the mass of the
+propellant and structure the reason already names — and the round's count went 247 → 249 rather than
+247 → 251, which is the difference between one obligation and two names for it.
+
+`thermal_diode.md:965`'s refusal to publish thermal constants is why it is owed rather than derived,
+and it is also why a plausible number would be exactly the invented figure that document refuses. The
+honest move is to name the scalar, not to shrink the debt by guessing it.
 
 ## Authoring convention: no flow mappings
 
