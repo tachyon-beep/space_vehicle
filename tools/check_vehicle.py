@@ -3656,6 +3656,48 @@ def check_producers(
         )
 
 
+def check_atmosphere_symmetry(root: Path, report: Report) -> None:
+    """Every gas the atmosphere model declares is held in *every* cabin, or the gap is explained.
+
+    Round 68 asked this question of the channels and found the CO2 exposure average published for one
+    compartment. This is the same question one file over, and it found the same shape: the atmosphere
+    model declares four gases (`o2`, `n2`, `co2`, `h2o`), `cabin_atm` held four stock states, and
+    **`lm_cabin_atm` held three — there was no `lm_cabin_h2o_kg`** — while `lm_water_separator` sits
+    in the same file to remove the vapour that had no state to be in. A component whose subject the
+    model does not hold is the round-42 absorber finding arriving in the atmosphere.
+
+    A cabin may legitimately lack a gas, so the rule is a declaration rather than a refusal: the pair
+    goes in `atmosphere_model.absent` with its reason. Nothing is absent today, and the list is what
+    keeps a future one from being silent.
+    """
+    eclss = load(root / "domains" / "eclss" / "components.yaml", report) or {}
+    model = eclss.get("atmosphere_model") or {}
+    gases = [str(g.get("id")) for g in model.get("gases") or [] if isinstance(g, dict)]
+    if not gases:
+        return
+    states = [s for s in eclss.get("state") or [] if isinstance(s, dict)]
+    absent = {
+        (str(pair[0]), str(pair[1]))
+        for pair in model.get("absent") or []
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    }
+    for cabin in ("cabin_atm", "lm_cabin_atm"):
+        held = {
+            str(s.get("id"))
+            for s in states
+            if str(s.get("node")) == cabin and s.get("method") == "stock"
+        }
+        for gas in gases:
+            if any(gas in name for name in held) or (cabin, gas) in absent:
+                continue
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model",
+                f"declares the gas {gas!r} and {cabin} holds no stock state for it. A model that "
+                "names a species and no state to hold it is a component acting on nothing — either "
+                "add the state or declare the pair in `absent` with its reason",
+            )
+
+
 def check_cabin_pairing(
     registry: dict[str, Any], presentation: dict[str, Any], report: Report
 ) -> None:
@@ -5533,6 +5575,7 @@ def main(argv: list[str] | None = None) -> int:
         check_trajectory(mission, report)
         check_met_clock(mission, report)
     check_cabin_pairing(registry, presentation, report)
+    check_atmosphere_symmetry(root, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.
     all_verbs: dict[str, dict[str, Any]] = {}

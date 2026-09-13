@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 130 states over 52 scheduled nodes, 141
+**All eleven domains have landed** — 148 channels, 131 states over 52 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 68 of the 130 states need code before the plant can
+rules the configuration deliberately does not carry**, so 68 of the 131 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-130 states, by what blocks them:
+131 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -2215,6 +2215,32 @@ published for the wrong compartment for the whole life of the registry.
 A new unpaired channel is refused until it is paired or explained, and a stale explanation is refused
 once the channel gains a twin.
 
+## The LM cabin had no water vapour, and a separator to remove it
+
+Round 68 asked "is this channel paired?" and found the CO2 exposure average published for one
+compartment. Round 69 asked the same question one file over, of the *states*, and found the same
+shape:
+
+| node | stock states |
+|---|---|
+| `cabin_atm` | o2, n2, co2, **h2o** |
+| `lm_cabin_atm` | o2, n2, co2 |
+
+**There was no `lm_cabin_h2o_kg`** — while `lm_water_separator` sits in the same file to remove the
+vapour that had no state to be in, and the atmosphere model declares four gases for the vehicle. A
+component whose subject the model does not hold is the round-42 absorber finding arriving in the
+atmosphere: a mechanism acting on nothing.
+
+`check_atmosphere_symmetry` holds it now. Every gas the model declares must be held in *every* cabin,
+or the pair must be declared in `atmosphere_model.absent` with a reason — because a cabin may
+legitimately lack a species, and the declaration is what separates that from an oversight. Nothing is
+absent today.
+
+**One class of finding, three rounds running:** round 67 split a leak that was doing two cabins' work,
+round 68 paired a channel that was published for one, and this round found a *gas* the LM cabin did
+not hold. Each was an asymmetry between two compartments that cannot equalise, and each was invisible
+because nothing compared the two sides.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
@@ -2585,7 +2611,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 130 states, 73 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 131 states, 73 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

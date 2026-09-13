@@ -296,7 +296,9 @@ nodes:
     note: "the LM's own atmosphere, a separate compartment with a separate ECLSS (apollo_diode.md:1071). Two nodes rather than one because the CSM/LM boundary is a phase-dependent topology switch, not a pipe: from undocking to docking the two atmospheres cannot equalise, and a leak diagnosis that assumed they could would be wrong for exactly the phase where it matters"
     state_order: independent
     state_order_note: >-
-      the LM's three, for the same reason: mixture components, not a sequence
+      the LM's four, for the same reason: mixture components, not a sequence. It said three
+      until round 69, when the water vapour it was missing turned out to be exactly the one
+      \`lm_water_separator\` removes
   cabin_regulator:   {domain: eclss, kind: discrete, unit: enum, apollo: "95"}
 
   # --- GNC, dynamics, geometry --------------------------------------------------------

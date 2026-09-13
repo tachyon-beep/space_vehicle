@@ -104,6 +104,21 @@ state:
     provenance:
       basis: derived
       relation: "as the CSM compartment. On the LM this is the stock Apollo 13's improvised cartridge kept below 1 mmHg, and it is the one whose exhaustion constrains how long a surface stay can be extended."
+  - id: lm_cabin_h2o_kg
+    node: lm_cabin_atm
+    method: stock
+    unit: kg
+    quantum: 1.0e-05
+    min_flow_per_s: 1.0e-05
+    provenance:
+      basis: chosen
+      reason: >-
+        water vapour at the LM's own compartment, and **it did not exist until round 69**: the
+        atmosphere model below declares four gases, the CSM cabin held all four, and the LM held
+        three — while `lm_water_separator` exists in this same file to remove the vapour that had no
+        state to be in. The quantum matches the CSM's for the same reason it was chosen there:
+        humidity is what a condensing exchanger is for, and a failed one is a fault the crew can feel
+        rather than read
   - id: lm_cabin_n2_kg
     node: lm_cabin_atm
     method: stock
