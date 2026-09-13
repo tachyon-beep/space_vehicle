@@ -1639,6 +1639,42 @@ def check_coupling(
         if target in forward_into and eid not in back_edge_ids:
             forward_into[target].append(eid)
 
+    #   **a `lag` or `stock` with no *inbound* edge can never be advanced**, and that is a different
+    #   property from having no edge at all — which is why this went unnoticed. `cabin_zone_t` has
+    #   an edge: `E-ZONE-ATM` points *out* of it, into `cabin_atm`, so the isolation check above is
+    #   satisfied and the node looks connected. But nothing drives it, `zone_csm_cabin_t` is a `lag`,
+    #   and a lag with no driver has nothing to relax toward. The cabin's temperature has no heat
+    #   input anywhere in the graph — the crew, the equipment and the loop all warm it in the prose
+    #   and none of them is an edge.
+    #
+    #   It is reported rather than refused because the fix is a design step and not a repair: the
+    #   heat inputs the thermal domain declares are `power/components.yaml#loads`, and **no load says
+    #   which compartment it heats**. `load_budget` states the relationship and its own note says
+    #   the numbers are not duplicated here; what is missing is the assignment, 25 loads against 6
+    #   zones, and until it exists there is nothing to draw the edges from.
+    driven_methods = {"lag", "stock", "delay", "dynamics"}
+    for name in sorted(node_of):
+        if not incident[name] or forward_into[name]:
+            continue
+        # A tank filled at the pad and never again has no inbound edge *on purpose*, and it says so
+        # in `preloaded:`. Three do — `o2_lm`, `prop_rcs`, `pressurant_he` — and reporting them would
+        # have made this check three parts noise to one part signal. The declaration is what separates
+        # a stock that nothing fills from one that is filled once, which is the distinction the
+        # README already draws for the same reason.
+        if node_of[name].get("preloaded"):
+            continue
+        undriven = [
+            sid
+            for sid in (states_by_node_map or {}).get(name, [])
+            if (state_methods or {}).get(sid) in driven_methods
+        ]
+        if undriven:
+            report.debt(
+                f"coupling.yaml:node {name}",
+                f"has edges but none into it, and {undriven} cannot be advanced without a driver. "
+                "A lag has nothing to relax toward and a stock has nothing to fill it",
+            )
+
     for name, node in sorted(node_of.items()):
         if not incident[name]:
             report.refuse(

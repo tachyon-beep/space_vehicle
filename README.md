@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -174,12 +174,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 248 declared debts and every
+verbs and 128 classified events across the eleven directories, with 254 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1770,6 +1770,41 @@ the loop all warm it in the prose and none of them is an edge.
 Two things the classifier had to get right, and one of them was wrong first: `delay` belongs in the
 rule class, because `advance()` implements `lag` and `stock` and refuses everything else — classifying
 it as ready would have promised the plant a state it cannot advance.
+
+## Having an edge is not having an input
+
+`cabin_zone_t` has an edge. `E-ZONE-ATM` points *out* of it, into `cabin_atm`, so the isolation check
+that refuses "a node with no edge in either direction" is satisfied and the node looks connected.
+
+**Nothing drives it.** `zone_csm_cabin_t` is a `lag`, and a lag with no driver has nothing to relax
+toward. The cabin's temperature has no heat input anywhere in the graph — while the crew, the
+equipment and the loop all warm it in the prose, and the state's own 2,880 s derivation reasons about
+*"a 1 kW cabin load"* that no edge carries. `check_vehicle` now reports it, and the same check found
+three nodes that look identical and are not:
+
+**`o2_lm`, `prop_rcs` and `pressurant_he` have no inbound edge because they are filled at the pad and
+never again**, which they say in `preloaded:`. The first version of the check reported all seven,
+which is three parts noise to one part signal — and the declaration is exactly what separates a stock
+that nothing fills from one that is filled once.
+
+### Why it is a debt and not a refusal
+
+The fix is a design step, not a repair. The heat inputs the thermal domain declares are
+`domains/power/components.yaml#loads`, and **no load says which compartment it heats**: a load carries
+`bus`, `class`, `demand_w`, `inrush_w` and `vehicle`, and nothing else. Twenty-five loads against six
+zones, and until the assignment exists there is nothing to draw a heat-input edge from.
+
+And drawing the obvious edge would be worse than drawing none. A cabin is *not* simply relaxed toward
+the coolant supply — its steady-state offset above that supply is the heat load over the conductance,
+which is what the 2,880 s derivation means by *"a 1 kW cabin load sits about 8 K above the coolant
+supply."* A `lag` pulls its state toward a single driver and has no term for an offset, so an edge
+from `coolant_supply_t` would model the cabin as *equal* to the loop at steady state: **8 K wrong, and
+wrong in the direction that makes a warm cabin look nominal.**
+
+That is the stock-flow finding from `coupling.yaml` arriving at a third domain. The graph has nodes
+for what is conserved and for what is commanded, and none for the flows between them — and here the
+missing flow is a heat rate. **248 became 254**: two design debts in `domains/thermal/` and four
+named undriven nodes.
 
 ## Authoring convention: no flow mappings
 

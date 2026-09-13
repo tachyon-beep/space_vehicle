@@ -376,3 +376,32 @@ load_budget:
   provenance:
     basis: derived
     relation: "2,588 W of radiator plus 2,345 W of evaporator, against a 1,723 W CSM demand — so the vehicle has a comfortable nominal margin and no margin at all if the radiator is sunlit and the evaporator is dry"
+
+# --------------------------------------------------------------------------------------
+# What this domain still owes, and the one item that blocks the cabins.
+# --------------------------------------------------------------------------------------
+open_debts:
+
+  - "**The compartment each load heats is declared nowhere.** `load_budget` above states the
+    relationship correctly — the heat inputs are `domains/power/components.yaml#loads`, and the
+    numbers are not duplicated here — but a load carries `bus`, `class`, `demand_w`, `inrush_w` and
+    `vehicle`, and **no field says which zone its watts warm**. There are 25 loads and 6 zones, and
+    until the assignment exists there is nothing to draw a heat-input edge from. The consequence is
+    not abstract: `zone_csm_cabin_t` and `zone_lm_cabin_t` are `lag` states with the same 2,880 s
+    time constant `a 1 kW cabin load` produced, and **neither node has an edge into it**, so neither
+    can be advanced — the cabin's temperature has no heat source anywhere in the graph while the
+    crew, the equipment and the loop all warm it in the prose. `check_vehicle` now reports the
+    undriven nodes by name. The check also found three nodes that looked the same and are not:
+    `o2_lm`, `prop_rcs` and `pressurant_he` have no inbound edge because they are filled at the pad
+    and never again, which they say in `preloaded:`, so the check exempts a declared one."
+
+  - "**The cabin zones need a second driver the `lag` method cannot express.** A cabin is not
+    simply relaxed toward the coolant supply: its steady-state offset above that supply is the heat
+    load divided by the conductance, which is what the 2,880 s derivation means by \"a 1 kW cabin
+    load sits about 8 K above the coolant supply\". A `lag` pulls the state toward its single driver
+    and has no term for an offset, so drawing an edge from `coolant_supply_t` into `cabin_zone_t`
+    would model the cabin as *equal* to the loop at steady state — 8 K wrong, and wrong in the
+    direction that makes a warm cabin look nominal. Either the state moves to a method that takes a
+    heat term, or the zone gets the flow node the heat budget implies. This is the same finding as
+    `coupling.yaml`'s stock-flow debt arriving at a third domain: **the graph has nodes for what is
+    conserved and for what is commanded, and none for the flows between them.**"
