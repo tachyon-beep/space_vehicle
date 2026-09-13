@@ -187,6 +187,21 @@ nodes:
     kind: flow
     unit: kg H2/s
     note: "hydrogen into the cell: exactly 1/8 of the oxygen draw by mass, the ratio `E-H2-FC` already declares"
+  # The cabin oxygen each regulator admits. The vehicle's O2 inventory is shared between ECLSS and the
+  # fuel cells, and the cabin's share of it had no rate: `E-O2-ECLSS` said "1 kg enters the cabin per
+  # kg of O2" against a *level* rather than a flow, so nothing could apply it.
+  cabin_o2_supply_csm:
+    domain: eclss
+    kind: flow
+    unit: kg O2/s
+    note: >-
+      the regulator's flow into the CSM cabin, which is what replaces what leaves: the cabin leak plus
+      the crew's metabolic consumption. `cabin_o2_supply_csm_kg_s` states the sum and its arithmetic
+  cabin_o2_supply_lm:
+    domain: eclss
+    kind: flow
+    unit: kg O2/s
+    note: "the LM's, over a smaller leak and two crew rather than three"
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
     domain: power
@@ -385,6 +400,30 @@ edges:
         `source_converter_v`, and it belongs in that state's relation, so it is recorded in
         open_debts as a resistance rather than as a coefficient here. Closing this edge retires
         the *coefficient* half of that debt and leaves the resistance half standing
+  - id: E-O2-SUPPLY-CSM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "kg O2 per kg O2"
+      basis: derived
+      relation: "every kilogram the regulator admits leaves the tank and enters the cabin, so the transfer is one for one in both places"
+      at: "regulator flow"
+    from: o2_csm
+    to: cabin_o2_supply_csm
+    kind: rate
+    advances: cabin_o2_supply_csm_kg_s
+  - id: E-O2-SUPPLY-LM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "kg O2 per kg O2"
+      basis: derived
+      relation: "as E-O2-SUPPLY-CSM, at the LM's own tank and regulator. The two compartments cannot equalise between undocking and docking, so this is a second supply path rather than a branch of the first"
+      at: "regulator flow"
+    from: o2_lm
+    to: cabin_o2_supply_lm
+    kind: rate
+    advances: cabin_o2_supply_lm_kg_s
   - id: E-O2-DRAW
     sensitivity:
       value: 1.0
@@ -478,20 +517,19 @@ edges:
     sensitivity: {value: UNCONFIGURED, unit: "V per J", basis: UNCONFIGURED,
     at: nominal, note: "LM and backup source; battery SOC and temperature both move the terminal voltage"}
   - id: E-O2-ECLSS
-    # `advances` because `csm` is not a node state's only occupant:
-    # the cryogenic supply's oxygen enters the CSM cabin, and the node carries more than one state an edge can drive.
+    # `advances` because `cabin_atm` is not a node with one state: the cabin carries four gas masses
+    # and a pressure, and this edge fills the oxygen one.
     advances: csm_cabin_o2_kg
-    from: o2_csm
+    from: cabin_o2_supply_csm
     to: cabin_atm
-    kind: conserve
-    sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+    kind: rate
+    sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the regulator's flow enters the cabin whole: one unit in, one unit out", at: nominal}
   - id: E-LM-O2-ECLSS
-    # `advances` because `lm` is not a node state's only occupant:
-    # as E-O2-ECLSS, at the second compartment, and the node carries more than one state an edge can drive.
+    # as E-O2-ECLSS, at the second compartment
     advances: lm_cabin_o2_kg
-    from: o2_lm
+    from: cabin_o2_supply_lm
     to: lm_cabin_atm
-    kind: conserve
+    kind: rate
     sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
     note: "LM ECLSS is a separate compartment; the CSM/LM boundary is a phase-dependent topology switch, not a pipe (apollo_diode.md:1068-1072)"}
   # `E-ZONE-ATM` was declared here as a `lag` edge from `cabin_zone_t` into `cabin_atm`, with a

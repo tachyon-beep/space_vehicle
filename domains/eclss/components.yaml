@@ -40,7 +40,8 @@ natural_rate_hz: 1
 
 reads: [o2_csm, o2_lm, absorber_capacity_csm, absorber_capacity_lm, crew_state,
         cabin_zone_t, lm_cabin_zone_t]
-writes: [cabin_atm, lm_cabin_atm, cabin_regulator]
+writes: [cabin_atm, lm_cabin_atm, cabin_regulator, cabin_o2_supply_csm,
+         cabin_o2_supply_lm]
 
 # --------------------------------------------------------------------------------------
 # State. Four conserved gases per compartment, one commanded regulator, and three derived
@@ -112,6 +113,38 @@ state:
     provenance:
       basis: derived
       relation: "as the CSM compartment"
+  - id: cabin_o2_supply_csm_kg_s
+    node: cabin_o2_supply_csm
+    method: algebraic
+    unit: kg O2/s
+    nominal_kg_s: 3.798611e-05
+    provenance:
+      basis: derived
+      computation: "(0.023 + 3 * 0.91 / 24) / 3600"
+      relation: >-
+        the regulator replaces what the cabin loses, and both terms are published: the cabin leak at
+        0.023 kg/h and the crew's metabolic consumption at 0.91 kg of oxygen per crew-day for three
+        crew. 0.023 + 3 x 0.91/24 = 0.13675 kg/h = **3.798611e-05 kg/s**. Algebraic rather than a
+        stock because the rate follows the loss rather than accumulating
+      note: >-
+        **the leak term's attribution is in doubt and is recorded in `open_debts`.** The datum is
+        Apollo 11's LM cabin leak of 0.05 lb/hr = 0.0227 kg/h against a 0.2 lb/hr specification, and
+        the CSM's own leak is not published in any source reached — but
+        `domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from "the nominal cabin
+        leak, 0.023 kg/h" as though it were the CSM's. The figure is used here because that is the
+        number this tank is already accounted against; what is owed is a separate CSM measurement
+  - id: cabin_o2_supply_lm_kg_s
+    node: cabin_o2_supply_lm
+    method: algebraic
+    unit: kg O2/s
+    nominal_kg_s: 2.736470e-05
+    provenance:
+      basis: derived
+      computation: "(0.05 * 0.453592 + 2 * 0.91 / 24) / 3600"
+      relation: >-
+        as the CSM's, over the LM's own figures: the A11 flight leak of 0.05 lb/hr = 0.0226796 kg/h and
+        two crew rather than three, so 0.0226796 + 2 x 0.91/24 = 0.098513 kg/h = **2.736470e-05 kg/s**.
+        This is the better-attested of the two — the leak figure is the LM's own
   - id: cabin_regulator_position
     node: cabin_regulator
     method: discrete
@@ -353,4 +386,13 @@ atmosphere_model:
 open_debts:
   - "The condensing heat exchanger's removal rate and the ventilation fan's flow are unpublished; both are declared unset above. Without them the humidity stock has no sink and the ventilation state has no magnitude, so the model can express a humid cabin and cannot yet dry it."
   - "The suit loop is modelled as a single flow channel rather than as a circuit with the PLSS, because apollo publishes suit_loop_flow_cfm and nothing about the portable life support's own consumables. EVA is therefore a phase whose atmosphere consequences are not yet modelled."
-  - "Repressurisation and depressurisation are not modelled. A hatch opening on the surface is a real event with a real gas cost, and `structure.hatch_state` exists without an atmosphere consequence behind it."
+  - "**The cabin leak figure is one number doing duty for two cabins, and its own source names only
+    one of them.** `vehicle.yaml#consumables.leak` carries a single `cabin_leak_kg_per_h_flight: 0.023`
+    whose source is *\"A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification\"* —
+    0.05 lb/hr is 0.0227 kg/h, so the datum is the LM's. The CSM's own leak is published nowhere in
+    the corpus, yet `domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from \"the
+    nominal cabin leak, 0.023 kg/h\" as though it were the CSM's, and the two cabin oxygen supply
+    rates above rest on it for the same reason. The number is not invented — it is the one this tank
+    is already accounted against — but a leak is a property of a seal rather than of a programme, and
+    the LM's seal is not the CSM's. What closes this is a CSM cabin-leak measurement; until then the
+    leak belongs to the LM and is borrowed by the CSM."

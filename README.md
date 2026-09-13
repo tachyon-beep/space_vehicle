@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 249 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 126 states over 47 scheduled nodes, 141
+**All eleven domains have landed** — 147 channels, 128 states over 49 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -182,7 +182,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **249** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 65 of the 126 states need code before the plant can
+rules the configuration deliberately does not carry**, so 67 of the 128 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-126 states, by what blocks them:
+128 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -1966,6 +1966,35 @@ job. The two tanks also lost their inbound edges in the move and now say `preloa
 pad, never refilled, which is true of them and was previously implicit.
 
 **252 became 251**, and six stock edges are now computable where three were.
+
+## The cabin supplies, and the leak that is doing two cabins' work
+
+`E-O2-ECLSS` said "1 kg enters the cabin per kg of O2" against a *level* rather than a flow, so
+nothing could apply it — the last two ratio refusals in the graph. `cabin_o2_supply_csm` and
+`cabin_o2_supply_lm` are flow nodes now, and the rule is what the regulator actually does: **it
+replaces what the cabin loses**, which is the leak plus the crew's metabolic consumption. Both terms
+are published.
+
+| | rule | rate |
+|---|---|---|
+| CSM | `(0.023 + 3 x 0.91/24) / 3600` | 3.798611e-05 kg/s |
+| LM | `(0.05 x 0.453592 + 2 x 0.91/24) / 3600` | 2.736470e-05 kg/s |
+
+Both are re-derived on every run, against their own `computation` — the first states in the vehicle
+whose *nominal operating point* comes from other files' published figures rather than from a single
+sourced number, so a change to the leak or the metabolic rate lands here.
+
+**And one of the two rests on a figure that belongs to the other cabin.** `vehicle.yaml`'s leak block
+carries a single `cabin_leak_kg_per_h_flight: 0.023`, and its own source reads *"A11: LM cabin leak
+0.05 lb/hr actual against a 0.2 lb/hr specification"* — 0.05 lb/hr is 0.0227 kg/h, so **the datum is
+the LM's**. The CSM's own leak is published nowhere in the corpus. Yet
+`domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from "the nominal cabin leak
+0.023 kg/h" as though it were the CSM's, and the CSM supply rate above rests on it for the same
+reason. The number is not invented — it is the one this tank is already accounted against — but **a
+leak is a property of a seal rather than of a programme, and the LM's seal is not the CSM's.** The
+conflict is a named debt in `domains/eclss/`, and what closes it is a CSM cabin-leak measurement.
+
+**Eleven of the nineteen stock-adjacent edges now compute**, against six before this round.
 
 ## Authoring convention: no flow mappings
 
@@ -2337,7 +2366,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 126 states, 66 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 128 states, 70 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

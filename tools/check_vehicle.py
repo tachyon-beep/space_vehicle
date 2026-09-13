@@ -2409,6 +2409,19 @@ def check_domain(
     for trail in walk_unset(docs):
         report.debt(f"domains/{name}/{trail}", "is UNCONFIGURED")
 
+    # A `nominal_kg_s` that states its arithmetic is re-derived, on the same rule as every other
+    # derived value in the folder. The two cabin supply rates are the first states whose *nominal*
+    # operating point is derived from other files' published figures — the leak from `vehicle.yaml`
+    # and the metabolic rate from the corpus — so a change to either lands here.
+    for state in (docs.get("components.yaml") or {}).get("state") or []:
+        if isinstance(state, dict) and state.get("nominal_kg_s") is not None:
+            rederive(
+                f"domains/{name}/components.yaml:state {state.get('id')}",
+                state.get("nominal_kg_s"),
+                (state.get("provenance") or {}).get("computation"),
+                report,
+            )
+
     for component in components.get("components") or []:
         cid = component.get("id", "?")
         cwhere = f"{where}:component {cid}"
