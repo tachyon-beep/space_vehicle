@@ -369,12 +369,23 @@ consumables:
     provenance:
       basis: historical
       source: "NR glossary planning rates for a 154 lb man: in about 2 lb O2, 5 lb water and 1 lb food per day; out about 2 lb CO2 and 6 lb water/urea/minerals. apollo_diode.md:754 requires metabolic O2 and CO2 as *rates* — an input, not a model of a person"
+  # Per cabin, because a leak is a property of a seal rather than of a programme — and because until
+  # round 67 one field was doing both cabins' work while its own source named only one of them.
   leak:
-    cabin_leak_kg_per_h_flight: 0.023
-    cabin_leak_kg_per_h_spec: 0.091
+    csm_kg_per_h: 0.023
+    lm_kg_per_h: 0.0226796
+    lm_spec_kg_per_h: 0.0907184
     provenance:
       basis: historical
-      source: "A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification. Worth stating for the plant: 0.023 kg/h is 0.0064 g/s, BELOW the 0.01 g/s published precision of eclss.leak_rate_g_s. A nominal leak is therefore invisible to the instrument and only a growing one is detectable — the fixed-point dead zone of review-findings.md #1, present in the vehicle itself rather than introduced by the integrator"
+      source: "A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification = 0.0226796 and 0.0907184 kg/h. Worth stating for the plant: 0.023 kg/h is 0.0064 g/s, BELOW the 0.01 g/s published precision of eclss.leak_rate_g_s. A nominal leak is therefore invisible to the instrument and only a growing one is detectable — the fixed-point dead zone of review-findings.md #1, present in the vehicle itself rather than introduced by the integrator"
+      note: >-
+        **the LM's figure is measured and the CSM's is borrowed.** A11 gives one cabin leak, and it is
+        the LM's: 0.05 lb/hr. The CSM's own is published nowhere in the corpus reached, and
+        `domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from "the nominal cabin
+        leak, 0.023 kg/h" as though it were the CSM's — which is 0.0507 lb/hr, the same seal's number
+        to within rounding. So `csm_kg_per_h` is that borrowed figure, declared here rather than left
+        implicit, and what closes it is a CSM cabin-leak measurement. Two cabins with one number
+        between them was the state of this field until round 67 and it read as though it had two
   co2_removal:
     lm_primary_man_hours: 41
     lm_secondary_man_hours: 78

@@ -4339,6 +4339,31 @@ def check_metabolic_rules(
             "so what the crew produce cannot be compared with what the equipment removes",
         )
         return
+    # The oxygen side joins the same two declarations plus the leak: the regulator replaces what the
+    # cabin loses, which is the leak plus the crew's metabolic consumption. Both terms are published,
+    # so the supply rates are as checkable as the removal rates are.
+    leak = ((vehicle or {}).get("consumables") or {}).get("leak") or {}
+    o2_per_day = metabolic.get("o2_kg_per_crew_day")
+    for state_id, crew_key, leak_per_h in (
+        ("cabin_o2_supply_csm_kg_s", "size", leak.get("csm_kg_per_h")),
+        ("cabin_o2_supply_lm_kg_s", "surface_party", leak.get("lm_kg_per_h")),
+    ):
+        state = states.get(state_id)
+        headcount = crew.get(crew_key)
+        if state is None or not isinstance(leak_per_h, (int, float)):
+            continue
+        if not isinstance(headcount, (int, float)) or not isinstance(o2_per_day, (int, float)):
+            continue
+        expected = (float(leak_per_h) + headcount * float(o2_per_day) / 24.0) / 3600.0
+        declared = state.get("nominal_kg_s")
+        if not isinstance(declared, (int, float)) or abs(declared - expected) > expected * 0.01:
+            report.refuse(
+                f"domains/eclss/components.yaml:state {state_id}",
+                f"declares {declared!r} kg/s and {headcount} crew at {o2_per_day} kg per crew-day "
+                f"plus a {leak_per_h} kg/h leak is {expected:.6g} kg/s. The regulator replaces what "
+                "the cabin loses, and a supply that does not is a cabin whose pressure drifts",
+            )
+
     for state_id, key in (
         ("co2_removal_csm_kg_s", "size"),
         ("co2_removal_lm_kg_s", "surface_party"),

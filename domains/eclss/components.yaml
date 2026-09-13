@@ -140,11 +140,12 @@ state:
     nominal_kg_s: 2.736470e-05
     provenance:
       basis: derived
-      computation: "(0.05 * 0.453592 + 2 * 0.91 / 24) / 3600"
+      computation: "(0.0226796 + 2 * 0.91 / 24) / 3600"
       relation: >-
-        as the CSM's, over the LM's own figures: the A11 flight leak of 0.05 lb/hr = 0.0226796 kg/h and
-        two crew rather than three, so 0.0226796 + 2 x 0.91/24 = 0.098513 kg/h = **2.736470e-05 kg/s**.
-        This is the better-attested of the two — the leak figure is the LM's own
+        as the CSM's, over the LM's own figures: `vehicle.yaml#consumables.leak.lm_kg_per_h` =
+        0.0226796 (A11's measured 0.05 lb/hr) and two crew rather than three, so
+        0.0226796 + 2 x 0.91/24 = 0.098513 kg/h = **2.736470e-05 kg/s**. This is the better-attested
+        of the two, because the leak figure is the LM's own
   - id: cabin_regulator_position
     node: cabin_regulator
     method: discrete
@@ -415,13 +416,12 @@ atmosphere_model:
 open_debts:
   - "The condensing heat exchanger's removal rate and the ventilation fan's flow are unpublished; both are declared unset above. Without them the humidity stock has no sink and the ventilation state has no magnitude, so the model can express a humid cabin and cannot yet dry it."
   - "The suit loop is modelled as a single flow channel rather than as a circuit with the PLSS, because apollo publishes suit_loop_flow_cfm and nothing about the portable life support's own consumables. EVA is therefore a phase whose atmosphere consequences are not yet modelled."
-  - "**The cabin leak figure is one number doing duty for two cabins, and its own source names only
-    one of them.** `vehicle.yaml#consumables.leak` carries a single `cabin_leak_kg_per_h_flight: 0.023`
-    whose source is *\"A11: LM cabin leak 0.05 lb/hr actual against a 0.2 lb/hr specification\"* —
-    0.05 lb/hr is 0.0227 kg/h, so the datum is the LM's. The CSM's own leak is published nowhere in
-    the corpus, yet `domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from \"the
-    nominal cabin leak, 0.023 kg/h\" as though it were the CSM's, and the two cabin oxygen supply
-    rates above rest on it for the same reason. The number is not invented — it is the one this tank
-    is already accounted against — but a leak is a property of a seal rather than of a programme, and
-    the LM's seal is not the CSM's. What closes this is a CSM cabin-leak measurement; until then the
-    leak belongs to the LM and is borrowed by the CSM."
+  - "**The cabin leak is declared per cabin now, and one of the two is borrowed.** Round 67 split
+    `vehicle.yaml#consumables.leak` into `csm_kg_per_h: 0.023` and `lm_kg_per_h: 0.0226796`, so that
+    the two supply rates above rest on fields rather than on a single figure doing both cabins' work.
+    What remains owed is the CSM's measurement: A11 gives one cabin leak and it is the LM's, 0.05
+    lb/hr, while the CSM's own is published nowhere in the corpus reached. The 0.023 kg/h used for it
+    is the figure `domains/consumables/components.yaml` already sizes `o2_csm_kg`'s quantum from —
+    0.0507 lb/hr, the same seal's number to within rounding — so it is borrowed rather than invented,
+    and the provenance note says so. **A leak is a property of a seal rather than of a programme, and
+    two cabins with one number between them read as though they had two.**"

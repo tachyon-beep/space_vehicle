@@ -1984,17 +1984,14 @@ Both are re-derived on every run, against their own `computation` — the first 
 whose *nominal operating point* comes from other files' published figures rather than from a single
 sourced number, so a change to the leak or the metabolic rate lands here.
 
-**And one of the two rests on a figure that belongs to the other cabin.** `vehicle.yaml`'s leak block
-carries a single `cabin_leak_kg_per_h_flight: 0.023`, and its own source reads *"A11: LM cabin leak
-0.05 lb/hr actual against a 0.2 lb/hr specification"* — 0.05 lb/hr is 0.0227 kg/h, so **the datum is
-the LM's**. The CSM's own leak is published nowhere in the corpus. Yet
-`domains/consumables/components.yaml` sizes `o2_csm_kg`'s quantum from "the nominal cabin leak
-0.023 kg/h" as though it were the CSM's, and the CSM supply rate above rests on it for the same
-reason. The number is not invented — it is the one this tank is already accounted against — but **a
-leak is a property of a seal rather than of a programme, and the LM's seal is not the CSM's.** The
-conflict is a named debt in `domains/eclss/`, and what closes it is a CSM cabin-leak measurement.
+**And one of them rested on a figure that belonged to the other cabin.** Round 67 split
+`vehicle.yaml#consumables.leak` into `csm_kg_per_h: 0.023` and `lm_kg_per_h: 0.0226796`: A11 gives one
+cabin leak and it is the LM's, 0.05 lb/hr, while the CSM's own is published nowhere. The 0.023 used
+for the CSM is the figure `consumables` already sizes `o2_csm_kg`'s quantum from — 0.0507 lb/hr, the
+same seal's number to within rounding — so it is borrowed rather than invented, and the field's
+provenance says so. **A leak is a property of a seal rather than of a programme, and two cabins with
+one number between them read as though they had two.**
 
-**Eleven of the nineteen stock-adjacent edges now compute**, against six before this round.
 
 ## The water cycle's two edges had the stock on the wrong side of both
 
@@ -2156,6 +2153,31 @@ is a cabin whose CO2 either climbs or falls with nobody in it."*
 That is now **two of the 68 rule-owing states** with a completely specified rule — the cabin
 equilibrium (round 57) and this pair — and both are specified because their inputs were already
 declared and nothing had joined them.
+
+## The oxygen supplies are held to the same three declarations
+
+Round 60 declared the two cabin supply rates with their arithmetic; nothing checked them beyond
+re-deriving their own `computation`. They are held to the *other* files now — the crew count, the
+metabolic rate and the leak — which is the round-66 join applied to the supply side:
+
+| | crew | rule | rate |
+|---|---|---|---|
+| `csm_cabin` | 3 | `(0.023 + 3 x 0.91/24) / 3600` | 3.798611e-05 kg/s |
+| `lm_cabin` | 2 | `(0.0226796 + 2 x 0.91/24) / 3600` | 2.736470e-05 kg/s |
+
+**And the leak needed splitting to make that join real.** `vehicle.yaml#consumables.leak` was one
+figure doing two cabins' work while its own source named only one of them: A11 gives one cabin leak,
+0.05 lb/hr, and it is the **LM's**, while the CSM's own is published nowhere in the corpus reached.
+The 0.023 kg/h used for the CSM is the figure `consumables` already sizes `o2_csm_kg`'s quantum from —
+0.0507 lb/hr, the same seal's number to within rounding — so it is *borrowed rather than invented*,
+and it is now a declared field with its provenance saying so. What closes it is a CSM cabin-leak
+measurement.
+
+**A leak is a property of a seal rather than of a programme, and two cabins with one number between
+them read as though they had two.**
+
+Changing either leak now refuses the rate it feeds: *"the regulator replaces what the cabin loses, and
+a supply that does not is a cabin whose pressure drifts."*
 
 ## Authoring convention: no flow mappings
 
