@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 124 states over 45 scheduled nodes, 141
+**All eleven domains have landed** — 147 channels, 126 states over 47 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -182,11 +182,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **183** the plant
+charging efficiency). The **185** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 65 of the 124 states need code before the plant can
+rules the configuration deliberately does not carry**, so 65 of the 126 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-124 states, by what blocks them:
+126 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -1930,6 +1930,42 @@ and the plant's own reports — channels, edges, debts, states, nodes, `UNCONFIG
 build-order share that owes a rule — and asserts the README contains each. **It deliberately adds no
 counter of its own**: a counter written for the test would be one more declaration to drift, and the
 two tools already compute all of them.
+
+## The fuel cell's reactant chain, grounded but for one figure
+
+The cell is the vehicle's only consumer of hydrogen and its second consumer of oxygen, and **the tanks
+it drains had no computable outflow** — the oxygen inventory is shared between ECLSS and the cells and
+nothing said at what rate. `fc_o2_draw` and `fc_h2_draw` are flow nodes now, and the whole chain hangs
+off them:
+
+```
+o2_csm ──(1.0)──> fc_o2_draw ──(1.0)──> fuel_cell        the tank supplies the draw,
+                     ^       └──(1.126)──> water_potable   the draw limits the cell,
+                     └──(kg/s per W, UNCONFIGURED)── fuel_cell   the cell sets the draw
+h2_csm ──(1.0)──> fc_h2_draw ──(1.0)──> fuel_cell
+```
+
+**Exactly one figure in the chain is owed**: the cell's per-joule oxygen consumption, which no source
+publishes — `vehicle.yaml#electrical` carries a standby sustain flow and no operating point. It is
+declared as a state parameter rather than left in the edge's prose, so the debt count names it, and it
+is the *last* unknown: once it lands, the hydrogen draw is the published 8:1 ratio and the water is
+stoichiometry.
+
+**The water edge had to be re-expressed rather than re-valued.** It read `1.0 kg water per kg
+reactants` with the full molar-mass computation beside it — correct, and equal to 1.0 *because mass is
+conserved*: 2 × 18.01528 = 36.03056 and 2 × 2.01588 + 31.9988 = 36.03056. But its driver is now the
+oxygen draw, so the ratio has to be per kilogram of **oxygen**: 36.03056 / 31.9988 = **1.126**. Same
+reaction, same arithmetic, divided by a different thing — and the classifier caught it, because the
+denominator has to match the node it applies to.
+
+**The availability edges moved with the draws, and that is what let the two `C-REACTANT-DRAW` cycles
+close again.** They had run `fuel_cell → o2_csm → fuel_cell`; the path is now
+`fuel_cell → fc_o2_draw → fuel_cell`, because what limits the cell is the *draw* rather than the tank
+level. The linter refused both cycles the moment the path broke, which is the check doing exactly its
+job. The two tanks also lost their inbound edges in the move and now say `preloaded:` — loaded at the
+pad, never refilled, which is true of them and was previously implicit.
+
+**252 became 251**, and six stock edges are now computable where three were.
 
 ## Authoring convention: no flow mappings
 
@@ -2301,7 +2337,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 124 states, 66 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 126 states, 66 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

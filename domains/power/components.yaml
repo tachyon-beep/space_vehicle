@@ -20,7 +20,8 @@ natural_rate_hz: 50
 # Reads and writes are node ids from coupling.yaml. Domains do not call each other
 # (plant.md §2); these declarations are what the scheduler orders.
 reads: [o2_csm, h2_csm]
-writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state]
+writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
+         fc_o2_draw, fc_h2_draw]
 
 # --------------------------------------------------------------------------------------
 # State. Each entry names its integrator class from plant.md §3, and the class decides what
@@ -77,6 +78,34 @@ state:
       basis: chosen
       reason: "as bus_a_v: the second bus is the same nodal solve over a different source and load set"
 
+  - id: fc_o2_draw_kg_s
+    node: fc_o2_draw
+    method: algebraic
+    unit: kg O2/s
+    per_joule_kg: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the cell's oxygen consumption follows its electrical output, and **the per-joule figure is
+        not published**: `vehicle.yaml#electrical` carries a standby sustain flow of 4.72 kg/h total
+        and no operating point, and `E-FC-DRAW-O2` has been `UNCONFIGURED` since the graph was
+        written. Declared as a state parameter rather than left in the edge's prose so the debt count
+        names it. It is the *last* unknown in the reactant chain: once it lands, the hydrogen draw is
+        the published 8:1 ratio, the water is stoichiometry, and both tanks drain at rates the plant
+        can integrate
+  - id: fc_h2_draw_kg_s
+    node: fc_h2_draw
+    method: algebraic
+    unit: kg H2/s
+    ratio_of_o2_draw: 0.125
+    provenance:
+      basis: derived
+      computation: "1 / 8"
+      relation: >-
+        the cell consumes eight kilograms of oxygen for every kilogram of hydrogen — the 8:1 mass
+        ratio for the reaction, which `E-H2-FC` has declared since it was written and
+        `vehicle.yaml#consumables` corroborates at 279 kg O2 against 24.5 kg H2 loaded. Grounded, and
+        the only grounded figure in the chain until the oxygen draw lands
   - id: battery_charge_j
     method: stock
     node: battery_energy

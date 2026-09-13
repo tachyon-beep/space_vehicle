@@ -49,14 +49,24 @@ provenance_rules: docs/deep_research/integration/simulator-design.md#31
 # --------------------------------------------------------------------------------------
 nodes:
   # --- consumables: the conserved stocks (apollo_diode.md:836-847) --------------------
-  o2_csm:            {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  o2_csm:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    preloaded: "the cryogenic oxygen is loaded at the pad and nothing in the mission refills it. 279 kg from A11 Tbl 8-XII (vehicle.yaml#consumables); every tick after the first is a draw, and there are two — the cells and the cabin"
   o2_lm:
     domain: consumables
     kind: stock
     unit: kg
     apollo: "836-847"
     preloaded: "the LM's oxygen is loaded at the pad and the LM has no refill path in this mission. Its first tick is its full load and every tick after is a draw"
-  h2_csm:            {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  h2_csm:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    preloaded: "as the oxygen: 24.5 kg loaded at the pad, and the cell is its only consumer"
   water_potable:     {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
   water_cooling:     {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
   prop_main:         {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
@@ -159,6 +169,24 @@ nodes:
     kind: flow
     unit: K
     note: "as the CSM's: 280.35 + 827/125 = 286.97 K, the same supply and conductance with the LM cabin's larger heat load"
+  # The fuel cell's reactant draws. The cell is the vehicle's only *consumer* of hydrogen and its
+  # second consumer of oxygen, and until these existed the tanks it drains had no computable outflow —
+  # the inventory is shared between ECLSS and the cells and nothing said at what rate.
+  fc_o2_draw:
+    domain: power
+    kind: flow
+    unit: kg O2/s
+    note: >-
+      oxygen into the cell, set by its electrical output. The per-joule figure is **not published**:
+      `vehicle.yaml#electrical` gives a standby sustain flow and no operating point, so the rate is
+      owed and `E-FC-DRAW-O2` carries it as `UNCONFIGURED`. What the node buys is that everything
+      downstream is derivable once it lands — the hydrogen draw by the published 8:1 mass ratio, and
+      the water produced by stoichiometry
+  fc_h2_draw:
+    domain: power
+    kind: flow
+    unit: kg H2/s
+    note: "hydrogen into the cell: exactly 1/8 of the oxygen draw by mass, the ratio `E-H2-FC` already declares"
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
     domain: power
@@ -321,14 +349,14 @@ edges:
   # --- consumables into everything ----------------------------------------------------
   - id: E-O2-FC
     advances: fuel_cell_power_w   # reactant availability sets the cell's output, which is what the node's power state holds
-    from: o2_csm
+    from: fc_o2_draw
     to: fuel_cell
     kind: rate
     sensitivity: {value: 1.0, unit: "kg O2 per kg O2", basis: derived, relation: "8 kg O2 per kg H2 consumed, charged exactly to the O2 stock",
     at: nominal, note: "exact stoichiometric draw; the O2 inventory is shared between ECLSS and the fuel cells (apollo_diode.md:780-784), which is the coupling that makes Apollo 13 possible"}
   - id: E-H2-FC
     advances: fuel_cell_power_w   # as E-O2-FC; the cell is limited by whichever reactant runs out first and both edges drive the same output
-    from: h2_csm
+    from: fc_h2_draw
     to: fuel_cell
     kind: rate
     sensitivity: {value: 0.125, unit: "kg H2 per kg H2", basis: derived, relation: "1 kg H2 per 8 kg O2 consumed (the cell reaction stoichiometry)",
@@ -357,16 +385,41 @@ edges:
         `source_converter_v`, and it belongs in that state's relation, so it is recorded in
         open_debts as a resistance rather than as a coefficient here. Closing this edge retires
         the *coefficient* half of that debt and leaves the resistance half standing
-  - id: E-FC-WATER
-    from: fuel_cell
-    to: water_potable
-    kind: rate
+  - id: E-O2-DRAW
     sensitivity:
       value: 1.0
-      computation: "(2 * 18.01528) / (2 * 2.01588 + 31.9988)"
-      unit: "kg water per kg reactants"
+      computation: "1.0"
+      unit: "kg O2 per kg O2"
       basis: derived
-      relation: "2 H2 + O2 -> 2 H2O, so every kilogram of reactant that enters the cell leaves as water: (2 * 18.01528) / (2 * 2.01588 + 31.9988) = 1.0. The electricity and the heat are the chemical energy leaving, not mass leaving, and apollo_diode.md:849 writes the reaction the same way: O2 + H2 -> electrical energy + water + heat"
+      relation: "every kilogram the cell consumes leaves the tank: the draw *is* the tank's outflow, so the transfer is one for one"
+      at: "cell draw"
+    from: o2_csm
+    to: fc_o2_draw
+    kind: rate
+    advances: fc_o2_draw_kg_s
+  - id: E-H2-DRAW
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "kg H2 per kg H2"
+      basis: derived
+      relation: "as E-O2-DRAW, at the hydrogen tank"
+      at: "cell draw"
+    from: h2_csm
+    to: fc_h2_draw
+    kind: rate
+    advances: fc_h2_draw_kg_s
+  - id: E-FC-WATER
+    from: fc_o2_draw
+    to: water_potable
+    kind: rate
+    advances: water_potable_kg
+    sensitivity:
+      value: 1.126
+      computation: "(2 * 18.01528) / 31.9988"
+      unit: "kg water per kg O2"
+      basis: derived
+      relation: "2 H2 + O2 -> 2 H2O, per kilogram of *oxygen* rather than of combined reactant, because oxygen is what the driver node carries: 36.03056 kg of water per 31.9988 kg of O2 = 1.126. The per-reactant figure is exactly 1.0 and it is the same reaction — 2 x 18.01528 = 36.03056 and 2 x 2.01588 + 31.9988 = 36.03056, equal because mass is conserved — so the two differ only in what they are divided by. The electricity and the heat are the chemical energy leaving, not mass leaving, and apollo_diode.md:849 writes the reaction the same way: O2 + H2 -> electrical energy + water + heat"
       at: nominal
       note: >-
         this read 0.45 until the arithmetic was done, and 0.45 is not a number this reaction can
@@ -965,8 +1018,9 @@ edges:
 
   - id: E-FC-DRAW-O2
     from: fuel_cell
-    to: o2_csm
+    to: fc_o2_draw
     kind: rate
+    advances: fc_o2_draw_kg_s
     sensitivity:
       value: UNCONFIGURED
       unit: "kg/s per W"
@@ -993,8 +1047,9 @@ edges:
         operating point. `E-FC-WATER` was the same class of number and it was wrong by 2.2x
   - id: E-FC-DRAW-H2
     from: fuel_cell
-    to: h2_csm
+    to: fc_h2_draw
     kind: rate
+    advances: fc_h2_draw_kg_s
     sensitivity:
       value: UNCONFIGURED
       unit: "kg/s per W"
