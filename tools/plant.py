@@ -888,8 +888,99 @@ def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
     return committed
 
 
+def report_build_order(world: World) -> None:
+    """Print the derived build order: the worklist, grouped by what each state is waiting for."""
+    buckets = build_order(world)
+    total = sum(len(v) for v in buckets.values())
+    titles = {
+        "ready": "ready now — the two classes the reference plant can advance",
+        "value": "owes a value — the cheapest to close, and the debt count already tracks them",
+        "edge": "owes an edge — a coupling with no sensitivity, or a state nothing drives",
+        "rule": "owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code",
+    }
+    print(f"{total} states, by what blocks them:\n")
+    for key in ("ready", "value", "edge", "rule"):
+        rows = buckets[key]
+        share = f"{100 * len(rows) / total:.0f} %" if total else "-"
+        print(f"  {len(rows):4d}  {share:>5s}  {titles[key]}")
+    for key in ("value", "edge", "rule"):
+        rows = buckets[key]
+        if not rows:
+            continue
+        print(f"\nthe first of the {len(rows)} that {titles[key].split(' — ')[0]}:")
+        for state in rows[:5]:
+            print(f"  domains/{state.domain}/components.yaml:state {state.id} ({state.method})")
+
+
+def build_order(world: World) -> dict[str, list[State]]:
+    """What blocks every state, in the order the schedule reaches them — **derived, never authored**.
+
+    This is the folder's answer to "what do I implement first", and it has to be computed for the
+    same reason `--order` and `--phases` are: an authored worklist drifts from the data the moment
+    anybody lands anything, and a stale build order is worse than none because it sends the next
+    reader to work that is already done.
+
+    The classes are `advance()`'s own refusal order, so this cannot disagree with what the plant
+    actually does when it gets there — the classification is the same sequence of tests:
+
+      * **a value** — the method's named parameter is unset, or the state carries an `UNCONFIGURED`
+        anywhere in its spec. These are the cheapest to close and the ones the debt count already
+        tracks.
+      * **an edge** — a state driven by an edge that carries no sensitivity. Closing these means
+        supplying the coupling, and rounds 48 to 51 established what most of them need: a flow node.
+      * **a rule** — `algebraic`, `discrete`, `dynamics` or `hazard`. The configuration deliberately
+        does not carry these, so each is a piece of domain code rather than a number, and they are
+        the largest class by construction.
+
+    `lag` and `stock` with everything they need are ready, and they are the only classes the
+    reference plant can actually advance.
+    """
+    blocking_value: list[State] = []
+    blocking_edge: list[State] = []
+    blocking_rule: list[State] = []
+    ready: list[State] = []
+    # The scheduled nodes first, then the states on the `internal` sentinel — they are advanced with
+    # their domain rather than in the tick order, but they are 59 of the vehicle's 120 states and a
+    # build order that omitted half the work would be a build order for the other half.
+    ordered = list(world.schedule) + sorted(
+        {s.node for s in world.states if s.node not in set(world.schedule)}
+    )
+    for node in ordered:
+        for state in world.states_on(node):
+            owed = OWED.get(state.method)
+            if state.owed or (owed and state.spec.get(owed[0]) in (None, "UNCONFIGURED")):
+                blocking_value.append(state)
+                continue
+            incoming = [
+                e
+                for e in world.edges
+                if e.target == state.node
+                and e.id not in world.back_edges
+                and (e.advances is None or e.advances == state.id)
+            ]
+            if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming:
+                blocking_edge.append(state)
+                continue
+            if any(not e.usable for e in incoming):
+                blocking_edge.append(state)
+                continue
+            # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
+            # else, so a delay state is domain code like the rest. Classifying it as ready would
+            # have promised the plant a state it cannot advance.
+            if state.method in {"algebraic", "discrete", "dynamics", "hazard", "delay"}:
+                blocking_rule.append(state)
+                continue
+            ready.append(state)
+    return {
+        "value": blocking_value,
+        "edge": blocking_edge,
+        "rule": blocking_rule,
+        "ready": ready,
+    }
+
+
 def readiness(world: World) -> None:
-    """The build order: what is ready, what is not, and what the schedule reaches first."""
+    """What is ready, what is not, and what the schedule reaches first."""
     ready = [s for s in world.states if not s.owed]
     blocked = [s for s in world.states if s.owed]
     usable = [e for e in world.edges if e.usable]
@@ -930,6 +1021,11 @@ def main(argv: list[str] | None = None) -> int:
         "--readiness",
         action="store_true",
         help="print the build order: what is ready, what is blocked, and by what",
+    )
+    parser.add_argument(
+        "--build-order",
+        action="store_true",
+        help="what blocks every state, in the order the schedule reaches them",
     )
     parser.add_argument(
         "--frame", action="store_true", help="emit one telemetry frame and print its keys"
@@ -1078,6 +1174,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.readiness:
         readiness(world)
+        return 0
+
+    if args.build_order:
+        report_build_order(world)
         return 0
 
     print(

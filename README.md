@@ -32,6 +32,7 @@ python3 tools/check_vehicle.py --order    # the derived tick order, dependencies
 python3 tools/check_vehicle.py --phases   # the verbs by phase, in place of the deleted list
 
 python3 tools/plant.py --readiness        # the build order: ready, blocked, and by what
+python3 tools/plant.py --build-order # what blocks every state, derived
 python3 tools/plant.py --frame            # one telemetry frame in the declared shape
 python3 tools/plant.py --state            # one state.json: the mirror and the capability snapshot
 python3 tools/plant.py --crew             # who is at which station, and which phases cannot say
@@ -1737,6 +1738,38 @@ Chasing it also caught a skip bug in round 50's rule: the `advances` test skippe
 on a stock node while driving something else, **but only on the inbound side matters.** `E-O2-FC` and
 `E-H2-FC` drive the fuel cell's *power* state and empty the oxygen and hydrogen tanks, so testing
 `advances` alone let both through while the tanks they drain stayed unfillable. **246 became 248.**
+
+## What blocks the vehicle, derived rather than authored
+
+The folder's answer to "what do I implement first" is now a **derived** view, for the same reason
+`--order` and `--phases` are: an authored worklist drifts the moment anybody lands anything, and a
+stale build order is worse than none because it sends the next reader to work that is already done.
+`plant.py --build-order` classifies every state by `advance()`'s own refusal order — the same
+sequence of tests the plant runs when it gets there — so the two cannot disagree.
+
+```
+120 states, by what blocks them:
+
+    11    9 %  ready now — the two classes the reference plant can advance
+    12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
+    36   30 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    61   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+```
+
+**Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
+domain code the configuration deliberately does not carry, so the build order is mostly a list of
+missing *code* rather than missing numbers — which is the honest shape of the remaining work and was
+not visible anywhere before this view existed.
+
+The 30 % that owe an edge is the class rounds 48 to 51 kept finding, and it contains one the graph
+has been hiding since the beginning: **`zone_csm_cabin_t` has no inbound edge at all.** The cabin's
+temperature is a `lag` with nothing driving it, because `E-ZONE-ATM` was its only edge and that edge
+points *out* of the node. So the cabin has no heat input in the graph — the crew, the equipment and
+the loop all warm it in the prose and none of them is an edge.
+
+Two things the classifier had to get right, and one of them was wrong first: `delay` belongs in the
+rule class, because `advance()` implements `lag` and `stock` and refuses everything else — classifying
+it as ready would have promised the plant a state it cannot advance.
 
 ## Authoring convention: no flow mappings
 
