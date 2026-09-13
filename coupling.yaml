@@ -746,12 +746,12 @@ edges:
     kind: rate
   - id: E-PROP-ENG
     sensitivity:
-      value: 3084.2
-      computation: "314.5 * 9.80665"
-      unit: "N per kg/s"
+      value: 0.00032423409
+      computation: "1 / (314.5 * 9.80665)"
+      unit: "kg/s per N"
       basis: derived
-      relation: "thrust = mdot * Isp * g0. At the service propulsion system's 314.5 s that is 3084.2 N per kg/s; the LM's descent engine at 305 s gives 2991.0 and its ascent engine at 309.4 s gives 3034.1, and the plant reads whichever engine is firing"
-      at: "sps"
+      relation: "the tank drains at thrust / (Isp x g0): Isp 314.5 s gives 3084.2 N per kg/s, so the drain is 1/3084.2 = 0.000324234 kg/s for every newton. Read the other way it is the same number and the same engine — 3084.2 N per kg/s is what it produces — and the edge is stated as a drain because a stock discharges through its outbound edges, and this is one."
+      at: "Isp 314.5 s"
       note: >-
         the main engine's version of the figure `E-RCSP-RCS` closed at 2843.9, and the three
         engines differ because their Isps do. What this edge does *not* carry is the
@@ -788,12 +788,12 @@ edges:
     to: rcs_thrust
     kind: rate
     sensitivity:
-      value: 2843.9
-      computation: "290 * 9.80665"
-      unit: "N per kg/s"
+      value: 0.0003516262803
+      computation: "1 / (290.0 * 9.80665)"
+      unit: "kg/s per N"
       basis: derived
-      relation: "thrust = mdot * Isp * g0, so the sensitivity is Isp * g0 = 290 * 9.80665 = 2843.9 N per kg/s, independent of which propellant is burning. One figure for all three systems: they share the 100 lbf thruster and the 290 s Isp (vehicle.yaml#propulsion.rcs_*)"
-      at: nominal
+      relation: "as E-PROP-ENG, at the thruster: Isp 290 s gives 2843.9 N per kg/s, so the tank drains 1/2843.9 = 0.000351626 kg/s for every newton of thrust. The inverse is the RCS domain's own published figure, `capability.mass_flow_per_thruster` = 445/2843.9 = 0.15647 kg/s"
+      at: "Isp 290 s"
       note: >-
         closed by landing `domains/rcs/`. The edge was declared UNCONFIGURED while Isp was unset;
         Isp arrived with the Apollo 11 tables and the relation is a definition, so what remained

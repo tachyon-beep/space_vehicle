@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 249 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -182,7 +182,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **249** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **247** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -2021,6 +2021,30 @@ Swapped, they are one relation with the stock on opposite sides:
 The debt count is unchanged at 249, because one edge was fixed and its twin became a correctly-named
 refusal. What changed is the **sign**: `water_cooling` drains now, and the vehicle's only
 water-budget cycle is the right way round.
+
+## The propulsion edges were stated as an engine's production under a tank's name
+
+`prop_main` and `prop_rcs` discharge through their outbound edges, and an outbound edge **reads its
+target as the driver**: the tank drains at whatever rate the thrust demands. Stated as
+`3084.2 N per kg/s` the edge handed the plant a *force* to multiply a propellant mass by — N per
+(kg/s) is what an engine produces, not what a tank loses.
+
+Both reversed figures are published rather than owed, which is what makes this pair unlike the water
+cycle: `vehicle.yaml#propulsion` carries Isp 314.5 s and 290 s, so `1/(Isp x g0)` closes each edge
+exactly:
+
+| edge | was | is |
+|---|---|---|
+| `E-PROP-ENG` | `3084.2 N per kg/s` | `3.2423e-04 kg/s per N` |
+| `E-RCSP-RCS` | `2843.9 N per kg/s` | `3.5163e-04 kg/s per N` |
+
+A thousand newtons of SPS thrust drains 1000/3084.2 kg/s of propellant, and the test asserts exactly
+that. **249 became 247** — no swap, no new debt, because the numbers were already there in the
+vehicle's own tables and only their direction was wrong.
+
+Neither edge carries `advances` any more, and correctly: each target node holds a single state, so
+the declaration was never required, and it would be wrong now — the edge reads the thrust rather
+than producing it. `prop_rcs` has no inbound edge at all, which it declares in `preloaded:`.
 
 ## Authoring convention: no flow mappings
 
