@@ -731,9 +731,9 @@ edges:
     sensitivity:
       value: 4.0816e-07
       computation: "1 / 2.45e6"
-      unit: "kg per J"
+      unit: "kg/s per W"
       basis: derived
-      relation: "the inverse of E-RAD-WATER: 1 / 2.45e6 J per kg = 4.082e-7 kg of water per joule rejected"
+      relation: "the same figure as E-RAD-WATER and the same physics, applied in the direction the *stock* discharges: the water leaves the tank at 1/2.45e6 kg/s for every watt the radiator rejects. It said `kg per J` until round 61 — the forward relation's unit under the backward edge's name — which is why the plant filled `water_cooling` from the radiator instead of draining it"
       at: "nominal"
       note: >-
         the backward half of the vehicle's only cycle with a water budget in it, and it is the
@@ -1110,9 +1110,9 @@ edges:
     to: water_cooling
     kind: rate
     sensitivity:
-      value: 4.0816e-07
-      computation: "1 / 2.45e6"
-      unit: "kg/s per W"
+      value: 2450000.0
+      computation: "2.45e6"
+      unit: "J per kg"
       basis: derived
       at: "full evaporator rate"
       relation: "the latent heat of vaporisation at about 280 K, 2.45e6 J/kg, so 1 W of evaporative rejection costs 1/2.45e6 = 4.082e-7 kg/s of water. The published figure is the evaporator's 2,345 W capacity, and the consumption rate no source gives is derived from it"

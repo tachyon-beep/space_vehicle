@@ -1996,6 +1996,32 @@ conflict is a named debt in `domains/eclss/`, and what closes it is a CSM cabin-
 
 **Eleven of the nineteen stock-adjacent edges now compute**, against six before this round.
 
+## The water cycle's two edges had the stock on the wrong side of both
+
+`C-WATER-BUDGET` is the vehicle's only cycle with a water budget in it, and its two edges are one
+relation read in two directions. Until round 61 they were the wrong way round:
+
+| | said | meant |
+|---|---|---|
+| `E-RAD-WATER` | `radiator_reject → water_cooling`, `kg/s per W` | a **fill** — the plant added the water the radiator *consumes* |
+| `E-WATER-RAD` | `water_cooling → radiator_reject`, `kg per J` | the discharge side, carrying the **forward** relation's unit |
+
+The second edge's own note read *"the inverse of E-RAD-WATER"* and then stated the same number in the
+same unit as the edge it was inverting. So the pair asserted that rejection fills a tank that it
+empties.
+
+Swapped, they are one relation with the stock on opposite sides:
+
+- **`E-WATER-RAD`** — `water_cooling → radiator_reject`, `kg/s per W`, `1/2.45e6`. The discharge, and
+  it **computes**: the radiator's wattage sets how fast the water goes.
+- **`E-RAD-WATER`** — `radiator_reject → water_cooling`, `J per kg`, `2.45e6`. What a kilogram of
+  water *buys*. Refused as a stock flux, correctly — availability is a clamp rather than a slope, the
+  same finding the fuel cell's availability edges produced.
+
+The debt count is unchanged at 249, because one edge was fixed and its twin became a correctly-named
+refusal. What changed is the **sign**: `water_cooling` drains now, and the vehicle's only
+water-budget cycle is the right way round.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
