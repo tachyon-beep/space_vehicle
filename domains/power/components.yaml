@@ -21,7 +21,7 @@ natural_rate_hz: 50
 # (plant.md §2); these declarations are what the scheduler orders.
 reads: [o2_csm, h2_csm]
 writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
-         fc_o2_draw, fc_h2_draw]
+         fc_o2_draw, fc_h2_draw, battery_usable_j]
 
 # --------------------------------------------------------------------------------------
 # State. Each entry names its integrator class from plant.md §3, and the class decides what
@@ -78,6 +78,19 @@ state:
       basis: chosen
       reason: "as bus_a_v: the second bus is the same nodal solve over a different source and load set"
 
+  - id: battery_usable_j_j
+    node: battery_usable_j
+    method: algebraic
+    unit: J
+    derate_curve: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        usable energy is the stored charge times a derating that falls with temperature, and **no
+        source publishes the curve**: `electrical_diode.md:341` names the effect — "radiator
+        isolation / poor attitude raises battery temperature and derates usable capacity" — and gives
+        no numbers. So the shape is declared and the scalar is owed, rather than a plausible
+        capacity-fade curve being invented for a vehicle whose batteries are Apollo's
   - id: fc_o2_draw_kg_s
     node: fc_o2_draw
     method: algebraic

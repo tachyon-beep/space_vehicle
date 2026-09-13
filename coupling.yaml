@@ -219,6 +219,19 @@ nodes:
     kind: flow
     unit: kg CO2/s
     note: "the LM cartridge's, a separate absorber in a separate compartment"
+  # The battery's *usable* energy, as against its stored charge. A cold pack gives up less than it
+  # holds, so the derating is a property of the capacity rather than a flux into the charge — and
+  # `E-PLATE-BAT` carried `0.0 J per K` into `battery_energy`, which is a capacity relation landing
+  # on a quantity that is conserved. A stock is not where a derating goes.
+  battery_usable_j:
+    domain: power
+    kind: flow
+    unit: J
+    note: >-
+      `battery_charge_j` times a temperature-dependent derating. The nominal derating is 1.0 and
+      `E-PLATE-BAT`'s sensitivity is 0.0 J per K at nominal, which its own note already flags as the
+      review-findings.md #8 case: **a closure computed at nominal passes a fidelity decision that is
+      wrong exactly when it matters.** In the crisis the pack is cold and the derating is not 1.0
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
     domain: power
@@ -552,7 +565,7 @@ edges:
         vehicle can run on batteries after the cells stop, which is the same class of number as
         the oxygen duration and is owed for the same reason
   - id: E-BAT-BUS
-    from: battery_energy
+    from: battery_usable_j
     to: bus_a
     kind: algebraic
     sensitivity: {value: UNCONFIGURED, unit: "V per J", basis: UNCONFIGURED,
@@ -1198,10 +1211,27 @@ edges:
     kind: lag
     sensitivity: {value: UNCONFIGURED, unit: "dB per K", basis: UNCONFIGURED,
     at: "comm_amp_c > 333 K", note: "comm_amp_c event is >60 C (apollo_diode.md:106)"}
+  - id: E-BAT-USABLE
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "J per J"
+      basis: derived
+      relation: >-
+        the usable energy is the stored charge at unity derating, so at nominal the two are the same
+        number and the edge is the identity. What it carries is the *availability* — the charge is
+        what the derating is applied to, which is why this edge runs from the stock to the capacity
+        rather than the other way
+      at: "nominal derating 1.0"
+    from: battery_energy
+    to: battery_usable_j
+    kind: rate
+    advances: battery_usable_j_j
   - id: E-PLATE-BAT
     from: coldplate_t
-    to: battery_energy
+    to: battery_usable_j
     kind: lag
+    advances: battery_usable_j_j
     sensitivity: {value: 0.0, unit: "J per K", basis: chosen, at: nominal,
     reason: "a deliberately declared nominal zero whose crisis value is not zero; the point of the field is that the two differ (review-findings.md #8)",
     crisis: {value: UNCONFIGURED, unit: "J per K",
@@ -1681,7 +1711,10 @@ cycles:
   # it stood, and the flow that changes the stock is computed forward.
   - id: C-BAT-BUS
     name: "battery charge versus bus voltage"
-    members: [E-BUS-BAT, E-BAT-BUS]
+    # `E-BAT-USABLE` joined in round 64, when the derating moved off the charge stock and onto a
+    # capacity node: the loop now runs bus -> charge -> usable capacity -> bus, and the last step is
+    # what the bus actually draws on. Without it the cycle did not close, and the linter said so.
+    members: [E-BUS-BAT, E-BAT-USABLE, E-BAT-BUS]
     back_edge: E-BAT-BUS
     delay_ticks: 1
     closing_mechanism: >-

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 129 states over 51 scheduled nodes, 141
+**All eleven domains have landed** — 147 channels, 130 states over 52 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -182,11 +182,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **185** the plant
+charging efficiency). The **187** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 68 of the 129 states need code before the plant can
+rules the configuration deliberately does not carry**, so 68 of the 130 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-129 states, by what blocks them:
+130 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -2074,6 +2074,34 @@ partner node carries as a flow — which is the general test, and the two cases 
 **247 became 245. Seventeen of the twenty-one stock-adjacent edges compute, and all four that remain
 are genuinely not fluxes**: the two pressure relations, the water-availability clamp, and the battery
 derating.
+
+## A derating is not a flux
+
+`E-PLATE-BAT` carried `0.0 J per K` from `coldplate_t` into `battery_energy` — a **capacity**
+relation landing on a quantity that is conserved. The linter refused it as a lag edge on a stock, and
+it was right to: a cold pack gives up less than it holds, and where it gives up less is the
+*capacity*, not the charge.
+
+`battery_usable_j` is the capacity node now, and the loop runs **bus → charge → usable capacity →
+bus**. That last step is what the bus actually draws on, so `E-BAT-BUS`'s source moved with it, and
+`C-BAT-BUS` gained `E-BAT-USABLE` as a member — **the linter refused the cycle the moment it stopped
+closing**, which is the third time this session that check has caught a graph edit's consequence.
+
+The nominal derating is 1.0 and the sensitivity is `0.0 J per K`, which the edge's own note already
+flagged as the review-findings.md #8 case: *a closure computed at nominal passes a fidelity decision
+that is wrong exactly when it matters.* In the crisis the pack is cold and the derating is not 1.0 —
+and no source publishes the curve (`electrical_diode.md:341` names the effect and gives no numbers),
+so it is `UNCONFIGURED` rather than invented.
+
+### One refusal left in the whole flux class
+
+**`E-RAD-WATER` alone.** It is `J per kg` — *what a kilogram of water buys*, 2.45e6 J — and that is an
+availability clamp rather than a slope, exactly like the two cabin pressure relations and the fuel
+cell's availability edges. The three of those are already handled, because their `advances` names an
+algebraic state rather than a stock; this one drives `water_cooling_kg` itself, so there is nothing
+for `advances` to point at and the rule has no way to say "a relation into this node's channel rather
+than into the stock". That is a gap in the vocabulary rather than in the data, and it is the last of
+its kind.
 
 ## Authoring convention: no flow mappings
 
@@ -2445,7 +2473,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 129 states, 74 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 130 states, 73 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is
