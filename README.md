@@ -1822,7 +1822,7 @@ a second declaration of one fact, in the file that explicitly refuses to duplica
 | `csm_cabin` | cabin fan, suit fan, CO2 scrubber, lighting, S-band transceiver, S-band amplifier, heaters | 733 |
 | `csm_avionics_bay` | IMU, guidance computer, instrumentation | 360 |
 | `csm_service_bay` | both coolant pumps, RCS heaters, comm heaters | 630 |
-| `lm_cabin` | cabin fan, suit fan, CO2 scrubber, lighting, S-band transmitter, S-band PA, guidance computer, instrumentation, heaters | 887 |
+| `lm_cabin` | cabin fan, suit fan, CO2 scrubber, lighting, S-band transmitter, S-band PA, guidance computer, instrumentation, heaters | 827 |
 | `lm_descent_bay` | landing radar, RCS heaters | 180 |
 | `radiator_loop` | *unheated, deliberately* | — |
 
@@ -1841,8 +1841,24 @@ that heats nothing, and its zone would run cold for a reason no reader could fin
 were verified by breaking a copy of the definition; dropping `csm_imu` reports *"accounts for 1,633 W
 of csm load against a declared 1,723 W ... a load assigned to no zone is a watt that heats nothing"*.
 
-What is still owed is the **edges**. The mapping is data, and the graph has no heat-rate node for it
-to flow through — the second thermal debt, unchanged by this round.
+### The edges exist now, and the cabins are driven
+
+`cabin_heat_csm` and `cabin_heat_lm` are flow nodes in watts, each produced by an `algebraic` state
+that sums its zone's assigned loads — **733 W for the CSM cabin, 827 W for the LM's** — and each
+feeds its zone through `E-CABIN-HEAT-CSM`/`E-CABIN-HEAT-LM` at `1/125 K per W`, the inverse of the
+conductance the cabin state's own relation sizes. Both nodes had no inbound edge before this round;
+**seven undriven nodes became two.**
+
+The state's `total_w` is re-derived twice on every run — against its own `computation` and against the
+loads `heat_inputs` assigns — because two declarations of one quantity in two files is exactly the
+shape that drifts, and it drifts in the quiet direction: a load re-rated under `domains/power/` would
+change what the cabin's equipment draws while the thermal state relaxed toward the old figure,
+**modelling a cabin cooler than it is.**
+
+What remains is the second thermal debt, and the edge makes it sharp rather than vague: a `lag` pulls
+its state toward its single driver, so the cabin now relaxes toward **Q/G absolute** instead of
+**coolant + Q/G**. The offset is 8 K at a 1 kW load, and it is missing in the direction that makes a
+warm cabin look nominal.
 
 ## Authoring convention: no flow mappings
 

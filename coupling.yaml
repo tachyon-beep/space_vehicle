@@ -119,6 +119,28 @@ nodes:
     accumulates: >-
       as `absorber_capacity_csm`: a counter of man-hours spent, exhausted at its rating
   battery_energy:    {domain: power,       kind: stock,    unit: J,  apollo: "836-847"}
+  # The heat each crewed compartment's equipment puts into its air. A flow node rather than a
+  # constant, because the rate is a sum over the vehicle's load inventory and a load that is shed
+  # stops heating: `heat_inputs` in `domains/thermal/` declares which loads belong to which zone,
+  # and these are the two zones that carry a temperature state.
+  cabin_heat_csm:
+    domain: thermal
+    kind: flow
+    unit: W
+    note: >-
+      the 733 W `domains/thermal/components.yaml#heat_inputs.csm_cabin` assigns to this zone, at the
+      loads' published `demand_w`. It is the driver `zone_csm_cabin_t` never had: the cabin's
+      temperature was a `lag` with nothing to relax toward, because the thermal domain declared the
+      heat sources, the power domain declared the loads, and no file said which load heats which
+      compartment
+  cabin_heat_lm:
+    domain: thermal
+    kind: flow
+    unit: W
+    note: >-
+      the LM's, at 827 W. Larger than the CSM cabin's despite carrying two crew rather than three,
+      because the LM has no avionics-bay zone: its guidance computer and instrumentation are inside
+      the compartment the crew fly in
 
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
@@ -508,6 +530,43 @@ edges:
     to: lm_cabin_atm
     kind: lag
     advances: lm_cabin_pressure_pa
+  - id: E-CABIN-HEAT-CSM
+    sensitivity:
+      value: 0.008
+      computation: "1 / 125"
+      unit: "K per W"
+      basis: derived
+      relation: >-
+        the inverse of the cabin's conductance. `zone_csm_cabin_t`'s own relation sizes G at
+        125 W/K so that a 1 kW cabin load sits about 8 K above the coolant supply, and the
+        sensitivity of the equilibrium temperature to the heat rate at fixed coolant is 1/G =
+        0.008 K per watt
+      at: "csm cabin, lumped"
+      note: >-
+        **this makes the equilibrium Q/G absolute rather than Q/G above the coolant**, which is the
+        second thermal debt and is not repaired here: a `lag` pulls its state toward its single
+        driver and has no term for a second input, so the cabin now relaxes toward its own heat
+        rise instead of toward the loop plus that rise. The coolant term needs a method that takes
+        a heat balance
+    from: cabin_heat_csm
+    to: cabin_zone_t
+    kind: lag
+    advances: zone_csm_cabin_t
+  - id: E-CABIN-HEAT-LM
+    sensitivity:
+      value: 0.008
+      computation: "1 / 125"
+      unit: "K per W"
+      basis: derived
+      relation: "as E-CABIN-HEAT-CSM: the LM cabin's lumped mass and conductance are the same figure within the precision of either"
+      at: "lm cabin, lumped"
+      note: >-
+        the same edge at the second compartment, and the same caveat. What differs is the
+        distribution behind it: 827 W against 733, from nine loads against seven
+    from: cabin_heat_lm
+    to: lm_cabin_zone_t
+    kind: lag
+    advances: zone_lm_cabin_t
   - id: E-WATER-RAD
     sensitivity:
       value: 4.0816e-07

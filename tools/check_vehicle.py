@@ -4215,6 +4215,41 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
     for vehicle, ids in sorted(seen.items()):
         total = sum(int(loads[i].get("demand_w") or 0) for i in ids)
         by_vehicle[vehicle] = total
+    # And the heat-rate states carry the totals, re-derived against the loads they sum. Without this
+    # the two declarations could part company in the quiet direction: a load re-rated in
+    # `domains/power/` would change what the cabin's equipment actually draws while the thermal
+    # state went on relaxing toward the old figure — a cabin modelled as cooler than it is.
+    states = {
+        str(s.get("id")): s
+        for s in thermal.get("state") or []
+        if isinstance(s, dict) and s.get("id")
+    }
+    for zone, block in sorted(heat.items()):
+        state = next(
+            (s for s in states.values() if str(s.get("node")) == f"cabin_heat_{block.get('rate')}"),
+            None,
+        )
+        if state is None:
+            continue
+        declared = sum(
+            int(loads[str(load_id)].get("demand_w") or 0)
+            for load_id in block.get("loads") or []
+            if str(load_id) in loads
+        )
+        if state.get("total_w") != declared:
+            report.refuse(
+                f"domains/thermal/components.yaml:state {state['id']}",
+                f"declares {state.get('total_w')!r} W and the loads `heat_inputs.{zone}` assigns "
+                f"sum to {declared} W. The cabin would relax toward a heat rate its equipment does "
+                "not produce",
+            )
+        rederive(
+            f"domains/thermal/components.yaml:state {state['id']}",
+            state.get("total_w"),
+            (state.get("provenance") or {}).get("computation"),
+            report,
+        )
+
     for vehicle, total in sorted(by_vehicle.items()):
         expected = sum(
             int(row.get("demand_w") or 0)

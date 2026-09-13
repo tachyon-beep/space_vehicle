@@ -39,7 +39,7 @@ natural_rate_hz: 1
 reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_thrust,
         structure_config, water_cooling]
 writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
-         cabin_zone_t, lm_cabin_zone_t]
+         cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm]
 
 # --------------------------------------------------------------------------------------
 # State. Thermal has no conserved stocks on purpose: energy is not asserted here. A fuel cell
@@ -49,6 +49,39 @@ writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_tran
 # (simulator-design.md:248).
 # --------------------------------------------------------------------------------------
 state:
+  - id: cabin_heat_csm_w
+    node: cabin_heat_csm
+    method: algebraic
+    unit: W
+    total_w: 733
+    provenance:
+      basis: derived
+      computation: "60 + 85 + 80 + 100 + 36 + 72 + 300"
+      relation: >-
+        the sum of the `demand_w` of the seven loads `heat_inputs.csm_cabin` assigns to this zone:
+        cabin fan 60, suit fan 85, CO2 scrubber 80, lighting 100, S-band transceiver 36, S-band
+        power amplifier 72, and the cabin's share of the 300 W heater bank. Algebraic rather than a
+        stock because the rate follows which loads are on rather than accumulating — a load that is
+        shed stops heating in the same tick
+      note: >-
+        the number is not invented here and is not duplicated: it is the load inventory's, summed.
+        `check_thermal_heat_inputs` re-derives it against `heat_inputs` on every run, so a load
+        re-rated in `domains/power/` and not here is refused rather than silently changing how warm
+        the cabin gets
+  - id: cabin_heat_lm_w
+    node: cabin_heat_lm
+    method: algebraic
+    unit: W
+    total_w: 827
+    provenance:
+      basis: derived
+      computation: "62 + 85 + 80 + 40 + 20 + 90 + 150 + 100 + 200"
+      relation: >-
+        as the CSM's, over the nine loads `heat_inputs.lm_cabin` assigns: cabin fan 62, suit fan 85,
+        CO2 scrubber 80, lighting 40, S-band transmitter 20, S-band high-power amplifier 90,
+        guidance computer 150, instrumentation 100, and the cabin's share of the 200 W heater bank.
+        827 W against the CSM cabin's 733, with two crew against three, because the LM has no
+        avionics-bay zone and its guidance equipment is inside the compartment
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t
@@ -431,6 +464,7 @@ open_debts:
 heat_inputs:
 
   csm_cabin:
+    rate: csm
     loads: [csm_cabin_fan, csm_suit_fan, csm_co2_scrubber, csm_lighting,
             csm_sband_transceiver, csm_sband_power_amplifier, csm_heaters]
     note: >-
@@ -452,6 +486,7 @@ heat_inputs:
       the largest pair of loads on the vehicle and they sit here rather than in the cabin: the
       primary loop's pumps are on the service module
   lm_cabin:
+    rate: lm
     loads: [lm_cabin_fan, lm_suit_fan, lm_co2_scrubber, lm_lighting, lm_sband_transmitter,
             lm_sband_high_power, lm_guidance_computer, lm_instrumentation, lm_heaters]
     note: >-
