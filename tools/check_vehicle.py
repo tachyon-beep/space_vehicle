@@ -3709,9 +3709,30 @@ def check_zone_nodes(root: Path, vehicle: dict[str, Any], report: Report) -> Non
                 f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}",
                 "is not a declared zone",
             )
-        elif not str(why or "").strip():
+            continue
+        if not str(why or "").strip():
             report.refuse(
                 f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}", "gives no reason"
+            )
+            continue
+        # The other direction, and it was missing: a zone on the list that has since been put on a
+        # node is a **stale exemption** — a reader told to expect a gap that has been closed. Round
+        # 68's `check_cabin_pairing` checks both directions and this one did not, which is how the
+        # two bays' exemptions survived the round that closed them.
+        stem = zone.replace("_bay", "").replace("_loop", "").replace("csm_", "").replace("lm_", "")
+        on_node = [
+            s
+            for s in states
+            if stem.split("_")[0] in str(s.get("id"))
+            and "_t" in str(s.get("id"))
+            and str(s.get("node")) != "internal"
+        ]
+        if on_node:
+            report.refuse(
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}",
+                f"is declared as having no node, and {on_node[0].get('id')!r} sits on "
+                f"{on_node[0].get('node')!r}. A stale exemption is a reader told to expect a gap "
+                "that has been closed",
             )
 
 

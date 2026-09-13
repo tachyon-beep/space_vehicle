@@ -279,6 +279,36 @@ nodes:
     # compute the rejection from last tick's temperature — a one-tick error in a quantity that enters
     # every thermal edge on the vehicle.
     state_order: [zone_radiator_t, radiator_rejection_w]
+  service_bay_heat:
+    domain: thermal
+    kind: flow
+    unit: W
+    note: >-
+      the 630 W `heat_inputs.csm_service_bay` assigns — both coolant pumps, the RCS heaters and the
+      comm heaters — which the bay's structure and propellant absorb. It is the driver the zone never
+      had: `zone_csm_service_t` is a `lag` and a lag with no driver has nothing to relax toward.
+      **What it does not yet carry is the conductance**, which is what turns watts into kelvin, and
+      `thermal_diode.md:965` declares every thermal constant UNSPECIFIED — so the edge below owes its
+      value and the zone state owes its `conductance_w_per_k`. Named rather than filled, because a
+      plausible conductance is exactly the invented typical-spacecraft number that document refuses
+  descent_bay_heat:
+    domain: thermal
+    kind: flow
+    unit: W
+    note: >-
+      the 180 W of the descent stage's landing radar and RCS heaters, and the same shape as the
+      service bay's. This is the zone the frozen-line chain lives in, so its missing conductance is
+      the one with a consequence the mission cares about rather than a bookkeeping one
+  service_bay_zone_t:
+    domain: thermal
+    kind: state
+    unit: K
+    note: "the service bay's temperature, a node now rather than the `internal` sentinel — a state on the sentinel cannot be driven by any edge, which is what the zone check refuses"
+  descent_bay_zone_t:
+    domain: thermal
+    kind: state
+    unit: K
+    note: "the descent stage's temperature, as the service bay's"
   environment_heat:
     domain: thermal
     kind: flow
@@ -818,6 +848,36 @@ edges:
     to: lm_cabin_zone_t
     kind: lag
     advances: zone_lm_cabin_t
+  - id: E-BAY-HEAT-CSM
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "K per W"
+      basis: UNCONFIGURED
+      relation: "the service bay's steady-state rise per watt, which is 1/G for the bay's own conductance"
+      at: "service bay, lumped"
+      note: >-
+        the zone's driver, and its value is owed: `thermal_diode.md:965` declares every thermal
+        constant UNSPECIFIED, so the conductance that turns these watts into kelvin is not published
+        and is not guessed here. The *heat* is grounded — 630 W summed from the power domain's load
+        inventory — and the arithmetic that converts it is the single missing scalar
+    from: service_bay_heat
+    to: service_bay_zone_t
+    kind: lag
+    advances: zone_csm_service_t
+  - id: E-BAY-HEAT-LM
+    sensitivity:
+      value: UNCONFIGURED
+      unit: "K per W"
+      basis: UNCONFIGURED
+      relation: "as E-BAY-HEAT-CSM, for the descent stage"
+      at: "descent bay, lumped"
+      note: >-
+        the frozen-line chain's zone, and the one of the two whose missing conductance has a
+        consequence rather than a bookkeeping cost
+    from: descent_bay_heat
+    to: descent_bay_zone_t
+    kind: lag
+    advances: zone_lm_descent_t
   - id: E-ENV-RAD
     sensitivity:
       value: 1.0

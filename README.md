@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 132 states over 53 scheduled nodes, 141
+**All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -182,11 +182,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **247** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **187** the plant
+charging efficiency). The **191** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 69 of the 132 states need code before the plant can
+rules the configuration deliberately does not carry**, so 71 of the 134 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-132 states, by what blocks them:
+134 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -2241,36 +2241,34 @@ round 68 paired a channel that was published for one, and this round found a *ga
 not hold. Each was an asymmetry between two compartments that cannot equalise, and each was invisible
 because nothing compared the two sides.
 
-## The environment is in the graph, and the radiator has something to be a function of
+## Six zones, six nodes, six drivers
 
-Round 70 moved `zone_radiator_t` onto `radiator_reject` and moved it back, because its only inbound
-edge there was `E-WATER-RAD` — a **back-edge**, which neither the linter nor the plant counts as a
-driver. What was missing was a *forward* edge, and what the radiator's temperature is a function of is
-**the heat the environment puts into it.**
+Rounds 70 and 71 took the crewed cabins and the radiator; this round takes the two bays, whose heat
+rates were already summed and whose states were on the `internal` sentinel.
 
-`environment_heat` is a node now, produced by a grounded state:
+| zone | node | driver |
+|---|---|---|
+| `csm_cabin` | `cabin_zone_t` | `E-CABIN-EQ-CSM` |
+| `lm_cabin` | `lm_cabin_zone_t` | `E-CABIN-EQ-LM` |
+| `csm_avionics_bay` | `coldplate_t` | `E-FC-HEAT`, `E-TRANSPORT-PLATE`, `E-STRUCT-PLATE` |
+| `csm_service_bay` | `service_bay_zone_t` | `E-BAY-HEAT-CSM` |
+| `lm_descent_bay` | `descent_bay_zone_t` | `E-BAY-HEAT-LM` |
+| `radiator_loop` | `radiator_reject` | `E-ENV-RAD`, `E-WATER-RAD` |
 
-```
-1361 W/m2  x  0.2 absorptivity  x  9.1 m2 presented at a bad attitude  =  2477 W
-```
+**What the two new edges do not carry is the conductance**, and that is declared rather than filled:
+`thermal_diode.md:965` calls every thermal constant UNSPECIFIED, so the scalar that turns watts into
+kelvin is owed and a plausible one would be exactly the invented typical-spacecraft number that
+document refuses. What the round buys is that the zone is **drivable and the missing scalar is
+named**, which is strictly better than a zone that is neither. The heat itself is grounded — 630 W
+and 180 W summed from the power domain's load inventory.
 
-against the radiator's own 2,588 W of rejection capacity. That is the whole reason
-`apollo_diode.md:341` lists *"radiator isolation / poor attitude"* as a failure chain — attitude alone
-can cancel the vehicle's rejection — and it was declared in `radiator_model.environment` all along
-while no edge could read it.
+**And it found a gap in round 70's own check.** That check refused a zone with no node and no
+explanation, but **not a stale explanation** — so the two bays' exemptions survived the very round
+that closed them, and the linter composed. It checks both directions now, the same way
+`check_cabin_pairing` has since round 68. Removing the block was only possible because the second
+direction was added first.
 
-`E-ENV-RAD` drives `radiator_reject`, so the zone moved onto that node for real this time, with a
-`state_order` because rejection is `epsilon x sigma x A x T^4` and the frozen lexicographic tiebreak
-sorts `radiator_rejection_w` **first** — computing the rejection from last tick's temperature. A
-one-tick error in a quantity that enters every thermal edge on the vehicle.
-
-**Four of six zones now carry a driver**, against three before. The two that remain are declared in
-`zones_not_on_nodes`, and the lunar surface terms (`lunar_ir_w_m2`, `albedo_load_w`) are still
-`UNCONFIGURED` — but they are owed *here* now, where an edge can carry them, rather than in a block
-no tool reads.
-
-The re-derivation hook reads `total_w` as well as `nominal_kg_s` now, so a state that declares the
-operating point it is sized at has its arithmetic checked whichever unit its subject takes.
+`zones_not_on_nodes` is empty and gone, and six of six zones carry a driver.
 
 ## Authoring convention: no flow mappings
 
@@ -2642,7 +2640,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 132 states, 74 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 134 states, 76 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

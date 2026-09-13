@@ -40,7 +40,8 @@ reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_th
         structure_config, water_cooling]
 writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
          cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm, cabin_eq_csm,
-         cabin_eq_lm, environment_heat]
+         cabin_eq_lm, environment_heat, service_bay_heat, descent_bay_heat,
+         service_bay_zone_t, descent_bay_zone_t]
 
 # --------------------------------------------------------------------------------------
 # State. Thermal has no conserved stocks on purpose: energy is not asserted here. A fuel cell
@@ -133,6 +134,27 @@ state:
         the lunar surface terms — `lunar_ir_w_m2` and `albedo_load_w` — are still `UNCONFIGURED` in
         `radiator_model.environment`, and they are owed *here* now: the node exists, so a value that
         lands there has an edge to travel down rather than a block no tool reads
+  - id: service_bay_heat_w
+    node: service_bay_heat
+    method: algebraic
+    unit: W
+    total_w: 630.0
+    provenance:
+      basis: derived
+      computation: "250 + 250 + 80 + 50"
+      relation: >-
+        the sum of the `demand_w` of the four loads `heat_inputs.csm_service_bay` assigns: coolant
+        pump 1 at 250, pump 2 at 250, the RCS heaters at 80 and the comm heaters at 50. Algebraic
+        because the rate follows which loads are on rather than accumulating
+  - id: descent_bay_heat_w
+    node: descent_bay_heat
+    method: algebraic
+    unit: W
+    total_w: 180.0
+    provenance:
+      basis: derived
+      computation: "120 + 60"
+      relation: "the landing radar at 120 W and the descent stage's RCS heaters at 60, which is all `heat_inputs.lm_descent_bay` assigns"
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t
@@ -154,7 +176,7 @@ state:
       note: "apollo_diode.md:97: electronics were directly cooled by coldplates, so the coldplate and its boxes are one lump"
   - id: zone_csm_service_t
     method: lag
-    node: internal
+    node: service_bay_zone_t
     unit: K
     tau_s: 7200
     provenance:
@@ -171,7 +193,7 @@ state:
       relation: "as the CSM cabin: 6.7 m3 at about 5 psia, so the same lumped mass and conductance within the precision of either figure"
   - id: zone_lm_descent_t
     method: lag
-    node: internal
+    node: descent_bay_zone_t
     unit: K
     tau_s: 10800
     provenance:
@@ -557,31 +579,3 @@ unheated:
       compartment: nothing is installed in it and no load heats it. It is listed here rather than
       left out so that the check can tell "nothing heats it, deliberately" from "nothing heats it,
       nobody said"
-
-# --------------------------------------------------------------------------------------
-# The zone temperatures the coupling graph cannot reach.
-#
-# Six zones are declared and all six carry a state; four carry a *driver*. Two sit on the `internal`
-# sentinel, which is not a node, so no edge can terminate on them — `internal` has no inbound edge at
-# all — and they are undrivable by construction. The two crewed cabins were in exactly this position
-# until round 55 gave them heat-rate nodes, and the radiator was in it until round 71 gave the
-# *environment* one: round 70 had moved `zone_radiator_t` onto `radiator_reject` and moved it back,
-# because its only inbound edge there was `E-WATER-RAD`, a back-edge that neither the linter nor the
-# plant counts as a driver. `E-ENV-RAD` is the forward edge that was missing, so the radiator's
-# temperature is a function of the heat the environment puts into it.
-#
-# What closes the two below is the same thing one step further: a heat-rate node per zone, fed by the
-# loads `heat_inputs` already assigns (630 W to the service bay, 180 W to the descent stage). The
-# mapping and the arithmetic both exist; what is missing is the node and its state, a design step of
-# the same size as the cabins' was. Declared here rather than left implicit, so that "this zone has no
-# driver" is a recorded gap rather than something a reader derives from where a state happens to live.
-# --------------------------------------------------------------------------------------
-zones_not_on_nodes:
-  csm_service_bay: >-
-    unregulated and uninstrumented in the graph: no edge can drive it while its state is on the
-    sentinel. Its 630 W of loads and its -20 to 60 C band are both declared, so the heat-rate node
-    round 55 built for the cabins is what it needs
-  lm_descent_bay: >-
-    as the service bay, at the descent stage — and this is the zone the frozen-line chain lives in,
-    which makes it the one of the two whose missing driver has a consequence the mission cares about
-    rather than a bookkeeping one
