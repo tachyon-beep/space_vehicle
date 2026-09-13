@@ -411,6 +411,7 @@ edges:
   # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
   # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
   - id: E-LM-ATM-ABSORB
+    drains: lm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
       computation: "41 / (41 * 0.91 / 24)"
@@ -453,6 +454,7 @@ edges:
   # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
   # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
   - id: E-ATM-ABSORB
+    drains: csm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
       computation: "72 / (72 * 0.91 / 24)"

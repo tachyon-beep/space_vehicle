@@ -719,12 +719,52 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
     if sensitivity.get("value") in (None, "UNCONFIGURED"):
         return None, f"{where} carries no sensitivity value, so nothing establishes its flux"
 
+    # The sensitivity's numerator has to be the stock's own unit, in whichever direction the edge
+    # runs. Without this the time-basis test alone passes `E-PROP-ENG` at `3084.2 N per kg/s`, whose
+    # `/s` reads as a rate while the numerator is a *force*: the number is thrust per unit of flow,
+    # stated backwards, so a plant multiplying it by a thrust would get N^2 per (kg/s) and call the
+    # result kilograms of propellant. The vehicle's stock units are `kg`, `J` and `man_hours`, and
+    # a flux into or out of one of them is denominated in that unit or it is not a flux.
+    # Which end is the stock decides whose unit the numerator has to be. An edge *into* a stock is
+    # denominated in the target's unit; an edge *out of* one, in the source's. Getting this from
+    # "whichever endpoint is a stock" rather than from the direction is how `E-PROP-ENG` slipped
+    # through: its target `thrust_main` is a flow in newtons, so a numerator of newtons looked like
+    # agreement.
+    source_node = (nodes or {}).get(str(edge.get("from"))) or {}
+    target_node = (nodes or {}).get(str(edge.get("to"))) or {}
+    stock_unit = ""
+    if target_node.get("kind") == "stock":
+        stock_unit = str(target_node.get("unit") or "")
+    elif source_node.get("kind") == "stock":
+        stock_unit = str(source_node.get("unit") or "")
+
+    # A node may be denominated in more than one quantity — `cabin_atm` is `kg + Pa`, because it
+    # carries four gas masses *and* the pressure that reads them — so the numerator has to match one
+    # of the node's units rather than the whole string. Comparing against the string is how moving
+    # the pressure onto the cabin node silently broke the crew's own metabolic edge.
+    # Normalised, because the same unit is spelled two ways across the two files: the coupling node
+    # says `man_hours` and the sensitivity that spends it says `man-hours`. A comparator that reads
+    # those as different units reports a dimensional error where there is only a hyphen.
+    def _norm(text: str) -> str:
+        return text.replace("-", "").replace("_", "").replace(" ", "").lower()
+
+    node_units = {_norm(part) for part in re.split(r"[+,]", stock_unit) if part.strip()}
+    # The `/h` or `/s` is the time denominator, not part of the unit symbol: `kg/h per crew` is a
+    # mass rate, and reducing it to `kg` is what lets the same comparator judge it beside `kg/s per W`.
+    numerator = unit.split(" per ")[0].split()[0].split("/")[0] if unit else ""
+    if node_units and numerator and _norm(numerator) not in node_units:
+        return None, (
+            f"{where} declares {unit!r}, whose unit is {numerator!r}, against a stock denominated "
+            f"in {stock_unit!r}. The number is a conversion between two quantities rather than a "
+            "flux of the stock, and the flow it converts is not declared"
+        )
+
     if edge.get("kind") not in STOCK_INFLOW_KINDS:
         return None, (
-            f"{where} is a {edge.get('kind')!r} edge into a stock. A stock is a conserved quantity, "
-            "so the only thing an inbound edge can be is a flux: this one relates the stock's "
-            "quantity to a different physical quantity, and it lands on the stock node because the "
-            "*channel* hangs off the node rather than because anything flows into it"
+            f"{where} is a {edge.get('kind')!r} edge on a stock. A stock is a conserved quantity, so "
+            "the only thing an edge on it can be is a flux: this one relates the stock's quantity to "
+            "a different physical quantity, and it lands on the stock node because the *channel* "
+            "hangs off the node rather than because anything flows"
         )
 
     per_hour = any(token.endswith("/h") for token in tokens)
@@ -745,13 +785,13 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
         )
         if shared:
             return None, (
-                f"{where} carries the dimensionless ratio {unit!r} into a stock, so its flux is the "
-                "source's own outflow multiplied by that ratio — and the outflow is a flow this "
-                "edge does not declare. A level cannot be converted into a rate"
+                f"{where} carries the dimensionless ratio {unit!r} against a stock, so its flux is "
+                "the other endpoint's own flow multiplied by that ratio — and that flow is not a "
+                "node this edge can read. A level cannot be converted into a rate"
             )
         return None, (
             f"{where} declares {unit!r}, which does not establish a flux: it relates the stock's "
-            "quantity to a different quantity, and nothing says which state produces the flow"
+            "quantity to a different quantity, and the flow between them is not declared"
         )
 
     return ("per_hour" if per_hour else "per_second"), ""
@@ -1240,8 +1280,38 @@ def check_coupling(
     # recipe the edge owes, and saying it twice would double-count the same obligation.
     stock_nodes = {name for name, node in node_of.items() if node.get("kind") == "stock"}
     stock_states = {sid for sid, method in (state_methods or {}).items() if method == "stock"}
+
+    # A stock discharges through its *outbound* edges — that is the rule the README states and the
+    # plant never implemented, so every tank in the vehicle only filled. An outbound edge from a node
+    # carrying more than one stock state has to say which one it drains, for the same reason an
+    # inbound edge has to say which one it advances.
+    stocks_per_node: dict[str, list[str]] = {
+        node_name: [state for state in states if state in stock_states]
+        for node_name, states in (states_by_node_map or {}).items()
+    }
     for edge in edges:
-        if edge.get("to") not in stock_nodes:
+        source = str(edge.get("from"))
+        candidates = stocks_per_node.get(source) or []
+        if len(candidates) < 2:
+            continue
+        where = f"coupling.yaml:edge {edge.get('id')}"
+        drains = edge.get("drains")
+        if drains is None:
+            report.refuse(
+                where,
+                f"leaves {source}, which carries {len(candidates)} stock states "
+                f"({sorted(candidates)}), and declares no `drains`. The stock discharges through its "
+                "outbound edges, so without this every one of them loses this edge's flow",
+            )
+        elif str(drains) not in candidates:
+            report.refuse(
+                where,
+                f"declares `drains: {drains!r}`, which is not one of {source}'s stock states "
+                f"({sorted(candidates)})",
+            )
+
+    for edge in edges:
+        if edge.get("to") not in stock_nodes and edge.get("from") not in stock_nodes:
             continue
         if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
             continue

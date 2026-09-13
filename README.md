@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 243 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 243 declared debts and every
+verbs and 128 classified events across the eleven directories, with 246 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **243** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1655,6 +1655,53 @@ it, and the 116.86 Pa per kelvin figure survives there.
 **Two of round 48's eight structural stock-edge defects turned out not to be defects at all** — they
 were edges that landed on a stock node's *channel* while driving something else, and `advances` is
 what makes that visible. Six structural and four unset remain. **245 became 243.**
+
+## Every tank in the vehicle only filled
+
+The README states the rule and no tool implemented any of it: **"a back-edge *out* of a stock still
+drains it, because the stock's own integrator subtracts the flow the back-edge reads."**
+`advance()` summed `incoming` and never looked at an outbound edge, so the twelve edges that leave
+stock nodes drained nothing.
+
+With round 47's missing driver and round 49's node-level resolution, the stock integrator has now
+been wrong in **four independent ways** — no driver, no outbound term, drivers resolved by node, and
+one discharge reading the wrong endpoint — and the reason is the same every time: **the schedule
+stops at the first `algebraic` state, so it never runs.** A function that has never executed is not
+a function that works; it is a function nobody has tested, in the exact place where being wrong is
+invisible.
+
+The outbound term is in, and the same classifier judges both directions. Two corrections came with
+it, each of which the data made obvious once the term existed:
+
+- **A discharge is driven by the consumer, not by the stock.** `E-CREW-WATER` at `kg/h per crew` is
+  the crew's drinking rate; reading the tank's own level and multiplying gave **zero at every crew
+  count**, and zero is what a stuck instrument looks like.
+- **Back-edges drain.** The README names `h2_csm` and `water_cooling` as discharging *entirely*
+  through back-edges; excluding them from the outbound loop would have left both draining nothing.
+
+### The classifier had to become dimensional, not just temporal
+
+Thirteen of the vehicle's sixteen stock edges cannot be integrated, and the linter now names every
+one of them, so they enter the count and fail `--strict`:
+
+| | edges |
+|---|---|
+| **computable** | 4 — `E-CREW-ATM`, `E-LM-CREW-ATM` (`kg/h per crew`), `E-RAD-WATER` (`kg/s per W`), `E-CREW-WATER` (`kg/h per crew`, outbound) |
+| **a ratio whose flow is undeclared** | 4 |
+| **a conversion stated backwards** | 2 — `E-PROP-ENG` and `E-RCSP-RCS` at `N per kg/s` |
+| **a relation on a stock** | 1 — `E-PLATE-BAT` |
+| **unset value** | 4 |
+
+`E-PROP-ENG` is why the time-basis test alone was not enough. `N per kg/s` contains `/s`, so it read
+as a rate — while its numerator is a **force**. The number is thrust per unit of flow, stated
+backwards, so a plant multiplying it by a thrust would get N² per (kg/s) and call the result
+kilograms of propellant. The rule is now that a sensitivity's numerator must be one of the units the
+stock is denominated in, and the `/h` or `/s` reduces to the unit before the comparison — `kg/h per
+crew` is a mass rate, and reducing it is what lets the same comparator judge it beside `kg/s per W`.
+
+**243 became 246.** The design question the refusals name is the same one rounds 48 and 49 kept
+arriving at: the vehicle's stocks connect to their consumers through edges whose sensitivity
+describes a *conversion*, and the flow itself is never a node.
 
 ## Authoring convention: no flow mappings
 

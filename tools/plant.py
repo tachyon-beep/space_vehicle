@@ -127,6 +127,7 @@ class Edge:
     kind: str
     sensitivity: dict[str, Any]
     advances: str | None = None
+    drains: str | None = None
 
     @property
     def usable(self) -> bool:
@@ -141,6 +142,7 @@ class World:
     edges: list[Edge]
     back_edges: set[str]
     schedule: list[str]
+    nodes: dict[str, dict[str, Any]]
     channels: dict[str, dict[str, Any]]
     frame_fields: list[str]
     verbs: dict[str, dict[str, Any]]
@@ -189,6 +191,7 @@ def load_world(root: Path) -> World:
             kind=str(e.get("kind")),
             sensitivity=e.get("sensitivity") or {},
             advances=e.get("advances"),
+            drains=e.get("drains"),
         )
         for e in coupling.get("edges") or []
     ]
@@ -222,6 +225,11 @@ def load_world(root: Path) -> World:
         edges=edges,
         back_edges=back_edges,
         schedule=schedule,
+        # The node declarations travel with the world so the shared flux classifier can see a
+        # stock's unit and an endpoint's kind. Without them the plant called the classifier with an
+        # empty map, the dimensional check silently did nothing, and the plant's judgement was
+        # weaker than the linter's — which is the one thing sharing the function is meant to prevent.
+        nodes={str(k): v for k, v in (coupling.get("nodes") or {}).items()},
         channels=channels,
         frame_fields=[
             str((f or {}).get("name"))
@@ -680,7 +688,9 @@ def emit_frame(
 SECONDS_PER_HOUR = 3600.0
 
 
-def stock_flux(world: World, edge: Edge, values: dict[str, Any], dt: float) -> float:
+def stock_flux(
+    world: World, edge: Edge, values: dict[str, Any], dt: float, driver_node: str | None = None
+) -> float:
     """What one edge moves into a stock over `dt`, or a named refusal.
 
     This function exists because the line it replaces was wrong three ways at once and **had never
@@ -717,7 +727,14 @@ def stock_flux(world: World, edge: Edge, values: dict[str, Any], dt: float) -> f
     # `derive_schedule` already set: a rule about what a stock edge means cannot come apart from the
     # rule that checks it.
     basis, reason = stock_flux_basis(
-        {"id": edge.id, "kind": edge.kind, "sensitivity": edge.sensitivity}, {}
+        {
+            "id": edge.id,
+            "kind": edge.kind,
+            "sensitivity": edge.sensitivity,
+            "from": edge.source,
+            "to": edge.target,
+        },
+        world.nodes,
     )
     if basis is None:
         # The shared classifier prefixes its reason with the edge id because the linter reports it
@@ -733,17 +750,22 @@ def stock_flux(world: World, edge: Edge, values: dict[str, Any], dt: float) -> f
     per_hour = basis == "per_hour"
     where = f"coupling.yaml:edge {edge.id}"
 
-    driver = values.get(edge.source)
+    # Which end drives the flux depends on the direction. A fill is driven by the source, which is
+    # the thing producing the flow; a **discharge is driven by the target**, which is the consumer
+    # that sets the rate. Reading the stock itself on a discharge returns its own level, and
+    # `E-CREW-WATER` at `kg/h per crew` then multiplied by a mass in kilograms and gave zero.
+    source = driver_node or edge.source
+    driver = values.get(source)
     if driver is None:
         raise Unconfigured(
             where,
-            f"drives {edge.target} and reads {edge.source!r}, which nothing supplies this tick",
+            f"drives {edge.target} and reads {source!r}, which nothing supplies this tick",
         )
     if not isinstance(driver, (int, float)):
         raise Unconfigured(
             where,
-            f"drives {edge.target} and reads {edge.source!r} as {driver!r}, which is not a number "
-            "the sensitivity can multiply",
+            f"drives {edge.target} and reads {source!r} as {driver!r}, which is not a number the "
+            "sensitivity can multiply",
         )
     flux = float(edge.sensitivity["value"]) * float(driver)
     return flux * (dt / SECONDS_PER_HOUR if per_hour else dt)
@@ -799,6 +821,22 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         total = 0.0
         for edge in incoming:
             total += stock_flux(world, edge, values, dt)
+        # And the outbound half, which was missing entirely: **every tank in the vehicle only
+        # filled.** The README states the rule — "a back-edge *out* of a stock still drains it,
+        # because the stock's own integrator subtracts the flow the back-edge reads" — and no tool
+        # implemented any of it. Twelve edges leave stock nodes, and the classifier can establish a
+        # flow for exactly one of them (`E-CREW-WATER`, at `kg/h per crew`); the rest are refused by
+        # name, which is why the linter reports them as debts too.
+        for edge in world.edges:
+            # **Back-edges included**, which is the README's own rule: "a back-edge *out* of a stock
+            # still drains it, because the stock's own integrator subtracts the flow the back-edge
+            # reads". Excluding them would have left `water_cooling` and `h2_csm` — the two the README
+            # names as discharging *entirely* through back-edges — draining nothing.
+            if edge.source != state.node:
+                continue
+            if edge.drains is not None and edge.drains != state.id:
+                continue
+            total -= stock_flux(world, edge, values, dt, driver_node=edge.target)
         if abs(total) and abs(total) < quantum:
             # plant.md §4: a flow below the quantum is a modelling error, not a rounding one, and
             # the accumulator must still carry it rather than lose it.
