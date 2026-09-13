@@ -37,6 +37,15 @@ points:
       eclss_diode.md:735 adopts NASA's one-hour-average limit of 3 mmHg, and conflict register
       C-05 keeps it as a *separate* channel rather than letting it contaminate the instantaneous
       alarm. Two statistics, two channels, one gas.
+  - channel: eclss.lm_co2_pp_1h_avg_mmhg
+    from: csm_cabin_co2_kg
+    layer: estimate
+    inputs: [eclss.co2_pp_mmhg]
+    derivation: "a rolling one-hour mean of the instantaneous channel"
+    note: >-
+      eclss_diode.md:735 adopts NASA's one-hour-average limit of 3 mmHg, and conflict register
+      C-05 keeps it as a *separate* channel rather than letting it contaminate the instantaneous
+      alarm. Two statistics, two channels, one gas.
   - channel: eclss.pp_o2_mmhg
     from: csm_cabin_o2_kg
     layer: measurement

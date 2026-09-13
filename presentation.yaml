@@ -259,15 +259,36 @@ plant_published:
 # *cadence structure*, because §5 requires the distinction between a fast control variable and a
 # slow resource trend to be visible in the publication and not just in the registry.
 # --------------------------------------------------------------------------------------
+single_cabin:
+  eclss.cabin_regulator_state: >-
+    the CSM's pressure control. The LM's is not published as a mechanism at all — a two-position
+    regulator like the CSM's, a relief valve, or a continuous bleed — so the channel cannot be
+    twinned without inventing the article it would describe. Named in `open_debts`.
+  eclss.leak_rate_g_s: >-
+    derived from the CSM's own mass balance, which is why an LM leak never appears in it. The
+    asymmetry is deliberate and load-bearing: it is what makes an LM leak *harder* to diagnose than
+    the CSM's, because the vehicle has no instrument that reconciles the LM's cabin pressure against
+    its supply.
+  eclss.o2_supply_pressure_psi: >-
+    the cryogenic supply's tank pressure. The LM's oxygen is a separate tank at its own pressure and
+    the vehicle publishes no channel for it — the same gap as `leak_rate_g_s` one step over, and it
+    is owed rather than decided: `vehicle.yaml#consumables` carries both loads (279 kg and 24.1 kg)
+    and only one supply has an instrument.
+  eclss.suit_loop_flow_cfm: >-
+    legitimately single. The suit loop is one shared circuit rather than a per-cabin one, which is
+    why `ECL-07-suit-loop-fan-failure` has no LM twin either — a second fault would be the same
+    fault twice.
+
+
 ring:
 
   cadence_classes:
     - {class: fast, rule: "rate_hz >= 5", members: 21, note: "rates, voltages, chamber pressure — the quantities a transient lives in, and the ones a slow rate turns into a step change that looks like nothing happened"}
     - {class: control, rule: "1 <= rate_hz < 5", members: 85, note: "the engineering channels a fleet plans against, and by far the largest class: 59 % of the registry"}
     - {class: slow, rule: "0.5 <= rate_hz < 1", members: 8, note: "consumables and thermal trends — the quantities whose next value the previous one predicts"}
-    - {class: resource, rule: "0 < rate_hz < 0.5", members: 29, note: "the ledger residuals and reconciliation quantities, whose unit is hours"}
+    - {class: resource, rule: "0 < rate_hz < 0.5", members: 30, note: "the ledger residuals and reconciliation quantities, whose unit is hours"}
     - {class: event, rule: "rate_hz == 0", members: 4, note: "a channel with no period: `rcs.thruster_[n]_pulse_width_us`, `avionics.program_alarm_code`, `structure.stage_state` and `cw.acknowledged`. Three of the four are *states* published only when they change, which is why each declares a `max_decision_age_ms` heartbeat — without one a fleet cannot tell 'nothing has happened' from 'the publisher has stopped'"}
-  members_total: 147
+  members_total: 148
   burst: >-
     around events, and `on_event: true` is what the registry uses to say which channels have an
     event worth bursting around. §5's reason is that "the interesting failures are transients, and
@@ -427,3 +448,18 @@ open_debts:
   - "`state.json`'s `available_commands` is derived here from three registries and it is the one mirror key with an algorithm behind it: the intersection of a verb's `allowed_phases` with the current phase, its gate variable's value, and its interlock list against the live thresholds. Written out, that is a rule; not written out, it is a thing two implementations will disagree about."
   - "The `HELP.md` generator is written (`tools/generate_help.py`) and its coverage is a test rather than a hope: every registered verb gets an entry, every gate variable is named, and every refusal in a domain's declined list is documented. The runtime half is now written too: `tools/console.py` calls the generator and writes `<slug>/HELP.md`, and it calls *that* generator rather than one of its own — its first version hand-rolled a second HELP.md, which is hand-editing with extra steps and exactly what this file warns against. What remains owed is not the file but its `not_published` half: four channels are hidden from the fleet and the registry that lists them is the same one HELP.md is generated from, so a hidden channel and an unregistered one still look alike from the outside."
   - "`state.json`'s capability snapshot and gate variable map are emitted by `tools/plant.py --state`, and the emission is what closed this debt. Writing the generator found three things the specification had assumed rather than checked. First, the expansion rule: 58 gate variables are 58 *templates* and they instantiate to **226 published names**, and the binding is by name — the first rule tried was positional and it publishes `power_amplifier_True_enable`, because `set_power_amplifier` declares `state` before `transmitter`. Second, ten verbs could not be expanded at all: eight wrote a bare `<id>` where the argument was `antenna`, `source`, `load`, `breaker`, `battery`, `engine`, `pump`, `hatch` or `loop`, and two — `set_load` and `set_breaker` — declared their values as a *sentence* (`[any id in components.yaml#loads]`), which instantiates to nothing. Both are linter refusals now, because a gate the mirror cannot publish is a closed gate a fleet cannot name and §9's check 5 is exactly that check. Third, and the reason this stayed a debt so long: nothing was checking that a template *could* expand, so the failure was invisible until something tried to publish the map. What remains owed here is not the generator but the far side's keys — `budget`, `queue_depth`, `published_at` are the executive's and a vehicle that filled them would be writing the executive's record for it."
+
+# --------------------------------------------------------------------------------------
+# The channels that exist for one cabin only.
+#
+# The vehicle has two crewed compartments and they cannot equalise between undocking and docking, so
+# a channel about a cabin's air is about one cabin. Most are paired — the same quantity published
+# twice, once per compartment — and the registry's own ids are the evidence: `eclss.cabin_temp_c` and
+# `eclss.lm_cabin_temp_c` are one quantity in two rooms with no shared air between them.
+#
+# A channel that is *not* paired is therefore a claim, and until round 68 it was an implicit one: the
+# two CO2 exposure averages were published for the cabin the crew leave and none for the one they
+# live in, and nothing could tell that from a channel that is legitimately single because its subject
+# is. `check_cabin_pairing` holds this list to the registry exactly, so a new unpaired channel is
+# refused until it is either paired or explained here.
+# --------------------------------------------------------------------------------------

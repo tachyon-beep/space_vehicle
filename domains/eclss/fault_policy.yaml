@@ -496,6 +496,7 @@ faults:
       unit: per_h
     perturbs:
       - eclss.lm_co2_pp_mmhg
+      - eclss.lm_co2_pp_1h_avg_mmhg
       - eclss.lm_absorber_capacity_pct
       - cw.active_lights
     detection:

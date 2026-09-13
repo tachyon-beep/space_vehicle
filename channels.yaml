@@ -397,6 +397,30 @@ eclss:
         the LM's own CO2 channel. Apollo 13's improvised cartridge kept this below 1 mmHg, and
         it is the channel that constrains how long a surface stay can be extended — a different
         constraint from the CSM's, because the LM's absorber is a cartridge rather than a bed.
+  - id: eclss.lm_co2_pp_1h_avg_mmhg
+    unit: mmHg
+    layer: estimate
+    precision: 0.1
+    rate_hz: 0.1
+    priority: P4
+    range: [0, 3]
+    # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
+    # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
+    # from the numbers alone, which is why this is declared rather than inferred.
+    range_kind: band
+    events: [">3 sustained"]
+    inputs: [eclss.lm_co2_pp_mmhg]
+    event_class: alarm
+    provenance:
+      basis: chosen
+      reason: >-
+        NASA's one-hour-average ppCO2 limit of 3 mmHg, at the LM's own compartment. It is a separate
+        channel for the reason the instantaneous one is: from undocking to docking the two
+        atmospheres share no air, so an exposure average computed from the CSM's CO2 says nothing
+        about the air a surface crew are breathing. **It did not exist until round 68**, and the gap
+        was the sharpest kind — the exposure limit is the statistic that governs how long a surface
+        stay can be extended, and it was published for the cabin the crew leave rather than the one
+        they live in
   - id: eclss.lm_pp_o2_mmhg
     unit: mmHg
     layer: measurement

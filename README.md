@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 130 states over 52 scheduled nodes, 141
+**All eleven domains have landed** — 148 channels, 130 states over 52 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -2178,6 +2178,42 @@ them read as though they had two.**
 
 Changing either leak now refuses the rate it feeds: *"the regulator replaces what the cabin loses, and
 a supply that does not is a cabin whose pressure drifts."*
+
+## An unpaired cabin channel is a claim
+
+The vehicle has two crewed compartments and they cannot equalise between undocking and docking, so a
+channel about a cabin's air is about **one** cabin. Most ECLSS channels are paired — `eclss.cabin_temp_c`
+and `eclss.lm_cabin_temp_c` are one quantity in two rooms — and the registry's own ids are the
+evidence.
+
+**A channel that is not paired is therefore a claim, and until round 68 it was an implicit one.** The
+CO2 exposure average was published for the cabin the crew *leave* and none for the one they live in:
+
+| | before | after |
+|---|---|---|
+| paired ECLSS channels | 5 | **6** |
+| CSM-only, explained | — | 4 |
+
+`eclss.lm_co2_pp_1h_avg_mmhg` exists now, with its own point, its own threshold and `ECL-15` as the
+fault that perturbs it. It is the sharpest version of this class of gap, because **the one-hour
+exposure limit is the statistic that governs how long a surface stay can be extended** — and it was
+published for the wrong compartment for the whole life of the registry.
+
+`presentation.yaml#single_cabin` names each remaining unpaired channel with its reason, and
+`check_cabin_pairing` holds the list to the registry exactly in both directions:
+
+- **`eclss.cabin_regulator_state`** — the LM's pressure control is not published as a mechanism at all,
+  so twinning it would mean inventing the article it describes.
+- **`eclss.leak_rate_g_s`** — derived from the CSM's mass balance, and the asymmetry is
+  load-bearing: it is what makes an LM leak *harder* to diagnose, because no instrument reconciles the
+  LM's cabin pressure against its supply.
+- **`eclss.o2_supply_pressure_psi`** — the LM's oxygen is a separate tank at its own pressure and the
+  vehicle publishes no channel for it. Owed rather than decided: both loads are declared (279 kg and
+  24.1 kg) and only one supply has an instrument.
+- **`eclss.suit_loop_flow_cfm`** — legitimately single, because the suit loop is one shared circuit.
+
+A new unpaired channel is refused until it is paired or explained, and a stale explanation is refused
+once the channel gains a twin.
 
 ## Authoring convention: no flow mappings
 

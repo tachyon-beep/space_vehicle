@@ -137,6 +137,22 @@ thresholds:
         more than 3 mmHg. It is a different statistic from the instantaneous alarm — an exposure
         limit rather than a warning — and it is deliberately ADVISORY rather than CAUTION,
         because it says something about the next hour rather than about now.
+  - id: lm_co2_exposure_1h
+    point: eclss.lm_co2_pp_1h_avg_mmhg
+    comparator: above
+    assert: 3
+    clear: 2.5
+    dwell_assert_ms: 0
+    dwell_clear_s: 600
+    latched: true
+    severity: ADVISORY
+    provenance:
+      basis: historical
+      source: >-
+        eclss_diode.md:735: NASA's current nominal requirement is a one-hour average ppCO2 of no
+        more than 3 mmHg. The same limit at the LM's compartment, where a surface stay is extended or
+        cut short by it. **It did not exist until round 68**: the vehicle published an exposure
+        limit for the cabin the crew leave and none for the one they live in.
   - id: co2_absorber_low
     point: eclss.absorber_capacity_pct
     comparator: below

@@ -3656,6 +3656,59 @@ def check_producers(
         )
 
 
+def check_cabin_pairing(
+    registry: dict[str, Any], presentation: dict[str, Any], report: Report
+) -> None:
+    """Every channel about a cabin is either paired with its twin, or says why it is not.
+
+    The vehicle has two crewed compartments, so a channel about a cabin's air is about *one* cabin:
+    `eclss.cabin_temp_c` and `eclss.lm_cabin_temp_c` are one quantity in two rooms with no shared air
+    between them, and the registry's own ids are the evidence. Most of the ECLSS channels are paired
+    that way. **A channel that is not paired is therefore a claim, and until round 68 it was an
+    implicit one** — the CO2 exposure average was published for the cabin the crew leave and none for
+    the one they live in, and nothing could tell that from a channel that is legitimately single
+    because its subject is.
+
+    So each unpaired ECLSS channel is named in `presentation.yaml#single_cabin` with its reason, and
+    the comparison is exact in both directions: a new unpaired channel is refused until it is paired
+    or explained, and a stale explanation is refused once the channel gains a twin.
+    """
+    declared = presentation.get("single_cabin")
+    if not isinstance(declared, dict):
+        report.debt(
+            "presentation.yaml#single_cabin",
+            "names no single-cabin channels, so an ECLSS channel about one compartment and an ECLSS "
+            "channel about both are indistinguishable to a reader",
+        )
+        return
+    # `check_channels` returns the registry keyed by channel id, not in its file's sections.
+    published = {str(cid) for cid in (registry or {}) if str(cid).startswith("eclss.")}
+    # The twin is the CSM id with the compartment inserted, not the LM id with it removed: stripping
+    # `eclss.lm_` from a CSM id is a no-op, so the first version called every channel paired and the
+    # check reported all four declarations as stale.
+    paired = {
+        cid
+        for cid in published
+        if ".lm_" not in cid and cid.replace("eclss.", "eclss.lm_", 1) in published
+    }
+    single = {cid for cid in published if ".lm_" not in cid and cid not in paired}
+    for cid in sorted(single - set(declared)):
+        report.refuse(
+            "presentation.yaml#single_cabin",
+            f"does not explain {cid!r}, which is published for one cabin and has no `lm_` twin. "
+            "Either pair it or say why its subject is one compartment",
+        )
+    for cid in sorted(set(declared) - single):
+        report.refuse(
+            "presentation.yaml#single_cabin",
+            f"explains {cid!r}, which is either paired or not an ECLSS channel. A stale explanation "
+            "is a reader told to expect a gap that has been closed",
+        )
+    for cid, why in sorted(declared.items()):
+        if not str(why or "").strip():
+            report.refuse(f"presentation.yaml#single_cabin.{cid}", "gives no reason")
+
+
 def check_presentation(
     doc: dict[str, Any],
     registry: dict[str, dict[str, Any]],
@@ -5479,6 +5532,7 @@ def main(argv: list[str] | None = None) -> int:
             check_objectives(mission, registry, report)
         check_trajectory(mission, report)
         check_met_clock(mission, report)
+    check_cabin_pairing(registry, presentation, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.
     all_verbs: dict[str, dict[str, Any]] = {}
