@@ -41,7 +41,7 @@ natural_rate_hz: 1
 reads: [o2_csm, o2_lm, absorber_capacity_csm, absorber_capacity_lm, crew_state,
         cabin_zone_t, lm_cabin_zone_t]
 writes: [cabin_atm, lm_cabin_atm, cabin_regulator, cabin_o2_supply_csm,
-         cabin_o2_supply_lm]
+         cabin_o2_supply_lm, co2_removal_csm, co2_removal_lm]
 
 # --------------------------------------------------------------------------------------
 # State. Four conserved gases per compartment, one commanded regulator, and three derived
@@ -164,13 +164,38 @@ state:
     provenance:
       basis: chosen
       reason: "the suit loop is a fan-driven circuit, so it spins up in seconds. apollo_diode.md:92 publishes the flow at 27-33 cfm with a <20 event, and five seconds is long enough that a fan commanded on cannot be declared failed within one tick."
-  - id: co2_removal_kg_s
-    node: internal
+  # Two removal rates, not one. This was a single state on the `internal` sentinel *reading both
+  # counters*, so it converted the two beds' remaining capacity into one rate for one vehicle — and a
+  # crew on the surface spent the CSM element while a crew back in the CM spent the LM cartridge,
+  # exactly the defect round 42 fixed when it split the counters themselves.
+  - id: co2_removal_csm_kg_s
+    node: co2_removal_csm
     method: algebraic
-    unit: "kg/s"
+    unit: "kg CO2/s"
     provenance:
       basis: derived
-      relation: "the absorber bed's removal rate, which is its rated man-hour capacity converted through the metabolic production rate. Algebraic because the rate follows the bed's state and the blower's flow rather than accumulating."
+      relation: >-
+        the CSM element's removal rate: its remaining man-hour capacity converted through the
+        metabolic production rate, capped by the blower's flow. Algebraic because the rate follows
+        the bed's state rather than accumulating. What the split changes is *which* capacity it is a
+        function of — this one reads `absorber_capacity_csm` and the CSM cabin's CO2, and the LM's
+        reads its own two
+      note: >-
+        the rule is domain code and is owed as the rest of this domain's are, but its *inputs* are
+        per-compartment now and every one of them is declared: the counter, the cabin's CO2 mass, the
+        blower's flow and the crew's production
+  - id: co2_removal_lm_kg_s
+    node: co2_removal_lm
+    method: algebraic
+    unit: "kg CO2/s"
+    provenance:
+      basis: derived
+      relation: >-
+        as the CSM's, at the cartridge: the LM's own remaining capacity, its own cabin's CO2 and the
+        same two crew whose metabolic production it is sized against. The LM carries two crew during
+        the descent, the surface and the ascent, so its removal rate is two thirds of the CSM's at
+        the same per-crew production — a *different* number from the CSM's, and one a single shared
+        state could not have expressed
   - id: csm_cabin_pressure_pa
     node: cabin_atm
     method: algebraic

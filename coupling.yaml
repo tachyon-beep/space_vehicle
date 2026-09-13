@@ -202,6 +202,23 @@ nodes:
     kind: flow
     unit: kg O2/s
     note: "the LM's, over a smaller leak and two crew rather than three"
+  # The CO2 each cabin's absorber removes. `co2_removal_kg_s` was a single algebraic state on the
+  # `internal` sentinel reading *both* counters — so a surface crew's CO2 spent the CSM element's
+  # man-hours, the same defect round 42 fixed one layer down when the counters were split. A flow is
+  # per-compartment for the reason the counters are: the two atmospheres cannot equalise.
+  co2_removal_csm:
+    domain: eclss
+    kind: flow
+    unit: kg CO2/s
+    note: >-
+      the CSM element's removal rate. It is what `E-ATM-ABSORB` converts to man-hours spent and what
+      `E-CABIN-CO2-REMOVAL` takes out of the cabin, so the counter is spent by the removal it
+      actually performs rather than by an assumption about which cabin the crew are in
+  co2_removal_lm:
+    domain: eclss
+    kind: flow
+    unit: kg CO2/s
+    note: "the LM cartridge's, a separate absorber in a separate compartment"
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
     domain: power
@@ -400,6 +417,30 @@ edges:
         `source_converter_v`, and it belongs in that state's relation, so it is recorded in
         open_debts as a resistance rather than as a coefficient here. Closing this edge retires
         the *coefficient* half of that debt and leaves the resistance half standing
+  - id: E-CABIN-CO2-REMOVAL
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "kg CO2 per kg CO2"
+      basis: derived
+      relation: "the CO2 the element removes leaves the cabin: the removal *is* the cabin's outflow, so the transfer is one for one"
+      at: "element removal"
+    from: cabin_atm
+    to: co2_removal_csm
+    kind: rate
+    drains: csm_cabin_co2_kg
+  - id: E-LM-CABIN-CO2-REMOVAL
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "kg CO2 per kg CO2"
+      basis: derived
+      relation: "as E-CABIN-CO2-REMOVAL, at the LM cartridge"
+      at: "cartridge removal"
+    from: lm_cabin_atm
+    to: co2_removal_lm
+    kind: rate
+    drains: lm_cabin_co2_kg
   - id: E-O2-SUPPLY-CSM
     sensitivity:
       value: 1.0
@@ -554,7 +595,7 @@ edges:
         E-ATM-ABSORB is which compartment's atmosphere it draws from and *which counter it
         exhausts*; the sensitivity is the same number because a man-hour is defined as one
         crew-hour of removal, not because the two cartridges are alike
-    from: lm_cabin_atm
+    from: co2_removal_lm
     to: absorber_capacity_lm
     kind: rate
   - id: E-LM-CREW-ATM
@@ -602,7 +643,7 @@ edges:
         edge one for one. It said `conserve` until the conservation check learned to refuse an
         edge whose endpoints have no dimension, which is the only reason the mislabelling was
         ever visible
-    from: cabin_atm
+    from: co2_removal_csm
     to: absorber_capacity_csm
     kind: rate
   - id: E-ZONE-ATM

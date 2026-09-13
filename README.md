@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,7 +173,7 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 128 states over 49 scheduled nodes, 141
+**All eleven domains have landed** — 147 channels, 129 states over 51 scheduled nodes, 141
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -182,7 +182,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **247** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1563,7 +1563,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 67 of the 128 states need code before the plant can
+rules the configuration deliberately does not carry**, so 68 of the 129 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1751,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-128 states, by what blocks them:
+129 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -2045,6 +2045,35 @@ vehicle's own tables and only their direction was wrong.
 Neither edge carries `advances` any more, and correctly: each target node holds a single state, so
 the declaration was never required, and it would be wrong now — the edge reads the thrust rather
 than producing it. `prop_rcs` has no inbound edge at all, which it declares in `preloaded:`.
+
+## One removal rate for two absorbers was round 42's defect one layer up
+
+Round 42 split the absorber *counters* per cabin. It did not split the rate that spends them.
+`co2_removal_kg_s` was a single algebraic state on the `internal` sentinel **reading both counters**,
+so it converted two beds' remaining capacity into one rate for one vehicle — and a crew on the
+surface spent the CSM element while a crew back in the CM spent the LM cartridge.
+
+Split into `co2_removal_csm_kg_s` and `co2_removal_lm_kg_s`, each on its own flow node, the chain is
+per-compartment end to end:
+
+```
+cabin_atm ──(1.0, drains csm_cabin_co2_kg)──> co2_removal_csm ──(26.37 man-hours/kg)──> absorber_capacity_csm
+```
+
+**The LM's rate is two thirds of the CSM's** on the same per-crew production, because two crew
+produce the CO2 rather than three. That is a *different number*, and one a single shared state could
+not have expressed.
+
+### It also closed the last two conversion refusals
+
+`man-hours per kg CO2` has no time basis in its own unit, so the classifier refused it. Applied to a
+node carrying `kg CO2/s` it is man-hours per second, which is exactly what the counter integrates.
+The rule was already there for same-dimension ratios; it now covers any unit whose *denominator* the
+partner node carries as a flow — which is the general test, and the two cases are the same case.
+
+**247 became 245. Seventeen of the twenty-one stock-adjacent edges compute, and all four that remain
+are genuinely not fluxes**: the two pressure relations, the water-availability clamp, and the battery
+derating.
 
 ## Authoring convention: no flow mappings
 
@@ -2416,7 +2445,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 128 states, 70 edges, 147 channels, 58 verbs — derives the tick order by importing
+world — 129 states, 74 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is

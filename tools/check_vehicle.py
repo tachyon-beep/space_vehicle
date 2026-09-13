@@ -778,6 +778,18 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
         )
 
     if not per_hour and not per_second:
+        # No time basis in the unit, so the *partner* has to supply one. Two cases reach here and
+        # both are the same test: a same-dimension ratio (`kg O2 per kg O2`) and a conversion
+        # (`man-hours per kg CO2`). Either is a flux when the other endpoint is a flow denominated
+        # in the ratio's denominator — `man-hours per kg CO2` applied to `kg CO2/s` is man-hours per
+        # second, which is exactly what the absorber counter integrates.
+        denominator = " per ".join(unit.split(" per ")[1:]).strip()
+        partner = str(edge.get("to") if edge.get("to") != stock_endpoint else edge.get("from"))
+        partner_node = (nodes or {}).get(partner) or {}
+        partner_unit = str(partner_node.get("unit") or "")
+        partner_basis = partner_unit.split("/")[0]
+        if partner_node.get("kind") == "flow" and _norm(partner_basis) == _norm(denominator):
+            return "per_second", ""
         sides = unit.split(" per ")
         shared = (
             len(sides) >= 2
@@ -796,15 +808,6 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
             # flow nodes are denominated in `W`, `N`, `dB`, `kg/s` and nothing else. The refusal
             # therefore names the node that would fix the edge, which turns thirteen vague debts
             # into one build order.
-            denominator = " per ".join(unit.split(" per ")[1:]).strip()
-            partner = str(edge.get("to") if edge.get("to") != stock_endpoint else edge.get("from"))
-            partner_node = (nodes or {}).get(partner) or {}
-            partner_unit = str(partner_node.get("unit") or "")
-            # The partner is a *rate*, so its own `/s` reduces away before the comparison: a node
-            # denominated `kg reactants/s` is the flow that `kg water per kg reactants` is against.
-            partner_basis = partner_unit.split("/")[0]
-            if partner_node.get("kind") == "flow" and _norm(partner_basis) == _norm(denominator):
-                return "per_second", ""
             return None, (
                 f"{where} carries the dimensionless ratio {unit!r} against a stock, so its flux is "
                 f"the flow of {denominator} multiplied by that ratio — and no node in the graph "
