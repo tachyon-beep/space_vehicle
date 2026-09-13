@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,13 +173,16 @@ direction of that error is stated in `check_propulsion` rather than tuned away.
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 254 declared debts and every
-one of them named. That completes the design's spike many times over (`simulator-design.md:113`
+**All eleven domains have landed** — 147 channels, 124 states over 45 scheduled nodes, 141
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
+and every one of them named. Every figure in this sentence is derived by the tools and asserted
+against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
+places across three rounds while the commit messages stayed right — which is this folder's own
+recurring finding arriving at its own status section. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1558,9 +1561,9 @@ document.
 ## The plant's stock integrator had never run, and was wrong three ways
 
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
-`lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 120 states, and
+`lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 76 states need code before the plant can
+rules the configuration deliberately does not carry**, so 65 of the 124 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1748,7 +1751,7 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-120 states, by what blocks them:
+124 states, by what blocks them:
 
     11    9 %  ready now — the two classes the reference plant can advance
     12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
@@ -1910,6 +1913,23 @@ the **magnitude of the operating range's cold end with the sign lost** — the s
 The conductance moved out of prose and into `conductance_w_per_k` while I was there, because a number
 the linter cannot read is a number that drifts — and this one now has four other declarations resting
 on it.
+
+## The status numbers had drifted, and the tools now hold them
+
+Twelve rounds of structural work moved the state count, the node count and the debt count. The
+commit messages carried the right figures every time; **the README kept the old ones.** It said
+"120 states over 43 nodes ... with 254 declared debts and every one of them named" while the tools
+said 124, 45 and 252 — so the sentence that ends *"and every one of them named"* was two out of date
+about the number it was describing.
+
+That is this folder's own recurring finding arriving at its own status section: **a declaration no
+tool reads has already drifted.** The counts had no reader, so nothing could notice.
+
+`test_the_readme_status_matches_the_tools` is the reader. It derives every figure from the linter's
+and the plant's own reports — channels, edges, debts, states, nodes, `UNCONFIGURED` scalars, and the
+build-order share that owes a rule — and asserts the README contains each. **It deliberately adds no
+counter of its own**: a counter written for the test would be one more declaration to drift, and the
+two tools already compute all of them.
 
 ## Authoring convention: no flow mappings
 
@@ -2281,7 +2301,7 @@ temperature among the things they can perceive, and until `eclss.lm_cabin_temp_c
 one they could have been reading was **the other spacecraft's**.
 
 **"Ready to implement" is now evidence rather than a claim.** `tools/plant.py` loads the whole
-world — 120 states, 60 edges, 147 channels, 58 verbs — derives the 41-node tick order by importing
+world — 124 states, 66 edges, 147 channels, 58 verbs — derives the tick order by importing
 the linter's own `derive_schedule` (so the plant and the linter cannot disagree about it), emits a
 telemetry frame in apollo's shape from the declared field list, and then **walks the tick in
 schedule order until it reaches something it cannot compute, where it names exactly what is
