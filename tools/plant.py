@@ -795,8 +795,16 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         if e.target == state.node
         and e.id not in world.back_edges
         and (e.advances is None or e.advances == state.id)
+        # A declared clamp constrains the node's channel and moves no matter, so it is neither an
+        # input nor an output. See `CLAMP_KIND` in the linter.
+        and e.kind != "limit"
     ]
-    if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming:
+    # A tank filled at the pad and never again has no incoming edge *on purpose*, and it says so in
+    # `preloaded:`. Without this exemption the plant refuses `water_cooling`, `o2_lm`, `prop_rcs` and
+    # `pressurant_he` — four stocks that are correctly declared and simply drain, which is the same
+    # distinction the linter's undriven-node check draws for the same reason.
+    preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
+    if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming and not preloaded:
         raise Unconfigured(
             where, f"is a {state.method} with no incoming edge, so nothing drives it"
         )
@@ -833,6 +841,10 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             # reads". Excluding them would have left `water_cooling` and `h2_csm` — the two the README
             # names as discharging *entirely* through back-edges — draining nothing.
             if edge.source != state.node:
+                continue
+            # A declared clamp is a relation, not a flow: it constrains what the node's channel may
+            # do and moves no matter, so it neither fills nor drains. See `CLAMP_KIND` in the linter.
+            if edge.kind == "limit":
                 continue
             if edge.drains is not None and edge.drains != state.id:
                 continue

@@ -118,7 +118,7 @@ NODE_KINDS = {"stock", "flow", "state", "discrete", "service", "sink"}
 # whichever engine the command names rather than one state rather than another. See
 # `states_by_node`.
 DRIVEN_BY_A_VALUE = {"stock", "lag", "delay", "dynamics", "algebraic"}
-EDGE_KINDS = {"conserve", "rate", "algebraic", "lag", "accumulate", "discrete", "delay"}
+EDGE_KINDS = {"conserve", "rate", "algebraic", "lag", "accumulate", "discrete", "delay", "limit"}
 
 # `02-canonical-vocabulary.md` §9b's union, and §10 has promised it since it was written: "**a code
 # not in the union** — a quality, kind, severity, lifecycle state or priority that is not one of
@@ -682,6 +682,21 @@ def load(path: Path, report: Report) -> dict[str, Any] | None:
 # `conserve` is. `lag`, `algebraic` and `delay` relate a stock's quantity to a *different* quantity,
 # and `discrete` and `service` carry authority rather than matter.
 STOCK_INFLOW_KINDS = {"rate", "conserve", "accumulate"}
+
+
+# `limit` is the vocabulary's word for a **clamp**: an edge that lands on a stock node because the
+# thing it constrains hangs off that node, rather than because matter crosses it. `E-RAD-WATER` at
+# `J per kg` is what a kilogram of water *buys* — the rejection it permits — and it is the last of
+# its class, because the other three relations of that shape are already declared by their
+# `advances` naming an algebraic state rather than a stock. This one drives `water_cooling_kg`
+# itself, so there was nothing for `advances` to point at and the rule had no way to say *a relation
+# into this node's channel rather than into the stock*. Four attempts to express it as a flux failed
+# because it is not one; the vocabulary was what was missing.
+#
+# A `limit` edge must say what it clamps and why it is not a flux, because an exemption without a
+# reason is how a mislabelled conversion gets through — which is exactly what `E-ATM-ABSORB` and
+# `E-PRESS-PROP` did while `conserve` was doing this job badly.
+CLAMP_KIND = "limit"
 
 
 def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str | None, str]:
@@ -1339,6 +1354,17 @@ def check_coupling(
 
     for edge in edges:
         if edge.get("to") not in stock_nodes and edge.get("from") not in stock_nodes:
+            continue
+        if edge.get("kind") == CLAMP_KIND:
+            # A declared clamp, exempt by its kind — but only with a reason attached, because the
+            # exemption is the one place a mislabelled conversion could hide.
+            if not (edge.get("sensitivity") or {}).get("note"):
+                report.refuse(
+                    f"coupling.yaml:edge {edge.get('id')}",
+                    "declares `kind: limit` and gives no `sensitivity.note`. A clamp is exempt from "
+                    "the flux rule because it is a relation rather than a flow, and the reason is "
+                    "what separates that from a conversion wearing the label",
+                )
             continue
         if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
             continue

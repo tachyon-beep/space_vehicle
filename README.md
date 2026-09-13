@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 245 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -182,7 +182,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **245** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -2102,6 +2102,35 @@ algebraic state rather than a stock; this one drives `water_cooling_kg` itself, 
 for `advances` to point at and the rule has no way to say "a relation into this node's channel rather
 than into the stock". That is a gap in the vocabulary rather than in the data, and it is the last of
 its kind.
+
+## The vocabulary was missing the word "clamp"
+
+`E-RAD-WATER` at `J per kg` is what a kilogram of water *buys* — 2.45e6 J of rejection — and it is
+the availability half of `C-WATER-BUDGET`. It lands on `water_cooling` because the quantity being
+constrained hangs off that node, and **four attempts to express it as a flux failed because it is not
+one.** The other three relations of that shape are declared by their `advances` naming an algebraic
+state rather than a stock; this one drives `water_cooling_kg` itself, so there was nothing for
+`advances` to point at.
+
+`kind: limit` is the missing word. An edge of that kind is exempt from the flux rule **only with a
+reason attached**, because the exemption is the one place a mislabelled conversion could hide — which
+is exactly what `E-ATM-ABSORB` and `E-PRESS-PROP` did while `conserve` was doing this job badly.
+
+```
+water_cooling ──(4.0816e-07 kg/s per W, rate)──> radiator_reject     the consumption, a real flux
+radiator_reject ──(2.45e6 J per kg, limit)──> water_cooling           the clamp, a relation
+```
+
+The plant skips `limit` edges in both directions — a clamp constrains what a node's channel may do
+and moves no matter — so 1000 W of rejection now drains **4.0816e-4 kg of water per second**, which
+is the first time this vehicle has ever spent a consumable at a demand-driven rate.
+
+Two consequences fell out of it. `water_cooling` has no *fill* — it is 13 kg loaded at the pad, spent
+by the evaporator, and nothing aboard makes it — so it says `preloaded:` now. And the plant's own
+"no incoming edge" refusal needed the same `preloaded` exemption the linter's undriven-node check
+already had, or it refused four correctly-declared tanks.
+
+**No stock-flux refusal is left anywhere in the vehicle.**
 
 ## Authoring convention: no flow mappings
 
