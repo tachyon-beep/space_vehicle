@@ -733,8 +733,10 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
     source_node = (nodes or {}).get(str(edge.get("from"))) or {}
     target_node = (nodes or {}).get(str(edge.get("to"))) or {}
     stock_unit = ""
+    stock_endpoint = str(edge.get("from"))
     if target_node.get("kind") == "stock":
         stock_unit = str(target_node.get("unit") or "")
+        stock_endpoint = str(edge.get("to"))
     elif source_node.get("kind") == "stock":
         stock_unit = str(source_node.get("unit") or "")
 
@@ -784,10 +786,32 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
             and sides[0].split()[0] == sides[1].split()[0]
         )
         if shared:
+            # A ratio *is* computable when the other endpoint is a flow denominated in the ratio's
+            # own denominator: `1.0 kg water per kg reactants` applied to a node carrying
+            # `kg reactants per second` gives water per second, which is a flux. So the test is not
+            # "is this a ratio" but "does the graph carry the flow the ratio is against".
+            #
+            # Nothing in the vehicle does, and that is the finding rather than the rule's failure:
+            # the denominators name `kg O2`, `kg CO2`, `kg reactants` and `kg prop`, and the six
+            # flow nodes are denominated in `W`, `N`, `dB`, `kg/s` and nothing else. The refusal
+            # therefore names the node that would fix the edge, which turns thirteen vague debts
+            # into one build order.
+            denominator = " per ".join(unit.split(" per ")[1:]).strip()
+            partner = str(edge.get("to") if edge.get("to") != stock_endpoint else edge.get("from"))
+            partner_node = (nodes or {}).get(partner) or {}
+            partner_unit = str(partner_node.get("unit") or "")
+            # The partner is a *rate*, so its own `/s` reduces away before the comparison: a node
+            # denominated `kg reactants/s` is the flow that `kg water per kg reactants` is against.
+            partner_basis = partner_unit.split("/")[0]
+            if partner_node.get("kind") == "flow" and _norm(partner_basis) == _norm(denominator):
+                return "per_second", ""
             return None, (
                 f"{where} carries the dimensionless ratio {unit!r} against a stock, so its flux is "
-                "the other endpoint's own flow multiplied by that ratio — and that flow is not a "
-                "node this edge can read. A level cannot be converted into a rate"
+                f"the flow of {denominator} multiplied by that ratio — and no node in the graph "
+                f"carries that flow. `{partner}` is {partner_unit or 'not a node'}, so the ratio has "
+                "nothing to apply to. A level cannot be converted into a rate: the fix is a "
+                f"`kind: flow` node denominated in {denominator} per second, which is what the "
+                "stock's consumer produces"
             )
         return None, (
             f"{where} declares {unit!r}, which does not establish a flux: it relates the stock's "
@@ -1320,8 +1344,13 @@ def check_coupling(
         # the answer. `E-ZONE-ATM` is the case this distinction exists for: it lands on the cabin
         # node, which is a stock, but it drives `csm_cabin_pressure_pa` — an algebraic state — and a
         # pressure is not a conserved quantity that something flows into.
+        # The `advances` test skips an edge that lands on a stock node's *channel* while driving
+        # something else — but only on the inbound side. An edge that *leaves* a stock drains it
+        # whatever it drives, and `E-O2-FC` and `E-H2-FC` are exactly that: they drive the fuel
+        # cell's power state and empty the oxygen and hydrogen tanks, so testing `advances` alone
+        # let both through while the tanks they drain stayed unfillable.
         driven = edge.get("advances")
-        if driven is not None and str(driven) not in stock_states:
+        if edge.get("to") in stock_nodes and driven is not None and str(driven) not in stock_states:
             continue
         basis, reason = stock_flux_basis(edge, node_of)
         if basis is None:

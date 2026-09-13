@@ -55,7 +55,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -173,12 +173,12 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 147 channels, 120 states over 43 nodes, 140 thresholds, 58
-verbs and 128 classified events across the eleven directories, with 246 declared debts and every
+verbs and 128 classified events across the eleven directories, with 248 declared debts and every
 one of them named. That completes the design's spike many times over (`simulator-design.md:113`
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -1702,6 +1702,41 @@ crew` is a mass rate, and reducing it is what lets the same comparator judge it 
 **243 became 246.** The design question the refusals name is the same one rounds 48 and 49 kept
 arriving at: the vehicle's stocks connect to their consumers through edges whose sensitivity
 describes a *conversion*, and the flow itself is never a node.
+
+## The refusals now name the node that would fix them
+
+Round 50 established that a dimensionless ratio into a stock is not a flux. That is true and it is
+not actionable — five edges were refused with the same sentence and none of them said what to build.
+The test a ratio actually needs is not "is this a ratio" but **"does the graph carry the flow the
+ratio is against"**: `1.0 kg water per kg reactants` applied to a node holding `kg reactants per
+second` is water per second, which is a flux. So the classifier checks the partner node's unit, with
+its own `/s` reduced away first.
+
+Nothing in the vehicle carries one, so the refusals stand — and each now names the flow:
+
+| edge | needs |
+|---|---|
+| `E-O2-FC` | a flow in **kg O2/s** — the fuel cell's oxygen draw |
+| `E-H2-FC` | a flow in **kg H2/s** — the fuel cell's hydrogen draw |
+| `E-FC-WATER` | a flow in **kg reactants/s** — the same cell's consumption |
+| `E-O2-ECLSS` | a flow in **kg O2/s** — the CSM cabin's supply through the regulator |
+| `E-LM-O2-ECLSS` | a flow in **kg O2/s** — the LM cabin's, a separate compartment |
+
+**Five edges, four consumer intakes** — not one node, because `E-O2-FC` and `E-O2-ECLSS` both draw
+from `o2_csm` while being the cell's draw and the regulator's supply to the cabin: two consumers, two
+intakes, two rates. Sizing it: four `kind: flow` nodes, four algebraic states whose rules set the
+rates, five edges repointed, and `advances`/`drains` on each.
+
+This is the same answer rounds 48, 49 and 50 each reached from a different direction, and it is now a
+specification rather than a diagnosis: **the graph has nodes for what is conserved and for what is
+commanded, and none for the flows between them.** Six flow nodes exist — `fuel_cell`,
+`coolant_flow`, `radiator_reject`, `link`, `thrust_main`, `rcs_thrust` — denominated in `W`, `N`,
+`dB` and `kg/s`, while the flows the stocks need are named only in the sensitivities' denominators.
+
+Chasing it also caught a skip bug in round 50's rule: the `advances` test skipped any edge landing
+on a stock node while driving something else, **but only on the inbound side matters.** `E-O2-FC` and
+`E-H2-FC` drive the fuel cell's *power* state and empty the oxygen and hydrogen tanks, so testing
+`advances` alone let both through while the tanks they drain stayed unfillable. **246 became 248.**
 
 ## Authoring convention: no flow mappings
 

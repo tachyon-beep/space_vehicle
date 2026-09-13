@@ -1663,6 +1663,39 @@ failure_chains:
 # --------------------------------------------------------------------------------------
 open_debts:
 
+  # Round 50 added `advances` and `drains` and made the stock classifier dimensional; round 51
+  # asked what would actually fix the ratio edges rather than how to describe them better. The
+  # answer is now exact, and it is one mechanism rather than five patches.
+  #
+  # A dimensionless ratio is computable whenever the graph carries the flow it is *against*:
+  # `1.0 kg water per kg reactants` applied to a node holding `kg reactants per second` gives water
+  # per second, which is a flux. Nothing in the vehicle does, so the classifier refuses — and its
+  # refusal names the node that would fix the edge. Five edges, four distinct intakes:
+  #
+  #   * `E-O2-FC`          needs a flow in **kg O2/s** — the fuel cell's oxygen draw
+  #   * `E-H2-FC`          needs a flow in **kg H2/s** — the fuel cell's hydrogen draw
+  #   * `E-FC-WATER`       needs a flow in **kg reactants/s** — the same cell's consumption
+  #   * `E-O2-ECLSS`       needs a flow in **kg O2/s** — the CSM cabin's supply through the regulator
+  #   * `E-LM-O2-ECLSS`    needs a flow in **kg O2/s** — the LM cabin's, a separate compartment
+  #
+  # They are not one node. `E-O2-FC` and `E-O2-ECLSS` both draw from `o2_csm`, but one is the cell's
+  # draw and the other is the regulator's supply to the cabin: two consumers, two intakes, two rates.
+  # So the shape is a `kind: flow` node per consumer intake, each with a producing state whose rule
+  # sets that rate — the cell's draw follows its power, the cabin supply follows the regulator's
+  # position and the cabin's pressure.
+  #
+  # That is the same answer rounds 48, 49 and 50 each arrived at from a different direction, and it
+  # is now a specification rather than a diagnosis: **the graph has nodes for what is conserved and
+  # for what is commanded, and none for the flows between them.** Six flow nodes exist
+  # (`fuel_cell`, `coolant_flow`, `radiator_reject`, `link`, `thrust_main`, `rcs_thrust`) and they
+  # are denominated in `W`, `N`, `dB` and `kg/s`; the flows the stocks need are named only in the
+  # sensitivities' denominators.
+  #
+  # Sizing it: four nodes and four algebraic states, five edges repointed, and the `advances` and
+  # `drains` declarations on each. It is deferred rather than half-done because a flow node without
+  # a rule that computes its rate is a node the plant still cannot advance, and the rules are real
+  # modelling — the cell's draw is bounded by its own reactant availability, which is the
+  # `C-REACTANT-DRAW-O2` cycle declared two hundred lines above.
   # Added in round 47, and it is a property of the graph rather than of any one edge: **eleven of
   # the fourteen edges that land on a stock node cannot be integrated as written.** Round 49 added
   # `advances` to every edge on a multi-state node, which is what distinguishes an edge that drives
