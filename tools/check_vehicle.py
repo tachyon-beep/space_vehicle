@@ -4142,6 +4142,98 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         )
 
 
+def check_thermal_heat_inputs(root: Path, report: Report) -> None:
+    """Which loads heat which zone, held as a partition rather than a list.
+
+    `load_budget` says the thermal domain's heat inputs are the power domain's loads and that the
+    numbers are not duplicated. What it did not say — anywhere, in either file — is **which
+    compartment each load's watts warm**, and that is why `zone_csm_cabin_t` spent its life as a
+    `lag` with no driver: the thermal domain declares the heat sources, the power domain declares
+    the loads, and nothing joined them.
+
+    Three properties, and the third is the one with teeth:
+
+      * every zone in `vehicle.yaml#thermal.zones` is either given inputs or listed in `unheated`
+        with a reason — so "nothing heats it" is a decision rather than an oversight;
+      * every load named exists in `power/components.yaml#loads`, and every load in that inventory
+        is assigned somewhere. A load nobody assigned is a watt that heats nothing, and its zone
+        would run cold for a reason no reader could find;
+      * the distinct loads assigned to each vehicle sum to that vehicle's declared demand. This is
+        the mass closure's shape a fourth time, and it is what makes the assignment a *partition*
+        rather than a wish: 1,723 W of CSM load and 1,007 W of LM load have to arrive somewhere.
+
+    A load may appear in more than one zone — `csm_heaters` is one 300 W bank serving the cabin and
+    the avionics bay, which `heater_bank_csm` already declares as a shared source — so the closure
+    counts *distinct* loads per vehicle while the zones may overlap.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    power = load(root / "domains" / "power" / "components.yaml", report) or {}
+    if not thermal or not power:
+        return
+    heat = thermal.get("heat_inputs")
+    if not heat:
+        report.debt(
+            "domains/thermal/components.yaml",
+            "declares no `heat_inputs`, so the zones that a `lag` advances have no declared driver "
+            "and the power domain's loads heat nowhere",
+        )
+        return
+
+    vehicle_doc = load(root / "vehicle.yaml", report) or {}
+    zones = {str(z.get("id")) for z in (vehicle_doc.get("thermal") or {}).get("zones") or []}
+    unheated = {str(k) for k in (thermal.get("unheated") or {})}
+    where = "domains/thermal/components.yaml:heat_inputs"
+    for zone in sorted(zones - set(heat) - unheated):
+        report.refuse(
+            where,
+            f"gives {zone!r} no heat inputs and does not list it in `unheated`, so whether anything "
+            "warms it is undeclared",
+        )
+    for zone in sorted(set(heat) - zones):
+        report.refuse(where, f"names {zone!r}, which is not a zone in vehicle.yaml#thermal")
+    for zone in sorted(unheated & set(heat)):
+        report.refuse(where, f"lists {zone!r} as unheated and also gives it heat inputs")
+
+    loads = {str(row.get("id")): row for row in power.get("loads") or []}
+    by_vehicle: dict[str, int] = {}
+    for zone, block in sorted(heat.items()):
+        for load_id in (block or {}).get("loads") or []:
+            if str(load_id) not in loads:
+                report.refuse(
+                    f"{where}.{zone}",
+                    f"names {load_id!r}, which is not a load in domains/power/components.yaml",
+                )
+                continue
+    # Distinct loads per vehicle, so a shared bank is not counted twice.
+    by_vehicle = {}
+    seen: dict[str, set[str]] = {}
+    for block in heat.values():
+        for load_id in (block or {}).get("loads") or []:
+            row = loads.get(str(load_id))
+            if row:
+                seen.setdefault(str(row.get("vehicle")), set()).add(str(load_id))
+    for vehicle, ids in sorted(seen.items()):
+        total = sum(int(loads[i].get("demand_w") or 0) for i in ids)
+        by_vehicle[vehicle] = total
+    for vehicle, total in sorted(by_vehicle.items()):
+        expected = sum(
+            int(row.get("demand_w") or 0)
+            for row in loads.values()
+            if str(row.get("vehicle")) == vehicle
+        )
+        if total != expected:
+            missing = sorted(
+                str(row.get("id"))
+                for row in loads.values()
+                if str(row.get("vehicle")) == vehicle and str(row.get("id")) not in seen[vehicle]
+            )
+            report.refuse(
+                f"{where}.{vehicle}",
+                f"accounts for {total} W of {vehicle} load against a declared {expected} W. A load "
+                f"assigned to no zone is a watt that heats nothing: {missing}",
+            )
+
+
 def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """One machine, two files, and no sentence saying so.
 
@@ -5105,6 +5197,7 @@ def main(argv: list[str] | None = None) -> int:
             "placements and the propulsion budgets — is unavailable for this run",
         )
     check_power_inventory(root, report)
+    check_thermal_heat_inputs(root, report)
     if mission is not None:
         if vehicle is not None:
             check_mission(mission, vehicle, report)

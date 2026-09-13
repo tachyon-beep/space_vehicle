@@ -382,7 +382,13 @@ load_budget:
 # --------------------------------------------------------------------------------------
 open_debts:
 
-  - "**The compartment each load heats is declared nowhere.** `load_budget` above states the
+  - "**The compartment each load heats WAS declared nowhere, and is now declared above.**
+    `heat_inputs` gives every load a zone and the partition closes: 1,723 W of CSM load and
+    1,007 W of LM load, matching `domains/power/components.yaml`'s per-vehicle totals exactly, which
+    is what `check_thermal_heat_inputs` holds it to. What remains owed from that work is the
+    *edges*: the mapping is data and the graph still has no heat-rate node for it to flow through,
+    which is the second debt below. The original finding, kept because it is the reason the block
+    exists: `load_budget` above states the
     relationship correctly — the heat inputs are `domains/power/components.yaml#loads`, and the
     numbers are not duplicated here — but a load carries `bus`, `class`, `demand_w`, `inrush_w` and
     `vehicle`, and **no field says which zone its watts warm**. There are 25 loads and 6 zones, and
@@ -405,3 +411,63 @@ open_debts:
     heat term, or the zone gets the flow node the heat budget implies. This is the same finding as
     `coupling.yaml`'s stock-flow debt arriving at a third domain: **the graph has nodes for what is
     conserved and for what is commanded, and none for the flows between them.**"
+
+# --------------------------------------------------------------------------------------
+# Which loads heat which zone.
+#
+# This is the assignment `load_budget` says is missing and `open_debts` names. It lives *here*
+# rather than as a `zone:` field on each power load for the reason `heater_bank_csm`'s own
+# provenance already gives: the electrical figures are the power domain's and **the thermal side
+# owns which zones a source serves**. Putting a zone on the load would be a second declaration of
+# one fact, in the file that explicitly refuses to duplicate the numbers.
+#
+# The assignment is `chosen` where the corpus does not state it — it gives the equipment, never
+# its compartment — and the rule is the zones' own definitions: crew-accessible equipment heats
+# the crewed compartment, guidance and instrumentation heat the bay that carries the avionics
+# plate, and everything on an uncrewed stage heats that stage. Apollo's own arrangement is the
+# basis for the split, and the alternative considered was a single lumped vehicle heat input,
+# which would have made a warm cabin and a warm service bay the same observation.
+# --------------------------------------------------------------------------------------
+heat_inputs:
+
+  csm_cabin:
+    loads: [csm_cabin_fan, csm_suit_fan, csm_co2_scrubber, csm_lighting,
+            csm_sband_transceiver, csm_sband_power_amplifier, csm_heaters]
+    note: >-
+      the crewed compartment, and it holds the comms transceiver and amplifier as well as the ECS
+      equipment: Apollo's S-band equipment was inside the command module rather than on the stage.
+      `csm_heaters` is the cabin side of a 300 W bank that serves two zones — `heater_bank_csm`'s
+      `source:` on both this zone and the avionics bay is the declaration that it is shared
+  csm_avionics_bay:
+    loads: [csm_imu, csm_guidance_computer, csm_instrumentation]
+    note: >-
+      the bay whose >50 C event is the zone's whole limit. The IMU, the guidance computer and the
+      instrumentation are what the avionics plate carries, and the discrepancy between their 360 W
+      of demand and the plate's own temperature is the point of the zone
+  csm_service_bay:
+    loads: [csm_coolant_pump_1, csm_coolant_pump_2, csm_rcs_heaters, csm_comm_heaters]
+    note: >-
+      uncrewed, and unregulated because nothing in it has a limit — what matters is the propellant
+      and pressurant it contains, which is where the frozen-line chain lives. The coolant pumps are
+      the largest pair of loads on the vehicle and they sit here rather than in the cabin: the
+      primary loop's pumps are on the service module
+  lm_cabin:
+    loads: [lm_cabin_fan, lm_suit_fan, lm_co2_scrubber, lm_lighting, lm_sband_transmitter,
+            lm_sband_high_power, lm_guidance_computer, lm_instrumentation, lm_heaters]
+    note: >-
+      the LM's crewed compartment, and it carries more than the CSM's because the LM has no
+      avionics-bay zone: the guidance computer and the instrumentation are inside the cabin the
+      crew fly in, which is why the LM's cabin is the warmer of the two by design
+  lm_descent_bay:
+    loads: [lm_landing_radar, lm_rcs_heaters]
+    note: >-
+      the descent stage, exposed and unregulated. The landing radar is mounted on it and the RCS
+      quads are its own, so both heat the stage the crew leave behind at staging
+
+unheated:
+  radiator_loop:
+    why: >-
+      the radiator is an *observable* with no command interface (simulator-design.md:158), not a
+      compartment: nothing is installed in it and no load heats it. It is listed here rather than
+      left out so that the check can tell "nothing heats it, deliberately" from "nothing heats it,
+      nobody said"

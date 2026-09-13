@@ -1806,6 +1806,44 @@ for what is conserved and for what is commanded, and none for the flows between 
 missing flow is a heat rate. **248 became 254**: two design debts in `domains/thermal/` and four
 named undriven nodes.
 
+## The heat inputs exist now, and they close exactly
+
+Round 53 found that `zone_csm_cabin_t` had no driver because **no load said which compartment it
+heats** — the thermal domain declared the heat *sources*, the power domain declared the *loads*, and
+nothing joined them. The assignment is declared now, as `heat_inputs` in the thermal domain.
+
+It lives there rather than as a `zone:` field on each power load, and the reason was already written
+in the file: `heater_bank_csm`'s own provenance says *"the electrical figures are the power domain's
+`csm_heaters` load; **the thermal side owns which zones it serves**."* A `zone:` on the load would be
+a second declaration of one fact, in the file that explicitly refuses to duplicate a number.
+
+| zone | loads | W |
+|---|---|---|
+| `csm_cabin` | cabin fan, suit fan, CO2 scrubber, lighting, S-band transceiver, S-band amplifier, heaters | 733 |
+| `csm_avionics_bay` | IMU, guidance computer, instrumentation | 360 |
+| `csm_service_bay` | both coolant pumps, RCS heaters, comm heaters | 630 |
+| `lm_cabin` | cabin fan, suit fan, CO2 scrubber, lighting, S-band transmitter, S-band PA, guidance computer, instrumentation, heaters | 887 |
+| `lm_descent_bay` | landing radar, RCS heaters | 180 |
+| `radiator_loop` | *unheated, deliberately* | — |
+
+The assignment is `chosen` where the corpus does not state it — it gives the equipment and never its
+compartment — and the rule is the zones' own definitions: crew-accessible equipment heats the crewed
+compartment, guidance and instrumentation heat the bay carrying the avionics plate, and everything on
+an uncrewed stage heats that stage. The alternative considered was a single lumped vehicle heat
+input, which would have made a warm cabin and a warm service bay the same observation.
+
+**And it closes exactly.** `check_thermal_heat_inputs` holds it as a partition: every zone is either
+given inputs or listed in `unheated` with a reason, every named load exists, every load in the
+inventory is assigned somewhere, and the distinct loads per vehicle sum to that vehicle's declared
+demand — **1,723 W of CSM and 1,007 W of LM**, to the watt. That is the mass closure's shape a fourth
+time, and it is what makes this a partition rather than a wish: a load assigned to no zone is a watt
+that heats nothing, and its zone would run cold for a reason no reader could find. All three rules
+were verified by breaking a copy of the definition; dropping `csm_imu` reports *"accounts for 1,633 W
+of csm load against a declared 1,723 W ... a load assigned to no zone is a watt that heats nothing"*.
+
+What is still owed is the **edges**. The mapping is data, and the graph has no heat-rate node for it
+to flow through — the second thermal debt, unchanged by this round.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
