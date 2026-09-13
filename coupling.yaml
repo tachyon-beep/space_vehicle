@@ -328,6 +328,11 @@ nodes:
   link:
     domain: comms
     kind: flow
+    # Two states, and the order is physical rather than alphabetical: rejection is
+    # `epsilon x sigma x A x T^4`, so the surface temperature is what it is a function of. The frozen
+    # lexicographic tiebreak would have sorted `radiator_rejection_w` first and computed the
+    # rejection from last tick's temperature — which is a one-tick error in a quantity that enters
+    # every thermal edge on the vehicle.
     unit: dB
     apollo: "164"
     state_order: [tx_power, link_snr]

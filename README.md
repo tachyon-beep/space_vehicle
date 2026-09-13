@@ -2241,6 +2241,42 @@ round 68 paired a channel that was published for one, and this round found a *ga
 not hold. Each was an asymmetry between two compartments that cannot equalise, and each was invisible
 because nothing compared the two sides.
 
+## A zone's temperature lives on a node, or the zone says why it has none
+
+Six zones are declared and all six carry a temperature state; five carry a *driver*. The gap was
+invisible because of **where the states lived**: two sat on the `internal` sentinel, which is not a
+node, so no edge could terminate on them — `internal` has no inbound edge at all. The two crewed
+cabins were in exactly that position until round 55 gave them heat-rate nodes, and the radiator was
+in it until this round moved `zone_radiator_t` onto `radiator_reject`, where a node already existed
+and was already driven.
+
+| zone | node | driver |
+|---|---|---|
+| `csm_cabin` | `cabin_zone_t` | `E-CABIN-EQ-CSM` |
+| `lm_cabin` | `lm_cabin_zone_t` | `E-CABIN-EQ-LM` |
+| `csm_avionics_bay` | `coldplate_t` | `E-FC-HEAT`, `E-TRANSPORT-PLATE`, `E-STRUCT-PLATE` |
+| `csm_service_bay` | *sentinel* | **none — declared** |
+| `lm_descent_bay` | *sentinel* | **none — declared** |
+| `radiator_loop` | *sentinel* | **none — declared** |
+
+The radiator was moved onto `radiator_reject` and **moved back in the same round**, which is the
+round's most useful result: its only inbound edge there is `E-WATER-RAD`, and that is
+`C-WATER-BUDGET`'s **back-edge**. Neither the linter nor the plant counts a back-edge as a driver, so
+the node gave the state a home without giving it an input — and the linter said so **twice**, first
+that `E-WATER-RAD` needed an `advances`, then that `radiator_reject` was undriven. What the radiator's
+surface temperature needs is a forward edge from the environment it faces, and `environment` is a
+block in `vehicle.yaml` with no node.
+
+And I reintroduced the round-48 crash: the new check takes both `vehicle.yaml` and the thermal domain,
+so when `vehicle.yaml` will not parse it dereferenced `None` — the exact shape the cross-file checks
+were guarded against. `test_an_unloadable_vehicle_refuses_instead_of_crashing` caught it, which is
+what it is for.
+
+The two bays are declared in `zones_not_on_nodes` with their reasons rather than left implicit: their
+630 W and 180 W are assigned, their bands are declared, and the heat-rate node round 55 built for the
+cabins is what they need. `lm_descent_bay` is the one whose missing driver has a consequence the
+mission cares about — it is where the frozen-line chain lives.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

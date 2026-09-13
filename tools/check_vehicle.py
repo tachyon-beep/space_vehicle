@@ -3656,6 +3656,57 @@ def check_producers(
         )
 
 
+def check_zone_nodes(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """A zone's temperature lives on a node, or the zone is declared as one that has none.
+
+    Six zones are declared for this vehicle and all six carry a temperature state; five carry a
+    *driver*. The gap was invisible because of where the states lived: **two sat on the `internal`
+    sentinel**, which is not a node, so no edge could terminate on them — `internal` has no inbound
+    edge at all — and they were undrivable by construction. The two crewed cabins were in exactly
+    that position until round 55, and the radiator was in it until round 70 moved it onto
+    `radiator_reject`, where a node already existed and was already driven.
+
+    A zone may legitimately have no node — `radiator_loop` is an observable rather than a
+    compartment — so the rule is a declaration: the zone goes in `zones_not_on_nodes` with its
+    reason. What is refused is a zone whose absence from the graph is neither.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    # `vehicle` is `None` when `vehicle.yaml` will not parse, and this check takes both files —
+    # exactly the shape that reintroduced the round-48 crash. The caller guards the vehicle's own
+    # checks; a cross-file one has to guard itself.
+    if not isinstance(vehicle, dict) or not thermal:
+        return
+    zones = {str(z.get("id")) for z in (vehicle.get("thermal") or {}).get("zones") or []}
+    declared = thermal.get("zones_not_on_nodes") or {}
+    states = [s for s in thermal.get("state") or [] if isinstance(s, dict)]
+    # Which zone each temperature state is about. The ids are not mechanical (`zone_csm_service_t`
+    # against a zone called `csm_service_bay`), so the match is by the zone's own words.
+    for zone in sorted(zones):
+        stem = zone.replace("_bay", "").replace("_loop", "").replace("csm_", "").replace("lm_", "")
+        mine = [
+            s for s in states if stem.split("_")[0] in str(s.get("id")) and "_t" in str(s.get("id"))
+        ]
+        on_node = [s for s in mine if str(s.get("node")) != "internal"]
+        if on_node or zone in declared:
+            continue
+        report.refuse(
+            "domains/thermal/components.yaml",
+            f"gives {zone!r} a temperature state on the `internal` sentinel, which is not a node, so "
+            "no edge can drive it. Either put it on a node or declare it in `zones_not_on_nodes` "
+            "with the reason it has none",
+        )
+    for zone, why in sorted(declared.items()):
+        if zone not in zones:
+            report.refuse(
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}",
+                "is not a declared zone",
+            )
+        elif not str(why or "").strip():
+            report.refuse(
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}", "gives no reason"
+            )
+
+
 def check_atmosphere_symmetry(root: Path, report: Report) -> None:
     """Every gas the atmosphere model declares is held in *every* cabin, or the gap is explained.
 
@@ -5576,6 +5627,7 @@ def main(argv: list[str] | None = None) -> int:
         check_met_clock(mission, report)
     check_cabin_pairing(registry, presentation, report)
     check_atmosphere_symmetry(root, report)
+    check_zone_nodes(root, vehicle, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a
     # verb and published in `state.json`, and nothing else in the tool joins the two.
     all_verbs: dict[str, dict[str, Any]] = {}

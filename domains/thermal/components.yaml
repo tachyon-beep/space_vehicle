@@ -538,3 +538,36 @@ unheated:
       compartment: nothing is installed in it and no load heats it. It is listed here rather than
       left out so that the check can tell "nothing heats it, deliberately" from "nothing heats it,
       nobody said"
+
+# --------------------------------------------------------------------------------------
+# The zone temperatures the coupling graph cannot reach.
+#
+# Six zones are declared and all six carry a state; five carry a *driver*. Two sit on the `internal`
+# sentinel, which is not a node, so no edge can terminate on them — `internal` has no inbound edge at
+# all — and they are undrivable by construction. The two crewed cabins were in exactly this position
+# until round 55, when `cabin_heat_csm` and `cabin_heat_lm` gave them one. The radiator was here too
+# and moved onto `radiator_reject` in round 70, where a node already existed and was already driven.
+#
+# What closes the two below is the same thing one step further: a heat-rate node per zone, fed by the
+# loads `heat_inputs` already assigns (630 W to the service bay, 180 W to the descent stage). The
+# mapping and the arithmetic both exist; what is missing is the node and its state, a design step of
+# the same size as the cabins' was. Declared here rather than left implicit, so that "this zone has no
+# driver" is a recorded gap rather than something a reader derives from where a state happens to live.
+# --------------------------------------------------------------------------------------
+zones_not_on_nodes:
+  radiator_loop: >-
+    moved onto `radiator_reject` in round 70 and moved back in the same round: its only inbound edge
+    there is `E-WATER-RAD`, which is `C-WATER-BUDGET`'s **back-edge**, and neither the linter nor the
+    plant counts a back-edge as a driver. So the node gave the state a home without giving it an
+    input, and the linter said so twice — first that `E-WATER-RAD` needed an `advances`, then that
+    `radiator_reject` was undriven. What the radiator's surface temperature actually needs is a
+    forward edge from the environment it faces, and `environment` is a block in `vehicle.yaml` with
+    no node
+  csm_service_bay: >-
+    unregulated and uninstrumented in the graph: no edge can drive it while its state is on the
+    sentinel. Its 630 W of loads and its -20 to 60 C band are both declared, so the heat-rate node
+    round 55 built for the cabins is what it needs
+  lm_descent_bay: >-
+    as the service bay, at the descent stage — and this is the zone the frozen-line chain lives in,
+    which makes it the one of the two whose missing driver has a consequence the mission cares about
+    rather than a bookkeeping one
