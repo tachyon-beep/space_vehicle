@@ -39,7 +39,8 @@ natural_rate_hz: 1
 reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_thrust,
         structure_config, water_cooling]
 writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
-         cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm]
+         cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm, cabin_eq_csm,
+         cabin_eq_lm]
 
 # --------------------------------------------------------------------------------------
 # State. Thermal has no conserved stocks on purpose: energy is not asserted here. A fuel cell
@@ -82,6 +83,37 @@ state:
         guidance computer 150, instrumentation 100, and the cabin's share of the 200 W heater bank.
         827 W against the CSM cabin's 733, with two crew against three, because the LM has no
         avionics-bay zone and its guidance equipment is inside the compartment
+  - id: cabin_eq_csm_k
+    node: cabin_eq_csm
+    method: algebraic
+    unit: K
+    total_k: 286.21
+    provenance:
+      basis: derived
+      computation: "7.2 + 273.15 + 733 / 125"
+      relation: >-
+        the equilibrium the cabin relaxes toward: the loop's mixed supply plus the rise the
+        compartment's own equipment causes. Every term is declared elsewhere — the supply is
+        `vehicle.yaml#thermal.loops.loop_primary.supply_c` and its own source gives 45 F = 7.2 C, the
+        733 W is `cabin_heat_csm_w` summed from the power domain's load inventory, and the 125 W/K is
+        `zone_csm_cabin_t`'s conductance. 7.2 C is 280.35 K and 733/125 = 5.864 K
+      note: >-
+        this is the vehicle's first state whose rule is **completely specified**: nothing in it is
+        owed, and `check_cabin_equilibrium` re-derives it against the four declarations it rests on.
+        It is algebraic rather than a stock because the equilibrium is a function of the current heat
+        rate and supply, not an accumulation
+  - id: cabin_eq_lm_k
+    node: cabin_eq_lm
+    method: algebraic
+    unit: K
+    total_k: 286.97
+    provenance:
+      basis: derived
+      computation: "7.2 + 273.15 + 827 / 125"
+      relation: >-
+        as the CSM's, over the LM cabin's larger heat load: 827 W over the same 125 W/K conductance is
+        6.616 K above the same 280.35 K supply. The two cabins differ by 0.75 K at equilibrium, and
+        the whole of that difference is the 94 W between their equipment
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t
@@ -436,16 +468,14 @@ open_debts:
     `o2_lm`, `prop_rcs` and `pressurant_he` have no inbound edge because they are filled at the pad
     and never again, which they say in `preloaded:`, so the check exempts a declared one."
 
-  - "**The cabin zones need a second driver the `lag` method cannot express.** A cabin is not
-    simply relaxed toward the coolant supply: its steady-state offset above that supply is the heat
-    load divided by the conductance, which is what the 2,880 s derivation means by \"a 1 kW cabin
-    load sits about 8 K above the coolant supply\". A `lag` pulls the state toward its single driver
-    and has no term for an offset, so drawing an edge from `coolant_supply_t` into `cabin_zone_t`
-    would model the cabin as *equal* to the loop at steady state — 8 K wrong, and wrong in the
-    direction that makes a warm cabin look nominal. Either the state moves to a method that takes a
-    heat term, or the zone gets the flow node the heat budget implies. This is the same finding as
-    `coupling.yaml`'s stock-flow debt arriving at a third domain: **the graph has nodes for what is
-    conserved and for what is commanded, and none for the flows between them.**"
+  - "**The cabin's second driver is now expressed, and not by the `lag`.** A cabin's equilibrium is
+    the coolant supply plus its own heat rise, and a `lag` pulls its state toward a single driver, so
+    the two inputs are combined *upstream* of the relaxation instead: `cabin_eq_csm_k` and
+    `cabin_eq_lm_k` are algebraic states whose every term is declared elsewhere, and the cabins relax
+    toward them. This closes the 8 K error the previous round introduced when the cabin relaxed
+    toward `Q/G` absolute — the offset is back, and it is a node rather than a hoped-for method.
+    These are the vehicle's first states whose rule is completely specified: nothing in either is
+    owed, and `check_cabin_equilibrium` re-derives them against the four declarations they rest on."
 
 # --------------------------------------------------------------------------------------
 # Which loads heat which zone.

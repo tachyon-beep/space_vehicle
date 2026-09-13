@@ -4334,9 +4334,29 @@ def check_cabin_equilibrium(root: Path, vehicle: dict[str, Any], report: Report)
         )
         if not heat or not cabin or not cabin.get("conductance_w_per_k"):
             continue
-        equilibrium = float(supply) + float(heat.get("total_w") or 0) / float(
+        equilibrium_c = float(supply) + float(heat.get("total_w") or 0) / float(
             cabin["conductance_w_per_k"]
         )
+        equilibrium = equilibrium_c
+        # The state that carries this figure is re-derived too, in kelvin. Two declarations of one
+        # quantity is the shape that drifts, and here it would drift in the quiet direction: the
+        # cabin would relax toward a stale equilibrium while the loads and the supply moved on.
+        eq_state = states.get(f"cabin_eq_{zone.split('_')[0]}_k")
+        if eq_state is not None:
+            declared_k = eq_state.get("total_k")
+            computed_k = equilibrium_c + 273.15
+            if not isinstance(declared_k, (int, float)) or abs(declared_k - computed_k) > 0.02:
+                report.refuse(
+                    f"domains/thermal/components.yaml:state {eq_state.get('id')}",
+                    f"declares {declared_k!r} K and the supply plus Q/G is {computed_k:.2f} K. The "
+                    "cabin would relax toward an equilibrium its own declarations do not produce",
+                )
+            rederive(
+                f"domains/thermal/components.yaml:state {eq_state.get('id')}",
+                declared_k,
+                (eq_state.get("provenance") or {}).get("computation"),
+                report,
+            )
         low, high = (bands + [None, None])[:2]
         if isinstance(low, (int, float)) and equilibrium < low:
             report.refuse(

@@ -142,6 +142,23 @@ nodes:
       because the LM has no avionics-bay zone: its guidance computer and instrumentation are inside
       the compartment the crew fly in
 
+  # What each cabin relaxes *toward*: the coolant supply plus the rise its own equipment causes.
+  # These exist because a `lag` pulls its state toward its single driver and a cabin has two inputs —
+  # the loop and its own heat. Before them the cabin relaxed toward `Q/G` absolute rather than
+  # `supply + Q/G`, an 8 K error in the direction that makes a warm cabin look nominal.
+  cabin_eq_csm:
+    domain: thermal
+    kind: flow
+    unit: K
+    note: >-
+      280.35 K supply plus 733/125 = 5.86 K, so 286.21 K. Every input is declared: the heat rate is
+      `cabin_heat_csm`, the conductance is the cabin state's `conductance_w_per_k`, and the supply
+      is `vehicle.yaml#thermal.loops.loop_primary.supply_c`
+  cabin_eq_lm:
+    domain: thermal
+    kind: flow
+    unit: K
+    note: "as the CSM's: 280.35 + 827/125 = 286.97 K, the same supply and conductance with the LM cabin's larger heat load"
   # --- power: the algebraic network (review-findings.md #5, "nodal solve, no integration")
   fuel_cell:
     domain: power
@@ -536,6 +553,34 @@ edges:
       computation: "1 / 125"
       unit: "K per W"
       basis: derived
+      relation: "the cabin's heat rate raises its equilibrium by 1/G = 0.008 K per watt, the same conductance the cabin state is lumped with"
+      at: "csm cabin, lumped"
+    from: cabin_heat_csm
+    to: cabin_eq_csm
+    kind: algebraic
+    advances: cabin_eq_csm_k
+  - id: E-CABIN-SUPPLY-CSM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "K per K"
+      basis: derived
+      relation: "the equilibrium sits *on* the coolant supply when the cabin's own heat is zero, so the supply passes through one for one"
+      at: "csm cabin, lumped"
+      note: >-
+        the edge that was missing when the cabin relaxed toward `Q/G` alone. A `lag` takes one driver
+        and a cabin has two, so the two are combined *here*, upstream of the relaxation, rather than
+        being asked of the lag
+    from: coolant_supply_t
+    to: cabin_eq_csm
+    kind: algebraic
+    advances: cabin_eq_csm_k
+  - id: E-CABIN-EQ-CSM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "K per K"
+      basis: derived
       relation: >-
         the inverse of the cabin's conductance. `zone_csm_cabin_t`'s own relation sizes G at
         125 W/K so that a 1 kW cabin load sits about 8 K above the coolant supply, and the
@@ -548,7 +593,7 @@ edges:
         driver and has no term for a second input, so the cabin now relaxes toward its own heat
         rise instead of toward the loop plus that rise. The coolant term needs a method that takes
         a heat balance
-    from: cabin_heat_csm
+    from: cabin_eq_csm
     to: cabin_zone_t
     kind: lag
     advances: zone_csm_cabin_t
@@ -558,12 +603,36 @@ edges:
       computation: "1 / 125"
       unit: "K per W"
       basis: derived
+      relation: "as E-CABIN-HEAT-CSM, at the second compartment"
+      at: "lm cabin, lumped"
+    from: cabin_heat_lm
+    to: cabin_eq_lm
+    kind: algebraic
+    advances: cabin_eq_lm_k
+  - id: E-CABIN-SUPPLY-LM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "K per K"
+      basis: derived
+      relation: "as E-CABIN-SUPPLY-CSM"
+      at: "lm cabin, lumped"
+    from: coolant_supply_t
+    to: cabin_eq_lm
+    kind: algebraic
+    advances: cabin_eq_lm_k
+  - id: E-CABIN-EQ-LM
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "K per K"
+      basis: derived
       relation: "as E-CABIN-HEAT-CSM: the LM cabin's lumped mass and conductance are the same figure within the precision of either"
       at: "lm cabin, lumped"
       note: >-
         the same edge at the second compartment, and the same caveat. What differs is the
         distribution behind it: 827 W against 733, from nine loads against seven
-    from: cabin_heat_lm
+    from: cabin_eq_lm
     to: lm_cabin_zone_t
     kind: lag
     advances: zone_lm_cabin_t

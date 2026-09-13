@@ -1855,10 +1855,28 @@ shape that drifts, and it drifts in the quiet direction: a load re-rated under `
 change what the cabin's equipment draws while the thermal state relaxed toward the old figure,
 **modelling a cabin cooler than it is.**
 
-What remains is the second thermal debt, and the edge makes it sharp rather than vague: a `lag` pulls
-its state toward its single driver, so the cabin now relaxes toward **Q/G absolute** instead of
-**coolant + Q/G**. The offset is 8 K at a 1 kW load, and it is missing in the direction that makes a
-warm cabin look nominal.
+### The offset is back, and it is a node rather than a hoped-for method
+
+Round 55 gave the cabins a driver and introduced an 8 K error in the same move: relaxing toward
+**Q/G absolute** instead of **coolant + Q/G**, wrong in the direction that makes a warm cabin look
+nominal. A `lag` takes one driver and a cabin has two, so the two are combined *upstream* of the
+relaxation rather than asked of the lag:
+
+```
+cabin_heat_csm ──(1/G)──┐
+                        ├──> cabin_eq_csm ──(1.0 K/K)──> cabin_zone_t   (lag, tau 2880 s)
+coolant_supply_t ─(1.0)─┘
+```
+
+**These are the vehicle's first states whose rule is completely specified** — nothing in
+`cabin_eq_csm_k` or `cabin_eq_lm_k` is owed, and every term comes from a declaration that already
+existed: the supply from `loops`, the heat rate from `heat_inputs` summed over the power domain's
+loads, and the conductance from the cabin state's own field. They re-derive on every run against all
+four, so a load re-rated or a supply moved cannot leave the cabin relaxing toward a stale
+equilibrium.
+
+At 7.2 C supply the two cabins sit at **286.21 K and 286.97 K** — 13.06 C and 13.82 C — and the
+0.75 K between them is exactly the 94 W between their equipment.
 
 ## The cabin's equilibrium, and two fields that were the wrong way round
 
