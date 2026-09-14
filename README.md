@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 249 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 223 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -182,7 +182,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **249** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **223** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
 debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
 the crisis gains, the source resistance, the missing pack-voltage state, and the missing
@@ -2286,6 +2286,32 @@ propellant and structure the reason already names — and the round's count went
 `thermal_diode.md:965`'s refusal to publish thermal constants is why it is owed rather than derived,
 and it is also why a plausible number would be exactly the invented figure that document refuses. The
 honest move is to name the scalar, not to shrink the debt by guessing it.
+
+## The debt count was inflated by 26, and the inflation was structural
+
+A threshold declares `assert` and `clear` together, and **a comparator with no limit has neither**.
+Twenty-six thresholds declared both `UNCONFIGURED`, so the walk reported each missing limit twice —
+as `...thresholds[n].assert` and as `...thresholds[n].clear` — and the vehicle's headline number
+carried 26 obligations that one value closes each.
+
+The walk reports the pair once now, at the threshold. **249 became 223**, and no unknown was removed
+to get there: the count is now the number of *scalars the vehicle wants* rather than the number of
+paths that reach them.
+
+That distinction is the round's real content, and it is the fourth time this session that one
+obligation was wearing several names:
+
+| round | one unknown, several names |
+|---|---|
+| 45 | the phase sum stated three times, none of them read |
+| 67 | one cabin leak doing two cabins' work |
+| 73 | mass and conductance, with `tau` already declared |
+| 74 | `assert` and `clear`, reported separately |
+
+The count is the folder's headline claim, which is why a double-count in it matters more than one
+anywhere else: it is the figure a reader uses to judge how much is left. The **prose** `open_debts`
+are 90 of the remaining 223 and have not been examined the same way — that is where the next
+grouping would go.
 
 ## Authoring convention: no flow mappings
 

@@ -2435,7 +2435,22 @@ def check_domain(
     # ones a state's method happens to require. plant.md §11 generalises
     # `thermal_diode.md:29` — a value that is needed and unset fails the build, naming what
     # wants it — and it applies to a radiator's absorbed load as much as to a time constant.
-    for trail in walk_unset(docs):
+    # A threshold declares `assert` and `clear` together, and a comparator with no limit has neither:
+    # **twenty-six thresholds declared both `UNCONFIGURED`**, which is one missing limit reported as
+    # two debts and took the vehicle's headline count from 223 to 249 without a single new unknown.
+    # The walk reports the pair once, at the threshold, because one number closes both.
+    unset_trails = walk_unset(docs)
+    unset_set = set(unset_trails)
+    for trail in unset_trails:
+        base, _, field = trail.rpartition(".")
+        sibling = f"{base}.{'clear' if field == 'assert' else 'assert'}"
+        if field == "clear" and sibling in unset_set:
+            continue
+        if field == "assert" and sibling in unset_set:
+            report.debt(
+                f"domains/{name}/{trail}", "and its `clear` are UNCONFIGURED — one missing limit"
+            )
+            continue
         report.debt(f"domains/{name}/{trail}", "is UNCONFIGURED")
 
     # A `nominal_kg_s` that states its arithmetic is re-derived, on the same rule as every other
