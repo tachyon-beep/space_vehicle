@@ -2462,11 +2462,64 @@ def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) 
     by.
     """
     profiles_doc = docs.get("profiles.yaml") or {}
-    alternatives = profiles_doc.get("alternatives") or []
     selection = profiles_doc.get("profile_selection") or {}
+    # --------------------------------------------------------------------------------------
+    # **The alternatives are declared in two different places, and this read one of them.**
+    #
+    # `profiles_doc.get("alternatives")` — top level — is where four domains put them
+    # (consumables, power, propulsion, thermal). The other **seven** put the same list under
+    # `profile_selection.alternatives`, which is where the section's own header reads naturally:
+    # "what a profile changes" belongs with "who may select one". So this loop has never run on
+    # avionics, comms, crew, eclss, gnc, rcs or structure — **thirteen alternatives, and the rule
+    # it applies is the one whose docstring records the defect it was written for**: `power`'s
+    # `tight` profile, selected by a fleet that wanted warning *earlier*, dropped the bus
+    # undervoltage ladder from 26.5 V to 23.85 V and widened the envelope it was supposed to
+    # narrow. `power` is one of the four that is read. **`rcs` declares a profile named `tight`
+    # and has never had the rule applied to it.**
+    #
+    # Both shapes are read now, and a domain that declares neither list while declaring a
+    # `profile_selection` at all is refused rather than skipped — because "no alternatives" and
+    # "alternatives somewhere this does not look" are the same silence, and only one of them is a
+    # decision.
+    # --------------------------------------------------------------------------------------
+    nested = selection.get("alternatives") or []
+    top_level = profiles_doc.get("alternatives") or []
+    if nested and top_level:
+        report.refuse(
+            f"domains/{path.name}/profiles.yaml",
+            "declares `alternatives` both at the top level and inside `profile_selection`. One of "
+            "the two is not read by whatever looks for the other, and a fleet would be offered "
+            "whichever list its reader happened to consult",
+        )
+    alternatives = top_level or nested
     if not alternatives and not selection:
         return
     where = f"domains/{path.name}/profiles.yaml"
+    # --------------------------------------------------------------------------------------
+    # `profiles` and `alternatives` are two lists of the same kind of thing, and nothing joined
+    # them. A deletion test removed `profiles` — every domain's base declaration — and no tool
+    # noticed, which is the seventh of the nine-and-then-seven blocks the folder does not miss.
+    #
+    # What the join is for: an id has to mean one profile. `profiles` names the base a domain
+    # operates under and `alternatives` the ones a fleet may select *instead*, so an id in both
+    # lists is a name that resolves to two different sets of factors, and which one a fleet got
+    # would depend on which list the reader consulted.
+    # --------------------------------------------------------------------------------------
+    base = [str(p.get("id")) for p in profiles_doc.get("profiles") or [] if isinstance(p, dict)]
+    if len(base) != len(set(base)):
+        report.refuse(
+            f"{where}:profiles",
+            f"declares {base}, which repeats an id. Two base profiles under one name is a "
+            "revision history wearing a list",
+        )
+    clashes = sorted(set(base) & {str(a.get("id")) for a in alternatives if isinstance(a, dict)})
+    if clashes:
+        report.refuse(
+            f"{where}",
+            f"declares {clashes} in both `profiles` and `profile_selection.alternatives`. An id "
+            "has to mean one profile: the base a domain operates under and the alternatives a "
+            "fleet may select instead are different sets of factors under the same name",
+        )
     if selection and selection.get("selectable_by") not in AUTHORITIES:
         report.refuse(
             f"{where}:profile_selection",
@@ -2483,12 +2536,41 @@ def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) 
         awhere = f"{where}:alternative {alt.get('id')}"
         factors = alt.get("factors")
         if not isinstance(factors, dict) or not factors:
-            report.refuse(
-                awhere,
-                "declares no `factors`. One number cannot tighten both a ceiling and a floor — the "
-                "direction depends on the comparator — so a profile that will be applied to both "
-                "has to say which way each one moves",
-            )
+            # ------------------------------------------------------------------------------
+            # **A scalar `factor` is an unmet requirement, not a false claim**, and the
+            # difference decides which instrument this is.
+            #
+            # Thirteen alternatives across seven domains declare one number where the rule needs
+            # one per comparator, and none of them has ever been read — the loop looked for
+            # `alternatives` at the top level while those seven nest the list under
+            # `profile_selection`. What each one *should* say is a judgement about that profile's
+            # direction, and a judgement is not something a linter may supply: `rcs.conservative`
+            # declares `factor: 1.5` for "a wider deadband and a *lower* authority floor", and
+            # 1.5 is a legitimate factor for a `below` threshold that is being *raised* and a
+            # forbidden one for a floor being lowered. Which of those the profile means is the
+            # author's statement to make.
+            #
+            # So a domain that has declared the two-key form and got a direction wrong is
+            # **refused** — it made a claim and the claim is false. A domain that has declared one
+            # number is **owed**: the obligation is named, counted and put in the worklist, which
+            # is what this folder does with a value that is needed and absent. Refusing here would
+            # have been a red build for thirteen honest gaps and would have said nothing about
+            # which of them is which.
+            # ------------------------------------------------------------------------------
+            if isinstance(alt.get("factor"), (int, float)):
+                report.debt(
+                    f"{awhere}.factors",
+                    f"is unset and this profile declares a single `factor: {alt['factor']}`. One "
+                    "number cannot tighten both a ceiling and a floor, so the direction has to be "
+                    "stated per comparator — `below` at least 1, `above` at most 1 — and which way "
+                    "this profile moves is its author's judgement rather than the linter's",
+                )
+            else:
+                report.refuse(
+                    awhere,
+                    "declares neither `factors` nor a `factor`. A profile that changes nothing is "
+                    "not a profile",
+                )
             continue
         if not alt.get("revision"):
             report.refuse(awhere, "declares no `revision`")
@@ -2496,7 +2578,13 @@ def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) 
             report.refuse(
                 awhere, "declares no reason; a selectable envelope is a reviewed decision"
             )
-        for comparator in sorted(comparators):
+        # Every comparator the domain's *valued* thresholds use needs a factor, and every factor
+        # the profile declares is checked for direction **whether or not a threshold uses it
+        # today**. Iterating `comparators` alone left an unused key unvalidated, which is a claim
+        # waiting for the threshold that activates it: a domain with no `above` thresholds can
+        # carry `above: 1.4` in silence, and the first ceiling anybody adds makes it a profile that
+        # widens what it was selected to narrow.
+        for comparator in sorted(set(comparators) | set(map(str, factors))):
             if comparator not in factors:
                 report.refuse(
                     awhere,
@@ -5260,6 +5348,127 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         )
 
 
+# The statuses the conformance table may use. Four say how the vehicle satisfies a check and one
+# says why it is moot, and the distinction the table turns on is that `far_side` is not a failure:
+# a check the operator's side satisfies is one this side cannot demonstrate and must not claim to.
+CONFORMANCE_STATUSES = {
+    "demonstrated",
+    "satisfied_by_configuration",
+    "far_side",
+    "shared",
+    "vacuous",
+}
+
+
+def check_presentation_references(
+    root: Path,
+    presentation: dict[str, Any],
+    coupling: dict[str, Any],
+    mission: dict[str, Any],
+    report: Report,
+) -> None:
+    """Four path references and a conformance table, none of which anything resolved.
+
+    A deletion test over every top-level block in the folder left seven that no tool noticed
+    losing, and these are the five that are *claims about other files*. Each is a reference in the
+    folder's own sense — a name whose whole value is that it points at something — and a reference
+    nothing resolves is a reference that is already free to be wrong. All five are right today.
+
+    `presentation.yaml` names the frozen contract and the probe that tests it; `coupling.yaml`
+    names the corpus document it was generated from and the section of the design that fixes its
+    provenance rule. The paths are written relative to the repository root, so this resolves them
+    by walking up from the vehicle directory — which also means the check survives the move the
+    folder is destined for, when `docs/diode-contract.md` stops being two levels up. A path that
+    resolves nowhere is refused, and so is one that resolves only because a *different* file
+    happens to share its name at a shallower level.
+
+    The conformance table is the vehicle's claim to satisfy `docs/diode-contract.md` §9, and it is
+    twelve rows against the contract's twelve numbered checks. Nothing joined the two, so a row
+    dropped in an edit would leave a check nobody claims and a row duplicated would claim one
+    twice — neither visible in a table that reads perfectly.
+    """
+
+    def resolve(target: str) -> Path | None:
+        # The vehicle directory and its ancestors first, then the process's own working directory
+        # and *its* ancestors. The second half is not a convenience: these paths are
+        # repository-relative, and a test that copies the definition into a temporary directory
+        # takes the vehicle out of the repository without taking the repository away. Resolving
+        # only by walking up refused four correct references on every fixture copy — which is the
+        # check working, on a question about where the vehicle is rather than about what it says.
+        for base in (root, *root.parents, Path.cwd(), *Path.cwd().parents):
+            candidate = base / target
+            if candidate.exists():
+                return candidate
+        return None
+
+    for where, value in (
+        ("presentation.yaml:contract", presentation.get("contract")),
+        ("presentation.yaml:contract_probe", presentation.get("contract_probe")),
+        ("coupling.yaml:generated_from", coupling.get("generated_from")),
+        ("coupling.yaml:provenance_rules", coupling.get("provenance_rules")),
+    ):
+        if value is None:
+            report.refuse(where, "is absent. The reference is the whole content of the field")
+            continue
+        target = str(value).split("#", 1)[0]
+        if not target.strip():
+            report.refuse(f"{where}.{value}", "names no file")
+        elif resolve(target) is None:
+            report.refuse(
+                where,
+                f"names {value!r} and no such file is reachable from the vehicle directory. A "
+                "reference whose target has been renamed reads exactly like a reference whose "
+                "target is there",
+            )
+
+    rows = presentation.get("conformance")
+    if isinstance(rows, list) and rows:
+        numbers = [row.get("check") for row in rows if isinstance(row, dict)]
+        if not all(isinstance(n, int) for n in numbers):
+            report.refuse(
+                "presentation.yaml:conformance",
+                f"numbers its rows {numbers}, and a check number that is not an integer cannot be "
+                "matched against the contract's own list",
+            )
+        else:
+            duplicated = sorted({n for n in numbers if numbers.count(n) > 1})
+            missing = sorted(set(range(1, max(numbers) + 1)) - set(numbers))
+            if duplicated:
+                report.refuse(
+                    "presentation.yaml:conformance",
+                    f"claims checks {duplicated} more than once. Two rows for one check is one "
+                    "check claimed twice and another claimed by nobody",
+                )
+            elif missing:
+                report.refuse(
+                    "presentation.yaml:conformance",
+                    f"covers checks {sorted(numbers)} and skips {missing}. The table is the "
+                    "vehicle's claim to satisfy the contract, so a gap is a check nobody claims "
+                    "and a reader cannot tell whether it was missed or conceded",
+                )
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            cwhere = f"presentation.yaml:conformance check {row.get('check')}"
+            if row.get("status") not in CONFORMANCE_STATUSES:
+                report.refuse(
+                    f"{cwhere}.status",
+                    f"is {row.get('status')!r}, which is not one of "
+                    f"{sorted(CONFORMANCE_STATUSES)}. `far_side` in particular is not a failure: a "
+                    "check the operator's side satisfies is one this side cannot demonstrate and "
+                    "must not claim to",
+                )
+            for field in ("property", "vehicle"):
+                if not str(row.get(field) or "").strip():
+                    report.refuse(cwhere, f"declares no `{field}`")
+
+    # `mission.yaml`'s seed is the one declaration determinism rests on — `plant.md` §6 keys every
+    # stochastic stream to it — and its provenance was a block nothing validated.
+    seed = mission.get("random_seed_provenance")
+    if isinstance(seed, dict):
+        check_basis("mission.yaml:random_seed_provenance", seed.get("basis"), seed, report)
+
+
 def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -> None:
     """The filter's rates are a claim about the *plant's* clock, and the two must agree.
 
@@ -6688,6 +6897,7 @@ def main(argv: list[str] | None = None) -> int:
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
+    check_presentation_references(root, presentation or {}, coupling or {}, mission or {}, report)
     check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)

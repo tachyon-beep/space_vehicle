@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 267 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 267 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,9 +184,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **267** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **51** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
 pack-voltage state, and the missing charging efficiency). The **203** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 137. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 150. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 254 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 267 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 254 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 267 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2738,6 +2738,59 @@ block **no tool read**, and `gnc` was the only domain with a components file and
 all*, which is how the two obligations appeared in no count and no worklist. They are counted now,
 and the third paragraph says explicitly which terms are *not* owed, because a list of what is
 missing is more useful when it also says what is not. **251 became 254.**
+
+## The narrowing rule had never run on seven of the eleven domains
+
+A full deletion sweep — every top-level block in the folder, not just the ones I had sampled —
+found **seven more** blocks nothing notices losing. Last round's claim that the audit was complete
+was wrong, and the sweep is what showed it.
+
+Five of the seven are claims about other files, and they are the folder's own kind of reference:
+
+| reference | points at | resolved by |
+|---|---|---|
+| `presentation.yaml:contract` | the frozen `docs/diode-contract.md` | nothing |
+| `presentation.yaml:contract_probe` | `contract/diode_probe.py` | nothing |
+| `coupling.yaml:generated_from` | `docs/deep_research/apollo_diode.md` | nothing |
+| `coupling.yaml:provenance_rules` | `simulator-design.md#31` | nothing |
+| `mission.yaml:random_seed_provenance` | the seed every stochastic stream is keyed to | nothing |
+
+**All four paths resolve today.** A reference nothing resolves is a reference that is already free
+to be wrong, and these are the ones whose target is a *different repository's* file — the probe
+lives on the operator's side of the window. They are resolved now by walking up from the vehicle
+directory, which also means the check survives the move this folder is destined for.
+
+The sixth is the **conformance table**: twelve rows claiming the twelve numbered checks in
+`docs/diode-contract.md` §9. A dropped row leaves a check nobody claims; a duplicate claims one
+twice; neither is visible in a table that reads perfectly.
+
+**And the seventh was the substantive one.** `check_profiles` — the rule whose own docstring
+records the defect it was written for, `power`'s `tight` profile dropping the bus undervoltage
+ladder from 26.5 V to 23.85 V while claiming to narrow it — read:
+
+```python
+    alternatives = profiles_doc.get("alternatives") or []
+```
+
+Top level. **Four domains put the list there; seven nest it under `profile_selection`.** So the
+rule had never been applied to thirteen alternatives across avionics, comms, crew, eclss, gnc, rcs
+and structure — including one in `rcs` named **`tight`**, the same name as the one that was wrong.
+Every one of the thirteen declares a single scalar `factor`.
+
+Both shapes are read now, and the thirteen split on a distinction worth stating:
+
+- **A wrong direction is refused.** A domain that declares `factors: {below, above}` and gets one
+  backwards has made a claim, and the claim is false. Verified by flipping `power.tight`'s `above`
+  to 1.4 and its `below` to 0.9 — both refused.
+- **A scalar is owed.** It has made *no claim about direction*, and which way a profile moves is its
+  author's judgement rather than the linter's: `rcs.conservative` declares `factor: 1.5` for "a
+  wider deadband and a *lower* authority floor", and 1.5 is legitimate for a floor being raised and
+  forbidden for one being lowered. Refusing here would be a red build for thirteen honest gaps and
+  would say nothing about which is which. **254 became 267.**
+
+A gap in the rule itself closed while I was there: it validated only the comparators the domain's
+thresholds *use*, so a domain with no `above` thresholds could carry `above: 1.4` in silence until
+somebody added a ceiling. Every declared factor is checked for direction now.
 
 ## Authoring convention: no flow mappings
 
