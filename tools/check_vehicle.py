@@ -2882,9 +2882,25 @@ def check_domain(
     # **twenty-six thresholds declared both `UNCONFIGURED`**, which is one missing limit reported as
     # two debts and took the vehicle's headline count from 223 to 249 without a single new unknown.
     # The walk reports the pair once, at the threshold, because one number closes both.
+    # **A threshold that derives its limit is not an independent obligation.** Three `gnc`
+    # thresholds take their limit from a component field the domain already owes, so counting the
+    # threshold as well counted one missing datum twice — and `drift_deg_per_h` three times, since
+    # a fault's seeding names it too. The debt belongs where the quantity lives; this is the same
+    # instrument round 74 used on `assert`/`clear`, applied across two files instead of two fields.
+    derived_trails: set[str] = set()
+    # `position` rather than `index`, which is this function's `ChannelIndex` parameter — the
+    # first version of this loop shadowed it and the failure landed thirty lines away, in a
+    # membership test that had been handed an integer.
+    for position, threshold in enumerate((docs.get("profiles.yaml") or {}).get("thresholds") or []):
+        if isinstance(threshold, dict) and threshold.get("derives_from"):
+            for field in ("assert", "clear"):
+                derived_trails.add(f"profiles.yaml.thresholds[{position}].{field}")
+
     unset_trails = walk_unset(docs)
     unset_set = set(unset_trails)
     for trail in unset_trails:
+        if trail in derived_trails:
+            continue
         base, _, field = trail.rpartition(".")
         sibling = f"{base}.{'clear' if field == 'assert' else 'assert'}"
         if field == "clear" and sibling in unset_set:
@@ -5169,6 +5185,45 @@ def check_one_way_configurations(root: Path, vehicle: dict[str, Any], report: Re
                 )
 
 
+def resolve_dotted(document: Any, dotted: str) -> Any:
+    """Walk a dotted path through a parsed document, stepping sequences of `id`-keyed rows.
+
+    `coupling.yaml` holds its nodes as a sequence with `id` fields rather than as a mapping, and
+    `domains/*/components.yaml` does the same with its components, so a path through either has to
+    step by name. Returns `None` for a path that does not resolve — which is the caller's business
+    to report, because "the name is gone" and "the value is unset" are different answers.
+    """
+    node: Any = document
+    for step in dotted.split("."):
+        if isinstance(node, dict) and step in node:
+            node = node[step]
+        elif isinstance(node, list):
+            found = next(
+                (row for row in node if isinstance(row, dict) and str(row.get("id")) == step),
+                None,
+            )
+            if found is None:
+                return None
+            node = found
+        else:
+            return None
+    return node
+
+
+def load_documents(root: Path, vehicle: Any, coupling: Any, mission: Any) -> dict[str, Any]:
+    """Every document a declared source may point into, keyed by the path a source writes."""
+    documents = {
+        "vehicle.yaml": vehicle or {},
+        "coupling.yaml": coupling or {},
+        "mission.yaml": mission or {},
+    }
+    domains = root / "domains"
+    if domains.is_dir():
+        for path in sorted(domains.glob("*/*.yaml")):
+            documents[path.relative_to(root).as_posix()] = load(path, Report()) or {}
+    return documents
+
+
 def check_initial_sources(
     root: Path, vehicle: dict[str, Any], coupling: dict[str, Any], report: Report
 ) -> None:
@@ -5491,6 +5546,97 @@ def check_presentation_references(
     seed = mission.get("random_seed_provenance")
     if isinstance(seed, dict):
         check_basis("mission.yaml:random_seed_provenance", seed.get("basis"), seed, report)
+
+
+def check_threshold_derivations(root: Path, documents: dict[str, Any], report: Report) -> None:
+    """A threshold whose limit *is* another declared quantity says so, and is checked against it.
+
+    Three `gnc` thresholds name a quantity the domain already declares and owes: the alignment
+    error is measured "against the platform's alignment budget", the gyro bias against
+    `imu.drift_deg_per_h`, the radar's altitude against `landing_radar.range_km`. All three of
+    those component fields are `UNCONFIGURED`, so **each missing datum was counted twice** — once
+    where the quantity lives and once where it is used — and `drift_deg_per_h` was counted *three*
+    times, because a fault's seeding names it as well.
+
+    That is the inflation round 74 removed from `assert`/`clear`, arriving through a different
+    door. The instrument is the same in spirit: name the dependency so the use is not a second
+    obligation. A threshold declaring `derives_from` reports no debt of its own — the walk skips it
+    — and when the source resolves, the threshold's limit is the source times `derives_factor`,
+    which is checked here. The factor is not decoration: the bias threshold is in deg/s and the
+    drift it is sized from is in deg/h, so the conversion is 1/3600, and the radar's range is
+    published in kilometres while the channel is in metres.
+
+    A path that no longer resolves is refused rather than tolerated, because a source that has been
+    renamed reads exactly like a source that is unset.
+    """
+    for name, document in sorted(documents.items()):
+        if not name.endswith("profiles.yaml"):
+            continue
+        for index, threshold in enumerate((document or {}).get("thresholds") or []):
+            if not isinstance(threshold, dict):
+                continue
+            source = threshold.get("derives_from")
+            if not source:
+                continue
+            where = f"{name}:thresholds[{index}] {threshold.get('id')}"
+            if not str(threshold.get("derives_note") or "").strip():
+                report.refuse(
+                    f"{where}.derives_note",
+                    "is absent. A limit taken from another declaration is a claim about the "
+                    "*relationship* — that this threshold is that quantity rather than a multiple "
+                    "of it, and what the factor converts — and the note is where the claim is made",
+                )
+            text = str(source)
+            if ":" not in text:
+                report.refuse(
+                    f"{where}.derives_from",
+                    f"is {text!r}, which names no document. The form is `<file>.yaml:<dotted.path>`",
+                )
+                continue
+            filename, dotted = text.split(":", 1)
+            if filename not in documents:
+                report.refuse(
+                    f"{where}.derives_from",
+                    f"names {filename!r}, and the documents this check can resolve are "
+                    f"{sorted(documents)}",
+                )
+                continue
+            resolved = resolve_dotted(documents[filename], dotted)
+            factor = threshold.get("derives_factor", 1)
+            if not isinstance(factor, (int, float)) or factor == 0:
+                report.refuse(f"{where}.derives_factor", f"is {factor!r}")
+                continue
+            if resolved is None:
+                report.refuse(
+                    f"{where}.derives_from",
+                    f"is {text!r} and {filename} has no {dotted!r}. A source that has been renamed "
+                    "reads exactly like a source that is unset",
+                )
+                continue
+            if resolved == "UNCONFIGURED":
+                # The obligation is counted where the quantity lives, and this threshold is a use
+                # of it rather than a second unknown. Nothing to check until it lands.
+                continue
+            if not isinstance(resolved, (int, float)):
+                report.refuse(
+                    f"{where}.derives_from",
+                    f"resolves to {resolved!r}, which is not a number to derive a limit from",
+                )
+                continue
+            wanted = float(resolved) * float(factor)
+            if threshold.get("assert") == "UNCONFIGURED":
+                report.refuse(
+                    f"{where}.assert",
+                    f"is UNCONFIGURED while `derives_from` resolves to {resolved!r}. A threshold "
+                    f"that declares where its limit comes from takes it: {wanted:g} here",
+                )
+            elif abs(float(threshold["assert"]) - wanted) > abs(wanted) * 0.01 + 1e-12:
+                report.refuse(
+                    f"{where}.assert",
+                    f"is {threshold['assert']} and `derives_from` resolves to {resolved!r} x "
+                    f"{factor:g} = {wanted:g}. One of the two is the quantity and the other is a "
+                    "copy of it, and only this check keeps them the same number",
+                )
 
 
 def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -> None:
@@ -6921,6 +7067,7 @@ def main(argv: list[str] | None = None) -> int:
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
+    check_threshold_derivations(root, load_documents(root, vehicle, coupling, mission), report)
     check_presentation_references(root, presentation or {}, coupling or {}, mission or {}, report)
     check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)

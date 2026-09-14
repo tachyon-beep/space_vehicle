@@ -152,6 +152,9 @@ thresholds:
     latched: true
     severity: CAUTION
     point_units: "deg, against the platform's alignment budget"
+    derives_from: "domains/gnc/components.yaml:components.imu.alignment_budget_deg"
+    derives_note: >-
+      the limit *is* the budget: an error beyond the platform's alignment budget is a burn flown in a direction the vehicle did not choose, and a second number here would be a second opinion about one instrument
     provenance:
       basis: apollo
       ref: "apollo_diode.md:122"
@@ -174,6 +177,10 @@ thresholds:
     latched: true
     severity: ADVISORY
     point_units: "deg/s, the largest component magnitude"
+    derives_from: "domains/gnc/components.yaml:components.imu.drift_deg_per_h"
+    derives_factor: 0.0002777777777777778
+    derives_note: >-
+      the platform's drift rate is published per hour and this channel is per second, so the factor is 1/3600. The threshold is the drift *rate* rather than a multiple of it: a bias estimate growing at the instrument's own rated drift is the instrument behaving as specified, and one growing faster is the earliest observable of an IMU that is going
     provenance:
       basis: historical
       source: "gnc_diode.md:815-825 — `b_g` in the error-state vector"
@@ -196,6 +203,10 @@ thresholds:
     latched: false
     severity: CAUTION
     point_units: "m, above the radar's acquisition range"
+    derives_from: "domains/gnc/components.yaml:components.landing_radar.range_km"
+    derives_factor: 1000
+    derives_note: >-
+      the radar's acquisition range is published in kilometres and the altitude channel is in metres, so the factor is 1,000. Above the range the radar reports nothing and the vehicle is on gyros, which is why this is a gating condition rather than a fault
     provenance:
       basis: apollo
       ref: "apollo_diode.md:121"

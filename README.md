@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 137. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 134. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 254 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 251 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 254 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 251 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2842,6 +2842,48 @@ file's provenance rule lives: a `chosen` value needs a reason, an `apollo` one n
 `historical` one needs a source. The profile check demanded a field named `reason` regardless — so
 it was **redundant where it was right and wrong where it was not**, and it would have made the
 convention impossible to follow. It routes through `check_basis` now, which is strictly stronger.
+
+## One missing datum, counted twice — through a door round 74 did not know about
+
+Round 74 removed an inflation where one missing limit was reported as two debts, because a
+comparator with no value has neither `assert` nor `clear`. The same inflation was still in the
+vehicle through a different door: **a threshold whose limit *is* another declaration.**
+
+Three `gnc` thresholds name a quantity the domain also owes:
+
+| threshold | says | the quantity | is |
+|---|---|---|---|
+| `alignment_error_high` | "against the platform's alignment budget" | `imu.alignment_budget_deg` | `UNCONFIGURED` |
+| `gyro_bias_growing` | "the largest component magnitude" | `imu.drift_deg_per_h` | `UNCONFIGURED` |
+| `radar_out_of_range` | "above the radar's acquisition range" | `landing_radar.range_km` | `UNCONFIGURED` |
+
+Each missing datum was counted **twice** — once where the quantity lives, once where it is used —
+and `drift_deg_per_h` was counted *three* times, because a fault's seeding names it as well. The
+obligation is one number and it appears three times in a figure whose whole job is to say how much
+is left.
+
+The instrument is round 74's, applied across two files instead of two fields: **name the
+dependency, so the use is not a second obligation.** A threshold may declare
+
+```yaml
+    derives_from: "domains/gnc/components.yaml:components.imu.drift_deg_per_h"
+    derives_factor: 0.0002777777777777778
+```
+
+and then it reports no debt of its own — the walk skips it — while the obligation stays counted
+where the quantity lives. When the source lands, the limit is the source times the factor and the
+linter checks it, so the two cannot drift apart the moment the number exists.
+
+**The factor is not decoration**, which is why it is checked: the bias threshold is in deg/s and
+the drift it is sized from is in deg/h, so the conversion is 1/3600, and the radar's range is
+published in kilometres while the altitude channel is in metres, so it is 1,000. A note is
+required beside it, because a limit taken from another declaration is a claim about the
+*relationship* — that this threshold is that quantity rather than a multiple of it, and what the
+factor converts.
+
+Four checks, each verified by breaking it: a supplied source with the right limit (composes), with
+a wrong one (refused), a renamed source (refused — it reads exactly like an unset one), and a
+missing note (refused). **254 became 251.**
 
 ## Authoring convention: no flow mappings
 
