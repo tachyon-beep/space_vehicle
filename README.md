@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 250 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **250** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -3857,6 +3857,43 @@ constant and a driving value, a `stock` needs a quantum and a flow, and an `alge
 or `dynamics` state needs a *rule* — which no configuration can supply, because the rules are
 domain code. What the file provides is the frame those rules go in, and the error messages that
 tell you where.
+
+## A shared field the join between the two files could not see
+
+`vehicle.yaml#thermal.loops` and `domains/thermal/components.yaml` are two views of one machine, and
+`check_thermal_bindings` exists to make them impossible to drift: it holds the `id` sets equal in both
+directions and compares every field the two share. Every field but one. The compared list was
+`fluid`, `flow_l_min`, `vehicle` and the volume — and `loop_lm` declares a `coolant_mass_kg` in both
+files, agreeing at 11.3. So the one shared field outside the list was also the one field where the
+three loops are not symmetric, which is the shape this folder keeps producing: **the declaration
+nothing reads is the declaration that has already drifted.**
+
+The asymmetry is a fact about the sources rather than an oversight, and the two files say so:
+
+| loop | mass | volume | why |
+|---|---|---|---|
+| `loop_lm` | **11.3 kg, sourced** | 11 L, chosen | TN D-6724 publishes "about 25 lb of coolant"; 25 lb = 11.34 kg |
+| `loop_primary` | — | 25 L, chosen | TN D-6718 gives the CSM circuit as volumes and flows and never as a mass |
+| `loop_secondary` | — | 18 L, chosen | scaled from the primary, as `apollo_diode.md:97` leaves it |
+
+**And the missing figure is not missing.** The first draft of this debt read *"needs a fluid density no
+source publishes"* — and that was wrong, because the thermal domain publishes it two entries away, in
+its own words, with the arithmetic done out loud:
+
+> 25 L of 62.5/37.5 glycol-water at 1,050 kg/m3 is 26.25 kg
+
+`loop_primary_thermal_mass` states the density, the volume and the product. So the honest debt is not
+a missing datum; it is **a datum that lives in a sentence**. A loop's coolant mass is what a
+heat-exchanger transient turns on — it is the `C` in every one of the loop's first-order responses —
+and two of the vehicle's three loops keep it as prose. Either the density becomes a scalar each loop
+can declare (and the mass derives from the volume all three already carry), or the mass is declared
+and the relation cites it. Declaring the mass is the smaller edit and the more useful one.
+
+**250 became 252, and then 252 became 250.** The first cut reported the gap once per file — four
+debts for two unknowns, because both views omit the same field. That is *one unknown under several
+names*, the pattern this folder has now found five times in the corpus, appearing for the first time
+in the linter's own output. A count that doubles a gap because a thing is written twice is the same
+lie as a count that halves it. The debt is reported once per loop and names both files.
 
 ## The invariants, and which of them are enforced
 

@@ -5916,7 +5916,11 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         )
     for loop_id in sorted(set(declared) & set(built)):
         one, two = declared[loop_id], built[loop_id]
-        for field in ("fluid", "flow_l_min", "vehicle"):
+        # `coolant_mass_kg` joins the compared list, and it was the *only* field the two files
+        # share that was not in it: `loop_lm` declares it in both, they agree at 11.3 kg, and
+        # nothing read either copy. The list is what makes two views of one machine impossible to
+        # drift, so a shared field outside it is the one that gets away.
+        for field in ("fluid", "flow_l_min", "vehicle", "coolant_mass_kg"):
             if field in one and field in two and one[field] != two[field]:
                 report.refuse(
                     f"{where}.{loop_id}",
@@ -5924,6 +5928,24 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
                     "One machine, two files: a loop re-rated in one and not the other is a vehicle "
                     "whose cooling was sized against a loop nobody flies",
                 )
+        # Only the LM's loop declares a coolant mass, and the asymmetry is a fact about the
+        # sources rather than an oversight: TN D-6724 publishes the LM's as "about 25 lb" = 11.3 kg,
+        # which is why `loop_lm` carries it in both files, while TN D-6718 publishes the CSM's
+        # circuit as volumes and flows and never as a mass. The figure is nonetheless *recoverable*
+        # — the thermal domain's own `loop_primary_thermal_mass` relation says "25 L of 62.5/37.5
+        # glycol-water at 1,050 kg/m3 is 26.25 kg" — so this is not a missing datum. It is a datum
+        # that lives in a sentence, and the quantity a heat-exchanger transient turns on should be a
+        # scalar the plant can read. Either the density becomes one (and the mass derives from the
+        # volume each loop already declares), or the mass is declared and the relation cites it.
+        # The two loops differ, so this counts once per loop: one unknown, one name.
+        if "coolant_mass_kg" not in one and "coolant_mass_kg" not in two:
+            report.debt(
+                f"{where}.{loop_id}",
+                "declares no coolant mass, while `loop_lm` declares one in both files. The figure "
+                "is recoverable — the thermal domain's `loop_primary_thermal_mass` relation states "
+                "25 L at 1,050 kg/m3 is 26.25 kg — but it is written in prose rather than declared, "
+                "so the mass a heat-exchanger transient depends on is not a scalar the plant can read",
+            )
         volume = one.get("loop_volume_l", one.get("volume_l"))
         if volume is not None and two.get("volume_l") is not None and volume != two["volume_l"]:
             report.refuse(
