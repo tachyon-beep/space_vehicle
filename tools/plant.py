@@ -1070,7 +1070,38 @@ def build_order(world: World) -> dict[str, list[State]]:
                 and e.id not in world.back_edges
                 and (e.advances is None or e.advances == state.id)
             ]
-            if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming:
+            # ------------------------------------------------------------------------------
+            # **Two ways this disagreed with `advance()`, which the docstring above says it
+            # cannot.** The classification is supposed to be the same sequence of tests the plant
+            # runs when it gets there, and it ran two tests the plant does not.
+            #
+            # A tank filled at the pad has no incoming edge *on purpose*, and `advance` exempts it
+            # by name — "without this exemption the plant refuses `water_cooling`, `o2_lm`,
+            # `prop_rcs` and `pressurant_he` — four stocks that are correctly declared and simply
+            # drain". This classifier did not have the exemption, so `o2_csm_kg`, `o2_lm_kg` and
+            # `h2_csm_kg` were reported as owing a driver they do not need and cannot have. Their
+            # outbound drains are all usable, so the plant integrates them happily: they are
+            # **ready**, and the worklist was telling an implementer to go and build three edges
+            # that must not exist.
+            #
+            # And a state on the `internal` sentinel cannot be reached by *any* edge, because the
+            # sentinel is not a node — `coupling.yaml#nodes` does not declare it and nothing can
+            # target it. So "no incoming edge" is not a gap in the graph for those states; it is
+            # what the sentinel means, and the thing they need is the domain code that advances
+            # them. Reporting them as owing a coupling sent an implementer to the wrong file for
+            # thirteen states.
+            # ------------------------------------------------------------------------------
+            preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
+            if state.node == "internal":
+                # Advanced with its domain, so its driver is code rather than an edge. This is the
+                # same distinction `check_domain` draws for `internal_order`.
+                blocking_rule.append(state)
+                continue
+            if (
+                state.method in {"lag", "stock", "delay", "dynamics"}
+                and not incoming
+                and not preloaded
+            ):
                 blocking_edge.append(state)
                 continue
             if any(not e.usable for e in incoming):

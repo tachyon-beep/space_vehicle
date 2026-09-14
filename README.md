@@ -1565,7 +1565,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 69 of the 134 states need code before the plant can
+rules the configuration deliberately does not carry**, so 82 of the 134 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1755,10 +1755,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    11    8 %  ready now — the two classes the reference plant can advance
+    14   10 %  ready now — the two classes the reference plant can advance
     26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
-    28   21 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    69   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -3197,6 +3197,44 @@ movers put an unset scalar in those states' specs, so `walk_unset` counts them a
 than as the domain code they still need. The code has not gone away. It is the honest consequence of
 one field meaning a configuration obligation and the plant's classifier asking only whether a
 scalar is set — and it is the sort of thing a reader should be told rather than left to notice.
+
+## The worklist was sending an implementer to the wrong file
+
+`plant.py --build-order` opens by promising that its classes *are* `advance()`'s own refusal order —
+*"so this cannot disagree with what the plant actually does when it gets there."* It ran two tests
+the plant does not, and **sixteen of the twenty-eight states it reported as owing an edge were not
+owed one.**
+
+**A tank filled at the pad has no incoming edge on purpose**, and `advance` exempts it by name:
+
+> without this exemption the plant refuses `water_cooling`, `o2_lm`, `prop_rcs` and
+> `pressurant_he` — four stocks that are correctly declared and simply drain
+
+The classifier did not have the exemption. So `o2_csm_kg`, `o2_lm_kg` and `h2_csm_kg` were reported
+as owing a driver they do not need and cannot have — while all of their outbound drains classify
+cleanly. They were telling an implementer to go and build three edges that **must not exist**. They
+are `ready`, and one of them genuinely ticks:
+
+```
+advance(o2_lm_kg) -> {'o2_lm': 23.1, ...}      # 24.1 kg, one second of declared drain
+```
+
+**And a state on the `internal` sentinel cannot be reached by any edge**, because the sentinel is
+not a node — `coupling.yaml#nodes` does not declare it and nothing can target it. So "no incoming
+edge" is not a gap in the graph for those states; it is what the sentinel *means*, and the thing
+they need is the domain code that advances them. Thirteen were sent to the wrong file.
+
+| bucket | was | is |
+|---|---:|---:|
+| ready | 11 | **14** |
+| owes a value | 26 | 26 |
+| owes an edge | 28 | **12** |
+| owes a rule | 69 | **82** |
+
+The worklist is the folder's answer to *"what do I implement first"*, and it is derived rather than
+authored for exactly this reason — but a derived list is only as good as the classifier's agreement
+with the thing it describes. **The remaining twelve are real**: eight whose inbound coupling carries
+no sensitivity and four that genuinely have no driver.
 
 ## Authoring convention: no flow mappings
 
