@@ -355,6 +355,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[idle,run,standby,failed]"
+    moved_by:
+      - "command:set_computer_mode"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -374,6 +376,8 @@ state:
     node: internal
     method: discrete
     unit: "map[class,enum[good,suspect,fault]]"
+    moved_by:
+      - "logic:the counted debounce over sensor disagreement, which is FDIR's own conclusion"
     hysteresis:
       assert: 3
       clear: 1
@@ -394,6 +398,8 @@ state:
     node: internal
     method: discrete
     unit: "map[group,enum[good,degraded,isolated]]"
+    moved_by:
+      - "logic:the majority vote's own verdict across a monitored group"
     dwell:
       min_on_s: 10
       min_off_s: 10
@@ -440,6 +446,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[sync,degraded,unsync]"
+    moved_by:
+      - "logic:the verdict that gates an irreversible command, computed from time sync"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -479,6 +487,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[good,suspect,fault]"
+    moved_by:
+      - "logic:the k-of-m rule over the filter's normalized innovations"
     hysteresis:
       assert: 2
       clear: 1
@@ -501,6 +511,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[good,transient,suspect,fault]"
+    moved_by:
+      - "logic:the shared tracking rule two domains need and neither owns"
     dwell:
       min_on_s: 1
       min_off_s: 1
@@ -518,6 +530,8 @@ state:
     node: internal
     method: discrete
     unit: bool
+    moved_by:
+      - "logic:apollo's frame sync as the receiver reports it"
     dwell:
       min_on_s: 2
       min_off_s: 2

@@ -331,6 +331,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[nominal,degraded,coasting,invalid,reacquire]"
+    moved_by:
+      - "logic:the ladder the covariance and the coast clock climb together"
     dwell:
       min_on_s: 10
       min_off_s: 10
@@ -350,6 +352,8 @@ state:
     node: guidance
     method: discrete
     unit: "enum[coast,burn,landing,rendezvous,alignment,free_drift]"
+    moved_by:
+      - "command:set_guidance_mode"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -369,6 +373,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[idle,target_loaded,plan_valid,plan_invalid,armed,executing,verifying,complete]"
+    moved_by:
+      - "logic:the maneuver lifecycle `load_burn` opens and the guidance then drives through it"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -389,6 +395,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[unaligned,aligning,aligned,drifted]"
+    moved_by:
+      - "logic:the alignment the platform drives once `request_imu_alignment` starts it"
     dwell:
       min_on_s: 30
       min_off_s: 10

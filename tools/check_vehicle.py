@@ -2740,6 +2740,7 @@ def check_domain(
     thresholds_by_domain: dict[str, set[str]] | None = None,
     components_elsewhere: set[str] | None = None,
     declared_phases: set[str] | None = None,
+    all_verbs: dict[str, str] | None = None,
 ) -> None:
     """One `domains/<name>/`, checked against the vocabulary, the graph and the plant contract.
 
@@ -3983,6 +3984,141 @@ def check_domain(
             )
 
     # --------------------------------------------------------------------------------------
+    # `moved_by`: what moves a discrete state, which forty-three of them never said.
+    #
+    # The corpus declares a discrete state's vocabulary (`unit`), its guard (`hysteresis` or
+    # `dwell`), its irreversibility (`one_way`, `requires_arm`) — and not what changes it. The gap
+    # is not academic: `domains/crew/components.yaml` carries a debt that says so in as many words
+    # — *"Nothing declares what moves the crew. `crew_location` can take `surface_eva` and
+    # `crew_availability` can take `suit`, and no verb writes either"* — and that debt has been the
+    # only place the question was asked.
+    #
+    # It is also not derivable, which is worth recording because I tried. Two mechanical rules both
+    # fail. A verb's `gate` or `conflict_domain` names the state in **three** cases out of
+    # forty-three (`set_computer_mode`, `request_imu_alignment`, and `mode`, whose name five verbs
+    # contain). And overlapping enum *values* are actively misleading: `bus_tie_closed` shares
+    # `open`/`closed` with `set_hatch_valve`, so the rule would have the hatch moving the bus tie.
+    # So the declaration is an author's judgement and the linter's job is to check it, not to
+    # invent it.
+    #
+    # Three movers, and the third is what most of them are. A `command:<verb>` is a verb of this
+    # domain whose argument vocabulary reaches the state's — checked, because a command that cannot
+    # express the value it is said to set is a command that never sets it. An `event:<id>` is a
+    # declared `one_way_event`. And `logic` is the vehicle's own machinery: FDIR conclusions, the
+    # undervoltage ladder, a geometric occultation, an allocation verdict. `logic` is a *claim* and
+    # it needs a reason, which is the same discipline `independent` gets for a node's state order.
+    # --------------------------------------------------------------------------------------
+    verbs_here = {
+        str(v.get("verb")): v
+        for v in (docs.get("commands.yaml") or {}).get("commands") or []
+        if isinstance(v, dict)
+    }
+    events_here = {
+        str(e.get("id")) for e in components.get("one_way_events") or [] if isinstance(e, dict)
+    }
+    for state in components.get("state") or []:
+        if not isinstance(state, dict) or state.get("method") != "discrete":
+            continue
+        sid = str(state.get("id"))
+        mwhere = f"{where}:state {sid}.moved_by"
+        movers = state.get("moved_by")
+        if movers is None:
+            report.debt(
+                mwhere,
+                "is unset. A discrete state declares its vocabulary and its guard and not what "
+                "changes it, so nothing in the definition says whether a verb writes it, an event "
+                "does, or the vehicle computes it",
+            )
+            continue
+        if movers == "UNCONFIGURED":
+            if not state.get("moved_by_note"):
+                report.refuse(
+                    f"{mwhere}",
+                    "is UNCONFIGURED with no `moved_by_note`. An undeclared mover is a decision "
+                    "about the vehicle — the crew debt is the one this field exists to make "
+                    "countable — and the note says what would close it",
+                )
+            continue
+        if not isinstance(movers, list) or not movers:
+            report.refuse(f"{mwhere}", f"is {movers!r}, which names no mover")
+            continue
+        values = set()
+        enum = re.search(r"enum\[([^\]]*)\]", str(state.get("unit") or ""))
+        for match in re.findall(r"enum\[([^\]]*)\]", str(state.get("unit") or "")):
+            values.update(v.strip() for v in match.split(","))
+        del enum
+        for mover in movers:
+            text = str(mover)
+            kind, _, name = text.partition(":")
+            if kind == "logic":
+                # `logic:<reason>` — the reason is the claim.
+                if len(name.strip()) < 12:
+                    report.refuse(
+                        f"{mwhere}",
+                        f"declares {text!r}. `logic` is a claim that the vehicle computes this "
+                        "state, so it carries the reason the way `independent` carries one",
+                    )
+                continue
+            if kind not in ("command", "event"):
+                report.refuse(
+                    f"{mwhere}",
+                    f"declares {text!r}; a mover is `command:<verb>`, `event:<id>` or "
+                    "`logic:<reason>`",
+                )
+                continue
+            if kind == "event":
+                if name not in events_here:
+                    report.refuse(
+                        f"{mwhere}",
+                        f"names event {name!r}, which this domain does not declare in "
+                        f"`one_way_events` ({sorted(events_here)})",
+                    )
+                continue
+            # The verb may live in **another** domain, and three of the movers do: the crew's
+            # `breaker_panel` is written by `power`'s `set_breaker`, `maneuver_state` by
+            # `propulsion`'s `load_burn`, and `lcl_tripped` by `avionics`'s
+            # `reset_latched_fault`. A command is an effect on the executive rather than a call
+            # between domains, so the state it moves need not be its own domain's — but the verb
+            # must exist somewhere, which is what the vehicle-wide map is for.
+            verb = verbs_here.get(name)
+            home = name if verb is not None else (all_verbs or {}).get(name)
+            if verb is None and home is None:
+                report.refuse(
+                    f"{mwhere}",
+                    f"names verb {name!r}, which no domain registers. This domain's are "
+                    f"{sorted(verbs_here)}",
+                )
+                continue
+            if verb is None:
+                # `path` is this domain's directory, so a sibling is one level up and back down.
+                verb = load(path.parent / str(home) / "commands.yaml", Report()) or {}
+                verb = next(
+                    (
+                        c
+                        for c in (verb.get("commands") or [])
+                        if isinstance(c, dict) and str(c.get("verb")) == name
+                    ),
+                    {},
+                )
+            offered = set()
+            for argument in (verb.get("argument_schema") or {}).values():
+                if isinstance(argument, dict) and argument.get("type") == "enum":
+                    offered.update(str(v) for v in argument.get("values") or [])
+            # A mover that is a *trigger* rather than a setter — `request_imu_alignment` starts an
+            # alignment the vehicle then drives, `arm_event` mints a token whose lifecycle the
+            # state follows — cannot express the state's values and is not claimed to. Those are
+            # `logic` with the verb named in the reason, and this rule is what draws the line:
+            # a `command:` mover has to be able to say the value it is said to set.
+            if values and not (values & offered):
+                report.refuse(
+                    f"{mwhere}",
+                    f"names {name!r}, whose arguments can take {sorted(offered)}, and {sid} can take "
+                    f"{sorted(values)}. A command that cannot express the value it is said to set "
+                    "is a command that never sets it — if the verb only *triggers* the change, the "
+                    "mover is `logic` with the verb written into the reason",
+                )
+
+    # --------------------------------------------------------------------------------------
     # A stock's initial condition, which the plant now integrates from and which the
     # configuration declared nowhere.
     #
@@ -4144,6 +4280,16 @@ def check_domains(
         for p in (channels_doc or {}).get("crew_positions") or []
     }
     domains_dir = root / "domains"
+    # Every verb on the vehicle, by the domain that registers it. A state's mover may live
+    # elsewhere — the crew's breaker panel is written by `power`'s `set_breaker` — because a
+    # command is an effect on the executive rather than a call between domains.
+    all_verbs: dict[str, str] = {}
+    if domains_dir.is_dir():
+        for domain_path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            commands = load(domain_path / "commands.yaml", Report()) or {}
+            for command in commands.get("commands") or []:
+                if isinstance(command, dict) and command.get("verb"):
+                    all_verbs[str(command["verb"])] = domain_path.name
     present: set[str] = set()
     # A verb's interlocks may name its own thresholds or another domain's, so the whole set is
     # collected before any domain is checked: `set_vent_valve` refusing to vent while a hatch is
@@ -4213,6 +4359,7 @@ def check_domains(
                 thresholds_by_domain,
                 components_elsewhere,
                 declared_phases,
+                all_verbs,
             )
     check_outbound_extremes(root, report, policies)
     # ----------------------------------------------------------------------------------

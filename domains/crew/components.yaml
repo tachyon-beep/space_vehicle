@@ -50,6 +50,8 @@ state:
     node: internal
     method: discrete
     unit: "map[switch_id,enum]"
+    moved_by:
+      - "command:set_display_mode"
     dwell:
       min_on_s: 1
       min_off_s: 1
@@ -69,6 +71,8 @@ state:
     node: internal
     method: discrete
     unit: "map[breaker_id,enum[in,out,tripped]]"
+    moved_by:
+      - "command:set_breaker"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -87,6 +91,9 @@ state:
     node: crew_state
     method: discrete
     unit: "map[crew_id,enum[csm_commander,csm_navigator,csm_lower_equipment_bay,lm_commander,lm_pilot,tunnel,surface_eva]]"
+    moved_by: UNCONFIGURED
+    moved_by_note: >-
+      no verb writes it and no event moves it, which is the debt `domains/crew/components.yaml` records
     dwell:
       min_on_s: 30
       min_off_s: 0
@@ -105,6 +112,9 @@ state:
     node: crew_state
     method: discrete
     unit: "map[crew_id,enum[available,resting,suit,incapacitated]]"
+    moved_by: UNCONFIGURED
+    moved_by_note: >-
+      no verb writes it and no event moves it, which is the debt `domains/crew/components.yaml` records
     dwell:
       min_on_s: 60
       min_off_s: 60
@@ -132,6 +142,8 @@ state:
     node: alert_state
     method: discrete
     unit: "map[alert_id,enum[nominal,asserted,active_unacknowledged,acknowledged,clearing,latched,cleared]]"
+    moved_by:
+      - "logic:the lifecycle the thresholds drive, which is why it is a state and not a channel"
     dwell:
       min_on_s: 1
       min_off_s: 1
@@ -146,6 +158,8 @@ state:
     node: alert_state
     method: discrete
     unit: "enum[silent,continuous,intermittent]"
+    moved_by:
+      - "logic:the audible half of the master alarm, driven by the lifecycle"
     dwell:
       min_on_s: 1
       min_off_s: 1

@@ -192,6 +192,8 @@ state:
     node: cabin_regulator
     method: discrete
     unit: "enum[closed,primary,emergency,isolated]"
+    moved_by:
+      - "command:set_cabin_regulator"
     dwell:
       min_on_s: 1
       min_off_s: 1

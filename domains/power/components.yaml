@@ -158,6 +158,8 @@ state:
     method: discrete
     node: bus_tie
     unit: "enum[open,closed,tripped]"
+    moved_by:
+      - "command:set_bus_tie"
     dwell: {min_on_s: 0.2, min_off_s: 0.2}
     note: >-
       The tie may close only when the two buses are within 1 V, and it latches open on a ground
@@ -179,6 +181,8 @@ state:
     method: discrete
     node: internal
     unit: "map[load_id,enum[closed,tripped,retrying,latched]]"
+    moved_by:
+      - "logic:the protection trips it and `reset_latched_fault` is the only thing that clears it"
     hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}
     note: >-
       One controlled reclose and then latch (electrical_diode.md:254, :888-901). The
@@ -193,6 +197,8 @@ state:
     method: discrete
     node: load_shed_state
     unit: "enum[none,P3,P2,P1,P0]"
+    moved_by:
+      - "logic:the undervoltage ladder's own position, which the bus thresholds drive"
     hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}
     note: >-
       The ladder's position. Its hysteresis values are volts on bus A and are shadowed by the

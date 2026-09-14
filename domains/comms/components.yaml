@@ -227,6 +227,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
+    moved_by:
+      - "command:select_antenna"
     dwell:
       min_on_s: 10
       min_off_s: 10
@@ -245,6 +247,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[sband_high,sband_low,vhf,none]"
+    moved_by:
+      - "command:set_comm_mode"
     dwell:
       min_on_s: 10
       min_off_s: 10
@@ -262,6 +266,8 @@ state:
     node: internal
     method: discrete
     unit: bool
+    moved_by:
+      - "logic:the receiver's own statement that it holds the carrier"
     dwell:
       min_on_s: 2
       min_off_s: 2
@@ -281,6 +287,8 @@ state:
     node: internal
     method: discrete
     unit: bit/s
+    moved_by:
+      - "command:set_telemetry_profile"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -320,6 +328,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[clear,occulted]"
+    moved_by:
+      - "logic:the geometric occultation, computed from the orbit and the Earth's disc"
     dwell:
       min_on_s: 60
       min_off_s: 60

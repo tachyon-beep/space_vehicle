@@ -145,6 +145,8 @@ state:
     node: rcs_valves
     method: discrete
     unit: "map[thruster_id,bool]"
+    moved_by:
+      - "logic:the allocator commands each valve from the requested wrench"
     dwell:
       min_on_s: UNCONFIGURED
       min_off_s: UNCONFIGURED
@@ -289,6 +291,8 @@ state:
     node: internal
     method: discrete
     unit: bool
+    moved_by:
+      - "logic:the comparator latch that decides whether to request corrective torque"
     hysteresis:
       assert: UNCONFIGURED
       clear: UNCONFIGURED
@@ -312,6 +316,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[feasible,constrained,infeasible]"
+    moved_by:
+      - "logic:the allocator's own verdict on the wrench it was asked for"
     hysteresis:
       assert: UNCONFIGURED
       clear: UNCONFIGURED
@@ -346,6 +352,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[nominal,rate_damp,safe_hold,fault_safe]"
+    moved_by:
+      - "logic:the ladder whose entry conditions are FDIR conclusions"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -366,6 +374,8 @@ state:
     node: internal
     method: discrete
     unit: "enum[auto,manual,free_drift]"
+    moved_by:
+      - "command:set_rcs_mode"
     dwell:
       min_on_s: 2
       min_off_s: 2

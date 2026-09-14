@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 246 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **199** the plant
+pack-voltage state, and the missing charging efficiency). The **201** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1565,7 +1565,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 71 of the 134 states need code before the plant can
+rules the configuration deliberately does not carry**, so 69 of the 134 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1756,9 +1756,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     11    8 %  ready now — the two classes the reference plant can advance
-    24   18 %  owes a value — the cheapest to close, and the debt count already tracks them
+    26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
     28   21 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    71   53 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    69   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 129. The largest single field is `basis` at 28 —
+The literal half is 119 scalars and the prose half 129. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 246 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 248 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 246 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 248 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -3137,6 +3137,66 @@ and this is the one list the folder expects to grow: adding a fault is the edit 
 **`seeding.unit` is a one-word vocabulary declared 66 times and validated nowhere.** It is the
 rate's *time basis*, and `faults.py` scales the hazard by it across the mission's 192-hour ladder —
 so `per_hour`, which reads like `per_h`, is a silent change of rate rather than a refusal.
+
+## Every discrete state now says what moves it
+
+Forty-three states declared their vocabulary (`unit`), their guard (`hysteresis` or `dwell`), their
+irreversibility (`one_way`, `requires_arm`) — and **not what changes them**. The gap was not
+academic and the corpus said so in as many words: `domains/crew/` carries a debt reading
+
+> Nothing declares what moves the crew. `crew_location` can take `surface_eva` and
+> `crew_availability` can take `suit`, and no verb writes either.
+
+That debt was the **only** place the question was asked, and it was asked about two states out of
+forty-three.
+
+### It is not derivable, which is worth recording because I tried
+
+Two mechanical rules, and both fail:
+
+- A verb's `gate` or `conflict_domain` names the state in **three** cases out of forty-three.
+- Overlapping enum *values* are actively misleading. `bus_tie_closed` shares `open`/`closed` with
+  `set_hatch_valve`, so the rule would have the hatch moving the bus tie. Ten states matched on
+  values and most of the matches were coincidence.
+
+So the declaration is an author's judgement and the linter's job is to check it rather than to
+invent it.
+
+### Three movers
+
+| mover | count | what it is |
+|---|---:|---|
+| `command:<verb>` | 15 | a verb that writes it |
+| `event:<id>` | 6 | a declared `one_way_event` |
+| `logic:<reason>` | 22 | the vehicle's own machinery — FDIR, the undervoltage ladder, a geometric occultation |
+
+A `command:` mover **may be another domain's verb**, and three are: the crew's breaker panel is
+written by `power`'s `set_breaker`, `maneuver_state` by `propulsion`'s `load_burn`, and
+`lcl_tripped` by `avionics`'s `reset_latched_fault`. A command is an effect on the executive rather
+than a call between domains, so the state it moves need not be its own domain's.
+
+### The rule that draws the line, and the three classifications it corrected
+
+**A `command:` mover has to be able to say the value it is said to set.** `request_imu_alignment`
+takes reference frames (`EARTH_J2000`, `star`, …) and `imu_alignment` takes
+`unaligned/aligning/aligned/drifted` — the verb *starts* an alignment the vehicle then drives. That
+is a trigger, not a setter, so the mover is `logic` with the verb named in the reason. The same held
+for `arm_event` (it mints a token whose lifecycle the state follows) and `set_docking_latch` (it
+commands a mechanism that reports for itself).
+
+**Three of my own classifications failed that rule and had to be rewritten** — which is the check
+doing the work the mechanical rules could not.
+
+Two states still owe it and are counted: `crew_location` and `crew_availability`, the two the crew
+debt names. **246 became 248** — the forty-one declarations retired their own debts and the two
+owed ones were added.
+
+**And the build order moved with them, in a way worth stating.** `plant.py --build-order` now reads
+*69 owe a rule* where it read 71, and *26 owe a value* where it read 24: the two `UNCONFIGURED`
+movers put an unset scalar in those states' specs, so `walk_unset` counts them as owed values rather
+than as the domain code they still need. The code has not gone away. It is the honest consequence of
+one field meaning a configuration obligation and the plant's classifier asking only whether a
+scalar is set — and it is the sort of thing a reader should be told rather than left to notice.
 
 ## Authoring convention: no flow mappings
 

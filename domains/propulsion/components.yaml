@@ -41,6 +41,8 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
+    moved_by:
+      - "command:arm_engine"
     dwell: {min_on_s: 0.5, min_off_s: 5}
     provenance:
       basis: apollo
@@ -51,6 +53,8 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
+    moved_by:
+      - "command:arm_engine"
     dwell: {min_on_s: 2, min_off_s: 5}
     provenance:
       basis: historical
@@ -60,6 +64,8 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,armed,ignition,mainstage,shutdown,failed]"
+    moved_by:
+      - "command:arm_engine"
     dwell: {min_on_s: 0.5, min_off_s: 0}
     provenance:
       basis: historical
@@ -130,6 +136,8 @@ state:
     node: internal
     method: discrete
     unit: count
+    moved_by:
+      - "logic:the count of burns the engine has flown, incremented by the sequence"
     non_latching: true
     provenance:
       basis: historical
