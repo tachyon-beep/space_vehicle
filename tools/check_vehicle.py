@@ -4426,13 +4426,67 @@ def check_domains(
             report.refuse(
                 where, f"declares state_order {order!r}, which is neither a list nor 'independent'"
             )
-            continue
+        # --------------------------------------------------------------------------------------
+        # **Every state on the node has to be advanced by something.**
+        #
+        # `radiator_reject` holds two and its `state_order` puts `zone_radiator_t` **first** — the
+        # round-71 fix, so that rejection (`epsilon x sigma x A x T^4`) is computed from *this*
+        # tick's temperature rather than last tick's. But both of the node's inbound edges,
+        # `E-ENV-RAD` and `E-WATER-RAD`, declare `advances: radiator_rejection_w`. So the state the
+        # order puts first is the one state on the node that nothing advances, and the order is a
+        # statement about a sequence that never runs.
+        #
+        # The `state_order` check above verifies that an order names the node's states and that a
+        # multi-state node has one. Nothing verified that the order *can* execute. This is the
+        # round-71 `zone_csm_cabin_t` finding generalised: a state on a node is not driven because
+        # an edge reaches the node — it is driven because an edge **says it advances it**.
+        # --------------------------------------------------------------------------------------
         if sorted(str(s) for s in order) != names:
             report.refuse(
                 where,
                 f"declares state_order {sorted(str(s) for s in order)} but the node is advanced "
                 f"by {names}: the list has to be the group, in the order it advances",
             )
+        if isinstance(order, list):
+            # The states an edge is the only mechanism for: a method with an integrator and no
+            # `preloaded` exemption. `states_by_node` is not available here, so the domain files are
+            # consulted — the same three classes `advance` refuses on.
+            advanced_for: set[str] = set()
+            for domain_path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+                doc = load(domain_path / "components.yaml", Report()) or {}
+                for state in doc.get("state") or []:
+                    if (
+                        isinstance(state, dict)
+                        and state.get("node") == node
+                        and state.get("method") in {"lag", "stock", "delay", "dynamics"}
+                    ):
+                        advanced_for.add(str(state.get("id")))
+            producers = {state_id for _, state_id in producers}
+            advanced = {
+                str(edge.get("advances"))
+                for edge in (coupling or {}).get("edges") or []
+                if isinstance(edge, dict)
+                and edge.get("to") == node
+                and edge.get("id") not in ((coupling or {}).get("back_edges") or [])
+                and edge.get("advances")
+            }
+            # Only a state whose *method* needs an edge is in question. A state moved by a
+            # command, an event or the domain's own logic is advanced by something the coupling
+            # graph was never going to carry: `alert_lifecycle` and `alarm_horn` are the alert
+            # system's own computations, and the four states on `structure_config` are moved by
+            # irreversible events. Demanding an edge for those would be demanding the graph model
+            # a mechanism it does not describe — so the rule is `advance`'s own: a `lag`, `stock`,
+            # `delay` or `dynamics` state needs a driver, unless it is a tank filled at the pad.
+            needs_edge = producers & advanced_for
+            undriven = sorted(needs_edge - advanced)
+            for state_id in undriven:
+                report.debt(
+                    f"{where}",
+                    f"declares a state_order over {sorted(producers)} and no inbound edge advances "
+                    f"{state_id!r}. An edge that reaches the node without naming a state advances "
+                    "nothing on it, so the order describes a sequence one of its steps never runs",
+                )
+            continue
             continue
         # The declared order is the group's; report it so the derived schedule can be read.
         report.note(

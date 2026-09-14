@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,9 +184,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **43** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
 pack-voltage state, and the missing charging efficiency). The **201** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 119 scalars and the prose half 129. The largest single field is `basis` at 28 —
+The literal half is 119 scalars and the prose half 134. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 248 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 253 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 248 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 253 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -3263,6 +3263,44 @@ honest direction for a list whose whole job is to name what is left.
 What the classification must not do is **send a reader somewhere the answer is not** — and that,
 not agreement with `advance`, is the property worth holding. It is what round 95 fixed, and it is
 now pinned by a test that fails on any disagreement which is not one of the two kinds above.
+
+## Five states are in a declared order that nothing advances
+
+`radiator_reject` holds two states and its `state_order` puts `zone_radiator_t` **first** — the
+round-71 fix, so that rejection (`epsilon x sigma x A x T^4`) is computed from *this* tick's
+temperature rather than last tick's. But both of the node's inbound edges, `E-ENV-RAD` and
+`E-WATER-RAD`, declare `advances: radiator_rejection_w`. **The state the order puts first is the one
+state on the node that nothing advances**, and the order describes a sequence whose first step never
+runs.
+
+The existing check verified that an order names the node's states, and that a multi-state node has
+one. **Nothing verified that the order can execute** — which is the round-71 `zone_csm_cabin_t`
+finding generalised: a state on a node is not driven because an edge *reaches* the node, it is
+driven because an edge **says it advances it**.
+
+Five nodes are in that position, and the check that finds them had to be narrowed twice before it
+was right:
+
+- `alert_state` and `structure_config` hold states moved by the vehicle's own logic and by
+  irreversible events — demanding an edge for those would demand the graph model a mechanism it
+  does not describe. So the rule is `advance`'s own: a `lag`, `stock`, `delay` or `dynamics` state
+  needs a driver unless it is a tank filled at the pad.
+- `E-WATER-RAD` is a **back-edge**, and neither the linter nor the plant counts a back-edge as a
+  driver. Excluding them is what leaves the radiator on the list at all — my first version of the
+  *test* counted it and found nothing wrong.
+
+| node | the state nothing advances |
+|---|---|
+| `radiator_reject` | `zone_radiator_t` |
+| `vehicle_dynamics` | `attitude` |
+| `fuel_cell` | `source_converter_v` |
+| `coolant_flow` | `pump_1_speed_rpm` |
+| `crew_state` | all three, which the crew debt already names |
+
+Each is a **debt rather than a refusal**, because closing one is a decision about *which* edge
+advances which state and that decision is the author's: `E-ENV-RAD` reaching the radiator could
+advance the temperature or the rejection, and the node's own order says the temperature comes first.
+**248 became 253.**
 
 ## Authoring convention: no flow mappings
 
