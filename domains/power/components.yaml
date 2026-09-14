@@ -19,7 +19,13 @@ natural_rate_hz: 50
 
 # Reads and writes are node ids from coupling.yaml. Domains do not call each other
 # (plant.md §2); these declarations are what the scheduler orders.
-reads: [o2_csm, h2_csm]
+#
+# Three reads were missing until the edge list was read against this line, and each is a dependency
+# the graph had and the declaration denied: `coldplate_t`, which `E-PLATE-BAT` derates the battery's
+# usable capacity by; `link`, which `E-AMP-LOAD` puts on `bus_a` at 1/28 A per W; and
+# `command_executive`, which `E-CMD-BUS` drives the load-shed ladder with. All three are *inputs*,
+# which is why they belong here rather than in `writes` — the nodes they land on are power's.
+reads: [o2_csm, h2_csm, coldplate_t, link, command_executive]
 writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
          fc_o2_draw, fc_h2_draw, battery_usable_j]
 

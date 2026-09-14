@@ -34,7 +34,17 @@
 domain: consumables
 natural_rate_hz: 1
 
-reads: [fuel_cell, radiator_reject, crew_state, thrust_main, rcs_thrust, battery_energy]
+# Two entries were added when the edge list was read against this line, and one of them is a node
+# named one hop away from the dependency: the reaction water's driver is `fc_o2_draw` — 1.126 kg of
+# water per kg of O2 the cell consumes — and `fuel_cell` was declared in its place. The other two are
+# the removal rates that `E-ATM-ABSORB` and `E-LM-ATM-ABSORB` spend the absorbers' man-hours at, the
+# counters this domain writes and eclss drains.
+#
+# `fuel_cell` stays, and it is a different read: this domain's own `fuel_cell_o2` consumer is a
+# kg-per-kWh figure against the cell's output, which is why its `rate_kg_s` is UNCONFIGURED —
+# the reactant figure is unpublished — and why no edge carries that one yet.
+reads: [fuel_cell, fc_o2_draw, radiator_reject, crew_state, thrust_main, rcs_thrust,
+        battery_energy, co2_removal_csm, co2_removal_lm]
 writes: [o2_csm, o2_lm, h2_csm, water_potable, water_cooling, prop_main, prop_rcs,
          pressurant_he, absorber_capacity_csm, absorber_capacity_lm]
 

@@ -67,13 +67,19 @@ domain: rcs
 # sub-step in the event queue. See the header.
 natural_rate_hz: 50
 
-# Every node here has an edge into an RCS node in coupling.yaml, and the four are exactly the
+# Every node here has an edge into an RCS node in coupling.yaml, and the five are exactly the
 # ones that do. Two quantities the FDIR needs arrive as *published channels* rather than as
 # coupling edges — `structure.accel_xyz_g` for the stuck-on corroboration and
 # `thermal.coolant_supply_c` for the feed readiness check — and `controls.switches` is how a
 # crew member flies the vehicle in `manual` mode. None of them is a node this domain advances
 # or a graph edge it sits on, so none of them is declared here.
-reads: [prop_rcs, nav_state, bus_a, command_executive]
+#
+# `guidance` is the fifth and it was missing, which is worth a line because this comment claimed
+# the list was complete: *"the four are exactly the ones that do"*. `E-GNC-RCS` carries it into
+# `rcs_valves` — the last step of the control chain apollo_diode.md:792-796 describes, where the
+# allocator's commanded valve set arrives — so the claim was false in the one way a claim with no
+# reader can be, and it read as a statement of fact for as long as nobody counted.
+reads: [prop_rcs, nav_state, bus_a, command_executive, guidance]
 writes: [rcs_valves, rcs_thrust]
 
 # --------------------------------------------------------------------------------------

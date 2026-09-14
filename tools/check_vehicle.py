@@ -6671,6 +6671,135 @@ def check_initial_sources(
             )
 
 
+def check_domain_reads(documents: dict[str, Any], report: Report) -> None:
+    """A domain's declared reads against the edges that make it read them.
+
+    `reads`/`writes` are the domain-level half of the coupling graph, and the domain files say so
+    at the top: power's is the shortest — *"Reads and writes are node ids from coupling.yaml.
+    Domains do not call each other (plant.md §2); these declarations are what the scheduler
+    orders."* `writes` has been held in **both** directions since the domain check was written: a
+    state that advances a node its domain does not declare writing is refused, and a declared write
+    that no state advances is refused because the node never changes. `reads` was held in neither.
+    Every entry had to resolve to a coupling node — that is all — so the eleven declarations could
+    name the wrong nodes, or omit the right ones, and the only thing that would notice is a reader.
+
+    Two directions are checkable and they fail differently, which is why only one of them is a
+    refusal.
+
+    **An edge whose source the consumer does not declare** is a dependency the graph asserts and
+    the domain's own declaration denies. `plant.md` §4 lists exactly this among the things the
+    linter refuses — *"A domain that reads a node it does not declare, or writes one it does not
+    own"* — and the write half was implemented while the read half was not. It is a refusal here
+    because it is a statement about one edge and one missing name: the fix is to declare it, and the
+    eleven that were missing are all real physics — the fuel cell's oxygen draw that the reaction
+    water is computed from, the two removal rates that spend the absorber counters, the coldplate the
+    battery is derated by, the transmitter load on the bus, the command node three domains take,
+    `guidance` on two more, and the water the crew drink.
+
+    **A declared read that no edge carries** is a dependency the domain says it has and the graph
+    does not have. It is *not* refused, because the corpus contains both of the things it can mean
+    and nothing tells them apart: `eclss` reads `absorber_capacity_csm` and writes the removal rate
+    that drains it, so the return half of that loop lives only in the declaration — the schedule
+    sees a DAG, orders the two domains one way, and whichever of the pair runs second is reading a
+    stale value that looks like physics, with no `coupling.yaml#cycles` entry saying so. `gnc`
+    reads `bus_a` because a guidance computer with no bus is a guidance computer that stops, and
+    that is a dependency too. But `consumables` reads `battery_energy` for a resource ledger, which
+    is an observation and needs no edge at all. One key, two meanings, nothing distinguishing them
+    — the same shape as `range` before `range_kind` and `source` before it was split in three. What
+    is owed is the distinction, so this direction is counted as a debt with the numbers in it.
+    """
+    coupling = documents.get("coupling.yaml") or {}
+    edges = [e for e in coupling.get("edges") or [] if isinstance(e, dict)]
+    domains = {
+        key.split("/")[1]: doc
+        for key, doc in documents.items()
+        if key.startswith("domains/") and key.endswith("/components.yaml") and isinstance(doc, dict)
+    }
+    if not edges or not domains:
+        return
+
+    # Which domain writes each node. A node no domain writes is not a domain's product: the command
+    # node is the diode's, and the two telemetry edges end on nodes the presentation layer owns.
+    writers: dict[str, set[str]] = {}
+    for name, doc in domains.items():
+        for node in doc.get("writes") or []:
+            writers.setdefault(str(node), set()).add(name)
+    reads = {name: [str(n) for n in doc.get("reads") or []] for name, doc in domains.items()}
+    declared = {name: set(nodes) for name, nodes in reads.items()}
+    feeds: dict[str, set[str]] = {}
+    for edge in edges:
+        feeds.setdefault(str(edge.get("from")), set()).add(str(edge.get("to")))
+
+    # Direction one: every cross-domain edge source is declared by the domain that consumes it.
+    for edge in edges:
+        owners = writers.get(str(edge.get("to"))) or set()
+        if len(owners) != 1:
+            continue
+        name = next(iter(owners))
+        source = str(edge.get("from"))
+        # A node the reading domain writes itself is a read inside one tick, not a cross-domain
+        # one: `E-O2-FC` carries `fc_o2_draw` back into `fuel_cell` and both are power's.
+        if source in declared[name] or name in writers.get(source, set()):
+            continue
+        report.refuse(
+            f"domains/{name}/components.yaml:reads",
+            f"does not declare {source!r}, which `{edge.get('id')}` carries into "
+            f"{edge.get('to')!r} — a node {name} writes. plant.md §4: a domain that reads a node it "
+            "does not declare is a dependency the scheduler cannot see, so the two may be ordered "
+            "either way and the value read is whichever the tiebreak happened to give",
+        )
+
+    # Direction two: counted, not refused. A read is *carried* when some edge from that node lands
+    # on a node this domain writes. It is *declared feedback* when the only thing closing it is an
+    # edge `coupling.yaml#cycles` already names as a back-edge — then the read is the delayed half of
+    # a loop the corpus declares, which is what a back-edge means. It is *undeclared feedback* when
+    # something this domain writes feeds the node it reads and no cycle names that edge, so the loop
+    # exists only in the declaration and the schedule sees a DAG. Anything else is one-way.
+    declared_back_edges = {
+        str(cycle.get("back_edge"))
+        for cycle in coupling.get("cycles") or []
+        if isinstance(cycle, dict) and cycle.get("back_edge")
+    }
+    declared_feedback: list[str] = []
+    feedback: list[str] = []
+    one_way: list[str] = []
+    for name in sorted(domains):
+        own = {node for node, owners in writers.items() if name in owners}
+        for node in reads[name]:
+            owners = writers.get(node) or set()
+            if not owners or name in owners:
+                continue
+            if feeds.get(node, set()) & own:
+                continue
+            trail = f"{name}->{node}"
+            closing = {
+                str(edge.get("id"))
+                for written in own
+                for edge in edges
+                if str(edge.get("from")) == written and str(edge.get("to")) == node
+            }
+            if closing & declared_back_edges:
+                declared_feedback.append(trail)
+            elif closing:
+                feedback.append(trail)
+            else:
+                one_way.append(trail)
+    if feedback or one_way:
+        report.debt(
+            "domains/*/components.yaml:reads",
+            f"declares {len(feedback) + len(one_way)} cross-domain reads that no edge carries and "
+            f"no declared back-edge closes — {len(feedback)} of them return into a node the reading "
+            f"domain writes ({', '.join(feedback)}), so the loop exists only in the declaration and "
+            f"the schedule sees a DAG, and {len(one_way)} are one-way dependencies the graph does "
+            f"not contain at all ({', '.join(one_way)}). {len(declared_feedback)} more are the "
+            "delayed half of a loop `coupling.yaml#cycles` does name "
+            f"({', '.join(declared_feedback)}) and those are declared. Nothing distinguishes an "
+            "unmodelled dependency from an observation — `consumables` reading `battery_energy` for "
+            "a ledger and `gnc` reading `bus_a` to stay alive are written the same way — so what is "
+            "owed is either the missing edges or the second key that tells the two apart",
+        )
+
+
 # The keys of a thermal component that are never a quantity the two files both state: identity, the
 # prose keys, and the link itself. What is deliberately *not* here is the point — `fluid`,
 # `flow_l_min`, `vehicle`, `coolant_mass_kg`, `panels`, `area_m2` and `rejection_w` are the figures
@@ -9546,6 +9675,7 @@ def main(argv: list[str] | None = None) -> int:
     check_mission_model(mission or {}, report)
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
+    check_domain_reads(documents, report)
     check_argument_vocabularies(documents, report)
     check_spacecraft_vocabulary(documents, report)
     check_presentation_references(

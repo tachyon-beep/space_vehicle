@@ -39,7 +39,12 @@ domain: crew
 # and both are already cadenced by the domains that produce them.
 natural_rate_hz: 1
 
-reads: [instrumentation, cabin_atm, lm_cabin_atm, structure_config, command_executive]
+# `water_potable` is the sixth and it is the one consumption in the corpus that is a *rate of
+# people* rather than of machinery: `E-CREW-WATER` drinks it at 2.27 kg per crew-day, which is the
+# figure `E-CREW-ATM` cites for oxygen at the water rate instead of the gas-exchange rate. The crew
+# domain declares the dependency; the water is consumables' node.
+reads: [instrumentation, cabin_atm, lm_cabin_atm, structure_config, command_executive,
+        water_potable]
 writes: [crew_state, alert_state]
 
 # --------------------------------------------------------------------------------------

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -5179,6 +5179,86 @@ ceasing to resolve, the factor zero and non-numeric, an initial that still resol
 did, a load starting on less than it runs on, a load declaring no transient and a load declaring no
 steady draw, the battery no longer reported as owed, the plant counting one fewer unset scalar, and
 the unbroken corpus silent.
+
+## The scheduler's own declaration was the one nothing scheduled
+
+Every domain file opens with two lists, and power's header says what they are for in one line:
+*"Reads and writes are node ids from coupling.yaml. Domains do not call each other (plant.md §2);
+these declarations are what the scheduler orders."* Eleven domains, one declaration each — and
+`writes` has been held in **both** directions since the domain check was written: a state that
+advances a node its domain does not claim is refused, and a declared write that no state advances is
+refused because the node never changes.
+
+`reads` was held in neither. Every entry had to resolve to a coupling node — that is the whole of
+it — so a declaration of what the scheduler orders could omit the node an edge actually carries, and
+the only thing that would notice was a reader. **Eleven were missing**, across six domains:
+
+| domain | node | what carries it |
+|---|---|---|
+| consumables | `fc_o2_draw` | `E-FC-WATER` — 1.126 kg of reaction water per kg of O2 the cell consumes |
+| consumables | `co2_removal_csm`, `co2_removal_lm` | `E-ATM-ABSORB`, `E-LM-ATM-ABSORB` — the rates that spend the man-hour counters |
+| power | `coldplate_t` | `E-PLATE-BAT` — the derate on usable battery capacity |
+| power | `link` | `E-AMP-LOAD` — the transmitter's 1/28 A per W on `bus_a` |
+| power, eclss, propulsion | `command_executive` | `E-CMD-BUS`, `E-CMD-ATM`, `E-CMD-ENG` — one signal into each domain's own node |
+| propulsion, rcs | `guidance` | `E-GNC-ENG`, `E-GNC-RCS` — the closed loop and the commanded valve set |
+| crew | `water_potable` | `E-CREW-WATER` — 2.27 kg per crew-day, the one draw that is a rate of people |
+
+`plant.md` §4 lists this among the things the linter refuses — *"A domain that reads a node it does
+not declare, or writes one it does not own"* — and the write half had been implemented while the
+read half was not. So the check is a refusal, and it is the exact statement of the fault: an edge
+carries X into a node this domain writes, and the domain's own declaration does not name X.
+
+**One of the eleven had the omission written down as a completeness claim.** `domains/rcs/`'s header
+read *"Every node here has an edge into an RCS node in coupling.yaml, and the four are exactly the
+ones that do"* — while `E-GNC-RCS` carried a fifth, `guidance`. A claim with no reader reads as a
+statement of fact for as long as nobody counts, which is this folder's thesis arriving at a comment
+whose whole purpose was to say the list was finished.
+
+### The other direction is not a refusal, and that is the finding
+
+Twenty-four declared cross-domain reads have no edge at all, and they are three different things:
+
+| | count | example |
+|---|---|---|
+| the delayed half of a loop `coupling.yaml#cycles` **does** name | 1 | `thermal` reads `link`, and `E-PLATE-COMM` is C-AMP-BUS-PUMP's declared back-edge |
+| a loop the edge list **does not close** | 8 | `eclss` reads `absorber_capacity_csm` and writes the removal rate that drains it; `crew` reads its own cabin |
+| a one-way dependency the graph does not contain | 15 | `gnc` reads `bus_a` to stay alive; `propulsion` reads `pressurant_he` |
+
+The middle row is the one with teeth, and it is the failure `plant.md` §4 is written against: the
+graph is a DAG, so `derive_schedule` emits a total order, and whichever of the pair runs second is
+reading a stale value that looks like physics — with no cycle declared to say so. The corpus already
+has the machinery for it (`coupling.yaml#cycles`, a named back-edge) and these eight have nothing to
+name.
+
+The bottom row is why the direction is counted rather than refused. **One key, two meanings**: a
+dependency that has not been modelled and an observation that needs no edge are written the same
+way. `consumables` reading `battery_energy` is a resource ledger; `gnc` reading `bus_a` is a guidance
+computer that stops when the bus does. Nothing tells them apart, so what is owed is either the
+missing edges or the second key that names the difference — the same shape as `range` before
+`range_kind`, and `source` before it was split three ways.
+
+**252 became 253**: one new debt, carrying all twenty-three names in its text rather than a count
+that would have to be trusted.
+
+### And it found the next one on the way past
+
+`domains/consumables/components.yaml` has a `consumers:` block — twelve draws on the stocks, *"with
+the edge it corresponds to in coupling.yaml or the reason it has none"*. Seven name an edge, five say
+why not. **The section is read by nothing at all**: the word `consumers` does not appear in any tool
+in the folder, so twelve `rate_kg_s` declarations and seven edge references are a description rather
+than a model, and the file's own comment about the five with no edge is the only place the question
+is asked. That is the next round's instrument reading, and it is the same finding as this one: a
+declaration is only as good as the check that reads it.
+
+Verified by breaking ten copies in `.scratch/r13/`: four domains losing a declared read, an edge
+re-pointed at a node its consumer never declared, a read that stops resolving (the rule that always
+held it, still holding), an extra read with no edge raising the debt's own number without refusing
+anything, the unbroken corpus composing at 253 and refusing nothing, an internal read not counted as
+cross-domain, and the one read inside a declared cycle named as declared.
+
+**174 became 175 vehicle tests**, and the pins moved together: the debt count (253), the
+reconciliation's two, and the plant's own copy. Plant unchanged: 108 of 134 states fully configured,
+26 with a debt, 57 of 77 edges carrying a sensitivity, 198 unset scalars. `--strict` exits 2.
 
 ## The invariants, and which of them are enforced
 

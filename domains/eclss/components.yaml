@@ -38,8 +38,11 @@ domain: eclss
 # publication of the CO2 channel is what the alarm thresholds are sized against.
 natural_rate_hz: 1
 
+# `command_executive` is what `E-CMD-ATM` drives the cabin regulator with, and it is the only read
+# here that is a signal rather than a quantity. It was missing while the *other* command edges were
+# declared by their domains, which is what a list nothing counts looks like.
 reads: [o2_csm, o2_lm, absorber_capacity_csm, absorber_capacity_lm, crew_state,
-        cabin_zone_t, lm_cabin_zone_t]
+        cabin_zone_t, lm_cabin_zone_t, command_executive]
 writes: [cabin_atm, lm_cabin_atm, cabin_regulator, cabin_o2_supply_csm,
          cabin_o2_supply_lm, co2_removal_csm, co2_removal_lm]
 

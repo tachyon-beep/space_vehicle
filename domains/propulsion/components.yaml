@@ -33,7 +33,11 @@ domain: propulsion
 # integrator.
 natural_rate_hz: 10
 
-reads: [prop_main, pressurant_he, nav_state, structure_config]
+# `guidance` and `command_executive` both land on `engine_main` — `E-GNC-ENG` because closed loop
+# means guidance holds the authority to start and stop a burn without a crew verb, `E-CMD-ENG`
+# because the executive can still command the mode directly. `nav_state` was declared in their place
+# and is one hop upstream of the mode that actually arrives here.
+reads: [prop_main, pressurant_he, nav_state, structure_config, guidance, command_executive]
 writes: [engine_main, thrust_main]
 
 state:
