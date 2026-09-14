@@ -325,6 +325,16 @@ DIMENSION = {
     "Pa": "pressure",
     "psi": "pressure",
     "psia": "pressure",
+    # `psid` and `% nominal` are the two units the display contract uses that this map did not
+    # know, and they were missing for the reason the map's own docstring gives: it "covers the units
+    # this vehicle actually uses", and what it really covers is the units the *checks* consult.
+    # Nothing read `domains/crew/components.yaml#display_contract`'s `units` column until this
+    # round, so the one block where these two appear was outside every consumer of the map. Both are
+    # the same dimension as the unit the channel itself publishes — a cabin differential pressure
+    # gauge reads psid for a `psi` channel, and a percentage of nominal is shown on a panel as a
+    # percentage — which is exactly the judgement the map exists to make possible.
+    "psid": "pressure",
+    "% nominal": "ratio",
     "mmHg": "pressure",
     "m": "length",
     "km": "length",
@@ -3746,6 +3756,107 @@ def check_domain(
                         f"shows {cid!r}, which this position cannot perceive; the display "
                         "contract and the perception bound disagree, and the crew would be "
                         "reporting something they cannot see",
+                    )
+
+                # The two columns beside the channel name, which nothing read. `shows` was held to
+                # the registry and to the perception bound, and *what the panel shows it at* — the
+                # third argument of the perception function that `crew_diode.md`:42 and conflict
+                # register D-06 name as the reason `ask_crew` cannot be enabled — was declared 37
+                # times and compared to nothing. The rules are the registry's own two fields:
+                # `precision`, which is a resolution for an analogue channel and the literal `exact`
+                # for a discrete one, and `unit`.
+                registry_row = index.row(str(cid)) if cid in index else None
+                if registry_row is None:
+                    continue
+                rwhere = f"{pwhere}/{panel.get('id')} {cid}"
+                shown = readout.get("displayed_precision") if isinstance(readout, dict) else None
+                units = readout.get("units") if isinstance(readout, dict) else None
+                published = registry_row.get("precision")
+                pub_unit = str(registry_row.get("unit") or "")
+                if shown is None:
+                    report.refuse(
+                        f"{rwhere}.displayed_precision",
+                        "is not declared. A readout without one is a panel whose resolution nobody "
+                        "has stated, and resolution is what decides whether a crew member can see "
+                        "the change a threshold is watching for",
+                    )
+                elif published == "exact":
+                    # A discrete channel — an enum, a bool, a code — has no resolution to round,
+                    # and a panel that puts digits on it is showing a number the vehicle does not
+                    # have.
+                    if shown != "exact":
+                        report.refuse(
+                            f"{rwhere}.displayed_precision",
+                            f"is {shown!r}, and the channel's own precision is `exact`: this is a "
+                            "discrete quantity, so a panel showing it to some number of figures is "
+                            "showing figures the instrument does not publish",
+                        )
+                elif not isinstance(published, (int, float)) or isinstance(published, bool):
+                    report.debt(
+                        f"{rwhere}",
+                        f"is displayed beside a channel whose `precision` is {published!r}, which "
+                        "is neither a number nor `exact`, so there is nothing to hold the panel's "
+                        "resolution against",
+                    )
+                elif shown == "exact":
+                    report.refuse(
+                        f"{rwhere}.displayed_precision",
+                        f"is `exact`, and the channel publishes {published!r}: an analogue quantity "
+                        "shown exactly is a claim that the panel resolves what the instrument does "
+                        "not",
+                    )
+                elif (
+                    not isinstance(shown, (int, float))
+                    or isinstance(shown, bool)
+                    or float(shown) <= 0
+                ):
+                    report.refuse(
+                        f"{rwhere}.displayed_precision",
+                        f"is {shown!r}, which is neither a positive number nor `exact`",
+                    )
+                elif float(shown) < float(published):
+                    report.refuse(
+                        f"{rwhere}.displayed_precision",
+                        f"is {shown!r} where the channel publishes {published!r}. A panel may round "
+                        "— most of these do — and it may not invent resolution: a crew member "
+                        "reporting a change at the displayed figure would be reporting a change the "
+                        "vehicle never measured",
+                    )
+                if units and pub_unit and str(units) != pub_unit:
+                    shown_dim = DIMENSION.get(str(units))
+                    pub_dim = DIMENSION.get(pub_unit)
+                    unknown = [
+                        unit
+                        for unit, dim in ((str(units), shown_dim), (pub_unit, pub_dim))
+                        if dim is None
+                    ]
+                    if unknown:
+                        report.debt(
+                            f"{rwhere}.units",
+                            f"cannot be compared with the channel's {pub_unit!r}: the dimensional "
+                            f"map does not know {unknown}, so whether the panel is showing the same "
+                            "quantity cannot be decided at all. The map says it \"covers the units "
+                            "this vehicle actually uses\", and these are units it uses — the map "
+                            "covers the units the *checks* consult, and until this round no check "
+                            "consulted this block",
+                        )
+                    elif shown_dim != pub_dim:
+                        report.refuse(
+                            f"{rwhere}.units",
+                            f"displays {str(units)!r} ({shown_dim}) where the channel publishes "
+                            f"{pub_unit!r} ({pub_dim}). A panel in a different dimension is not a "
+                            "rounding of the value, it is a different quantity",
+                        )
+                elif (
+                    not units
+                    and isinstance(published, (int, float))
+                    and not isinstance(published, bool)
+                    and pub_unit != "dimensionless"
+                ):
+                    report.refuse(
+                        f"{rwhere}.units",
+                        "is not declared, and this channel publishes a number in a unit: a crew "
+                        "member reading a bare figure off a panel has nothing to report it in",
                     )
 
         # And the position's own `controls`, which is the unchecked half of the pair above: a

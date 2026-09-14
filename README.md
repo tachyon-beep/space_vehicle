@@ -5489,6 +5489,68 @@ its hand-rounded literal, the gas constant nudged, the molar-mass binding rename
 moved in the atmosphere model, a name the expression never binds, a cabin re-rated in both files at
 once, and the unbroken corpus composing at 268.
 
+## What the crew can see, and how finely — the third argument of the perception function
+
+`domains/crew/components.yaml#display_contract` gives every crew position its panels and every panel
+the readouts it shows. Its own `why` says what it is for:
+
+> crew_diode.md:42 says display topology was not supplied and remains a configuration item. conflict
+> register D-06 records that **this is the third argument of the perception function** and that
+> `ask_crew` cannot be safely enabled without it.
+
+What the linter held was membership. Every position must exist in `channels.yaml#crew_positions`,
+every readout must be a registered channel, and every readout must be in that position's
+`perceivable` list — the check is real and it found real drift when it was written. But a readout is
+a **mapping** with two more keys, and neither was compared to anything:
+
+```yaml
+            - {channel: eclss.cabin_pressure_psia, displayed_precision: 0.1, units: psia}
+            - {channel: power.bus_tie_state, displayed_precision: exact}
+```
+
+**`displayed_precision` — thirty-seven declarations — and `units`, thirty — in the one block whose
+stated purpose is the perception bound.** So the fleet could be told "the commander can perceive
+cabin pressure" and the vehicle had no statement of whether her gauge resolves 0.1 psia, 0.01, or
+1. Nine of the twenty-two analogue readouts round by a factor of ten or more, which is a
+decision — and decisions that nothing reads are the ones that drift.
+
+The rules are the registry's own two fields, which is what makes them checkable at all:
+
+| rule | why it is the rule |
+|---|---|
+| a panel may round the channel's published `precision`, and may not invent resolution | `precision` is what the instrument publishes; a crew member reporting a change at the *displayed* figure would be reporting a change the vehicle never measured |
+| `exact` belongs only where the registry publishes `exact` | 15 of the readouts are discrete — an enum, a bool, a code — and showing figures on one is showing figures the instrument does not have |
+| a numeric readout declares its unit, and it is the channel's unit or the same dimension | a bare number on a panel is a number with nothing to report it in; a unit in another dimension is not a rounding, it is a different quantity |
+
+The corpus sits on the safe side of all three: every panel rounds or matches, every `exact` sits on
+a channel the registry publishes as `exact`, and the one readout with no unit is the quaternion —
+which is dimensionless, and printing "dimensionless" on a display would be prose.
+
+### And the two units the map did not know
+
+The third rule is where the round's finding is. `psid` and `% nominal` are each used by exactly one
+readout, and the `DIMENSION` map — which says it *"covers the units this vehicle actually uses"* —
+did not know either. What it really covers is the units the **checks** consult, and no check
+consulted this block: `psid` is a cabin differential pressure gauge reading a channel whose unit is
+`psi`, and `% nominal` is a percentage-of-nominal channel shown on a panel as `%`. Both are what the
+map exists to make decidable, and neither could be decided, so the readouts were outside the map
+rather than wrong in it.
+
+An unknown unit is a **debt** rather than a refusal, which is the map's own stated policy — *"a
+linter that cries wolf is a linter that gets bypassed"* — and it names the unit so that closing it
+is one line. Closing them was two lines: **268 stayed 268**, because the two debts the reading
+created are the two the completed map removes.
+
+**178 became 179 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking twelve copies in `.scratch/r17/`: a panel inventing resolution, an analogue
+quantity shown `exact`, a discrete one shown to figures, a readout with no precision and one with a
+precision that is not a number and one of zero, a display unit in another dimension and one in the
+same dimension (which composes), a numeric readout with no unit, a unit the map does not know, the
+unbroken corpus composing at 268, and the map naming both units the contract uses.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

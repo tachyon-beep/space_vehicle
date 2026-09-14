@@ -185,6 +185,16 @@ state:
 # artifacts say different things — the channel list says what is perceptible, this one says what
 # an instrument in front of a person actually displays — and a disagreement between them is a
 # leak in the perception bound.
+#
+# **Both columns of every readout are held now, and until this round neither was.** The membership
+# checks above read `channel` and nothing else, so `displayed_precision` (37 declarations) and
+# `units` (30) were compared to nothing — in the block whose own `why` says it is "the third
+# argument of the perception function". The rules are the registry's own two fields: a panel may
+# round a channel's published `precision` and may not invent resolution, `exact` belongs only to
+# the channels the registry itself publishes as `exact`, and a displayed unit must be the
+# channel's or one the dimensional map places in the same dimension. Reading them found two units
+# the map did not know — `psid` and `% nominal`, each used here and nowhere else the checks
+# looked — which is what a column with no reader accumulates.
 # --------------------------------------------------------------------------------------
 display_contract:
   revision: 1
