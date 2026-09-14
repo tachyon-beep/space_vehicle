@@ -3422,6 +3422,35 @@ The same limit runs through the generation side: one `fuel_cell` node stands for
 so the two channels' **independence** — the property the spec names first — is not expressible at
 this granularity. The edge says bus B is fed; it cannot say the two feeds fail separately.
 
+## The LM's CO2 average was reading the CSM's cabin
+
+`check_cabin_pairing` asks whether an ECLSS channel about a cabin has an `lm_` twin — and until round
+102 **that was the whole of the pairing rule.** `eclss.lm_co2_pp_1h_avg_mmhg` had a twin. It also
+had:
+
+```yaml
+    from: csm_cabin_co2_kg
+    inputs: [eclss.co2_pp_mmhg]
+```
+
+— the **CSM's** cabin, and a note verbatim identical to the CSM channel's. The pair was paired by
+**id** and unpaired in fact.
+
+During `descent`, `surface` and `ascent_rendezvous` — **27.5 hours with the crew in the LM and the
+CSM empty** — a fleet watching that channel against the 3 mmHg one-hour limit would have been
+watching the compartment nobody was in. On the channel the corpus's own note calls *"the channel
+Apollo 13's crisis turned on."*
+
+**The comparison is extended to the state each one reads**: a channel's twin must read a state in
+the other compartment, and the compartments are the coupling nodes. It found **exactly one**
+instance, and both directions refuse — reverting the fix, or pointing the CSM channel at the LM.
+
+Two smaller things the check taught me while being written. A point's `from` names **a state in its
+domain or a coupling node**, so a name that is not a state *is* the node; my first version treated
+the two kinds differently and silently skipped every point that reads a node, which is most of the
+consumables ledger. And the pairing loop needed the domains' points threaded in, which is why
+`check_cabin_pairing` now takes a `root`.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

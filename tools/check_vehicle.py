@@ -5047,7 +5047,10 @@ def check_atmosphere_symmetry(root: Path, report: Report) -> None:
 
 
 def check_cabin_pairing(
-    registry: dict[str, Any], presentation: dict[str, Any], report: Report
+    registry: dict[str, Any],
+    presentation: dict[str, Any],
+    report: Report,
+    root: Path | None = None,
 ) -> None:
     """Every channel about a cabin is either paired with its twin, or says why it is not.
 
@@ -5097,6 +5100,52 @@ def check_cabin_pairing(
     for cid, why in sorted(declared.items()):
         if not str(why or "").strip():
             report.refuse(f"presentation.yaml#single_cabin.{cid}", "gives no reason")
+
+    # --------------------------------------------------------------------------------------
+    # **Paired by name is not paired in fact.**
+    #
+    # The comparison above asks whether a channel has an `lm_` twin, and until round 102 that was
+    # the whole of the pairing rule. `eclss.lm_co2_pp_1h_avg_mmhg` had a twin and read
+    # `csm_cabin_co2_kg` with `eclss.co2_pp_mmhg` as its input — the **CSM's** cabin — so the pair
+    # was paired by id and unpaired in fact, and its note was verbatim the CSM channel's. During
+    # `descent`, `surface` and `ascent_rendezvous` — 27.5 h with the crew in the LM and the CSM
+    # empty — a fleet watching it against the 3 mmHg one-hour limit would have been watching the
+    # compartment nobody was in.
+    #
+    # So the twin comparison is extended to the *state each one reads*: a channel's twin must read
+    # a state in the other compartment. The compartments are the coupling nodes, and the LM's are
+    # the ones whose names carry `lm`.
+    # --------------------------------------------------------------------------------------
+    if root is not None and paired:
+        node_of_state: dict[str, str] = {}
+        reads: dict[str, str] = {}
+        for domain_path in sorted((root / "domains").glob("*")):
+            if not domain_path.is_dir():
+                continue
+            components = load(domain_path / "components.yaml", Report()) or {}
+            for state in components.get("state") or []:
+                if isinstance(state, dict) and state.get("id"):
+                    node_of_state[str(state["id"])] = str(state.get("node"))
+            points = load(domain_path / "points.yaml", Report()) or {}
+            for row in points.get("points") or []:
+                if isinstance(row, dict) and row.get("channel") and row.get("from"):
+                    reads[str(row["channel"])] = str(row["from"])
+        for cid in sorted(paired):
+            twin = cid.replace("eclss.", "eclss.lm_", 1)
+            # A point's `from` is **a state in this domain or a coupling node**, so a name that is
+            # not a state *is* the node. Treating the two alike is what stops this check skipping
+            # every point that reads a node — which is most of the consumables ledger.
+            mine = node_of_state.get(reads.get(cid, "")) or reads.get(cid, "")
+            theirs = node_of_state.get(reads.get(twin, "")) or reads.get(twin, "")
+            if not mine or not theirs:
+                continue
+            if mine == theirs:
+                report.refuse(
+                    f"domains/eclss/points.yaml:{twin}",
+                    f"is the `lm_` twin of {cid!r} and both read the state on {mine!r}. A pair is "
+                    "two compartments, so a twin that reads its sibling's state is paired by name "
+                    "and unpaired in fact",
+                )
 
 
 def check_presentation(
@@ -7793,7 +7842,7 @@ def main(argv: list[str] | None = None) -> int:
             check_objectives(mission, registry, report)
         check_trajectory(mission, report)
         check_met_clock(mission, report)
-    check_cabin_pairing(registry, presentation, report)
+    check_cabin_pairing(registry, presentation, report, root)
     check_atmosphere_symmetry(root, report)
     check_zone_nodes(root, vehicle, report)
     # The fleets' view: collected from every registry, because a gate variable is declared on a

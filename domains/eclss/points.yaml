@@ -38,14 +38,20 @@ points:
       C-05 keeps it as a *separate* channel rather than letting it contaminate the instantaneous
       alarm. Two statistics, two channels, one gas.
   - channel: eclss.lm_co2_pp_1h_avg_mmhg
-    from: csm_cabin_co2_kg
+    from: lm_cabin_co2_kg
     layer: estimate
-    inputs: [eclss.co2_pp_mmhg]
-    derivation: "a rolling one-hour mean of the instantaneous channel"
+    inputs: [eclss.lm_co2_pp_mmhg]
+    derivation: "a rolling one-hour mean of the LM compartment's instantaneous channel"
     note: >-
       eclss_diode.md:735 adopts NASA's one-hour-average limit of 3 mmHg, and conflict register
       C-05 keeps it as a *separate* channel rather than letting it contaminate the instantaneous
-      alarm. Two statistics, two channels, one gas.
+      alarm. Two statistics, two channels, one gas — **per compartment**, and this one read the
+      CSM's cabin until round 102: its `from` was `csm_cabin_co2_kg` and its input was
+      `eclss.co2_pp_mmhg`, so the pair was paired by *name* and unpaired in fact. During `descent`,
+      `surface` and `ascent_rendezvous` — 27.5 h with the crew in the LM and the CSM empty — a
+      fleet watching this channel against the 3 mmHg limit would have been watching the
+      compartment nobody was in, on the channel Apollo 13's crisis turned on.
+
   - channel: eclss.pp_o2_mmhg
     from: csm_cabin_o2_kg
     layer: measurement
