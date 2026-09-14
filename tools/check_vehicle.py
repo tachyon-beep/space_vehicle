@@ -4714,6 +4714,34 @@ def check_propulsion(doc: dict[str, Any], vehicle: dict[str, Any], report: Repor
                 )
 
 
+# Keys that are never a quantity two files both state: identity, prose, and the link itself —
+# plus `thrusters`, which is compared by its own arithmetic rule rather than for equality, because a
+# string's eight and a system's sixteen are both correct. Everything else two views of one engine
+# share is compared, and that is the point: **a hand-written list of what to compare is how a shared
+# field gets left out.** This check's own first version listed four fields and the engines share six,
+# which is precisely the defect three rounds had been spent finding in other joins.
+PROPULSION_STRUCTURAL = {
+    "id",
+    "kind",
+    "class",
+    "vehicle",
+    "vehicle_keys",
+    "provenance",
+    "note",
+    "notes",
+    "why",
+    "reason",
+    "source",
+    "ref",
+    "relation",
+    "basis",
+    "unit",
+    "inputs",
+    "count",
+    "thrusters",
+}
+
+
 def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The engine figures the mission is flown on, declared twice and joined by nothing.
 
@@ -4739,6 +4767,13 @@ def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Repor
     Three closures, and the third is arithmetic rather than equality: an engine's `isp_s` and
     thrust figures are the vehicle entry's; a thruster's `count` is the sum of the `thrusters` its
     vehicle entries declare; and the strings claiming a system sum to that system's `thrusters`.
+
+    The comparison is the **intersection of the keys the two files share**, minus
+    `PROPULSION_STRUCTURAL`, rather than a list of field names. The first version of this check was
+    a list of four names and the engines share six — `engine`, `qualified_restarts`, `throttleable`
+    and `throttle_ratio` sat outside it, agreeing by luck, which is the defect this check was
+    written to catch arriving inside the fix for it. A hand-written list of what to compare is how
+    a shared field gets left out, so there is no list.
     """
     propulsion = (vehicle or {}).get("propulsion") or {}
     if not propulsion:
@@ -4785,15 +4820,15 @@ def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                         f"claims vehicle engine {key!r} and declares no `isp_s`, so the mass flow "
                         "through it cannot be computed from this file at all",
                     )
-                for field in ("isp_s", "thrust_n", "thrust_max_n", "thrust_min_n"):
-                    if field in one and field in c and one[field] != c[field]:
+                for field in sorted((set(one) & set(c)) - PROPULSION_STRUCTURAL):
+                    if one[field] != c[field]:
                         report.refuse(
                             where,
                             f"declares {field} {c[field]!r} and vehicle.yaml#propulsion.{key} "
-                            f"declares {one[field]!r}. The Δv budget is walked with the "
-                            "vehicle-level figure and the plant's mass flow is computed from this "
-                            "one, so the two disagreeing is a mission that closes on paper and "
-                            "does not close in the tank",
+                            f"declares {one[field]!r}. Two views of one engine: the vehicle-level "
+                            "file is what the Δv budget and the mass closure are walked with, and "
+                            "this is what the plant computes with, so a field the two disagree "
+                            "about is one machine described twice",
                         )
             # A thruster article's count is the number of thrusters its vehicle entries add up to.
             if cls == "thruster" and "count" in c:

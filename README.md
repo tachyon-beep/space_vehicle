@@ -4006,6 +4006,58 @@ refused by name, and the unbroken corpus silent. `--strict` still exits 2, and t
 not move: **the two files were already right; what was missing was anything that would notice if
 they stopped being.**
 
+## The instrument, and the defect it found in the fix for the defect
+
+Three rounds found this family by hand — a shared field outside a compared list, twice, then two
+views of one machine with no join at all. This round stopped guessing where to look next and built
+the instrument instead.
+
+**The method.** Flatten every YAML file in the folder to `(key, value, path)` triples, group by
+key, and keep the groups where one value appears in two or more *files*. A key with the same value
+in two files is almost never a coincidence; it is one quantity declared twice. It found **104
+groups**, and most are honestly not quantities: `dwell_assert_ms = 2000` spans ten domains because
+it is a vocabulary value, `hazard = 0.0002` spans eleven for the same reason, `revision = 1` spans
+thirteen because every profile is at revision 1. Those are the noise floor and they are easy to
+recognise. The signal is the rest.
+
+**The verdict on the three joins:**
+
+| join | shared fields outside its comparison |
+|---|---|
+| thermal loops (`check_thermal_bindings`) | **none** — round 104 closed it |
+| electrical batteries and cells (`check_electrical_bindings`) | **none** — round 105 closed it |
+| propulsion engines (`check_propulsion_bindings`) | **four**, and this check was written last round |
+
+`engine`, `qualified_restarts`, `throttleable` and `throttle_ratio` are declared on both sides of
+the propulsion join and outside the four-name list I wrote to compare it — all four agreeing today,
+which is exactly the state `coolant_mass_kg` and `chemistry` were in when they were found. **The
+check built to catch this had it, one round later, in four places.**
+
+That is the honest result and it is the reason the fix is not a fifth name in the list. A
+hand-written list of what to compare *is* the bug: it is correct on the day it is written and
+silently wrong on the day somebody adds a field to both files, and nothing about adding a field
+tells you to come back here. So the list is gone. The comparison is now
+
+    (set(vehicle_entry) & set(component)) - PROPULSION_STRUCTURAL
+
+— the intersection of the keys the two views share, minus a declared set of keys that are never a
+quantity two files both state (identity, prose, the link itself, and `thrusters`, which its own
+arithmetic rule compares rather than for equality, because a string's eight and a system's sixteen
+are both correct). **A field added to both files is now compared without anybody remembering to
+add it here**, which is the property the whitelist could never have.
+
+Verified by breaking four copies that the old list let through: a `throttle_ratio` of 8 against
+10, a `qualified_restarts` of 40 against 50, a renamed `AJ10-138` against `AJ10-137`, and an APS
+flipped to `throttleable: true`. Every one refused by name, and the unbroken corpus still composes
+at 252 debts — so the intersection rule catches four things the whitelist missed without inventing
+a single refusal.
+
+**One more thing this round caught, about this folder's own habits.** Two of the fixtures written
+last round stopped matching when the refusal message changed, and the suite failed on the needle
+rather than on the physics. That is the fixture doing its job: a needle that no longer appears is a
+message somebody changed, and the temptation to loosen it is the temptation to stop testing what it
+asserted. The needles were updated to the new message, not generalised until they matched anything.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
