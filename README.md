@@ -2313,6 +2313,26 @@ anywhere else: it is the figure a reader uses to judge how much is left. The **p
 are 90 of the remaining 223 and have not been examined the same way — that is where the next
 grouping would go.
 
+## The prose half of the count is clean, and now there is a view that says so
+
+Round 74 found the literal half inflated by 26 (`assert` and `clear` reported separately). Round 75
+asked the same question of the prose half — the 116 `open_debts` sentences — and the answer is
+**no**, with the measurement to back it:
+
+- `coupling.yaml`'s **nineteen** per-edge debts and the **seventeen** edge ids named inside its eight
+  `open_debts` sentences are **disjoint**. The prose summarises edges that have no per-edge debt of
+  their own, which is the opposite of a double-count.
+- One subject is named from two files — the **inertia tensor**, in `coupling.yaml` and
+  `domains/rcs/` — and those are one missing datum with two genuinely different *consequences*, each
+  recorded where it bites. That is the folder's style rather than an inflation.
+
+`check_vehicle.py --debts` is the view, and its reason for existing is the round-74 finding: it
+splits the owed list into literal scalars and prose obligations, groups the first by the field it
+wants and the second by the file that keeps it. A reader is entitled to know which half of the
+headline number has been examined, and after two rounds both have been.
+
+The literal half is 107 scalars and the prose half 116. The largest single field is `basis` at 28 —
+provenance that has been declared unconfigured — followed by the threshold pairs.
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -5502,6 +5502,43 @@ def order_report(root: Path, schedule: list[str], coupling: dict[str, Any], repo
     print(f"\n{internal} further states are internal to a domain and are advanced with it.")
 
 
+def debts_report(report: Report) -> None:
+    """Group the owed list by the *scalar* each debt wants rather than by the path that reaches it.
+
+    Round 74 found that twenty-six thresholds reported `assert` and `clear` separately — one missing
+    limit counted as two — and this view is how that class of inflation is looked for now. It splits
+    the list into the literal `UNCONFIGURED` scalars and the prose `open_debts`, groups the first by
+    the field they want, and reports the second by file.
+
+    **Run against the corpus the round after, the prose half is clean**: the nineteen per-edge debts
+    in `coupling.yaml` and the seventeen edge ids named inside its eight `open_debts` sentences are
+    disjoint, and the one subject named from two files — the inertia tensor, in `coupling.yaml` and
+    `domains/rcs/` — is one missing datum with two genuinely different consequences, each recorded
+    where it bites. That is the folder's style rather than a double-count, and it is worth being able
+    to say so: the count is the headline claim, and a reader is entitled to know which half of it has
+    been examined.
+    """
+    import collections
+
+    owed = [row.split(": ", 1)[1] for row in report.debts]
+    paths = [row.split(": ", 1)[0] for row in report.debts]
+    literal = [(p_, w) for p_, w in zip(paths, owed, strict=True) if w == "is UNCONFIGURED"]
+    prose = [(p_, w) for p_, w in zip(paths, owed, strict=True) if w != "is UNCONFIGURED"]
+    print(f"\n{len(report.debts)} owed, grouped by what each wants:\n")
+    print(f"  {len(literal):4d}  a literal `UNCONFIGURED` scalar")
+    print(f"  {len(prose):4d}  a prose obligation in an `open_debts` list")
+    fields = collections.Counter(p.rsplit(".", 1)[-1].split("[")[0] for p, _ in literal)
+    if fields:
+        print("\n  the literal half, by the field it wants:")
+        for field, count in fields.most_common(8):
+            print(f"    {count:4d}  {field}")
+    files = collections.Counter(p.split(":")[0] for p, _ in prose)
+    if files:
+        print("\n  the prose half, by the file that keeps it:")
+        for name, count in files.most_common(6):
+            print(f"    {count:4d}  {name}")
+
+
 def phases_report(
     root: Path, mission: dict[str, Any], registry_by_verb: dict[str, dict[str, Any]]
 ) -> None:
@@ -5546,6 +5583,11 @@ def main(argv: list[str] | None = None) -> int:
         "--phases",
         action="store_true",
         help="also print the verb-by-phase view derived from the command registries",
+    )
+    parser.add_argument(
+        "--debts",
+        action="store_true",
+        help="also group the owed list by the scalar each debt wants, not by the path that reaches it",
     )
     parser.add_argument(
         "--order",
@@ -5698,6 +5740,8 @@ def main(argv: list[str] | None = None) -> int:
     report.print()
     if args.order and coupling is not None:
         order_report(root, schedule, coupling, report)
+    if args.debts:
+        debts_report(report)
     if args.phases and mission is not None:
         verbs: dict[str, dict[str, Any]] = {}
         domains_dir = root / "domains"
