@@ -37,6 +37,20 @@ schema_version: 1
 source: docs/deep_research/apollo_diode.md
 vocabulary: docs/deep_research/integration/reconciliation/02-canonical-vocabulary.md
 
+# The two spacecraft the vehicle is made of. **This is the only place the corpus says how many
+# there are**, and until this round nothing said it at all: `vehicle:` appears sixty-seven times
+# across the domains — every power source, load and bus, every atmosphere, every thermal zone and
+# every component the crew can be in — and no list existed to hold a value against, so
+# `vehicle: csmx` composed. The key also carried two other meanings, which is why the rule could
+# not simply be written: `mission.yaml` used it for the *document* (`vehicle: vehicle.yaml`) and
+# `presentation.yaml`'s conformance table used it for the narrative of what this side does about a
+# check. Both are renamed — `vehicle_document` and `disposition` — and every remaining `vehicle:`
+# names one of these two.
+spacecraft:
+  - csm
+  - lm
+
+
 # --------------------------------------------------------------------------------------
 # Frames and conventions. `gnc_diode.md:382` states the rule this block exists for: "no vector
 # is valid without a declared frame", and it goes further than a frame list — it fixes four

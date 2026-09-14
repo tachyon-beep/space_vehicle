@@ -5013,6 +5013,54 @@ position cannot perceive, a zone's source naming a heater that does not exist, t
 to name both of its terms, and the unbroken corpus composing at **253** — which did not move,
 because this round resolved references that were already written.
 
+## Sixty-seven declarations of which spacecraft, held against nothing
+
+Every power source, load and bus, every atmosphere, every thermal zone and loop, every component
+the crew can be in says which spacecraft it belongs to. That is **sixty-seven `vehicle:` fields**,
+and the probe is one word: `vehicle: csmx` on a power component composed, and so did a thermal zone
+moved to a spacecraft that does not exist. No list existed to hold a value against.
+
+**And the rule could not simply be written, which is the round's real finding: the key carried
+three meanings.**
+
+| sense | where | count |
+|---|---|---|
+| a spacecraft id | the domains, `vehicle.yaml` | 67 |
+| the *document* the mission registers its channels against | `mission.yaml` — `vehicle: vehicle.yaml` | 1 |
+| the narrative of what this side does about a contract check | `presentation.yaml`'s conformance table | 12 |
+
+One key, three meanings — and the third was **enforced**: the linter requires every conformance row
+to carry a non-empty `vehicle`. So the overload was not an accident of naming that nobody noticed;
+it was a rule. And a key with three meanings is a key no rule can be written about, which is why the
+sixty-seven went unresolved.
+
+The two minority senses are renamed — `vehicle_document` and `disposition` — and the list the
+majority is held against is `vehicle.yaml#spacecraft`, **the only place in the corpus that says how
+many spacecraft there are**:
+
+```yaml
+spacecraft:
+  - csm
+  - lm
+```
+
+Two of the sixty-seven are held as well and are not a component's: the keys of
+`atmosphere_model.volume_m3`, which `check_cabin_volumes` uses as the authority for the cabin
+volume and which were a second, silent enumeration of the same fact.
+
+The list itself is guarded against the shape that would be worst: `spacecraft: csm, lm` parses to a
+*string*, and iterating a string gives its characters — so the guard refuses a malformed list rather
+than emitting sixty-seven refusals about spacecraft named `c` and `s`. Absence and emptiness are the
+section check's business, which is what adding the section to `VEHICLE_SECTIONS` buys.
+
+**253 stayed 253** — the round declared a vocabulary that was already in use and renamed two keys
+that meant something else, filling nothing in.
+
+Verified by breaking eight copies: a component on a spacecraft that does not exist, an atmosphere
+keyed by one, the list emptied and the list malformed, the document reference renamed back to the
+overloaded key, the conformance column renamed back, the two renamed senses asserted gone from the
+corpus, and the unbroken corpus composing at 253.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

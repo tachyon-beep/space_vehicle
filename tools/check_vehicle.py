@@ -163,6 +163,7 @@ VEHICLE_SECTIONS = {
     "thermal",  # `check_thermal_bindings`, against domains/thermal/components.yaml
     "comms",  # `check_blackout` and the link budget
     "electrical",  # `check_electrical_bindings`, against domains/power/components.yaml
+    "spacecraft",  # `check_spacecraft_vocabulary`: every `vehicle:` is held against this list
     "open_debts",  # counted and printed, like every other open_debts in the folder
 }
 # Declarations addressed to a reader rather than to a tool. Naming them is the point: an unread
@@ -7258,7 +7259,12 @@ def check_presentation_references(
                     "check the operator's side satisfies is one this side cannot demonstrate and "
                     "must not claim to",
                 )
-            for field in ("property", "vehicle"):
+            # The third key is `disposition` because it was `vehicle`, and that one word was doing
+            # three jobs across the corpus: a spacecraft id sixty-seven times, the *document*
+            # (`mission.yaml`'s `vehicle: vehicle.yaml`) once, and this narrative twelve times. A
+            # key with three meanings is a key no rule can be written about, which is why sixty-seven
+            # declarations of which spacecraft a component belongs to were resolved by nothing.
+            for field in ("property", "disposition"):
                 if not str(row.get(field) or "").strip():
                     report.refuse(cwhere, f"declares no `{field}`")
 
@@ -7467,6 +7473,92 @@ def check_edge_derivations(
                 f"derives {derived:.6g} from {expression!r} at {shown}, and the sensitivity "
                 f"declares {value!r}. A derived value that no longer re-derives is a value nobody "
                 "has checked since the declaration it came from moved",
+            )
+
+
+def check_spacecraft_vocabulary(documents: dict[str, Any], report: Report) -> None:
+    """Every `vehicle:` names one of the spacecraft the vehicle declares, and it declares them once.
+
+    `vehicle:` is written **sixty-seven times** across the domains — every power source, load and
+    bus, every atmosphere, every thermal zone and loop, every component the crew can be in — and
+    until this round no list existed to hold a value against. The probe is one word: `vehicle: csmx`
+    on a power component composed, and so did a thermal zone moved to a spacecraft that does not
+    exist. Sixty-seven declarations of *which spacecraft a piece of hardware belongs to*, resolved
+    by nothing, in a corpus whose oldest finding is that a declaration no tool reads has already
+    drifted.
+
+    The rule could not simply be written, and that is the round's real finding: **the key carried
+    three meanings.** A spacecraft id, sixty-seven times; the *document* `mission.yaml` registers
+    its channels against (`vehicle: vehicle.yaml`), once; and the narrative of what this side does
+    about a contract check, twelve times in `presentation.yaml`'s conformance table — where the
+    linter *required* it to be non-empty, so the overload was enforced. The two minority senses are
+    `vehicle_document` and `disposition` now, which is what makes a rule about the majority one
+    possible, and the list they are held against is `vehicle.yaml#spacecraft` — the only place in
+    the corpus that says how many spacecraft there are.
+
+    Two of the sixty-seven are not a component's and are held here as well: the keys of
+    `atmosphere_model.volume_m3`, which `check_cabin_volumes` uses as the authority for the cabin
+    volume and which were a second, silent enumeration of the same fact.
+    """
+    spacecraft = (documents.get("vehicle.yaml") or {}).get("spacecraft")
+    # A *shape* fault rather than an owed value: absence and emptiness are the section check's
+    # business, and this is the guard that stops a malformed list — `spacecraft: csm, lm` parses to
+    # a string, and iterating a string gives its characters — turning into sixty-seven refusals
+    # about spacecraft named 'c' and 's'.
+    if not isinstance(spacecraft, list) or not all(
+        isinstance(entry, str) and entry for entry in spacecraft
+    ):
+        report.refuse(
+            "vehicle.yaml:spacecraft",
+            f"is {spacecraft!r}, not a non-empty list of spacecraft names. The sixty-seven "
+            "`vehicle:` fields across the domains are held against it, so a list that is not one "
+            "leaves every one of them unresolved",
+        )
+        return
+    if not spacecraft:
+        report.refuse("vehicle.yaml:spacecraft", "declares no spacecraft at all")
+        return
+    declared = {str(s) for s in spacecraft}
+
+    found: dict[str, list[str]] = {}
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                here = f"{path}.{key}"
+                if key == "vehicle" and isinstance(value, str):
+                    found.setdefault(value, []).append(here)
+                walk(value, here)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{path}[{index}]")
+
+    for name, document in sorted(documents.items()):
+        walk(document, name)
+
+    for value in sorted(found):
+        if value in declared:
+            continue
+        for where in sorted(found[value])[:3]:
+            report.refuse(
+                where,
+                f"names spacecraft {value!r}, which vehicle.yaml#spacecraft does not declare; it "
+                f"declares {sorted(declared)}. Hardware on a spacecraft that does not exist is "
+                "hardware nothing can be asked about, and the field was resolved by nothing until "
+                "this check",
+            )
+    for which in sorted(
+        ((documents.get("domains/eclss/components.yaml") or {}).get("atmosphere_model") or {}).get(
+            "volume_m3"
+        )
+        or {}
+    ):
+        if str(which) not in declared:
+            report.refuse(
+                f"domains/eclss/components.yaml:atmosphere_model.volume_m3.{which}",
+                f"states the ideal-gas law for {which!r}, which vehicle.yaml#spacecraft does not "
+                f"declare; it declares {sorted(declared)}. The law's compartments and the vehicle's "
+                "spacecraft are one list",
             )
 
 
@@ -9370,6 +9462,7 @@ def main(argv: list[str] | None = None) -> int:
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_argument_vocabularies(documents, report)
+    check_spacecraft_vocabulary(documents, report)
     check_presentation_references(
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )

@@ -333,7 +333,7 @@ conformance:
 
   - check: 4
     property: "an unknown verb is refused by name"
-    vehicle: "the closed vocabulary is the registry: 58 verbs, and `FORBIDDEN_VERB` refuses the forms this vehicle must never have"
+    disposition: "the closed vocabulary is the registry: 58 verbs, and `FORBIDDEN_VERB` refuses the forms this vehicle must never have"
     status: demonstrated
     evidence: >-
       the probe submitted `zzz_definitely_not_a_verb probe` and read the result body: "refused:
@@ -343,7 +343,7 @@ conformance:
 
   - check: 5
     property: "a closed gate is refused by name, and its variable is published"
-    vehicle: >-
+    disposition: >-
       every verb declares `gate.variable`, every gate is console-writable, and the set is published
       in `state.json.variables`. The linter refuses a verb with no gate (D-03), which is what makes
       this check satisfiable by construction rather than by care
@@ -367,7 +367,7 @@ conformance:
 
   - check: 6
     property: "a hidden verb produces text and no wider effect"
-    vehicle: "vacuous for this vehicle — there are no hidden verbs, and `mirror.hidden_verbs` says why"
+    disposition: "vacuous for this vehicle — there are no hidden verbs, and `mirror.hidden_verbs` says why"
     status: vacuous
     evidence: >-
       nothing to demonstrate, and worth being explicit that this is a *design* answer rather than a
@@ -377,7 +377,7 @@ conformance:
 
   - check: 7
     property: "state.json is not read back: corrupting it changes nothing"
-    vehicle: >-
+    disposition: >-
       the mirror carries no input. Every gate variable is read from `console.json`, and the only
       vehicle state in `state.json` is a projection of the plant's own — so there is nothing in the
       mirror for a corrupting agent to reach
@@ -391,7 +391,7 @@ conformance:
 
   - check: 9
     property: "a deferred command is re-checked when it is due, not when it was scheduled"
-    vehicle: >-
+    disposition: >-
       every verb declares `allowed_phases`, `gate`, `interlocks` and `maximum_queue_age_s`, and
       every one of those four is re-read at effect time. `mission.yaml#transition_evidence` names
       the evidence each hazardous transition needs and how old it may be, which is the freshness
@@ -400,7 +400,7 @@ conformance:
 
   - check: 12
     property: "telemetry advances on its own, and a frame exists for a period when nothing was submitted"
-    vehicle: >-
+    disposition: >-
       the vehicle is not reactive: every channel has a `rate_hz` and the plant integrates whether or
       not anybody asked. The `ring.cadence_classes` are what make the property visible — a frame
       with nothing new in it still carries its `seq`, its `met_s` and the channels that came due
@@ -413,32 +413,32 @@ conformance:
 
   - check: 1
     property: "a submitted batch is claimed, and the console is left with `variables` preserved and `commands` empty"
-    vehicle: "the variables the executive must preserve are this vehicle's gate variables"
+    disposition: "the variables the executive must preserve are this vehicle's gate variables"
     status: far_side
 
   - check: 2
     property: "every command in a batch produces exactly one result file, refusals included"
-    vehicle: "the refusal *reason* is the vehicle's (V-02, the canonical chain); the file is the executive's"
+    disposition: "the refusal *reason* is the vehicle's (V-02, the canonical chain); the file is the executive's"
     status: far_side
 
   - check: 3
     property: "a non-string element refuses the whole batch and runs none of it"
-    vehicle: "nothing — batch atomicity is the intake's"
+    disposition: "nothing — batch atomicity is the intake's"
     status: far_side
 
   - check: 8
     property: "an allowance may be lowered by the console and never raised"
-    vehicle: "the ceilings that matter are the registries' own: `maximum_queue_age_s`, the profile ceilings, the reserve floors. No verb can raise one"
+    disposition: "the ceilings that matter are the registries' own: `maximum_queue_age_s`, the profile ceilings, the reserve floors. No verb can raise one"
     status: shared
 
   - check: 10
     property: "output/ grows and never overwrites"
-    vehicle: "nothing — the result directory is the executive's"
+    disposition: "nothing — the result directory is the executive's"
     status: far_side
 
   - check: 11
     property: "a result filename carries no separator or traversal sequence"
-    vehicle: "the verb names are the vehicle's and every one is lowercase snake case, checked by the linter (V-06); the filename is built by the executive"
+    disposition: "the verb names are the vehicle's and every one is lowercase snake case, checked by the linter (V-06); the filename is built by the executive"
     status: shared
 
 # --------------------------------------------------------------------------------------

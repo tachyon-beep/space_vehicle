@@ -26,7 +26,10 @@
 # the objectives the fleet is scored against — is chosen.
 
 schema_version: 1
-vehicle: vehicle.yaml
+# The document this one's channel ids are registered against. The key was `vehicle:` until round
+# 11, which is also what sixty-seven declarations of *which spacecraft* a component is on
+# use — one key, two meanings, and no rule that could be written about either.
+vehicle_document: vehicle.yaml
 vocabulary: ../integration/reconciliation/02-canonical-vocabulary.md
 
 met_epoch_utc: "2026-09-12T02:13:45Z"
