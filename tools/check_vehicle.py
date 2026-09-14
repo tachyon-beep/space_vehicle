@@ -949,6 +949,128 @@ def prose_fields(node: Any, trail: str = "") -> list[tuple[str, str]]:
     return found
 
 
+# The boundary values a quintic segment is written in terms of, and the only names its
+# coefficient formulas may use. `gnc_diode.md:724-753` states the segment as
+# `p(s) = a0 + a1 s + ... + a5 s^5` with `s = t/T`, so these seven symbols are the whole
+# vocabulary of the derivation.
+QUINTIC_SYMBOLS = ("p0", "pf", "v0", "vf", "alpha0", "alpha_f", "T")
+
+
+def polynomial(coefficients: dict[str, float], s: float, derivative: int = 0) -> float:
+    """`a0 + a1 s + ... + a5 s^5` and its first two derivatives, at one point.
+
+    Written as a function rather than as three closures inside the loop, which is what ruff's B023
+    objected to and rightly: a closure over a loop variable is correct only as long as nothing
+    defers the call, and a check about arithmetic that silently changes meaning under refactoring
+    is a poor guardian of arithmetic.
+    """
+    total = 0.0
+    for i in range(derivative, 6):
+        factor = 1
+        for j in range(derivative):
+            factor *= i - j
+        total += factor * coefficients[f"a{i}"] * s ** (i - derivative)
+    return total
+
+
+def check_quintic_segment(where: str, coefficients: dict[str, Any], report: Report) -> None:
+    """The declared coefficients must satisfy the boundary conditions they are declared for.
+
+    This is `rederive`'s idiom applied to six *formulas* instead of one number, and it is possible
+    only because the segment states its own boundary conditions — "position, velocity and
+    acceleration at both ends: (p0, v0, alpha0) and (pf, vf, alpha_f)". Given those, the six
+    coefficients are determined, and whether the declared expressions are the determined ones is a
+    question arithmetic can answer without a reader.
+
+    The expressions are evaluated with the same discipline `rederive` uses and for the same reason:
+    **the configuration must not become executable.** Every identifier is checked against the seven
+    symbols above before anything runs, `^` is translated to `**` because that is how the corpus
+    writes a power, and the namespace holds seven floats and no builtins.
+
+    The segment is evaluated at both ends and its first two derivatives compared against the
+    declared boundary values, through the chain rule that `s = t/T` implies: `dp/dt = (1/T) dp/ds`
+    and `d2p/dt2 = (1/T^2) d2p/ds2`. All six hold today, so this check refuses nothing — which is
+    the point of writing it. The value it protects is a *derivation*, and a derivation with no
+    reader is the one kind of declaration that cannot be spot-checked by eye: five of the six
+    coefficients are sums of five terms each, and a sign flipped in one of twenty-five places
+    would leave a trajectory that still starts and ends in the right place.
+    """
+    if set(map(str, coefficients)) != {f"a{i}" for i in range(6)}:
+        report.refuse(
+            f"{where}:trajectory_segment.coefficients",
+            f"declares {sorted(map(str, coefficients))}, and a quintic has a0 through a5",
+        )
+        return
+    for name, expression in coefficients.items():
+        text = str(expression)
+        if "__" in text:
+            report.refuse(f"{where}:trajectory_segment.coefficients.{name}", "contains `__`")
+            return
+        unknown = [
+            token
+            for token in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", text)
+            if token not in QUINTIC_SYMBOLS
+        ]
+        if unknown:
+            report.refuse(
+                f"{where}:trajectory_segment.coefficients.{name}",
+                f"uses {sorted(set(unknown))}, and the segment's vocabulary is "
+                f"{list(QUINTIC_SYMBOLS)}. An expression that reaches outside its own derivation "
+                "cannot be re-derived",
+            )
+            return
+    # Deterministic values, so a refusal is reproducible rather than intermittent.
+    trials = (
+        (0.0, 1000.0, 0.0, 0.0, 0.0, 0.0, 100.0),
+        (-500.0, 250.0, 12.0, -8.0, 0.05, -0.02, 37.5),
+        (1e4, -1e4, -300.0, 300.0, -1.5, 2.25, 900.0),
+        (3.25, 3.25, 0.0, 0.0, 0.0, 0.0, 1.0),
+    )
+    for p0, pf, v0, vf, alpha0, alpha_f, period in trials:
+        namespace = {
+            "p0": p0,
+            "pf": pf,
+            "v0": v0,
+            "vf": vf,
+            "alpha0": alpha0,
+            "alpha_f": alpha_f,
+            "T": period,
+        }
+        a: dict[str, float] = {}
+        try:
+            for name in (f"a{i}" for i in range(6)):
+                expression = str(coefficients[name]).replace("^", "**")
+                if not re.fullmatch(r"[0-9eE+\-*/(). \tA-Za-z_]+", expression):
+                    raise ValueError(f"{name} is not an arithmetic expression")
+                a[name] = float(eval(expression, {"__builtins__": {}}, namespace))  # noqa: S307
+        except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+            report.refuse(
+                f"{where}:trajectory_segment.coefficients",
+                f"cannot be evaluated: {exc}",
+            )
+            return
+
+        wanted = {
+            "position at s=0": (polynomial(a, 0.0), p0),
+            "velocity at s=0": (polynomial(a, 0.0, 1), period * v0),
+            "acceleration at s=0": (polynomial(a, 0.0, 2), period**2 * alpha0),
+            "position at s=1": (polynomial(a, 1.0), pf),
+            "velocity at s=1": (polynomial(a, 1.0, 1), period * vf),
+            "acceleration at s=1": (polynomial(a, 1.0, 2), period**2 * alpha_f),
+        }
+        scale = max(1.0, abs(pf), abs(period * vf), abs(period**2 * alpha_f))
+        for label, (got, want) in wanted.items():
+            if abs(got - want) > 1e-9 * scale:
+                report.refuse(
+                    f"{where}:trajectory_segment.coefficients",
+                    f"do not satisfy their own boundary conditions: {label} is {got:g} and the "
+                    f"boundary says {want:g} (p0={p0}, pf={pf}, T={period}). The segment declares "
+                    "position, velocity and acceleration at both ends, and those six conditions "
+                    "determine all six coefficients",
+                )
+                return
+
+
 def check_pointer_notes(docs: Iterable[tuple[str, Any]], report: Report) -> None:
     """A note may point at another entry, but it has to say what *this* entry is.
 
@@ -3393,6 +3515,114 @@ def check_domain(
     # declaration that is needed and that no source supplies.
     # --------------------------------------------------------------------------------------
     # --------------------------------------------------------------------------------------
+    # The guidance model: three blocks that were read by nothing, and all three are checkable.
+    #
+    # `gnc/estimator`, `gnc/trajectory_segment` and `gnc/flight_rules` were the last of the nine
+    # blocks a deletion test found the vehicle does not notice losing. They are not prose: the
+    # estimator declares a 15-dimensional error state and a unit per block, the trajectory
+    # declares the six quintic coefficients as formulas, and the flight rules name states and
+    # values. Every one of those claims is true today and none of them had a reader.
+    # --------------------------------------------------------------------------------------
+    estimator = components.get("estimator")
+    if estimator is None and name == "gnc":
+        report.refuse(
+            f"{where}:estimator",
+            "is absent. `gnc_diode.md:755-850` specifies the filter this vehicle flies, and the "
+            "`innovation_window` state in `domains/avionics/` has been waiting for it since that "
+            "domain landed — a normalized innovation needs the covariance this block describes",
+        )
+    if isinstance(estimator, dict):
+        ewhere = f"{where}:estimator"
+        vector = [str(v) for v in estimator.get("error_vector") or []]
+        units = estimator.get("covariance_units_per_block") or {}
+        if not vector:
+            report.refuse(ewhere, "declares no error vector, so the filter estimates nothing")
+        elif set(map(str, units)) != set(vector):
+            report.refuse(
+                f"{ewhere}.covariance_units_per_block",
+                f"names {sorted(map(str, units))} and the error vector is {sorted(vector)}. The "
+                "covariance is block-diagonal over the error state, so a block with no unit is a "
+                "variance nobody can size and a unit with no block is a dimension the filter does "
+                "not carry",
+            )
+        # Each block is a 3-vector — a position, a velocity, a small rotation, two biases — so the
+        # state dimension is three times the block count. `gnc_diode.md:815-825` gives the vector
+        # and the reference implementation carries 15; the arithmetic is the check.
+        dimension = estimator.get("dimension")
+        if not isinstance(dimension, int):
+            report.refuse(
+                f"{ewhere}.dimension", f"is {dimension!r}, so the filter's order is not a number"
+            )
+        elif dimension != 3 * len(vector):
+            report.refuse(
+                f"{ewhere}.dimension",
+                f"is {dimension} and the error vector has {len(vector)} blocks of three, which is "
+                f"{3 * len(vector)}. A dimension that disagrees with its own error state is a "
+                "covariance of the wrong size",
+            )
+
+    # The quintic segment's coefficients, re-derived. `rederive`'s idiom — a value that states its
+    # own arithmetic is re-derived on every run — applied to six *formulas* rather than one number,
+    # which is possible because the boundary conditions they claim to satisfy are themselves stated:
+    # position, velocity and acceleration at both ends. The check substitutes random boundary
+    # values, evaluates the declared formulas and requires the six conditions to hold, so a
+    # mistyped coefficient is caught by the algebra rather than by a reader.
+    segment = components.get("trajectory_segment")
+    if isinstance(segment, dict):
+        coefficients = segment.get("coefficients") or {}
+        if coefficients:
+            check_quintic_segment(where, coefficients, report)
+
+    # The flight rules name a state and the values it may not take, so both have to exist. A rule
+    # about a mode the vehicle does not have is a rule about nothing, and this is the third place
+    # in this file where an enum of state values is the thing being resolved against.
+    by_state = {
+        str(s.get("id")): str(s.get("unit") or "")
+        for s in components.get("state") or []
+        if isinstance(s, dict)
+    }
+    profiles_here = docs.get("profiles.yaml") or {}
+    for rule in profiles_here.get("flight_rules") or []:
+        if not isinstance(rule, dict):
+            continue
+        rwhere = f"{where}:flight_rule {rule.get('id')}"
+        text = str(rule.get("rule") or "")
+        if not text:
+            report.refuse(rwhere, "declares no rule")
+            continue
+        # Every state this domain declares is quoted in the rule text, and every value it names
+        # has to be one of that state's. The parse is deliberately narrow: a backticked token is
+        # either a state id or a value, and a value is only checked when the state it belongs to is
+        # named in the same sentence.
+        named = re.findall(r"`([^`]+)`", text)
+        for token in named:
+            if token in by_state:
+                continue
+            owners = [
+                sid
+                for sid in by_state
+                if sid in text and f"`{token}`" in text and token in by_state[sid]
+            ]
+            if owners:
+                continue
+            if token in by_state.values():
+                continue
+            # A value is legitimate when some state in this domain can take it; a state id when
+            # this domain declares it. Anything else is a name the rule cannot be about.
+            takes_it = [
+                sid
+                for sid, unit in by_state.items()
+                if re.search(rf"\benum\[[^\]]*\b{re.escape(token)}\b", unit)
+            ]
+            if takes_it:
+                continue
+            report.refuse(
+                f"{rwhere}",
+                f"names `{token}`, which is neither a state this domain declares nor a value any "
+                f"of them can take. The states are {sorted(by_state)}",
+            )
+
+    # --------------------------------------------------------------------------------------
     # Two blocks that no tool read at all, and both of them name things that exist elsewhere.
     #
     # A deletion test — remove the block, run every tool, diff the output — found nine blocks
@@ -5030,6 +5260,58 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         )
 
 
+def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -> None:
+    """The filter's rates are a claim about the *plant's* clock, and the two must agree.
+
+    `gnc/estimator#sub_stepping` declares three rates and a note that reads like a design decision
+    — "the major cycle is a sub-step inside the 50 Hz tick through the plant's integer-microsecond
+    event queue, **not a second plant rate (C-07)**". The 50 Hz is the vehicle's tick, and the
+    vehicle's tick is declared once, in `mission.yaml#met_epoch_provenance.tick_hz`, where the
+    34,560,000-tick figure is derived from it.
+
+    So this is a cross-file equality that nothing compared, in the direction that matters: change
+    the mission's tick rate and the filter's sub-stepping silently becomes a claim about a clock
+    the vehicle no longer has. The other two rates are checked against the tick as divisibility
+    rather than equality, because a sub-step has to land on tick boundaries — a 100 Hz major cycle
+    inside a 50 Hz tick is two sub-steps, and a 10 Hz guidance update is one every five ticks, and
+    either one failing to divide would mean a sub-step that straddles a tick.
+    """
+    estimator = load(root / "domains" / "gnc" / "components.yaml", Report()) or {}
+    sub = (estimator.get("estimator") or {}).get("sub_stepping")
+    if not isinstance(sub, dict):
+        return
+    tick = (mission or {}).get("met_epoch_provenance", {}).get("tick_hz")
+    if not isinstance(tick, (int, float)) or not tick:
+        return
+    where = "domains/gnc/components.yaml:estimator.sub_stepping"
+    declared = sub.get("plant_tick_hz")
+    if declared != tick:
+        report.refuse(
+            f"{where}.plant_tick_hz",
+            f"is {declared!r} and `mission.yaml#met_epoch_provenance.tick_hz` is {tick:g}. The "
+            "block's own note says the major cycle is a sub-step *inside the plant tick* rather "
+            "than a second plant rate, so a tick rate here that is not the mission's is a claim "
+            "about a clock the vehicle does not have",
+        )
+    for field in ("major_cycle_hz", "guidance_update_hz"):
+        rate = sub.get(field)
+        if not isinstance(rate, (int, float)) or not rate:
+            continue
+        if rate < tick and abs(tick / rate - round(tick / rate)) > 1e-9:
+            report.refuse(
+                f"{where}.{field}",
+                f"is {rate:g} Hz against a {tick:g} Hz tick, which is not a whole number of ticks "
+                "per update. A rate that does not divide the tick is an update that straddles one",
+            )
+        if rate > tick and abs(rate / tick - round(rate / tick)) > 1e-9:
+            report.refuse(
+                f"{where}.{field}",
+                f"is {rate:g} Hz against a {tick:g} Hz tick, which is not a whole number of "
+                "sub-steps. A sub-step that does not divide the tick lands mid-tick, and the "
+                "plant's event queue is integer microseconds for exactly that reason",
+            )
+
+
 def check_thermal_budget(root: Path, report: Report) -> None:
     """The rejection total is a closure, and nothing summed the two things it closes over.
 
@@ -6405,6 +6687,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
+    check_gnc_substepping(root, mission, report)
     check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)

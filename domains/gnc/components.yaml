@@ -418,3 +418,18 @@ state:
         loud during the final approach — so this state's published form is read by a crew member
         before it is read by a fleet, and its precision (0.5 m on altitude, 0.05 m/s on rate) is
         set by what a person can call out rather than by what the instrument can measure
+
+# --------------------------------------------------------------------------------------
+# The obligations `trajectory_segment#validity_check` names and nothing counted. Its note says
+# the segment "evaluates the complete segment against velocity, acceleration, jerk, pointing,
+# keep-out and actuator-authority limits before marking it `PLAN_VALID`" and that three of the
+# six are evaluable and three are not — but it says so inside a block no tool read, so the two
+# limits that are genuinely owed appeared in no count and in no worklist.
+#
+# `gnc` was also the only domain with a components file and no `open_debts` at all, which is
+# how the note stayed invisible: every other domain has somewhere for an obligation to land.
+# --------------------------------------------------------------------------------------
+open_debts:
+  - "**The jerk limit a `PLAN_VALID` segment is evaluated against.** `gnc_diode.md:753` requires the six-term evaluation, and jerk is the term with no source: the corpus gives no structural or crew limit on the third derivative of position, and the two candidates are different documents\u2019 business \u2014 a structural limit would be the docking interface or the solar-panel hinge, and a crew limit would be `crew_diode.md`\u2019s, which is silent. It matters because a quintic is the *lowest*-order polynomial that satisfies position, velocity and acceleration at both ends, so it is exactly the form whose jerk is unconstrained: `a3` through `a5` set it, and a long slow-looking slew can still be a violent one."
+  - "**The plume keep-out volume, and the geometry it is checked against.** The term is owed with the plume geometry rather than on its own: a keep-out is a region other hardware may not be inside while a thruster fires, and this vehicle declares the thruster *directions* (forty-four thrust directions in `rcs_dode.md:685-693`) and no plume extent. The same missing geometry is what stops `E-GNC-RCS` being a scalar \u2014 its sensitivity is a matrix over directions and lever arms that are themselves unpublished \u2014 so the two debts share one unknown, which is the fourth time this session that one missing datum has been counted under several names and the first time the names are in *different* files."
+  - "**The third term is not owed, and saying so is the point of listing it.** Pointing is `domains/comms/`\u2019s 9.4-degree beam and is already `rcs.attitude_error_deg`; actuator authority is `rcs.control_authority_margin`. So `plan_valid` is evaluable in three of its six terms and the other three are named here rather than in a sentence \u2014 which is what the round is for: the block said all of this already, in a note, where nothing could count it."

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,9 +184,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **35** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
 pack-voltage state, and the missing charging efficiency). The **203** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 134. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 137. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 251 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 254 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 251 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 254 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2689,6 +2689,55 @@ concrete instances, and not always the ones the residual is computed from: `prop
 observation is `prop.propellant_remaining_pct`, a percentage, because that is the channel a crew
 reads. The check refused all four correct declarations. A template and its instantiations are two
 vocabularies, and comparing across them needs an instantiation rule the registry does not have yet.
+
+## The guidance model, re-derived
+
+The deletion test left three blocks, all in `gnc`, and all three declare things arithmetic can
+check. They were the last of the nine.
+
+**`trajectory_segment` is the interesting one**, because it is `rederive`'s idiom applied to six
+*formulas* instead of one number. The segment states its own boundary conditions — *"position,
+velocity and acceleration at both ends: `(p0, v0, alpha0)` and `(pf, vf, alpha_f)`"* — and those
+six conditions determine all six quintic coefficients. So whether the declared expressions are the
+determined ones is a question the algebra answers, and `check_quintic_segment` answers it on every
+run: it substitutes boundary values, evaluates the declared formulas under a namespace of the seven
+symbols they are allowed to use, and requires all six conditions to hold through the chain rule
+that `s = t/T` implies.
+
+**A sign flipped in one of twenty-five terms would leave a trajectory that still starts and ends in
+the right place.** That is why a derivation needs a reader more than a number does, and the check
+is written to prove it: negating `a3`'s first term is caught immediately —
+
+```
+domains/gnc/components.yaml:trajectory_segment.coefficients: do not satisfy their own boundary
+conditions: position at s=1 is -19000 and the boundary says 1000
+```
+
+The expressions are evaluated with `rederive`'s discipline and for its reason: every identifier is
+checked against the seven symbols first, `^` is translated to `**` because that is how the corpus
+writes a power, and the namespace holds seven floats and no builtins. **The configuration must not
+become executable.**
+
+**The estimator's three consistency claims.** The error state's five blocks must be the covariance's
+five blocks — a block with no unit is a variance nobody can size — and each block is a 3-vector, so
+the declared `dimension: 15` is the block count times three.
+
+**And the filter's clock is the mission's.** `sub_stepping` declares three rates and a note that
+reads like a design decision: *"the major cycle is a sub-step inside the 50 Hz tick through the
+plant's integer-microsecond event queue, **not a second plant rate (C-07)**"*. The 50 Hz is declared
+once, in `mission.yaml#met_epoch_provenance.tick_hz`, where the 34,560,000-tick figure comes from —
+so a tick rate here that is not the mission's is a claim about a clock the vehicle does not have.
+The other two rates are checked as *divisibility* rather than equality: a 100 Hz major cycle inside
+a 50 Hz tick is two sub-steps, and a 10 Hz guidance update is one every five ticks, and either one
+failing to divide would be a sub-step landing mid-tick.
+
+**And the two limits that were only in a sentence.** `validity_check`'s note says the segment
+evaluates six terms and that three are evaluable — pointing is `rcs.attitude_error_deg`, actuator
+authority is `rcs.control_authority_margin` — while jerk and keep-out are owed. It said so inside a
+block **no tool read**, and `gnc` was the only domain with a components file and *no `open_debts` at
+all*, which is how the two obligations appeared in no count and no worklist. They are counted now,
+and the third paragraph says explicitly which terms are *not* owed, because a list of what is
+missing is more useful when it also says what is not. **251 became 254.**
 
 ## Authoring convention: no flow mappings
 
