@@ -3013,6 +3013,39 @@ uses both, `res` and `prop` for two domains and the directory name for the other
 name an **enum argument of its own verb**, which is exactly the rule the gate check above it applies
 to the gate template.
 
+## Five fields on the verbs that nothing validated
+
+Round 89's shape was *a check written for one field, leaving its sibling unvalidated*. This round
+asked it directly: **mutate every field of a command in turn and see which mutations compose.** Of
+the fourteen fields on the fifty-eight verbs, five were unvalidated — and every one of them is
+*read* by something, which is what makes them worth checking.
+
+| field | what it decides | what a mutation did |
+|---|---|---|
+| `execution_class` | whether a command may be held for a due time | `defered` composed |
+| `maximum_queue_age_s` | when a deferred command expires | `0` and `-5` composed |
+| `allowed_phases` | which phases offer the verb | **absent** composed |
+| `help` | the whole of what a fleet is told | emptied composed |
+| `gate.kind` | — | **read by nothing at all** |
+
+**`execution_class` is the sharpest.** Three tools compare it against the literal `deferred` —
+`plant.py`'s capability snapshot, `console.py`'s `settle`, and `generate_help.py` — so `defered`
+does not fail a build. It makes a deferrable verb take effect **in the tick it is accepted**, which
+is the difference between a command a fleet can schedule and one it cannot.
+
+**`allowed_phases` absent composed**, and that is not the same as one naming every phase. The
+availability check reads the field and a missing list is not a list of all phases — a reader cannot
+tell the difference and the linter can. `maximum_queue_age_s: 0` is a deferral that expires before it
+is accepted; `-5` is worse.
+
+And `gate.kind` is the session's own refrain once more: declared on all fifty-eight verbs as
+`preference`, and **no tool reads it**. D-03's rule is that a gate is an agent-writable preference
+and an interlock is service-owned, and the gate's *variable* carries that — so the kind is where a
+*second* class would be declared, and naming the set is what stops a third being spelled into
+existence one verb at a time.
+
+Six checks, each verified by mutating the field it guards.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

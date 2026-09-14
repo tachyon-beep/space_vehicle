@@ -1183,6 +1183,20 @@ def check_layer_coverage(
             )
 
 
+# The three classes a verb's execution falls into, and the corpus uses all three. `declarative`
+# takes effect in the tick it is accepted, `deferred` may be held for a due time, and `armed` is the
+# two-step the irreversible events use. **Only `deferred` is compared anywhere** — `plant.py`'s
+# capability snapshot, `console.py`'s `settle` and `generate_help.py` each test for that one string —
+# so `defered` on a deferrable verb would silently make it take effect immediately, and the other two
+# values are compared against nothing at all.
+EXECUTION_CLASSES = {"declarative", "deferred", "armed"}
+# What a gate's `kind` may say. It is `preference` on all fifty-eight verbs and **no tool reads the
+# field**: D-03's rule is that a gate is an agent-writable preference and an interlock is
+# service-owned, and the gate's *variable* carries that. The kind is where a second class would be
+# declared — a service-owned gate the console may not write — and naming the set is what stops a
+# third from being spelled into existence one verb at a time.
+GATE_KINDS = {"preference"}
+
 PLANT_DOMAINS = {
     "power",
     "eclss",
@@ -2722,6 +2736,7 @@ def check_domain(
     report: Report,
     thresholds_by_domain: dict[str, set[str]] | None = None,
     components_elsewhere: set[str] | None = None,
+    declared_phases: set[str] | None = None,
 ) -> None:
     """One `domains/<name>/`, checked against the vocabulary, the graph and the plant contract.
 
@@ -3161,6 +3176,60 @@ def check_domain(
             report.refuse(
                 vwhere,
                 "declares no interlocks; write `interlocks: none` deliberately if there are none",
+            )
+        # --------------------------------------------------------------------------------------
+        # Five fields on the fifty-eight verbs that nothing validated, found by mutating each one
+        # in turn and watching which mutations composed. Every one of them is *read* by something,
+        # which is what makes them worth checking: `execution_class` decides whether a command may
+        # be held for a due time, `maximum_queue_age_s` decides when it expires, `allowed_phases`
+        # decides which phases offer the verb, `help` is what a fleet reads, and `gate.kind` is
+        # read by nothing at all.
+        # --------------------------------------------------------------------------------------
+        execution = verb.get("execution_class")
+        if execution not in EXECUTION_CLASSES:
+            report.refuse(
+                f"{vwhere}.execution_class",
+                f"is {execution!r}, not one of {sorted(EXECUTION_CLASSES)}. Three tools compare this "
+                "field against the literal `deferred`, so a misspelling does not fail — it makes a "
+                "deferrable verb take effect in the tick it is accepted",
+            )
+        queue_age = verb.get("maximum_queue_age_s")
+        if not isinstance(queue_age, (int, float)) or queue_age <= 0:
+            report.refuse(
+                f"{vwhere}.maximum_queue_age_s",
+                f"is {queue_age!r}. The console expires a due command past this age, so zero or a "
+                "negative number is a deferral that expires before it is accepted",
+            )
+        declared_phases = declared_phases or set()
+        phases = verb.get("allowed_phases")
+        if not isinstance(phases, list) or not phases:
+            report.refuse(
+                f"{vwhere}.allowed_phases",
+                "is absent or empty. A verb offered in no phase is a verb no fleet can use, and an "
+                "*absent* list is not the same as one that names every phase — the check that "
+                "reads it can tell the difference and a reader cannot",
+            )
+        else:
+            unknown = sorted({str(ph) for ph in phases} - declared_phases)
+            if unknown:
+                report.refuse(
+                    f"{vwhere}.allowed_phases",
+                    f"names {unknown}, which `mission.yaml` does not declare. Its phases are "
+                    f"{sorted(declared_phases)}",
+                )
+        gate = verb.get("gate")
+        if isinstance(gate, dict) and gate.get("kind") not in GATE_KINDS:
+            report.refuse(
+                f"{vwhere}.gate.kind",
+                f"is {gate.get('kind')!r}, not one of {sorted(GATE_KINDS)}. **No tool reads this "
+                "field**, so a value outside the set is a class of gate that exists only in the "
+                "sentence that named it — D-03's agent-writable preference is the one there is",
+            )
+        if not str(verb.get("help") or "").strip():
+            report.refuse(
+                f"{vwhere}.help",
+                "is empty. `HELP.md` is generated from this field and is the whole of what a fleet "
+                "is told about the verb before it calls it",
             )
         # The argument schema is what `capability.snapshot` publishes so a machine can build a
         # call (vocabulary §1, `communcations_diode.md:436-452`). Four domains wrote the schema
@@ -4021,6 +4090,7 @@ def check_domains(
     coupling: dict[str, Any] | None,
     channels_doc: dict[str, Any] | None,
     report: Report,
+    declared_phases: set[str] | None = None,
 ) -> None:
     """Every `domains/<name>/` composes, and the linter names the ones still owed."""
     node_ids = set((coupling or {}).get("nodes") or {})
@@ -4067,6 +4137,7 @@ def check_domains(
                 report,
                 thresholds_by_domain,
                 components_elsewhere,
+                declared_phases,
             )
     check_outbound_extremes(root, report, policies)
     # ----------------------------------------------------------------------------------
@@ -7194,7 +7265,18 @@ def main(argv: list[str] | None = None) -> int:
     # The vehicle-wide half of a claim each domain already makes for itself. It needs every
     # domain's policy at once, which is why it is here rather than inside `check_domains`.
     check_layer_coverage(channels, all_faults, report)
-    check_domains(root, registry, coupling, channels, report)
+    check_domains(
+        root,
+        registry,
+        coupling,
+        channels,
+        report,
+        declared_phases={
+            str(phase.get("id"))
+            for phase in (mission or {}).get("phases") or []
+            if isinstance(phase, dict) and phase.get("id")
+        },
+    )
     # `vehicle.yaml` is the file every cross-file check joins against, so when it cannot be
     # loaded the answer is not to run them with a hole in the middle of the argument list — it is
     # to say once that the joins are unavailable and carry on with the checks that do not need it.
