@@ -6108,8 +6108,17 @@ def check_power_inventory(root: Path, report: Report) -> None:
     with nothing keeping it closed.
 
     Four relationships, and the fourth is the one with teeth: `power.battery_soc_pct` is a
-    percentage whose denominator was declared nowhere, and `battery_charge_j` is a stock with no
-    capacity, so what the vehicle carries in joules existed only as a product nobody computed.
+    percentage whose denominator was declared nowhere, and `battery_charge_j` is a stock that
+    declared no capacity — so what the vehicle carries in joules existed only as a product nobody
+    computed. It is declared now, and this check is what holds it: `load_budget` states the energy
+    in watt-hours and the cells' own `ah x v_nominal` has to agree, which is also what the stock's
+    `initial` is derived from.
+
+    Five relationships. The fifth is the one the flagship chain rests on and nothing read at all:
+    `inrush_w` is declared on every one of the 25 loads and no two numbers were ever compared, so
+    the field whose own comment says it "is what makes a marginal bus drop a pump" was free to be
+    smaller than the steady draw it settles to. Both relationships now require the figures they
+    relate to exist, because a sum that reads a missing `demand_w` as zero closes on a hole.
     """
     power = load(root / "domains" / "power" / "components.yaml", report) or {}
     loads = power.get("loads") or []
@@ -6122,11 +6131,21 @@ def check_power_inventory(root: Path, report: Report) -> None:
         )
         return
 
-    # 1. The demand closes, per vehicle, against the total the file states.
+    # 1. The demand closes, per vehicle, against the total the file states. The sum reads a load
+    #    that declares no `demand_w` as zero, which is how a closure holds on a hole, so the figure
+    #    is required before it is summed.
     by_vehicle: dict[str, int] = {}
     for row in loads:
+        demand = row.get("demand_w")
+        if not isinstance(demand, (int, float)) or isinstance(demand, bool):
+            report.refuse(
+                f"domains/power/components.yaml:load {row.get('id')}",
+                f"declares demand_w={demand!r}. The per-vehicle total below adds a load like this as "
+                "nothing, so the load budget would close on arithmetic over a hole",
+            )
+            continue
         by_vehicle[str(row.get("vehicle"))] = by_vehicle.get(str(row.get("vehicle")), 0) + int(
-            row.get("demand_w") or 0
+            demand
         )
     for vehicle, total in sorted(by_vehicle.items()):
         declared = budget.get(f"{vehicle}_total_demand_w")
@@ -6238,6 +6257,39 @@ def check_power_inventory(root: Path, report: Report) -> None:
                 "domains/power/components.yaml:load_budget",
                 f"declares the ascent stage at {asc} Wh and the ascent cells carry "
                 f"{energy.get('battery_lm_ascent')} Wh",
+            )
+
+    # 5. A load's starting transient is not below the steady draw it settles to, and every load
+    #    declares one. This is the last quantity in the domain that nothing read: 25 declarations of
+    #    `inrush_w` against 25 of `demand_w`, and no comparison between them anywhere — the field
+    #    the file's own comment introduces as the reason "a marginal bus drop[s] a pump — the
+    #    flagship chain of the experiment", free to say a load draws less while starting than while
+    #    running. The bound is the fields' own definition and nothing more; it is *not* the bus peak
+    #    at switching, which is the check that would actually use the number and which needs the
+    #    tie's routing, so that stays a debt.
+    for row in loads:
+        demand, transient = row.get("demand_w"), row.get("inrush_w")
+        if not isinstance(transient, (int, float)) or isinstance(transient, bool):
+            report.refuse(
+                f"domains/power/components.yaml:load {row.get('id')}",
+                f"declares inrush_w={transient!r}. A load with no starting transient is one the "
+                "flagship chain cannot happen to, and the demand it settles to is not a substitute: "
+                "the two are equal on 17 of these 25 loads, and the eight that differ are the ones "
+                "with a motor in them",
+            )
+            continue
+        if not isinstance(demand, (int, float)) or isinstance(demand, bool):
+            # Already refused above, as relationship 1's precondition. Comparing against a demand
+            # that is not there would invent the figure the first refusal says is missing.
+            continue
+        if float(transient) < float(demand):
+            report.refuse(
+                f"domains/power/components.yaml:load {row.get('id')}",
+                f"declares a steady draw of {demand} W and a starting transient of {transient} W. "
+                "By the file's own two definitions — `demand_w` the steady draw, `inrush_w` the "
+                "starting transient — the transient is the higher of the two, so this load draws "
+                "less while starting than while running, and its start is the one event on this bus "
+                "that cannot be detected",
             )
 
 
@@ -6425,10 +6477,17 @@ def load_documents(
     is synthesised here so `derives_from` can name it like any other source, which means the number
     is re-derived on every run instead of being a figure somebody typed once.
     """
+    # **Copies, not the caller's objects.** The statistics below are merged into this map, and
+    # merging them into `vehicle` itself mutated the document the caller still holds: building the
+    # map *before* the vehicle checks — which is what resolving `initial_source` against every
+    # document requires — made `check_vehicle_sections` refuse a top-level
+    # `max_explainable_acceleration_g` that no file declares, because `load_documents` had put it
+    # there. A function that edits its arguments is a function whose *call order* silently matters,
+    # and nothing said so until the order changed.
     documents = {
-        "vehicle.yaml": vehicle or {},
-        "coupling.yaml": coupling or {},
-        "mission.yaml": mission or {},
+        "vehicle.yaml": dict(vehicle or {}),
+        "coupling.yaml": dict(coupling or {}),
+        "mission.yaml": dict(mission or {}),
     }
     domains = root / "domains"
     if domains.is_dir():
@@ -6446,7 +6505,11 @@ def load_documents(
 
 
 def check_initial_sources(
-    root: Path, vehicle: dict[str, Any], coupling: dict[str, Any], report: Report
+    root: Path,
+    vehicle: dict[str, Any],
+    coupling: dict[str, Any],
+    report: Report,
+    documents: dict[str, Any] | None = None,
 ) -> None:
     """A stock's `initial_source` must resolve, and the two documents must agree.
 
@@ -6464,7 +6527,13 @@ def check_initial_sources(
     of those is a link that has stopped linking, which is how the absorber's man-hour ratings and
     the LM's leak both survived review in the first place.
     """
-    documents = {
+    # The whole corpus, not the two files this check was written against. It resolved
+    # `initial_source` against `vehicle.yaml` and `coupling.yaml` alone, which was every source a
+    # stock had until the battery's charge turned out to be declared in the *power* domain's load
+    # budget — the figure `check_power_inventory` already holds against the cells' `ah x v_nominal`.
+    # `derives_from` and an edge's `derivation` have resolved against every document since they
+    # were written; this is the third of the three path idioms and it was the narrowest.
+    documents = documents or {
         "vehicle.yaml": vehicle or {},
         "coupling.yaml": coupling or {},
     }
@@ -6510,12 +6579,26 @@ def check_initial_sources(
                     f"resolves to {node!r}, which is not a number to compare an initial against",
                 )
                 continue
-            if abs(float(node) - float(state["initial"])) > 1e-9:
+            # The factor, which a threshold has had since `derives_from` was written and an initial
+            # never did. It is not decoration: the source of a charge is published in Wh and the
+            # state integrates joules, so the conversion is 3,600 — and without it the honest
+            # answer for such a state was to leave the initial owed and say so.
+            factor = state.get("initial_factor", 1)
+            if not isinstance(factor, (int, float)) or isinstance(factor, bool) or factor == 0:
+                report.refuse(
+                    f"{swhere}.initial_factor",
+                    f"is {factor!r}, which is not a number to convert a source with",
+                )
+                continue
+            expected = float(node) * float(factor)
+            if abs(expected - float(state["initial"])) > 1e-9:
                 report.refuse(
                     f"{swhere}",
                     f"declares `initial: {state['initial']}` and `initial_source: {text}` resolves "
-                    f"to {node}. One of the two is the load and the other is a copy of it, and "
-                    "nothing but this check keeps them the same number",
+                    f"to {node}"
+                    + (f", times `initial_factor: {factor}`" if factor != 1 else "")
+                    + ". One of the two is the load and the other is a copy of it, and nothing but "
+                    "this check keeps them the same number",
                 )
 
     # And the other end of the same chain, which was missing its last link.
@@ -9439,6 +9522,9 @@ def main(argv: list[str] | None = None) -> int:
     # the report that named the parse error. A linter that crashes on the input it exists to
     # diagnose is worse than one that misses a fault, because the operator sees a traceback and
     # reasonably concludes the tool is broken rather than the definition.
+    # Built here rather than below, because `check_initial_sources` resolves a stock's initial
+    # against any document now and this is the one place they are all loaded.
+    documents = load_documents(root, vehicle, coupling, mission, channels)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)
@@ -9446,7 +9532,7 @@ def main(argv: list[str] | None = None) -> int:
         check_comms_bindings(root, vehicle, report)
         check_antenna_patterns(root, vehicle, report)
         check_one_way_configurations(root, vehicle, report)
-        check_initial_sources(root, vehicle, coupling, report)
+        check_initial_sources(root, vehicle, coupling, report, documents)
     else:
         report.refuse(
             "vehicle.yaml",
@@ -9458,7 +9544,6 @@ def main(argv: list[str] | None = None) -> int:
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
     check_mission_model(mission or {}, report)
-    documents = load_documents(root, vehicle, coupling, mission, channels)
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_argument_vocabularies(documents, report)

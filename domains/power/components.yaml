@@ -124,16 +124,24 @@ state:
     method: stock
     node: battery_energy
     unit: J
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the placement. `vehicle.yaml#electrical.batteries` declares three groups by `ah` and `v`, and `battery_energy` is one node; which group presents to it is `domain_group`'s question and it is answered for the power inventory rather than for this state
+    # The charge was owed for as long as this state has existed, and the figure was published,
+    # declared and *already checked* the whole time. `load_budget.csm_battery_energy_wh` is 3,360
+    # Wh — three 40 Ah entry batteries at 28 V, held by `check_power_inventory` against the cells'
+    # own `ah x v_nominal` — and this state integrates joules, so the initial is that figure times
+    # 3,600. The path names the group, which is what the old note said was missing: "which group
+    # presents to it is `domain_group`'s question", and the answer is the CSM's, because the one
+    # node's edge runs to `bus_a`.
+    initial: 12096000
+    initial_source: "domains/power/components.yaml:load_budget.csm_battery_energy_wh"
+    initial_factor: 3600
     quantum: 1.0
     min_flow_per_s: UNCONFIGURED
     note: >-
       The one conserved quantity in the domain, and the reason the LM is a countdown. The
       quantum is 1 J, which is far below any real battery flow, so the dead zone is not a
-      risk here — `min_flow_per_s` is declared unset rather than guessed because the check
-      that uses it is the one that matters for the consumables stocks.
+      risk here — `min_flow_per_s` is declared unset rather than guessed, and what it waits
+      for is the smallest load the battery feeds: the field is "the smallest flow this stock
+      must represent" and every load's `rated_w` is in the same unit.
     provenance:
       basis: historical
       source: "the capacities are published (NR, PSR: 40 Ah entry batteries, 400 Ah LM descent, 296 Ah LM ascent); that the charge is a conserved stock rather than a voltage-dependent model is chosen, because a first-order relaxation model would need parameters no source gives"

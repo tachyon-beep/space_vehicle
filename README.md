@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **199** the plant
+pack-voltage state, and the missing charging efficiency). The **198** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -5060,6 +5060,125 @@ Verified by breaking eight copies: a component on a spacecraft that does not exi
 keyed by one, the list emptied and the list malformed, the document reference renamed back to the
 overloaded key, the conformance column renamed back, the two renamed senses asserted gone from the
 corpus, and the unbroken corpus composing at 253.
+
+## The charge was published, already checked, and owed anyway
+
+Ten stocks declared `initial: UNCONFIGURED`, each with a note saying what would close it. The notes
+are honest and nine of them are still right: six cabin gases ("no source gives the fractions"), two
+tank splits that are modelling decisions rather than figures — `prop_main_kg` is one node for three
+engines' declared loads (SPS 18,508 kg, LM descent 8,248, LM ascent 2,376), `prop_rcs_kg` one node
+for three RCS loads — and a helium charge nothing publishes. The tenth was
+`power.battery_charge_j`, and its energy had been in the corpus the whole time:
+
+| declaration | says |
+|---|---|
+| `domains/power/components.yaml#load_budget.csm_battery_energy_wh` | 3,360 |
+| the three `battery_csm_*` cells beside it | `ah: 40` at `v_nominal: 28`, three of them |
+| `check_power_inventory` | holds those two against each other, and had since it was written |
+
+3 x 40 x 28 = 3,360 Wh, and the check that holds the product already existed. The state integrates
+**joules**. So the corpus had the figure, the reconciliation and a one-line conversion, and paid for
+a debt paragraph instead — which is the cost of a missing idiom rather than a missing number.
+**253 became 252**, and the plant's unset scalars went 199 to 198.
+
+`initial_source` names the other declaration, and it needed the one thing a threshold has had since
+`derives_from` was written and an initial never did: a **factor**.
+
+```yaml
+  - id: battery_charge_j
+    method: stock
+    node: battery_energy
+    unit: J
+    initial: 12096000
+    initial_source: "domains/power/components.yaml:load_budget.csm_battery_energy_wh"
+    initial_factor: 3600
+```
+
+The check compares `initial` against `source x factor`, refuses a factor that is not a number or is
+zero and a source that resolves to a non-number, and **names the factor in the refusal** when there
+is one — so a reader can tell whether the wrong figure is the source or the conversion. The source
+is the *CSM's* figure and not the LM's for a reason the old note had already asked for: which group
+presents to the one node is a question about the node's edge, and the edge runs to `bus_a`.
+
+### The source named a file the check had never loaded
+
+`check_initial_sources` resolved its paths against `vehicle.yaml` and `coupling.yaml`. That was
+every source a stock had until this one, and it was the narrowest of the three path idioms for no
+reason but the order they were written in: `derives_from` and an edge's `derivation` have always
+resolved against every document. The refusal it would have given is the tell — *"names
+'domains/power/components.yaml', and the documents this check can resolve are ['coupling.yaml',
+'vehicle.yaml']"* — a link called broken because the reader was narrow. It takes the same
+`documents` map as the other two now.
+
+### The debt entry had been false for hours, and nothing could have said so
+
+The entry this round answers had said since the list was written: *"`demand_w`, `inrush_w`, `bus`,
+`rated_w`, `ah` and `v_nominal` are read by nothing — 17 components and 25 loads ... `battery_charge_j`
+declares no capacity at all: what the vehicle actually carries in joules exists only as a product
+nobody computes."*
+
+Four of those six fields are read now, and the last clause was about to be answered by this round.
+By the time it finished, every clause of the entry was false and the entry was still in the list,
+being counted.
+
+**Nothing reads a debt.** `open_debts` is counted, printed, and grouped by the scalar each one
+wants; not one word of a claim inside it is held against anything. So a debt can be answered in the
+tool and left standing in the corpus, and the count — the one number a reader does see — cannot tell
+the difference. This is the folder's thesis arriving at the folder's own accounting: *a declaration
+no tool reads has already drifted*, and the debts are declarations. It is also why the entry is
+rewritten here rather than deleted: **252 then stayed 252**, because a residue that is real stays a
+debt even when the sentence around it was wrong.
+
+### The residue was `inrush_w`, and it was closable
+
+What the entry said was still true was that `inrush_w` was read by nothing. Twenty-five loads declare
+it beside their steady draw, the file's own comment introduces it as the reason "a starting transient
+is what makes a marginal bus drop a pump — the flagship chain of the experiment", and **no two
+numbers had ever been compared**: the field the whole experiment turns on was free to say a load
+draws less while starting than while running. Eight of the twenty-five declare a real transient
+(1.4-1.7x, the fans, scrubbers and pumps); seventeen declare it equal to the demand, which is what a
+load with no motor in it should say.
+
+So the fifth relationship went in, and it is the fields' own definition and nothing more: a starting
+transient is not below the steady draw it settles to. Relationship 1 also gained its precondition,
+because it summed `row.get("demand_w") or 0` — a closure that holds on a hole.
+
+What is left is the check that would *use* the figure: the **bus peak at switching**, which is the
+number the flagship chain turns on — a 72 W amplifier switching on against a 250 W coolant pump whose
+own start is 420 W, where the sag is what drops the pump and the pump is never the root fault. That
+needs the per-bus routing the source-capacity relationship declined to assume (which bus a source
+ties to is a routing decision the tie makes and no file declares), so on this corpus the transients
+are bounded and unspent rather than missing. The debt says that now instead.
+
+### The test that pins this was narrow in the same two ways
+
+`test_every_stock_declares_where_it_starts` holds the initial conditions, and it carried its own copy
+of the defects the check had: it resolved `initial_source` against the same two documents, with its
+own hand-written walk, and it pinned the inventory at nine seeded stocks. It reads the linter's
+`resolve_dotted` now — one rule, not a second copy of it — loads every document the corpus has,
+applies the factor, and pins ten.
+
+And the refusals had never been fired at all. `check_initial_sources` was written with the initial
+conditions and no test ever broke one, so every surface of it was unexercised — which for this idiom
+matters more than for most, because the whole point of `initial_source` is that it is not a
+provenance note: it is the other declaration, resolvable and comparable, and a check whose refusals
+never fire is a check whose silence means nothing. The new test breaks it nine ways: the two
+declarations drifted, the factor dropped, wrong, textual and zero, a document that is not loaded, a
+key the document does not have, a value that is not a number, and a path that names no document at
+all.
+
+**173 became 174 vehicle tests**, and the pins moved together: the debt count (252, in the status
+paragraph and the state line this section restates), the plant's unset scalars (198), the
+reconciliation's test count, and the plant's own copy of the debt figure. Plant: 108 of 134 states
+fully configured, 26 with a debt, 57 of 77 edges carrying a sensitivity. `--strict` exits 2.
+
+Verified by breaking thirteen copies in `.scratch/r12/`: the charge drifting from the energy its
+source publishes (the source of a charge is published in Wh and the state integrates joules), the
+factor dropped and so read as joules, the source naming the other spacecraft's battery, the source
+ceasing to resolve, the factor zero and non-numeric, an initial that still resolves the way it always
+did, a load starting on less than it runs on, a load declaring no transient and a load declaring no
+steady draw, the battery no longer reported as owed, the plant counting one fewer unset scalar, and
+the unbroken corpus silent.
 
 ## The invariants, and which of them are enforced
 
