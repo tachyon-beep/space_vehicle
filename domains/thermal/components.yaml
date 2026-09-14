@@ -344,6 +344,13 @@ components:
   - id: radiator_csm
     kind: flow
     class: radiator
+    # The link to `vehicle.yaml#thermal.radiators`, declared rather than inferred because the two
+    # files name one panel from opposite ends — `csm_radiator` against `radiator_csm` — so a rule
+    # guessed from the string would have to know that the vehicle's name leads with the vehicle
+    # and the domain's trails it. What it buys is `check_thermal_bindings`' second half: these two
+    # panels are what the linter holds the vehicle-level entry against, rather than only the
+    # `radiator_model` block the entry's *arithmetic* is derived into.
+    vehicle_keys: [csm_radiator]
     panels: 2
     area_m2: 9.1
     provenance:
@@ -352,6 +359,7 @@ components:
   - id: evaporator_csm
     kind: flow
     class: evaporator
+    vehicle_keys: [csm_evaporator]
     rejection_w: 2345
     fluid: water
     provenance:
@@ -360,6 +368,7 @@ components:
   - id: sublimator_lm
     kind: flow
     class: evaporator
+    vehicle_keys: [lm_sublimator]
     rejection_w: UNCONFIGURED
     provenance:
       basis: historical

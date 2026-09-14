@@ -6205,6 +6205,30 @@ def check_initial_sources(
                 )
 
 
+# The keys of a thermal component that are never a quantity the two files both state: identity, the
+# prose keys, and the link itself. What is deliberately *not* here is the point — `fluid`,
+# `flow_l_min`, `vehicle`, `coolant_mass_kg`, `panels`, `area_m2` and `rejection_w` are the figures
+# both halves of this join exist to hold, and a field added to both files later is compared without
+# anybody remembering to come back here.
+THERMAL_STRUCTURAL = {
+    "id",
+    "kind",
+    "class",
+    "vehicle_keys",
+    "provenance",
+    "note",
+    "notes",
+    "why",
+    "reason",
+    "source",
+    "ref",
+    "relation",
+    "basis",
+    "unit",
+    "inputs",
+}
+
+
 def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The thermal machine is declared twice, and the two declarations disagreed.
 
@@ -6255,12 +6279,16 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         )
     for loop_id in sorted(set(declared) & set(built)):
         one, two = declared[loop_id], built[loop_id]
-        # `coolant_mass_kg` joins the compared list, and it was the *only* field the two files
-        # share that was not in it: `loop_lm` declares it in both, they agree at 11.3 kg, and
-        # nothing read either copy. The list is what makes two views of one machine impossible to
-        # drift, so a shared field outside it is the one that gets away.
-        for field in ("fluid", "flow_l_min", "vehicle", "coolant_mass_kg"):
-            if field in one and field in two and one[field] != two[field]:
+        # `coolant_mass_kg` was the *only* field the two files share that the list omitted:
+        # `loop_lm` declares it in both, they agree at 11.3 kg, and nothing read either copy. A
+        # hand-written list of what to compare is correct on the day it is written and silently
+        # wrong the day somebody adds a field to both files, which is the defect this whole family
+        # of joins has now produced four times — so the list is gone, here as it is in the
+        # propulsion, comms and rejection joins. The comparison is the intersection of the keys the
+        # two views share, and `THERMAL_STRUCTURAL` is the declared set of keys that are never a
+        # quantity either states.
+        for field in sorted((set(one) & set(two)) - THERMAL_STRUCTURAL):
+            if one[field] != two[field]:
                 report.refuse(
                     f"{where}.{loop_id}",
                     f"gives {field} as {one[field]!r} and the thermal domain gives {two[field]!r}. "
@@ -6321,6 +6349,62 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
                 f"gives {area} m2 of panel area and the thermal domain gives {geometric} m2 "
                 "geometric",
             )
+
+    # And the same three articles as the *domain names them*. The block above holds the vehicle's
+    # entry against `radiator_model`, which is where its arithmetic is derived into; it does not
+    # hold it against `radiator_csm`, `evaporator_csm` and `sublimator_lm` — the components a fault
+    # happens to. TCS-03 names `radiator_csm` and argues its solar load against the model's 2,588 W
+    # capacity while the component's own `panels` and `area_m2` were read by nothing; TCS-04 names
+    # `evaporator_csm`, whose `rejection_w` of 2,345 appears in `vehicle.yaml` as well and was
+    # compared in neither place. So the same blind spot the four joins before this one closed is
+    # here too, one file over: the vehicle-level entry and the component that stands for it.
+    #
+    # The link is declared because the files name one panel from opposite ends. The comparison is
+    # the intersection of the keys the two share, minus the structural set — the rule the
+    # propulsion and comms joins use, and the reason `panels` and `area_m2` were compared the
+    # moment the link existed rather than when somebody remembered to add them.
+    built_by_key = {
+        str(c.get("id")): c
+        for c in domain.get("components") or []
+        if isinstance(c, dict) and c.get("class") in ("radiator", "evaporator")
+    }
+    claimed: set[str] = set()
+    for cid, component in sorted(built_by_key.items()):
+        cwhere = f"domains/thermal/components.yaml:{cid}"
+        keys = component.get("vehicle_keys")
+        if not isinstance(keys, list) or not keys:
+            report.refuse(
+                cwhere,
+                f"is a {component.get('class')!r} and declares no `vehicle_keys`. It is the article "
+                "a fault happens to, so a component claiming no vehicle entry is a copy nothing "
+                "holds against the entry the vehicle's heat balance is written from",
+            )
+            continue
+        for key in (str(k) for k in keys):
+            entry = radiators.get(key)
+            if entry is None:
+                report.refuse(
+                    cwhere,
+                    f"names vehicle radiator {key!r}, which vehicle.yaml#thermal.radiators does not "
+                    f"declare; it declares {sorted(radiators)}",
+                )
+                continue
+            claimed.add(key)
+            for field in sorted((set(entry) & set(component)) - THERMAL_STRUCTURAL):
+                if entry[field] != component[field]:
+                    report.refuse(
+                        cwhere,
+                        f"declares {field} {component[field]!r} and vehicle.yaml#thermal.radiators."
+                        f"{key} declares {entry[field]!r}. Two views of one article, and the one a "
+                        "fault names is this side: a radiator re-rated here and not in the vehicle "
+                        "file is heat the loop's own fault injection moves and the balance does not",
+                    )
+    for key in sorted(set(radiators) - claimed):
+        report.debt(
+            f"vehicle.yaml:thermal.radiators.{key}",
+            "is declared by vehicle.yaml and claimed by no radiator or evaporator component of the "
+            "thermal domain, so nothing holds its figures against the object a fault would name",
+        )
 
     # The zones. Both files list the same six, and the domain's `vehicle` is what binds a zone to
     # the compartment whose atmosphere it is; a zone named in one file and not the other is a

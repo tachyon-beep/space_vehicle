@@ -4234,6 +4234,83 @@ debt the antenna above. **163 vehicle tests, 252 repo tests, `--strict` 2, ruff 
 134 states over 57 nodes, 77 edges, 15 ready / 26 value / 11 edge / 82 rule, 199 `UNCONFIGURED`
 scalars.
 
+## The thermal join read the model, and the components a fault names were unread
+
+`check_thermal_bindings` was the first of these joins and the one that found the family. Its first
+half holds three coolant *loops* against each other by `id`. Its second half held the vehicle's
+`csm_radiator` against the domain's `radiator_model.csm` block — the panel product against the
+model's total rejection, the panel area against the model's geometric area — which is a real and
+useful closure, because the model is where the entry's arithmetic is *derived into*.
+
+It is also the wrong copy to stop at. `radiator_model` is a block; the things a fault happens to
+are components, and the thermal domain has three of them for this hardware:
+
+| domain component | vehicle entry | shared, and read by nothing |
+|---|---|---|
+| `radiator_csm` | `csm_radiator` | `panels` 2, `area_m2` 9.1 |
+| `evaporator_csm` | `csm_evaporator` | `rejection_w` 2345 |
+| `sublimator_lm` | `lm_sublimator` | `rejection_w` UNCONFIGURED |
+
+**Every one of those figures was declared twice and compared in neither place.** `TCS-03-radiator-
+isolation` names `radiator_csm` and its provenance argues the chain from "a sunlit radiator absorbs
+2,477 W against a 2,588 W rejection capacity" — the *model's* figure — while the component's own
+`panels` and `area_m2` went unread, and `TCS-04-evaporator-clog` names `evaporator_csm`, whose
+2,345 W appears in `vehicle.yaml` as well and was compared by no rule in either file. So the
+failure direction is the one this folder keeps finding: the entry is held against what it was
+derived *into*, and not against the article a fault points at. A panel count changed on the
+component side moves the fault's subject and leaves the heat balance exactly where it was.
+
+The link is `vehicle_keys` on the three components, declared because the two files name one panel
+from opposite ends — `csm_radiator` against `radiator_csm` — and the comparison is the intersection
+of the keys the two share, minus a declared structural set: the rule the propulsion and comms joins
+now use. `panels` and `area_m2` were compared the moment the link existed rather than when somebody
+remembered to add them.
+
+**And the list that started this family is gone with it.** The loop comparison above opened with
+
+```python
+        for field in ("fluid", "flow_l_min", "vehicle", "coolant_mass_kg"):
+```
+
+— and those four names are *exactly* the four fields the vehicle's loops and the domain's share
+today, which is what makes it the honest example rather than an embarrassing one: a hand-written
+list of what to compare is correct on the day it is written, and it is the day somebody adds a
+fifth field to both files that nothing tells you to come back. The loop half now uses the same
+intersection rule, and the file has no list of field names left to fall out of date.
+
+Two smaller things this round paid for. The reverse direction is a debt rather than a refusal, as
+it is in the comms join, and **all three entries are claimed today, so the count did not move:
+253**. And the LM sublimator's owed rejection is now declared in *both* files and held equal, which
+is a small gain in the direction this folder cares about: the debt can no longer be answered in one
+place and left standing in the other, because filling in `sublimator_lm`'s number while
+`vehicle.yaml` still says `UNCONFIGURED` is refused by name.
+
+**And the join caught a fixture that had been right for forty rounds.**
+`test_an_unset_domain_value_is_a_debt_named_by_its_path` proves that "supplying the value must
+retire the debt" by supplying the sublimator's owed rejection — in `domains/thermal/components.yaml`
+and nowhere else, which was correct until the two copies were joined. The suite failed on the
+assertion rather than on the physics, and the reason is the point: the debt *was* retired on the
+domain side, and what replaced it was the refusal for moving one copy and not the other. The
+fixture now moves both files, which is what its own sentence was always claiming. The assertion was
+not loosened, and the second file is not a concession — a debt answered in one place and left
+standing in the other is a debt the next reader finds still open.
+
+**One declaration in that block is still read by nothing, and it is not a duplicate.**
+`evaporator_csm` carries `fluid: water`; `vehicle.yaml`'s `csm_evaporator` carries no fluid at all,
+so there is no second copy to hold it against, and the join neither compares it nor pretends to.
+The vehicle's own provenance for that entry says the evaporator "consumes water, which is why
+`water_cooling` is a scored resource" — the fact is in a sentence there and in a field here, which
+is the shape this folder has recorded four times. Naming it is the honest end of this round's
+scope; closing it is either a `fluid` on the vehicle entry or a decision that a radiator list
+should not carry one.
+
+Verified by breaking ten copies: the domain's `panels` against the vehicle's 2, its `area_m2`
+against 9.1, its `rejection_w` against 2,345, the LM's owed figure filled in on one side only, the
+*vehicle's* area moved under the domain's copy, a component stripped of its link, a link naming a
+radiator that does not exist, a vehicle radiator claimed by nothing, and — the case the converted
+list exists for — a loop's `flow_l_min` moved in one file. Every one refused by name; the unbroken
+corpus silent and still at 253 debts.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
