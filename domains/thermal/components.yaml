@@ -470,6 +470,11 @@ zones:
   - id: csm_cabin
     vehicle: csm
     volume_m3: 5.9
+    # The cabin's nominal state, mirrored so that the zone join compares it. `vehicle.yaml` is the
+    # authority for both — the pressure is in psia because that is the unit NR publishes it in, and
+    # the two edges that differentiate the ideal-gas law convert it.
+    nominal_pressure_psia: 5
+    nominal_temperature_k: 295
     regulated: true
     source: heater_bank_csm
     provenance:
@@ -492,6 +497,8 @@ zones:
   - id: lm_cabin
     vehicle: lm
     volume_m3: 6.7
+    nominal_pressure_psia: 5
+    nominal_temperature_k: 295
     regulated: true
     source: heater_bank_lm
     provenance:

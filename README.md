@@ -4688,6 +4688,70 @@ density moved so the nominal no longer converts into the band, the density drift
 so the *join* is what fires, the loop's flow moved under the pump edge, the LM loop asserted to owe
 no density, and the unbroken corpus silent at 252.
 
+## A field on six zone entries that nothing read, and one instance already drifted
+
+The last two edges from round 4's debt are bound, and finding the fields they needed turned up a
+declaration nobody was reading.
+
+`E-ZONE-ATM` and `E-ZONE-ATM-LM` computed `5 * 6894.757 / 295` — the cabin's nominal pressure and
+temperature — and neither number was a field anywhere. 5 psia is in the cabin zone's own `source`
+string ("CSM cabin 210 cu ft habitable = 5.9 m3 at 5 psia") and in `atmosphere_model`'s `check`
+prose; 295 K is in that check and in two states' relations. The zones declare both now, in **psia**
+because that is the unit NR publishes and the unit this vehicle's cabin-pressure channel and its
+thresholds already use, and the two edges convert it with `6894.757` as a literal — the same shape
+`E-BUS-PUMP` uses for the pound. All three of round 4's unbound edges are bound, and the debt that
+named them is retired.
+
+**The zones had to be joined first, and `regulated` was the field that showed why.** The two files
+list the same six zones and share almost nothing: `vehicle.yaml` carries the band and the dwell,
+the domain carries the `vehicle` and the heater bank `source`. What they share is `regulated` — on
+all six, in both files — and the cabins' `volume_m3`. The ids were compared, and the cabin volumes
+were compared against `atmosphere_model` two rounds ago, and **`regulated` was read by nothing**. A
+zone the vehicle regulates and the domain does not is a compartment with a heater on one side of the
+join and none on the other, and the thresholds that watch it live on the domain's side. The zones
+are compared by the intersection rule now, which is also what compares the two new nominal fields
+without anybody remembering to add them here.
+
+### The band was read; the dwell beside it was not
+
+`thermal_diode.md:131` requires "paired heat/cool thresholds with a minimum dwell for any regulated
+zone", so a zone declares a band and a minimum dwell and the domain declares the thresholds that
+implement them. The two halves had no link at all.
+
+| zone | band | dwell | implementing threshold | its dwell |
+|---|---|---|---|---|
+| `csm_cabin` | 10–30 | 30 s | `csm_cabin_low`, `csm_cabin_high` | 30,000 ms |
+| `csm_avionics_bay` | 10–50 | **30 s** | `avionics_plate_high` | **10,000 ms** |
+| `lm_cabin` | 10–32 | 30 s | `lm_cabin_low`, `lm_cabin_high` | 30,000 ms |
+
+`limit_c` was at least read — `check_cabin_equilibrium` holds the cabin's equilibrium inside it.
+**`dwell_min_s` was read by nothing at all**, on any of the six zones, while every threshold beside
+it carries its own `dwell_assert_ms`. And one of the three had already drifted: the avionics bay
+requires thirty seconds of dwell before it alarms and the threshold that holds its band alarms after
+ten. That is this folder's oldest sentence — *a declaration no tool reads has already drifted* — and
+it was true of a field on six entries, four of them read by nothing and one of them wrong.
+
+The link is declared, `implemented_by` on each regulated zone, and `csm_avionics_bay` is why it
+cannot be inferred: its band is held by a **plate** threshold on `thermal.avionics_plate_c` rather
+than by a zone channel, while `lm_descent_bay` has a warning threshold *inside* its band that is not
+the band. A regulated zone that declares a band and names nothing implementing it is refused, and a
+threshold whose limit falls outside the band it is said to implement is refused.
+
+**The dwell divergence is a debt rather than a refusal**, and the difference matters: which of the
+two figures the vehicle means is a decision, not a contradiction. Either the threshold holds the
+dwell the zone requires — the reading `thermal_diode.md:131` suggests, since a minimum dwell is the
+requirement and the threshold is its implementation — or the zone's thirty seconds is the cabin's
+requirement written onto a compartment whose instrument moves faster. **252 stayed 252**: the debt
+round 4 opened for the three unbound edges is retired, and this one takes its place.
+
+Verified by breaking eleven copies: `regulated` flipped in the domain in both directions, the
+cabin's nominal temperature drifted in one file and then in both (the first is the join's business
+and the second is only the edge's), the LM cabin's nominal pressure drifted in both under its own
+edge, a regulated zone stripped of its link, a link naming a threshold that does not exist, a band
+whose threshold's limit falls outside it, the unbroken corpus silent — and the two negatives that
+make the dwell rule a rule: the avionics bay's divergence reported once, and the two cabins, whose
+dwells already agree, reported not at all.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

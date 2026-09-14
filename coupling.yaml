@@ -800,7 +800,17 @@ edges:
   - id: E-ZONE-ATM
     sensitivity:
       value: 116.86
-      computation: "5 * 6894.757 / 295"
+      # The cabin's nominal pressure and temperature were the last two numbers on this graph living
+      # only in a sentence — 5 psia in the zone's own source string and in `atmosphere_model`'s
+      # `check`, 295 K in the same prose and in two states' relations. The zone declares both now,
+      # in psia because that is the unit NR publishes and the unit this vehicle's cabin-pressure
+      # channel and thresholds already use; 6894.757 stays a literal, the way the pound does in
+      # `E-BUS-PUMP`.
+      derivation:
+        expression: "(pressure_psia * 6894.757) / temperature_k"
+        inputs:
+          pressure_psia: "vehicle.yaml:thermal.zones.csm_cabin.nominal_pressure_psia"
+          temperature_k: "vehicle.yaml:thermal.zones.csm_cabin.nominal_temperature_k"
       unit: "Pa per K"
       basis: derived
       relation: "the ideal-gas relation P = nRT/V gives dP/dT = P/T. At the cabin's nominal 5 psia = 34,474 Pa and 295 K, that is 116.9 Pa per kelvin"
@@ -817,7 +827,14 @@ edges:
   - id: E-ZONE-ATM-LM
     sensitivity:
       value: 116.86
-      computation: "5 * 6894.757 / 295"
+      # As E-ZONE-ATM, bound to the LM cabin's own two fields rather than to a literal the two edges
+      # shared. The corpus says both cabins sit at the same nominal; now that is two declarations
+      # that have to agree rather than one number written twice.
+      derivation:
+        expression: "(pressure_psia * 6894.757) / temperature_k"
+        inputs:
+          pressure_psia: "vehicle.yaml:thermal.zones.lm_cabin.nominal_pressure_psia"
+          temperature_k: "vehicle.yaml:thermal.zones.lm_cabin.nominal_temperature_k"
       unit: "Pa per K"
       basis: derived
       relation: "as E-ZONE-ATM: dP/dT = P/T at the LM's nominal 5 psia and 295 K, 116.9 Pa per kelvin"
@@ -2219,18 +2236,6 @@ failure_chains:
 # the wanting edge for each UNCONFIGURED above; this list is the human-readable version.
 # --------------------------------------------------------------------------------------
 open_debts:
-
-  - >-
-    Two sensitivities still inline a number the corpus declares nowhere, and each is a *datum in a
-    sentence* rather than a missing one: `E-ZONE-ATM` and `E-ZONE-ATM-LM` compute
-    `5 * 6894.757 / 295`, which carries the cabin's nominal pressure **and** temperature, and
-    neither is a field anywhere. `atmosphere_model` declares the volume and a `temperature_from`
-    naming the zone *states*, while 5 psia and 295 K appear only in its `check` prose and in the
-    cabin zone's own source string. The remedy is the one `mu_moon` got: the two numbers become
-    fields where they belong — the cabin's nominal pressure and temperature are properties of the
-    zone, which already declares its volume — and both edges bind them. The third edge that was in
-    this debt, `E-BUS-PUMP`, is bound: the loop declares its density and its published nominal flow
-    now, and the bus declares the voltage it divides by.
 
   # Round 50 added `advances` and `drains` and made the stock classifier dimensional; round 51
   # asked what would actually fix the ratio edges rather than how to describe them better. The

@@ -6525,6 +6525,27 @@ THERMAL_STRUCTURAL = {
 }
 
 
+# The keys of a thermal zone that are never a quantity the two files both state. Identity and the
+# prose keys — and deliberately *not* `regulated`, `volume_m3`, `limit_c`, `source` or the cabin's
+# nominal pressure and temperature, which are exactly what two views of one zone have to agree
+# about. `source` is on this list's other side for a reason worth stating: on a zone it is not
+# provenance prose but the heater bank that drives it, so it is a reference and belongs in the
+# comparison.
+ZONE_STRUCTURAL = {
+    "id",
+    "provenance",
+    "note",
+    "notes",
+    "why",
+    "reason",
+    "ref",
+    "relation",
+    "basis",
+    "unit",
+    "inputs",
+}
+
+
 def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The thermal machine is declared twice, and the two declarations disagreed.
 
@@ -6746,13 +6767,124 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
     # The zones. Both files list the same six, and the domain's `vehicle` is what binds a zone to
     # the compartment whose atmosphere it is; a zone named in one file and not the other is a
     # compartment that is either unregulated or unwatched, and the two are hard to tell apart.
-    zones_one = {str(z.get("id")) for z in thermal.get("zones") or []}
-    zones_two = {str(z.get("id")) for z in domain.get("zones") or []}
-    if zones_one != zones_two:
+    #
+    # The *ids* were all this compared until this round, and the two entries share more than that:
+    # `regulated` is on all six in both files and was read by nothing, so a zone the vehicle
+    # regulates and the domain does not is a compartment with a heater in one file and none in the
+    # other. The comparison is the intersection of the keys the two share, minus `ZONE_STRUCTURAL`
+    # — the rule the loops, the engines, the comms hardware and the rejection components all use,
+    # and the reason the cabin's nominal pressure and temperature are compared the moment they are
+    # declared rather than when somebody remembers to add them here.
+    zone_one = {
+        str(z.get("id")): z
+        for z in ((vehicle or {}).get("thermal") or {}).get("zones") or []
+        if isinstance(z, dict)
+    }
+    zone_two = {str(z.get("id")): z for z in domain.get("zones") or [] if isinstance(z, dict)}
+    if set(zone_one) != set(zone_two):
         report.refuse(
             "vehicle.yaml#thermal.zones",
-            f"lists {sorted(zones_one)} and the thermal domain lists {sorted(zones_two)}",
+            f"lists {sorted(zone_one)} and the thermal domain lists {sorted(zone_two)}",
         )
+    for zid in sorted(set(zone_one) & set(zone_two)):
+        one, two = zone_one[zid], zone_two[zid]
+        for field in comparable(one, two, ZONE_STRUCTURAL):
+            if one[field] != two[field]:
+                report.refuse(
+                    f"vehicle.yaml#thermal.zones.{zid}",
+                    f"gives {field} as {one[field]!r} and the thermal domain gives {two[field]!r}. "
+                    "One compartment, two files: a zone the vehicle regulates and the domain does "
+                    "not is a heater that exists on one side of the join, and a zone with a "
+                    "different `source` is a different heater bank driving it",
+                )
+
+    # And the band a regulated zone declares has to be the band a threshold implements.
+    #
+    # `thermal_diode.md:131` requires "paired heat/cool thresholds with a minimum dwell for any
+    # regulated zone", and the zone is where the vehicle declares both: `limit_c` is the band and
+    # `dwell_min_s` is the dwell the threshold must hold before it alarms. Neither was joined to
+    # the domain's thresholds. `limit_c` is read by `check_cabin_equilibrium` — as a band the
+    # cabin's equilibrium has to lie inside — and `dwell_min_s` was read by **nothing at all**,
+    # on any of the six zones, while the thresholds beside it carry their own `dwell_assert_ms`.
+    #
+    # The link is declared, the way `vehicle_keys` and `domain_group` are, because it cannot be
+    # inferred: `csm_avionics_bay`'s band is implemented by `avionics_plate_high`, which watches
+    # `thermal.avionics_plate_c` rather than a zone channel, and `lm_descent_bay`'s band has a
+    # warning threshold *inside* it that is not the band at all.
+    thresholds = {}
+    for path in sorted((root / "domains").glob("*/profiles.yaml")):
+        doc = load(path, Report()) or {}
+        for row in doc.get("thresholds") or []:
+            if isinstance(row, dict) and row.get("id"):
+                thresholds[str(row["id"])] = (path.parent.name, row)
+    for zid in sorted(zone_one):
+        zone = zone_one[zid]
+        names = zone.get("implemented_by")
+        band = zone.get("limit_c") or [None, None]
+        dwell_s = zone.get("dwell_min_s")
+        # A *regulated* zone is the case the rule is about: `thermal_diode.md:131` requires paired
+        # thresholds with a minimum dwell for any zone with a control loop, so a regulated zone
+        # that declares a band and names nothing implementing it is a compartment the vehicle
+        # claims to hold at a temperature with nothing watching. An unregulated zone — the service
+        # bay, the descent bay, the radiator loop — has a band that matters through what it
+        # contains and no requirement to alarm on it.
+        if not names:
+            if zone.get("regulated") and isinstance(band[0], (int, float)):
+                report.refuse(
+                    f"vehicle.yaml#thermal.zones.{zid}",
+                    "is regulated and declares a band with no `implemented_by`, so nothing says "
+                    "which threshold holds the compartment at it. `thermal_diode.md:131` requires "
+                    "paired heat/cool thresholds with a minimum dwell for a regulated zone, and the "
+                    "link is declared rather than inferred because it is not always the zone's own "
+                    "channel: `csm_avionics_bay`'s band is held by a plate threshold",
+                )
+            continue
+        if not isinstance(names, list):
+            report.refuse(
+                f"vehicle.yaml#thermal.zones.{zid}",
+                f"declares `implemented_by` as {names!r}, which is not a list of threshold ids",
+            )
+            continue
+        for name in (str(n) for n in names):
+            entry = thresholds.get(name)
+            if entry is None:
+                report.refuse(
+                    f"vehicle.yaml#thermal.zones.{zid}",
+                    f"names threshold {name!r}, which no domain's profiles.yaml declares. A zone "
+                    "saying which threshold implements its band is a link, and a link that has "
+                    "stopped linking reads exactly like one that works",
+                )
+                continue
+            domain_name, row = entry
+            limit = row.get("assert")
+            low, high = band[0], band[1]
+            inside = isinstance(limit, (int, float)) and (
+                (isinstance(low, (int, float)) and limit < low and row.get("comparator") == "above")
+                or (isinstance(high, (int, float)) and limit > high and row.get("comparator") == "below")
+                or (
+                    isinstance(low, (int, float))
+                    and isinstance(high, (int, float))
+                    and low <= limit <= high
+                )
+            )
+            if not inside:
+                report.refuse(
+                    f"vehicle.yaml#thermal.zones.{zid}",
+                    f"declares the band {band} and names {name!r}, whose limit is {limit!r} — "
+                    f"outside the band it is said to implement. `domains/{domain_name}/profiles.yaml` "
+                    "reports that limit by path, so the two are one requirement written twice",
+                )
+            if isinstance(dwell_s, (int, float)):
+                held_ms = row.get("dwell_assert_ms")
+                if isinstance(held_ms, (int, float)) and held_ms < float(dwell_s) * 1000.0:
+                    report.debt(
+                        f"vehicle.yaml#thermal.zones.{zid}",
+                        f"declares a minimum dwell of {dwell_s} s and names {name!r}, which "
+                        f"`domains/{domain_name}/profiles.yaml` gives {held_ms:g} ms — shorter than "
+                        "the zone's own minimum. One of the two is what the vehicle means: either "
+                        "the threshold holds the dwell the zone requires, or the zone's minimum is "
+                        "the cabin's written onto a compartment whose instrument moves faster",
+                    )
 
 
 # The statuses the conformance table may use. Four say how the vehicle satisfies a check and one

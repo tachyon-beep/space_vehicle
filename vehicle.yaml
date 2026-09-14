@@ -537,7 +537,20 @@ thermal:
         limit_c: [10, 30]
         regulated: true
         dwell_min_s: 30
+        # The thresholds that implement the band above. Declared rather than inferred: a zone's
+        # band is not always held by a threshold on the zone's own channel — `csm_avionics_bay`'s
+        # is held by a plate threshold — and `lm_descent_bay` has a warning *inside* its band that
+        # is not the band at all.
+        implemented_by: [csm_cabin_low, csm_cabin_high]
         volume_m3: 5.9
+        # The cabin's nominal state, which the ideal-gas law's two derivatives are taken at. Until
+        # this round both numbers lived only in prose: 5 psia is in this entry's own `source` string
+        # and in `atmosphere_model`'s `check`, and 295 K is in that check and in two states'
+        # relations. The pressure is declared in psia because that is the unit NR publishes it in
+        # and the unit this vehicle's cabin-pressure channel and thresholds already use; the two
+        # edges that differentiate the law convert it, the way `E-BUS-PUMP` converts pounds.
+        nominal_pressure_psia: 5
+        nominal_temperature_k: 295
         provenance:
           basis: apollo
           ref: "apollo_diode.md:89"
@@ -546,6 +559,10 @@ thermal:
         limit_c: [10, 50]
         regulated: true
         dwell_min_s: 30
+        # A plate threshold, on `thermal.avionics_plate_c` rather than a zone channel, because the
+        # avionics bay's temperature is the coldplate's — which is what makes this link one that
+        # had to be declared rather than derived from a channel name.
+        implemented_by: [avionics_plate_high]
         provenance:
           basis: apollo
           ref: "apollo_diode.md:105"
@@ -560,7 +577,14 @@ thermal:
         limit_c: [10, 32]
         regulated: true
         dwell_min_s: 30
+        implemented_by: [lm_cabin_low, lm_cabin_high]
         volume_m3: 6.7
+        # The LM's cabin is at the same nominal as the CSM's — the corpus's own relation for the
+        # second `E-ZONE-ATM` edge says "at the LM's nominal 5 psia and 295 K" — so the two edges
+        # derive the same 116.86 Pa per kelvin from two zones' figures rather than from a literal
+        # they shared.
+        nominal_pressure_psia: 5
+        nominal_temperature_k: 295
         provenance:
           basis: historical
           source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3 at about 5 psia, roughly 160 cu ft habitable. The limits mirror the CSM cabin's because no source distinguishes them"
