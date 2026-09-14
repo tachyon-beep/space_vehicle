@@ -1565,7 +1565,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 81 of the 134 states need code before the plant can
+rules the configuration deliberately does not carry**, so 82 of the 134 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1757,8 +1757,8 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 
     15   11 %  ready now — the two classes the reference plant can advance
     26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
-    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    81   60 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    11    8 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -3381,6 +3381,46 @@ and load set"*, and the source set is the part that does not exist.
 what the state actually lacks, and `bus_b_v`'s provenance names the gap for whoever closes it —
 declaring the tie's other direction, or giving bus B its own sources, is a modelling decision rather
 than a missing number.
+
+## Bus B has a source, and the plant's first stop moved
+
+Round 100 found that `bus_b` had no inbound edge anywhere in the graph — and that `bus_b_v` is the
+state the plant stops at. The decision the round left open is settled by the spec, not by me.
+`electrical_diode.md:16` specifies a
+
+> **dual 28 VDC A/B bus architecture** with **two independent generation/source channels**, dual
+> battery/storage channels, source and battery converters, a normally open or conditionally enabled
+> bus tie
+
+and the block diagram at `:198-232` is symmetric:
+
+```
+GEN_A -> SRC_CONV_A -> BUS_A        BAT_A <-> BAT_CONV_A <-> BUS_A
+GEN_B -> SRC_CONV_B -> BUS_B        BAT_B <-> BAT_CONV_B <-> BUS_B
+BUS_A <-> TIE_AB <-> BUS_B          normally open, 80 A, reverse-current capable
+```
+
+**Each bus has its own generation channel and its own battery, and the tie is normally open.**
+`bus_b_v`'s note said it was *"cross-supported through the tie"*, which reads the **backup** path as
+the supply — the tie is a cross-support, not a feed.
+
+`E-FC-BUSB` now gives bus B its generation channel, mirroring `E-FC-BUS` for bus A. **And the
+plant's first stop moved**: from `bus_b_v`, which had nothing to compute from, to
+`cabin_heat_csm_w` — a state that genuinely needs domain code. `bus_b_v` is back in *owes a rule*
+with the rest of the `algebraic` states, and the round-100 third class of worklist divergence is
+now empty, with the assertion kept so it cannot reappear unnoticed.
+
+### The battery half is still missing, and is named rather than guessed
+
+The diagram has `BAT_B <-> BAT_CONV_B <-> BUS_B` beside `BAT_A <-> BAT_CONV_A <-> BUS_A`. The model
+has **one** `battery_energy` node with `E-BAT-BUS` running to `bus_a` only. A second edge from that
+one node would model a *shared* battery presenting to two buses — a different claim from the two
+independent strings the spec describes, and the wrong one to make silently. So it is recorded in
+`bus_b_v`'s provenance for whoever closes it.
+
+The same limit runs through the generation side: one `fuel_cell` node stands for all three modules,
+so the two channels' **independence** — the property the spec names first — is not expressible at
+this granularity. The edge says bus B is fed; it cannot say the two feeds fail separately.
 
 ## Authoring convention: no flow mappings
 

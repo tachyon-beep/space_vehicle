@@ -473,6 +473,45 @@ edges:
     kind: rate
     sensitivity: {value: 0.125, unit: "kg H2 per kg H2", basis: derived, relation: "1 kg H2 per 8 kg O2 consumed (the cell reaction stoichiometry)",
     at: nominal, note: "8:1 O2:H2 mass ratio for the cell reaction"}
+  # --------------------------------------------------------------------------------------
+  # Bus B's source, which did not exist and had to: `electrical_diode.md:16` specifies a
+  # "**dual 28 VDC A/B bus architecture** with **two independent generation/source channels**,
+  # dual battery/storage channels, source and battery converters, a normally open or
+  # conditionally enabled bus tie", and its block diagram (`:198-232`) is symmetric —
+  # `GEN_B -> SRC_CONV_B -> BUS_B` with `BAT_B <-> BAT_CONV_B <-> BUS_B`, and `BUS_A <-> TIE_AB <->
+  # BUS_B` normally open.
+  #
+  # The vehicle had one of each: every electrical edge terminated on `bus_a`, so `bus_b` — with
+  # seven loads on `csm_bus_b`, an undervoltage threshold, a published channel, three faults and a
+  # place on a crew panel — had no source anywhere in the graph. And `bus_b_v`'s note said it was
+  # "cross-supported through the tie", which reads the *backup* path as the supply: the tie is
+  # normally open and 80 A, a cross-support rather than a feed.
+  #
+  # **At this granularity the second channel is a second edge.** The model has one `fuel_cell` node
+  # for all three modules and one `battery_energy` node, so the two channels' *independence* is not
+  # expressible, and **the battery half is still missing**: `E-BAT-BUS` runs
+  # `battery_usable_j -> bus_a`, and the diagram has `BAT_B <-> BAT_CONV_B <-> BUS_B` as well. That
+  # is recorded in `bus_b_v`'s provenance rather than guessed at here, because a second battery edge
+  # from the one battery node would model a *shared* battery presenting to two buses — which is a
+  # different claim from the two independent strings the spec describes, and the wrong one to make
+  # silently. What this edge does say is what the vehicle's own file could not: bus B is fed.
+  # --------------------------------------------------------------------------------------
+  - id: E-FC-BUSB
+    from: fuel_cell
+    to: bus_b
+    kind: algebraic
+    sensitivity:
+      value: 1.0
+      computation: "1"
+      unit: "V per V"
+      basis: derived
+      relation: "the second source converter's regulated output is bus B's source EMF, one for one, exactly as `E-FC-BUS` is for bus A. `bus_b_v` is the same nodal solve over a different source and load set, which its own reason already says"
+      at: nominal
+      note: >-
+        `electrical_diode.md:207`'s `MPPTB --> BUS_B`. The two channels are specified as
+        *independent*, and this edge is what the model can say about that: it gives bus B a source,
+        and it cannot give the two sources separate failure modes while one `fuel_cell` node stands
+        for all three modules
   - id: E-FC-BUS
     from: fuel_cell
     to: bus_a
