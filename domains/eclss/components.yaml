@@ -57,11 +57,32 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
-    initial: 2.653760
+    # 2.653595831 kg before rounding, and the derivation below is what says so. It read 2.653760
+    # until this round: a seven-figure literal from a sum done once by hand, whose own relation
+    # named 34,474 Pa and R nowhere — and 34,474 Pa is 5 psia at a rounded 6,894.8 Pa per psi, which
+    # is 0.006 % away from the conversion the constant actually is. Nothing could see the difference
+    # because the arithmetic was prose.
+    initial: 2.653596
+    initial_derivation:
+      expression: "psi_to_pa * pressure_psia * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        psi_to_pa: 6894.757293168361
+        pressure_psia: "domains/thermal/components.yaml:zones.csm_cabin.nominal_pressure_psia"
+        volume_m3: "domains/eclss/components.yaml:atmosphere_model.volume_m3.csm"
+        gas_constant: 8.314462618153
+        temperature_k: "domains/thermal/components.yaml:zones.csm_cabin.nominal_temperature_k"
+        molar_mass_kg_per_mol: "domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol"
     initial_provenance:
       basis: derived
       relation: >-
-        the ideal-gas relation the atmosphere model already states: 34,474 Pa over the CSM cabin's 5.9 m3 at 295 K is 82.93 mol, and at 32 g/mol that is 2.653760 kg of oxygen. atmosphere_model.check.total_pressure_at_5_psia works the same sum and rounds it to '2.65 kg ... the initial load the mission starts with'
+        the ideal-gas relation `atmosphere_model.law` states, with every term bound rather than
+        quoted: the cabin's nominal 5 psia and 295 K from the zone that holds them, the volume and
+        the molar mass from the atmosphere model itself, and the two physical constants as literals
+        — 6,894.757293168361 Pa per psi and 8.314462618153 J per mol-K. `psi_to_pa` is exact by
+        definition and the gas constant is the SI value; the inputs that are *not* exact are the
+        cabin's pressure and temperature, which are the published nominal the mission is flown at.
+        atmosphere_model.check.total_pressure_at_5_psia works the same sum and rounds it to
+        '2.65 kg ... the initial load the mission starts with'
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -107,10 +128,22 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
-    initial: 3.013592
+    # The same law, one volume apart, and the two applications disagreed until both were derived:
+    # 3.013592 was 0.006 % above what the CSM's own constants give on 6.7 m3 — the kind of
+    # difference that only shows when two copies of one computation are evaluated side by side.
+    initial: 3.013405
+    initial_derivation:
+      expression: "psi_to_pa * pressure_psia * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        psi_to_pa: 6894.757293168361
+        pressure_psia: "domains/thermal/components.yaml:zones.lm_cabin.nominal_pressure_psia"
+        volume_m3: "domains/eclss/components.yaml:atmosphere_model.volume_m3.lm"
+        gas_constant: 8.314462618153
+        temperature_k: "domains/thermal/components.yaml:zones.lm_cabin.nominal_temperature_k"
+        molar_mass_kg_per_mol: "domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol"
     initial_provenance:
       basis: derived
-      relation: "the same relation on the LM cabin's own 6.7 m3, which atmosphere_model.volume_m3 declares per compartment: 94.1747 mol, 3.013592 kg. The corpus states the relation once and the volume twice, so this is a computed consequence rather than a second published number"
+      relation: "the same relation on the LM cabin's own 6.7 m3, which atmosphere_model.volume_m3 declares per compartment: 94.1689 mol at the same constants, 3.013405 kg. The corpus states the relation once and the volume twice, so this is a computed consequence rather than a second published number — and since this round the relation is *evaluated* rather than quoted, so the two compartments cannot drift apart again"
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:

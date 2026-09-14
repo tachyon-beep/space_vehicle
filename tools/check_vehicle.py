@@ -6550,10 +6550,37 @@ def check_initial_sources(
         for state in components.get("state") or []:
             if not isinstance(state, dict) or state.get("method") != "stock":
                 continue
+            swhere = f"domains/{path.parent.name}/components.yaml:state {state.get('id')}"
+            # An initial that is a *computed consequence* of published figures binds them, the way
+            # an edge's sensitivity does. Two states declared `basis: derived` and stated their
+            # arithmetic as a relation — prose, which cannot be evaluated — so the cabin oxygen
+            # loads were literals nothing could re-derive, written to seven figures from a sum done
+            # once by hand. `check_declared_derivation` is the same rule the edges and the
+            # consumables rates use, and this is its third binding site.
+            derivation = state.get("initial_derivation")
+            if derivation is not None:
+                check_declared_derivation(
+                    f"{swhere}.initial_derivation",
+                    derivation,
+                    state.get("initial"),
+                    "`initial`",
+                    documents,
+                    report,
+                )
+            elif (
+                (state.get("initial_provenance") or {}).get("basis") == "derived"
+                and not state.get("initial_source")
+            ):
+                report.refuse(
+                    f"{swhere}.initial_provenance",
+                    "declares this initial as `derived` and binds nothing. A relation is prose and "
+                    "prose cannot be evaluated, so the value beside it is a literal with a note: "
+                    "declare `initial_derivation` over the figures the relation names, and the "
+                    "starting amount re-derives on every run as an edge's sensitivity does",
+                )
             source = state.get("initial_source")
             if not source:
                 continue
-            swhere = f"domains/{path.parent.name}/components.yaml:state {state.get('id')}"
             text = str(source)
             if ":" not in text:
                 report.refuse(

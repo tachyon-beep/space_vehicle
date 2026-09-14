@@ -2602,8 +2602,8 @@ Three fixes, and the third is the point of the round:
 | `o2_lm_kg` | 24.1 kg | `vehicle.yaml:consumables.lm.o2_kg` |
 | `absorber_man_hours_csm` | 72 | `coupling.yaml:nodes.absorber_capacity_csm.exhausted_at` |
 | `absorber_man_hours_lm` | 41 | `coupling.yaml:nodes.absorber_capacity_lm.exhausted_at` |
-| `csm_cabin_o2_kg` | 2.653760 kg | the atmosphere model's own ideal-gas relation |
-| `lm_cabin_o2_kg` | 3.013592 kg | the same relation on the LM's 6.7 m³ |
+| `csm_cabin_o2_kg` | 2.653596 kg | `initial_derivation`: the atmosphere model's own law over the zone's nominal pressure and temperature, the model's volume and molar mass, and two constants |
+| `lm_cabin_o2_kg` | 3.013405 kg | the same derivation on the LM's 6.7 m³ |
 | six accumulators | 0 | *chosen* — an accumulator starts empty |
 
 **`initial_source` is checked, not decorative**, and that is what keeps this from becoming a
@@ -2634,7 +2634,7 @@ The ring is exactly where the tanks belong, and the seed makes them appear:
 values:
   o2_csm: 279.0          h2_csm: 24.5             absorber_capacity_csm: 72.0
   o2_lm: 24.1            water_potable: 14.0      absorber_capacity_lm: 41.0
-  cabin_atm: 2.65376     water_cooling: 13.0      lm_cabin_atm: 3.013592
+  cabin_atm: 2.653596    water_cooling: 13.0      lm_cabin_atm: 3.013405
 ```
 
 The keys are **nodes, not channel names**, and that is deliberate rather than unfinished:
@@ -4080,7 +4080,7 @@ read any of them.** That is worth stating precisely, because it is easy to read 
 `atmosphere_model` states as the law the whole life-support model rests on —
 `P = (sum_i n_i) R T / V`. It is what turns a gas *mass* into the partial pressure a crew member
 reads and an agent decides on. So it sits underneath `eclss.pp_o2_mmhg` on one side and every
-thermal time constant in the zone on the other, and the LM's oxygen initial of 3.013592 kg is a
+thermal time constant in the zone on the other, and the LM's oxygen initial of 3.013405 kg is a
 *derived* figure computed from the LM's 6.7. Move the volume in one file and the plant's
 atmosphere changes while the checkout's does not: the crew would be breathing a cabin that only
 exists in the copy that happened to be loaded.
@@ -5434,6 +5434,60 @@ actions, a permission that is a word rather than a boolean, a machine that permi
 the latch dropped from the transition into the permitting posture, each of the four guards deleted
 from `transition_evidence` in turn, a debt deleted from each of the two newly-counted lists (267 in
 both cases), and the unbroken corpus composing at 268 with both files in its debt list.
+
+## The one initial that is a computed consequence, and the sum nobody could evaluate
+
+The corpus states an ideal-gas law in `domains/eclss/components.yaml#atmosphere_model` — `P =
+(sum_i n_i) R T / V` — with a volume per compartment, a molar mass per gas, and the cabin
+temperature taken from the zone. Two stocks are what the law determines: `csm_cabin_o2_kg` and
+`lm_cabin_o2_kg`, the free oxygen in each cabin at 5 psia. Both declared
+
+```yaml
+    initial: 2.653760
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the ideal-gas relation the atmosphere model already states: 34,474 Pa over the CSM cabin's
+        5.9 m3 at 295 K is 82.93 mol, and at 32 g/mol that is 2.653760 kg of oxygen.
+```
+
+— a **seven-figure literal justified by prose**. `initial_provenance` satisfies the check that every
+numeric initial says where it came from, and a relation is not something a tool can evaluate, so the
+sum had been done once by hand and written down. An audit of all twenty-five stocks found these are
+the only two whose provenance is `derived`: every other numeric initial has an `initial_source` that
+resolves, or is an accumulator that starts at zero because that is what an accumulator is.
+
+**And the hand-done sums did not agree with each other.** The CSM's 2.653760 implies 6,894.8 Pa per
+psi; the LM's 3.013592, on the same law with its own 6.7 m³, implies a little less. One law applied
+to two cabins had been rounded two ways, by an amount (0.006 %) that no reading would ever catch and
+that a shared derivation catches immediately.
+
+So `initial` gained its third binding site — `initial_derivation`, evaluated by
+`check_declared_derivation`, the same rule the edges and the consumables rates use — and the rule
+that makes it more than optional: **a stock whose provenance says `derived` must bind what its
+relation names**, because a derived value with a prose justification is a literal with a note.
+
+| term | bound to |
+|---|---|
+| the cabin's pressure and temperature | `domains/thermal/components.yaml:zones.<cabin>.nominal_*` — the zone that declares them, whose vehicle-level copy the zone join already holds |
+| the volume | `atmosphere_model.volume_m3.<cabin>` |
+| the oxygen molar mass | `atmosphere_model.gases.o2.molar_mass_kg_per_mol` |
+| the gas constant, and pascals per psi | 8.314462618153 and 6,894.757293168361 as literals — the first is the SI value and the second is exact by definition |
+
+The values are now what the law gives: **2.653596** and **3.013405**, where the corpus had 2.653760
+and 3.013592. The corrections are 0.16 g and 0.19 g of oxygen — nothing a simulation will notice,
+and not the point. The point is the case the test keeps: re-rate a cabin's temperature from 295 K to
+300 K **in both files, consistently**, so that the zone join and every other check is satisfied, and
+the initial refuses, because it was computed from the old nominal. That is the lesson of
+`E-GEOM-LINK`'s beamwidth arriving at a number that had no arithmetic to check it.
+
+**268 stayed 268**: nothing was owed here — the law, the volumes and the molar masses were all
+declared, and what was missing was a reader.
+
+Verified by breaking ten copies in `.scratch/r16/`: each derivation removed, each value put back to
+its hand-rounded literal, the gas constant nudged, the molar-mass binding renamed, the cabin volume
+moved in the atmosphere model, a name the expression never binds, a cabin re-rated in both files at
+once, and the unbroken corpus composing at 268.
 
 ## The invariants, and which of them are enforced
 
