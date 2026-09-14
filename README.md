@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 249 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 249 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **249** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **201** the plant
+pack-voltage state, and the missing charging efficiency). The **199** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 119 scalars and the prose half 130. The largest single field is `basis` at 28 —
+The literal half is 119 scalars and the prose half 129. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 249 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 248 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 249 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 248 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -3312,6 +3312,34 @@ Each is a **debt rather than a refusal**, because closing one is a decision abou
 advances which state and that decision is the author's: `E-ENV-RAD` reaching the radiator could
 advance the temperature or the rejection, and the node's own order says the temperature comes first.
 **248 became 253.**
+
+## The weakest-documented edge in the file
+
+`E-TRANSPORT-PLATE` carries the coolant loop's temperature to the avionics coldplate, unit
+`K per K` — and it declared **nothing else**. `value: UNCONFIGURED`, `basis: UNCONFIGURED`, `at:
+nominal`. No relation, no note, no `computation`. Nothing else in `coupling.yaml` is that bare.
+
+**A transport delay delivers what it received.** `loop_transport_t` is a `delay` of 1,042 s
+implemented as a tick-indexed ring buffer, and a ring buffer's output is its input one residence
+time later — so the ratio is 1.0, and the edge carries the temperature rather than transforming it.
+A ratio other than one would be a claim that the loop changes the temperature it transports, and
+the mechanism that does that is the conductance into the plate, not this edge.
+
+It survived for a reason worth recording. `E-DYN-GEOM`'s note says a `UNCONFIGURED` value beside an
+identity relation *"is a contradiction rather than an omission"* — and **that contradiction is what
+got it fixed**. This one had no relation to contradict. An edge with nothing written beside it is
+not obviously wrong; it is only unread, and nothing had read it.
+
+**And a fifth instance of one unknown under several names.** `E-FC-HEAT` (`W per W`, the fuel cell's
+waste heat) is owed *with the cell's conversion*, not on its own: waste heat is the difference
+between what the reactants carry in and what the cell delivers, so it and
+`fc_o2_draw_kg_s.per_joule_kg` are two consequences of one unknown — the electrochemistry no source
+publishes. **It is the first time the two names have been a heat rate and a mass rate**, which is
+why they do not look like the same quantity.
+
+**249 became 248.** The other edges still owed are genuine: `E-RCS-DYN` needs the inertia tensor,
+`E-PUMP-COOL` and `E-RAD-THERM` are thermal constants `thermal_diode.md:965` refuses to publish,
+`E-PLATE-CRITICAL` is a derating slope, and `E-FC-HEAT` waits on the cell.
 
 ## Authoring convention: no flow mappings
 

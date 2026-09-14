@@ -598,7 +598,7 @@ edges:
     to: coldplate_t
     kind: rate
     sensitivity: {value: UNCONFIGURED, unit: "W per W", basis: UNCONFIGURED,
-    at: nominal, note: "waste heat: the cell rejects heat through the coolant loop (apollo_diode.md:849-853)"}
+    at: nominal, note: "waste heat: the cell rejects heat through the coolant loop (apollo_diode.md:849-853). Owed with the cell's conversion rather than on its own: waste heat is the difference between what the reactants carry in and what the cell delivers, so this figure and `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg` are two consequences of one unknown — the electrochemistry no source publishes. The fifth time this session has found one missing datum under several names, and the first where the names are a heat rate and a mass rate: they do not look like the same quantity, and they are"}
   # The edge the corrected schedule order found on its first tick. `battery_energy` had exactly
   # one inbound edge — `E-PLATE-BAT`, the thermal back-edge — so it was a stock nothing ever
   # filled, and the plant said so: "is a stock with no incoming edge, so nothing drives it". The
@@ -1318,7 +1318,9 @@ edges:
     from: loop_transport
     to: coldplate_t
     kind: lag
-    sensitivity: {value: UNCONFIGURED, unit: "K per K", basis: UNCONFIGURED, at: nominal}
+    sensitivity: {value: 1.0, computation: "1.0", unit: "K per K", basis: derived, at: nominal,
+    relation: "a transport delay delivers what it received. `loop_transport_t` is a `delay` of 1,042 s implemented as a tick-indexed ring buffer, and a ring buffer's output is its input one residence time later — the edge carries the temperature rather than transforming it, which is what `K per K` says. It was `UNCONFIGURED` with no relation and no note at all, the weakest-documented edge in the file",
+    note: "the shape `E-DYN-GEOM`'s note records, where a `UNCONFIGURED` value beside an identity relation *'is a contradiction rather than an omission'*. This one had no relation to contradict, which is why it survived: an edge with nothing written beside it is not obviously wrong, it is simply unread. A ratio other than one would claim the loop changes the temperature it transports, and the mechanism that does that is the conductance into the plate, not this edge"}
   - id: E-PLATE-CRITICAL
     from: coldplate_t
     to: avionics_compute
