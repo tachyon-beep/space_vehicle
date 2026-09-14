@@ -2701,6 +2701,31 @@ def check_domain(
     # function returns FAULT from the same place it returns SUSPECT, and FAULT is refused as a
     # quality by design.md:211-214.
     quality = components.get("quality_assignment")
+    # --------------------------------------------------------------------------------------
+    # **A check that iterates a block reports nothing when the block is gone**, and three of
+    # this file's checks were written that way. Deleting `quality_assignment` from
+    # `domains/avionics/components.yaml` — ninety-three lines — left the linter composing
+    # cleanly, because every rule inside it is guarded by `if isinstance(quality, dict)` and an
+    # absent block skips the lot. The same deletion test found `display_contract` and
+    # `atmosphere_model` behaving identically, and between them the three are the whole
+    # quality-assignment function, the display contract and the atmosphere model: **four
+    # hundred lines of the vehicle that a build would not notice losing.**
+    #
+    # The distinction that makes this worth a refusal rather than a shrug is that these blocks
+    # are not optional. `simulator-design.md:496-508` requires a quality assignment; the display
+    # contract is what the perception bound is cross-checked against; the atmosphere model is
+    # what makes a cabin's gas a species rather than a mass. A domain that has one and loses it
+    # has lost a requirement, and a linter that cannot tell that from a domain that never had one
+    # is a linter reporting on nothing.
+    # --------------------------------------------------------------------------------------
+    if quality is None and name == "avionics":
+        report.refuse(
+            f"{where}:quality_assignment",
+            "is absent. `simulator-design.md:496-508` requires the quality function to be "
+            "declared, and every rule about it lives inside the block — so a missing block skips "
+            "the check rather than failing it, which is how ninety-three lines of the quality "
+            "assignment could be deleted with the build still green",
+        )
     if isinstance(quality, dict):
         qwhere = f"{where}:quality_assignment"
         params = {str(p) for p in quality.get("parameters") or []}
@@ -3134,6 +3159,16 @@ def check_domain(
     # reporting something they cannot see, which is the exact failure `review-findings.md` #4
     # says cannot be cleaned up retroactively.
     contract = components.get("display_contract") or {}
+    # The same absent-block silence as `quality_assignment`: this loop is the entire check, so
+    # `or {}` made two hundred and three lines of the display contract optional to the build.
+    if not contract and name == "crew":
+        report.refuse(
+            f"{where}:display_contract",
+            "is absent. The contract is what the crew perception bound is cross-checked against "
+            "\u2014 `channels.yaml#crew_positions` says what is perceptible and this says what an "
+            "instrument in front of a person actually shows, and the gap between them is where a "
+            "leak in a crew line hides. A missing block made the whole comparison vacuous",
+        )
     for position in contract.get("positions") or []:
         pid = position.get("id")
         pwhere = f"{where}:display_contract position {pid}"
@@ -3357,6 +3392,76 @@ def check_domain(
     # corpus, so it is reported as a debt rather than refused: the honest instrument for a
     # declaration that is needed and that no source supplies.
     # --------------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------------
+    # Two blocks that no tool read at all, and both of them name things that exist elsewhere.
+    #
+    # A deletion test — remove the block, run every tool, diff the output — found nine blocks
+    # the vehicle does not notice losing. Three were checks that pass vacuously (see
+    # `quality_assignment` above); these two were read by **nothing**, and what makes them worth
+    # wiring rather than declaring prose is that both are full of *references*:
+    # `consumables/ledgers` names twelve channel ids and `crew/alert_overlays` names three
+    # overlay ids that a verb can set. A reference nothing resolves is a reference that is
+    # already free to be wrong; all fifteen happen to be right today, which is exactly the
+    # condition under which the sixteenth is added wrong.
+    # --------------------------------------------------------------------------------------
+    for row in components.get("ledgers") or []:
+        if not isinstance(row, dict):
+            continue
+        resource = str(row.get("resource"))
+        lwhere = f"{where}:ledger {resource}"
+        if resource not in node_ids:
+            report.refuse(
+                lwhere,
+                f"names {resource!r}, which is not a coupling node. A ledger reconciles an "
+                "account against an observation of the same tank, so the resource it names has to "
+                "be the node the tank is",
+            )
+        for field in ("ledger_channel", "observed_channel", "residual_channel"):
+            cid = row.get(field)
+            if cid is None:
+                report.refuse(lwhere, f"declares no `{field}`")
+            elif index.row(str(cid)) is None:
+                report.refuse(
+                    f"{lwhere}.{field}",
+                    f"is {str(cid)!r}, which is not a registered channel. The reconciliation is "
+                    "published as three channels \u2014 the ledger, the observation and their "
+                    "residual \u2014 and a name that resolves to nothing is a reconciliation a "
+                    "fleet cannot read",
+                )
+        # A third rule was written and removed, and the reason is worth keeping because it is a
+        # property of the *registry* rather than of this check: `res.recon_[resource]_kg` declares
+        # its inputs as `res.[resource]_kg` and `res.ledger_[resource]_kg` — **template forms** —
+        # while a ledger row names concrete instances, and not always the ones the residual is
+        # computed from. `prop_main`'s observation is `prop.propellant_remaining_pct`, a
+        # percentage, because that is the channel a crew reads; the residual is computed from the
+        # kilogram quantity behind it. So the check refused all four correct declarations, and the
+        # lesson is this folder's own: a template and its instantiations are two vocabularies, and
+        # comparing across them needs an instantiation rule the registry does not have yet.
+
+    overlays = components.get("alert_overlays") or {}
+    declared_overlays = [
+        str(o.get("id")) for o in overlays.get("overlays") or [] if isinstance(o, dict)
+    ]
+    if declared_overlays:
+        # The verb that sets them is the vocabulary's, not this file's, so the two are joined
+        # rather than repeated: an overlay the vehicle declares and no verb can select is a
+        # suppression a fleet is told about and cannot use.
+        settable: set[str] = set()
+        for verb in commands.get("commands") or []:
+            if not isinstance(verb, dict):
+                continue
+            for argument in (verb.get("argument_schema") or {}).values():
+                if isinstance(argument, dict) and argument.get("type") == "enum":
+                    settable.update(str(v) for v in argument.get("values") or [])
+        unreachable = sorted(o for o in declared_overlays if o not in settable)
+        if unreachable:
+            report.refuse(
+                f"{where}:alert_overlays",
+                f"declares {unreachable}, and no verb's argument can take them. An overlay is a "
+                "suppression the crew applies, so one nothing can select is a capability "
+                "declared and not offered",
+            )
+
     # --------------------------------------------------------------------------------------
     # A stock's initial condition, which the plant now integrates from and which the
     # configuration declared nowhere.
@@ -4147,6 +4252,16 @@ def check_atmosphere_symmetry(root: Path, report: Report) -> None:
     model = eclss.get("atmosphere_model") or {}
     gases = [str(g.get("id")) for g in model.get("gases") or [] if isinstance(g, dict)]
     if not gases:
+        # The third of the three. This one returned *early* rather than guarding a loop, which is
+        # the same silence with a clearer signature: the check announces to the reader that it
+        # ran and says nothing, and a missing atmosphere model is indistinguishable from a
+        # symmetric one.
+        report.refuse(
+            "domains/eclss/components.yaml:atmosphere_model",
+            "declares no gases, so there is nothing for the symmetry check to compare. The model "
+            "is what makes a cabin's contents a set of species rather than one mass, and every "
+            "rule about the cabins being symmetric lives behind this early return",
+        )
         return
     states = [s for s in eclss.get("state") or [] if isinstance(s, dict)]
     absent = {
@@ -4912,6 +5027,53 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         report.refuse(
             "vehicle.yaml#thermal.zones",
             f"lists {sorted(zones_one)} and the thermal domain lists {sorted(zones_two)}",
+        )
+
+
+def check_thermal_budget(root: Path, report: Report) -> None:
+    """The rejection total is a closure, and nothing summed the two things it closes over.
+
+    `domains/thermal/components.yaml#load_budget.total_rejection_capacity_w` states 4,933 W and its
+    own relation says what that is: "2,588 W of radiator plus 2,345 W of evaporator". Both of those
+    live in the same file — the radiator's in `radiator_model.csm.rejection_w` and the evaporator's
+    in the `evaporator_csm` component — and **no tool read the block at all.** A deletion test that
+    removed all sixteen lines and diffed every tool's output found nothing.
+
+    That is the mass closure's shape for the fifth time, and it is worth wiring for the reason the
+    other four were: a total nobody sums is a total that drifts, and this one is the denominator a
+    fleet reasons about when it decides whether the vehicle can reject what it is generating. The
+    evaporator's LM twin is `UNCONFIGURED`, so the sum is taken over the parts that have values and
+    the missing one is reported as the debt it already is rather than silently omitted.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    budget = thermal.get("load_budget") or {}
+    total = budget.get("total_rejection_capacity_w")
+    if not isinstance(total, (int, float)):
+        return
+    parts: dict[str, float] = {}
+    radiator = ((thermal.get("radiator_model") or {}).get("csm") or {}).get("rejection_w")
+    if isinstance(radiator, (int, float)):
+        parts["radiator_model.csm"] = float(radiator)
+    for component in thermal.get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        value = component.get("rejection_w")
+        if isinstance(value, (int, float)):
+            parts[str(component.get("id"))] = float(value)
+    if not parts:
+        report.refuse(
+            "domains/thermal/components.yaml:load_budget",
+            "states a total rejection capacity and nothing declares a part of it, so the total is "
+            "a number with no arithmetic behind it",
+        )
+        return
+    stated = sum(parts.values())
+    if abs(stated - float(total)) > 1.0:
+        report.refuse(
+            "domains/thermal/components.yaml:load_budget.total_rejection_capacity_w",
+            f"is {total:g} W and the parts this file declares sum to {stated:g} W "
+            f"({', '.join(f'{k} {v:g}' for k, v in sorted(parts.items()))}). A total whose parts "
+            "do not reach it is a capacity the vehicle does not have",
         )
 
 
@@ -6243,6 +6405,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
+    check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)
     if mission is not None:

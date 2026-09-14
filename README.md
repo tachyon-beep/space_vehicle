@@ -2644,6 +2644,52 @@ the publisher's step and it is not a rename — `eclss.pp_o2_mmhg` is a partial 
 millimetres of mercury while `csm_cabin_o2_kg` is a mass in kilograms, so calling the mass by the
 channel's name would be a wrong number wearing the right one.
 
+## Nine blocks the vehicle does not notice losing
+
+Every previous round asked whether a *declaration* had a reader. This one asked the question
+mechanically: **delete a block, run every tool, diff the output.** Nine blocks came back with
+nothing to show for them — 493 lines between them — and they split into two kinds, of which the
+first is the worse.
+
+**Three checks that cannot run.** The linter had code for these; the code could not execute.
+
+```python
+    quality = components.get("quality_assignment")
+    if isinstance(quality, dict):          # absent block: the whole check is skipped
+```
+
+`display_contract` used `or {}` and an empty loop; `atmosphere_model` used an early `return`. All
+three report on nothing when the block is gone, which is indistinguishable from reporting that all
+is well — and between them they are **four hundred lines**: the quality-assignment function
+`simulator-design.md:496-508` requires, the display contract the perception bound is cross-checked
+against, and the atmosphere model that makes a cabin's contents species rather than one mass. Each
+is refused by name when absent now. *A check that iterates a block is not a check; it is a check
+plus an assumption.*
+
+**Six blocks no tool read**, and what makes three of them worth wiring rather than declaring prose is
+that they are full of **references**:
+
+| block | what it names | what was checking it |
+|---|---|---|
+| `consumables/ledgers` | 12 channel ids across 4 rows | nothing |
+| `crew/alert_overlays` | 3 overlay ids a verb must be able to set | nothing |
+| `thermal/load_budget` | 4,933 W = 2,588 radiator + 2,345 evaporator | nothing |
+| `gnc/estimator`, `gnc/trajectory_segment`, `gnc/flight_rules` | the estimator and the guidance model | nothing, and still nothing |
+
+**All fifteen references and the closure are right today** — which is exactly the condition under
+which the sixteenth is added wrong. The three checks are written and verified by breaking each: a
+one-character typo in a ledger channel, a resource that is not a coupling node, an overlay no verb
+can select, a total 1,000 W above its parts, and a radiator 500 W below its own model.
+
+One rule was **written and removed**, and the reason is a property of the registry rather than of
+the check. A ledger's residual *is* the difference of its two terms, so the residual channel's
+`inputs` ought to be those two — but `res.recon_[resource]_kg` declares its inputs as
+`res.[resource]_kg` and `res.ledger_[resource]_kg`, **template forms**, while a ledger row names
+concrete instances, and not always the ones the residual is computed from: `prop_main`'s
+observation is `prop.propellant_remaining_pct`, a percentage, because that is the channel a crew
+reads. The check refused all four correct declarations. A template and its instantiations are two
+vocabularies, and comparing across them needs an instantiation rule the registry does not have yet.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
