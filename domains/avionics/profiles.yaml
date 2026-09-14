@@ -333,7 +333,9 @@ profile_selection:
     - id: minimal
       revision: 1
       description: "publish only the channels the executive's guards read, at their own rates"
-      factor: 0.5
+      factors:
+        below: 2.0000
+        above: 0.5000
       provenance:
         basis: chosen
         reason: >-
@@ -350,7 +352,9 @@ profile_selection:
     - id: minimal_plus_eng
       revision: 1
       description: "the minimal set plus the engineering channels a diagnosis needs"
-      factor: 0.75
+      factors:
+        below: 1.3333
+        above: 0.7500
       provenance:
         basis: chosen
         reason: >-

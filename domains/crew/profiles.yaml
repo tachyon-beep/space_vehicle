@@ -184,7 +184,9 @@ profile_selection:
     - id: sensitive
       revision: 1
       description: "every dwell halved, for a fleet that would rather see an alarm early than rarely"
-      factor: 0.5
+      factors:
+        below: 2.0000
+        above: 0.5000
       provenance:
         basis: chosen
         reason: "the factor only shortens dwells, so the profile can add alarms and cannot remove them — which is the monotonic direction, since a false alarm costs attention and a missing one costs the mission"

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 267 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 267 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,9 +184,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **267** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **51** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
 pack-voltage state, and the missing charging efficiency). The **203** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 150. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 137. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 267 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 254 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 267 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 254 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2791,6 +2791,57 @@ Both shapes are read now, and the thirteen split on a distinction worth stating:
 A gap in the rule itself closed while I was there: it validated only the comparators the domain's
 thresholds *use*, so a domain with no `above` thresholds could carry `above: 1.4` in silence until
 somebody added a ceiling. Every declared factor is checked for direction now.
+
+## The thirteen profile directions, and the four that scale nothing
+
+Last round surfaced thirteen alternatives that had never been read; this round resolves them. Each
+needed a judgement about which way the profile moves its thresholds, and the judgements split in a
+way worth recording.
+
+**Nine are tightenings**, and they take `power.tight`'s established convention — tightening a
+ceiling means *lowering* it and tightening a floor means *raising* it, so a single number cannot do
+both and the pair is mirrored from the scalar the profile already declared:
+
+| domain | profile | was | now |
+|---|---|---:|---|
+| avionics | `minimal` | 0.5 | `{below: 2.0, above: 0.5}` |
+| avionics | `minimal_plus_eng` | 0.75 | `{below: 1.3333, above: 0.75}` |
+| comms | `emergency` | 0.15 | `{below: 6.6667, above: 0.15}` |
+| comms | `low` | 0.35 | `{below: 2.8571, above: 0.35}` |
+| crew | `sensitive` | 0.5 | `{below: 2.0, above: 0.5}` |
+| eclss | `conservative` | 0.8 | `{below: 1.25, above: 0.8}` |
+| gnc | `conservative` | 0.7 | `{below: 1.4286, above: 0.7}` |
+| rcs | `tight` | 0.6 | `{below: 1.6667, above: 0.6}` |
+| structure | `strict` | 0.5 | `{below: 2.0, above: 0.5}` |
+
+**Four declare the identity, and each is accurate rather than lazy.** `comms.burst` multiplies a
+*rate*, `gnc.radar_aided` weights a *measurement*, `rcs.conservative` widens a controller
+*deadband*, `rcs.safe_vector` is a mode whose content is the safe target — none of them moves a
+published limit, so a factor that scaled one would be the wrong number.
+`rcs.conservative`'s original `factor: 1.5` is the case in point: read as a threshold scale it
+would have **raised** a ceiling, which is the `power.tight` defect exactly.
+
+The identity on its own is indistinguishable from a profile somebody scaled by one and never
+thought about, so an all-identity `factors` must carry a **`factors_note`** saying what it changes
+instead. That is what makes the declaration read rather than decorative. **267 became 254.**
+
+### A check that carried its own provenance rule
+
+Converting them exposed the check's second defect. Eight alternatives were refused for
+*"declares no reason"* — and the corpus is entirely consistent about this, it just does not use
+that word:
+
+| basis | carries | count |
+|---|---|---|
+| `chosen` | `reason` | 9 |
+| `apollo` | `note` | 4 |
+| `historical` | `note` | 4 |
+
+`check_profile_immutability`'s docstring calls D-05 *"the rule"*, and `check_basis` is where the
+file's provenance rule lives: a `chosen` value needs a reason, an `apollo` one needs a ref, a
+`historical` one needs a source. The profile check demanded a field named `reason` regardless — so
+it was **redundant where it was right and wrong where it was not**, and it would have made the
+convention impossible to follow. It routes through `check_basis` now, which is strictly stronger.
 
 ## Authoring convention: no flow mappings
 

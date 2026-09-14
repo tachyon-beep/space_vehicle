@@ -2574,10 +2574,15 @@ def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) 
             continue
         if not alt.get("revision"):
             report.refuse(awhere, "declares no `revision`")
-        if not (alt.get("provenance") or {}).get("reason"):
-            report.refuse(
-                awhere, "declares no reason; a selectable envelope is a reviewed decision"
-            )
+        # The alternative's provenance goes through `check_basis`, which is the file's one
+        # provenance rule, rather than through a demand for a field named `reason`. The demand was
+        # this check's own second rule and it disagreed with the first: the corpus writes `reason`
+        # for a `chosen` basis and `source` + `note` for `historical` and `apollo`, consistently
+        # across all seventeen alternatives, and eight of them were refused for following the
+        # convention. `check_basis` already requires a reason of a `chosen` value — so the extra
+        # demand was redundant where it was right and wrong where it was not.
+        prov = alt.get("provenance") or {}
+        check_basis(f"{awhere}.provenance", prov.get("basis"), prov, report)
         # Every comparator the domain's *valued* thresholds use needs a factor, and every factor
         # the profile declares is checked for direction **whether or not a threshold uses it
         # today**. Iterating `comparators` alone left an unused key unvalidated, which is a claim
@@ -2608,6 +2613,25 @@ def check_profiles(path: Path, docs: dict[str, dict[str, Any]], report: Report) 
                     f"declares an above factor of {factor}, which *raises* a ceiling and so warns "
                     "later. Tightening a ceiling means lowering it: the factor must be at most 1",
                 )
+        # --------------------------------------------------------------------------------------
+        # A profile that scales nothing has to say what it does instead.
+        #
+        # Four of the vehicle's alternatives declare the identity, and each is accurate rather than
+        # lazy: `comms.burst` multiplies a *rate*, `gnc.radar_aided` weights a *measurement*,
+        # `rcs.conservative` widens a controller *deadband*, and `rcs.safe_vector` is a mode whose
+        # content is the safe target. None of them moves a published limit, so a factor that
+        # scaled one would be the wrong number — and the identity on its own is indistinguishable
+        # from a profile somebody scaled by one and never thought about.
+        # --------------------------------------------------------------------------------------
+        if all(float(factors.get(c, 1.0)) == 1.0 for c in comparators) and not alt.get(
+            "factors_note"
+        ):
+            report.refuse(
+                f"{awhere}.factors",
+                "scales every threshold by one and does not say what it changes instead. A profile "
+                "that moves no limit is a statement about something else — a rate, a measurement "
+                "weight, a control parameter — and `factors_note` is where that is written",
+            )
 
 
 def check_profile_immutability(

@@ -382,7 +382,9 @@ profile_selection:
     - id: conservative
       revision: 1
       description: "raise every caution level by a fifth toward the nominal band, for a fleet that wants to be told early"
-      factor: 0.8
+      factors:
+        below: 1.2500
+        above: 0.8000
       provenance:
         basis: chosen
         reason: "the factor moves the *caution* levels only, never the emergency ones, so the profile can only ever make the fleet more cautious — which is the monotonicity min(agent, operator) requires"

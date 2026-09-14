@@ -286,7 +286,11 @@ profile_selection:
     - id: conservative
       revision: 1
       description: "a wider deadband and a lower authority floor: hold attitude with fewer pulses and give up pointing accuracy"
-      factor: 1.5
+      factors:
+        below: 1.0
+        above: 1.0
+      factors_note: >-
+        the factor widens the controller's own *deadband*, which is a control parameter and not a published limit. The profile deliberately trades pointing accuracy for valve cycles, and that trade is invisible to every threshold this domain declares — which is why the linter must not be handed a number that would scale them
       provenance:
         basis: historical
         source: "rcs_dode.md:1071 and :1102 — the agent layer may request a degraded posture at an eligible window, and the trusted service still decides the pulses"
@@ -298,7 +302,9 @@ profile_selection:
     - id: tight
       revision: 1
       description: "a narrow deadband for a phase that needs pointing accuracy, at the cost of valve cycles"
-      factor: 0.6
+      factors:
+        below: 1.6667
+        above: 0.6000
       provenance:
         basis: historical
         source: "rcs_dode.md:658 — the controller interface supports approved profiles including quaternion PD/PID and phase-plane, selected by ID"
@@ -310,7 +316,11 @@ profile_selection:
     - id: safe_vector
       revision: 1
       description: "the safe-mode profile: acquire and hold a configured safe vector with rate damping"
-      factor: 1.0
+      factors:
+        below: 1.0
+        above: 1.0
+      factors_note: >-
+        a *mode* rather than a scale: the ladder's `safe_hold` rung selects it, and its content is the safe target, which `rcs_dode.md:1107` insists is a mission choice for power and thermal reasons. Nothing about the limits changes, so the identity is the whole truth about its `factors`
       provenance:
         basis: historical
         source: "rcs_dode.md:660 and :1105-1112 — SAFE_VECTOR is a controller profile, and the safe target is configuration data (SUN_SAFE, EARTH_SAFE, COMM_SAFE, INERTIAL_SAFE)"

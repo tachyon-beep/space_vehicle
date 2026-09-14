@@ -217,7 +217,9 @@ profile_selection:
     - id: strict
       revision: 1
       description: "halve the arm window, for a fleet that wants the two-step to be strictly a two-step"
-      factor: 0.5
+      factors:
+        below: 2.0000
+        above: 0.5000
       provenance:
         basis: chosen
         reason: "the factor only ever shortens the window, so the profile is monotonically safe: a shorter arm can make an accidental firing less likely and cannot make it more so"

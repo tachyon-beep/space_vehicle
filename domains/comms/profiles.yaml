@@ -248,7 +248,9 @@ profile_selection:
     - id: emergency
       revision: 1
       description: "event and alarm channels plus essential power, ECLSS and GNC at low rate"
-      factor: 0.15
+      factors:
+        below: 6.6667
+        above: 0.1500
       provenance:
         basis: apollo
         ref: "apollo_diode.md:891"
@@ -263,7 +265,9 @@ profile_selection:
     - id: low
       revision: 1
       description: "a ~1 Hz critical subset, Apollo-inspired reduced mode"
-      factor: 0.35
+      factors:
+        below: 2.8571
+        above: 0.3500
       provenance:
         basis: apollo
         ref: "apollo_diode.md:892"
@@ -272,7 +276,11 @@ profile_selection:
     - id: burst
       revision: 1
       description: "temporary high-rate selected channels; bandwidth expensive"
-      factor: 2.0
+      factors:
+        below: 1.0
+        above: 1.0
+      factors_note: >-
+        the burst is a *rate* profile: its factor multiplies the telemetry rate a fleet may select, not any limit. It is the one profile on the vehicle a fleet can deliberately overspend, and it is bounded by the operator ceiling and by `maximum_queue_age_s` rather than by a threshold — so it leaves every limit exactly where it found it
       provenance:
         basis: apollo
         ref: "apollo_diode.md:895"
