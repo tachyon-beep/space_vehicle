@@ -5862,6 +5862,155 @@ def check_threshold_derivations(root: Path, documents: dict[str, Any], report: R
                 )
 
 
+# What an objective can be. `outcome` is a thing that either happened or did not, `margin` is a
+# quantity that has to stay inside a bound, and `research` is a question the mission exists to ask —
+# the three the corpus uses, and the set is declared so a fourth is a decision rather than a typo.
+OBJECTIVE_KINDS = {"outcome", "margin", "research"}
+# Which end of a margin is the good one. `higher_is_better` is a reserve that is spent down and
+# `closest_to_limit` is a band a zone ran near without crossing; naming the set is what keeps a
+# third from being spelled into existence, in a block whose whole job is to be the score.
+OBJECTIVE_SENSES = {"higher_is_better", "closest_to_limit"}
+
+
+def check_mission_model(mission: dict[str, Any], report: Report) -> None:
+    """The postures, the transitions between them and the objectives — six fields nothing validated.
+
+    Found the way the command registry's five were: mutate each field in turn and see which
+    mutations compose. These are the blocks that decide what the *challenge* is — a posture is what
+    a fleet is authorized to do, a transition is the guard that moves it, and an objective is the
+    score — so a field in them that nothing reads is a hole in the experiment rather than in a
+    subsystem.
+
+    The transition strings are parsed rather than matched, because two of the five are not a plain
+    `A -> B`: `execute -> hold on stale evidence` appends the *reason* to the target, and
+    `any -> aborting` has no source posture at all. So the rule is that the source is `any` or a
+    declared posture, and the target's **first word** is a declared posture — which accepts both
+    forms and still refuses `safe -> standbye`.
+
+    `requires` must be *present*, and an empty one is allowed. That is not a loophole: `any ->
+    aborting` declares `requires: {}` and its note is the most important sentence in the block —
+    *"Abort requires no fresh evidence because requiring it would make the abort conditional on the
+    very instrumentation whose failure is a reason to abort."* A present-but-empty list is that
+    decision; an **absent** one is indistinguishable from an oversight, which is the same
+    distinction `interlocks: none` draws for a command.
+    """
+    postures = [
+        str(p.get("id"))
+        for p in mission.get("postures") or []
+        if isinstance(p, dict) and p.get("id")
+    ]
+    known = set(postures)
+
+    # A posture is a mode the vehicle is in and the executive authorizes against. Two of them under
+    # one id is a mode whose authority depends on which entry a reader found first.
+    repeated = sorted({name for name in postures if postures.count(name) > 1})
+    if repeated:
+        report.refuse(
+            "mission.yaml:postures",
+            f"declares {repeated} more than once. A posture is a mode a fleet is authorized "
+            "against, so two entries under one id is an authority that depends on the reader",
+        )
+    for posture in mission.get("postures") or []:
+        if not isinstance(posture, dict):
+            continue
+        where = f"mission.yaml:posture {posture.get('id')}"
+        if not isinstance(posture.get("terminal"), bool):
+            report.refuse(
+                f"{where}.terminal",
+                f"is {posture.get('terminal')!r}, not a boolean. `terminal` says whether the "
+                "mission is over, and a word that merely reads like yes is a mode the executive "
+                "cannot decide about",
+            )
+        for field in ("name", "entry", "exit"):
+            if not str(posture.get(field) or "").strip():
+                report.refuse(f"{where}.{field}", "is empty")
+
+    # The transitions. `any` is a declared source meaning the guard applies from wherever the
+    # vehicle is, and the target's first word is the posture it arrives at.
+    for row in mission.get("transition_evidence") or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("transition") or "")
+        where = f"mission.yaml:transition {text!r}"
+        if "->" not in text:
+            report.refuse(
+                f"{where}", "is not of the form `<from> -> <to>`, so it names no pair of postures"
+            )
+            continue
+        source, _, target = text.partition("->")
+        source, target = source.strip(), target.strip()
+        if source != "any" and source not in known:
+            report.refuse(
+                f"{where}",
+                f"begins {source!r}, which is neither a declared posture nor `any`. A guard on a "
+                f"transition from nowhere is a guard nothing evaluates. The postures are "
+                f"{sorted(known)}",
+            )
+        head = target.split()[0] if target.split() else ""
+        if head not in known:
+            report.refuse(
+                f"{where}",
+                f"arrives at {head!r}, which is not a declared posture. The target's first word is "
+                "the posture — `execute -> hold on stale evidence` is a legal form and `safe -> "
+                "standbye` is not",
+            )
+        if "requires" not in row:
+            report.refuse(
+                f"{where}.requires",
+                "is absent. An empty list is a decision — `any -> aborting` declares one and gives "
+                "the reason it must stay empty — but an absent field is indistinguishable from an "
+                "oversight, and this is the evidence a safety transition is judged on",
+            )
+
+    # The objectives are the score. A challenge whose scoring is unvalidated is a challenge whose
+    # result nobody can defend.
+    objectives = [
+        str(o.get("id"))
+        for o in mission.get("objectives") or []
+        if isinstance(o, dict) and o.get("id")
+    ]
+    repeated = sorted({name for name in objectives if objectives.count(name) > 1})
+    if repeated:
+        report.refuse(
+            "mission.yaml:objectives",
+            f"declares {repeated} more than once. Two objectives under one id is one of them "
+            "unscored and the other counted twice",
+        )
+    for objective in mission.get("objectives") or []:
+        if not isinstance(objective, dict):
+            continue
+        where = f"mission.yaml:objective {objective.get('id')}"
+        if objective.get("kind") not in OBJECTIVE_KINDS:
+            report.refuse(
+                f"{where}.kind",
+                f"is {objective.get('kind')!r}, not one of {sorted(OBJECTIVE_KINDS)}. The kind says "
+                "what sort of claim the objective makes, and a value outside the set is a claim "
+                "nothing can score",
+            )
+        # `channels` may be empty, and only when `evaluated_by` says the vehicle contributes
+        # nothing. `coordination` is the case: twenty metrics "computed externally and never shown
+        # to the fleet", so it declares no channels at all — and the field that makes that
+        # legitimate is `evaluated_by: external`, which is already a declaration about who settles
+        # it. For `vehicle` and `far_side` an empty list is a scoring rule with no observation
+        # behind it, and `far_side` is not an exemption: the corpus says plainly that what the
+        # vehicle owes the operator's verdict is *the record*.
+        if not objective.get("channels") and objective.get("evaluated_by") != "external":
+            report.refuse(
+                f"{where}.channels",
+                "is empty and `evaluated_by` is not `external`. An objective is settled from "
+                "somewhere — the record, the operator, or neither — and a list with nothing in it "
+                "is a claim that nothing observes it while `evaluated_by` claims otherwise",
+            )
+        # A margin is a quantity judged against a bound, so which direction is *good* is the whole
+        # of what the objective adds to the channel it names.
+        if objective.get("kind") == "margin" and objective.get("sense") not in OBJECTIVE_SENSES:
+            report.refuse(
+                f"{where}.sense",
+                f"is {objective.get('sense')!r}, not one of {sorted(OBJECTIVE_SENSES)}. A margin "
+                "without a direction is a number whose good end nobody wrote down",
+            )
+
+
 def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -> None:
     """The filter's rates are a claim about the *plant's* clock, and the two must agree.
 
@@ -7301,6 +7450,7 @@ def main(argv: list[str] | None = None) -> int:
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
+    check_mission_model(mission or {}, report)
     check_threshold_derivations(
         root, load_documents(root, vehicle, coupling, mission, channels), report
     )

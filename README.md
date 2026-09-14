@@ -3046,6 +3046,51 @@ existence one verb at a time.
 
 Six checks, each verified by mutating the field it guards.
 
+## The postures, the transitions and the objectives
+
+Same sweep as last round, on the blocks that decide **what the challenge is**. Six fields composed
+under mutation:
+
+| block | field | what a mutation did |
+|---|---|---|
+| objectives | `kind` | `outcomee` composed |
+| objectives | `channels` | emptied composed |
+| objectives | `id` | a duplicate composed |
+| postures | `terminal` | `maybe` composed |
+| transitions | the endpoint names | `safe -> standbye` composed |
+| transitions | `requires` | **absent** composed |
+
+The transition strings are **parsed rather than matched**, because two of the five are not a plain
+`A -> B`: `execute -> hold on stale evidence` appends the *reason* to the target, and
+`any -> aborting` has no source posture at all. So the source must be `any` or a declared posture,
+and the target's **first word** must be one — which accepts both real forms and still refuses
+`safe -> standbye`, a guard on a transition that can never happen.
+
+**`requires` must be present, and may be empty.** That is not a loophole: `any -> aborting`
+declares `requires: {}` and carries the best sentence in the block —
+
+> Abort requires no fresh evidence because requiring it would make the abort conditional on the
+> very instrumentation whose failure is a reason to abort.
+
+A present-but-empty list is that decision. An *absent* one is indistinguishable from an oversight —
+the same distinction `interlocks: none` draws for a command.
+
+### One rule the check found live, and had to be narrowed for
+
+`channels` may be empty **only** when `evaluated_by` is `external`, and the check found the case
+immediately: `coordination` is *"apollo_diode.md:1001-1022's twenty metrics, computed externally and
+never shown to the fleet"* and declares no channels at all. The field that makes that legitimate is
+`evaluated_by`, which is already a declaration about **who settles it**.
+
+`far_side` is not an exemption, and that is the interesting half. The vehicle contributes channels
+to objectives the *operator* verdicts — `crew_survive` says it plainly: the availability state
+cannot say "dead", but *"what the vehicle owes it is the record."* So an empty list under
+`far_side` is a scoring rule with no observation behind it.
+
+A margin objective now has to declare its **`sense`** as well — `higher_is_better` for a reserve
+spent down, `closest_to_limit` for a zone that ran near its band. A margin without a direction is a
+number whose good end nobody wrote down.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
