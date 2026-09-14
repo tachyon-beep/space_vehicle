@@ -839,6 +839,46 @@ def stock_flux_basis(edge: dict[str, Any], nodes: dict[str, Any]) -> tuple[str |
     return ("per_hour" if per_hour else "per_second"), ""
 
 
+def check_placeholders(docs: dict[str, dict[str, Any]], report: Report) -> None:
+    """A value the plant integrates with, inside an entry whose magnitudes are owed, says so.
+
+    `basis: UNCONFIGURED` is a *decision*, not an undecided one: it is the class for a value no source
+    supplies, and the twenty-eight entries carrying it are correctly declared. Round 76 set out to
+    settle them and found there was nothing to settle — which is the useful answer, and it corrected
+    the round-75 framing that called them open judgements.
+
+    But two of them carry a number the plant **uses** while the entry says its magnitudes are owed:
+    `pressurant_pressure_psi.tau_s = 5` (integrated as a lag, and the seed of PRP-03) and
+    `pressurant_he_kg.quantum = 1.0e-05` (the fixed-point stock cannot exist without one). Read
+    together with `basis: UNCONFIGURED` those look like contradictions until a reader finds the
+    sentence that reconciles them, and a reader who does not find it cannot tell whether to use the
+    number or ignore it.
+
+    So an entry whose basis is unconfigured and which carries a numeric integrator parameter must
+    declare *that* parameter a placeholder, with the reason. The rule names the four parameters the
+    plant reads — `tau_s`, `quantum`, `delay_s`, `lambda_per_h` — because those are the ones whose
+    absence stops a tick rather than merely leaving a quantity unset.
+    """
+    for state in (docs.get("components.yaml") or {}).get("state") or []:
+        if not isinstance(state, dict):
+            continue
+        basis = (state.get("provenance") or {}).get("basis")
+        if basis != "UNCONFIGURED":
+            continue
+        for field in ("tau_s", "quantum", "delay_s", "lambda_per_h"):
+            value = state.get(field)
+            if not isinstance(value, (int, float)):
+                continue
+            if not state.get(f"{field}_placeholder"):
+                report.refuse(
+                    f"components.yaml:state {state.get('id')}",
+                    f"declares `{field}: {value}` inside an entry whose basis is UNCONFIGURED, and "
+                    f"does not say it is a placeholder. The plant *uses* this number while the entry "
+                    "says its magnitudes are owed, and the two read as a contradiction until the "
+                    f"reason is stated in `{field}_placeholder`",
+                )
+
+
 def check_basis(where: str, basis: str | None, extra: dict[str, Any], report: Report) -> None:
     """Every value that matters records where it came from, and a claim needs support.
 
@@ -2304,6 +2344,7 @@ def check_domain(
             docs[filename] = loaded
 
     check_fault_components(path, docs, node_ids, components_elsewhere or set(), report)
+    check_placeholders(docs, report)
     check_fault_coverage(path, docs, report)
     check_profiles(path, docs, report)
 

@@ -171,6 +171,12 @@ state:
     method: stock
     unit: kg
     quantum: 1.0e-5
+    quantum_placeholder: >-
+      chosen against a *quantum and minimum-flow* rule this entry cannot satisfy: the stock's
+      smallest flow is owed, so there is nothing to size the quantum against, and the quantum is
+      nevertheless needed for the fixed-point stock to exist. One hundredth of a gram is the
+      `water_potable_kg` figure, picked because the helium feed is slow rather than because any
+      source gives it
     min_flow_per_s: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED

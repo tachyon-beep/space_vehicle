@@ -2333,6 +2333,30 @@ headline number has been examined, and after two rounds both have been.
 
 The literal half is 107 scalars and the prose half 116. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
+## There was nothing to settle, and correcting that is the round
+
+Round 75 called the 28 entries carrying `basis: UNCONFIGURED` "open judgements" and proposed finishing
+them. **They are correctly declared.** `UNCONFIGURED` is the class for a value no source supplies, and
+the twenty-eight are owed values rather than undecided ones — the premise was wrong, and saying so is
+worth a round because the opposite conclusion would have had me inventing 28 provenance classes.
+
+Two of them, though, carry a number the plant **uses** while the entry says its magnitudes are owed:
+
+| entry | the number | why it is used |
+|---|---|---|
+| `pressurant_pressure_psi` | `tau_s: 5` | `plant.py` integrates the lag with it and PRP-03 is seeded against the state |
+| `pressurant_he_kg` | `quantum: 1.0e-05` | the fixed-point stock cannot exist without one |
+
+Read against `basis: UNCONFIGURED` those look contradictory until a reader finds the sentence that
+reconciles them — and a reader who does not cannot tell whether to use the number or ignore it. They
+carry `tau_s_placeholder` and `quantum_placeholder` now, and `check_placeholders` requires the marker
+on any owed entry carrying a numeric **integrator parameter**: `tau_s`, `quantum`, `delay_s` and
+`lambda_per_h` are the four the plant reads, and whose absence stops a tick rather than merely
+leaving a quantity unset.
+
+The distinction the round turns on: **an owed value is a declaration; a placeholder is a declaration
+about a value that is in use.** Before this round the folder could not tell them apart.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

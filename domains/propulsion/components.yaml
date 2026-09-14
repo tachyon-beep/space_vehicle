@@ -106,6 +106,13 @@ state:
     method: lag
     unit: psi
     tau_s: 5
+    tau_s_placeholder: >-
+      the five seconds is **used** — `plant.py` integrates this lag with it and PRP-03 is seeded
+      against the state — so it is not merely recorded. It is a placeholder in *shape* rather than in
+      value: no source gives the regulator's transfer function, and a lag with no constant cannot be
+      integrated at all. Said here rather than left to the note, because `basis: UNCONFIGURED` on the
+      entry and a number in its `tau_s` read as a contradiction until a reader finds the sentence
+      that reconciles them
     provenance:
       basis: UNCONFIGURED
       note: "the regulator's transfer function is not published for either vehicle; apollo_diode.md:139 marks the channel vehicle-dependent. The five-second constant is a placeholder in shape only and the magnitudes are owed — PRP-03 is seeded against this and cannot be evaluated until they exist"
