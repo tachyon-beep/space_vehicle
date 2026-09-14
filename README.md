@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 255 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 268 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 255 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 268 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **255** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **268** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -5354,6 +5354,87 @@ and a name it never binds, an entry with a derivation and two rates, the LM abso
 from the rounded sensitivity (which refuses, and is why it is not declared), and the unbroken corpus
 composing at 255.
 
+## The permission the machine exists to grant, and the guards that read nothing
+
+The unread-field sweep, run over the whole corpus rather than over one block, put
+`hazardous_actions_permitted` at the top of what it found: **ten declarations, in the block that
+decides what the challenge *is*, and no tool in the folder mentioned the field.** Five of the six
+fields around it were validated — the ids are unique, `terminal` is a boolean, `entry` and `exit`
+are non-empty, the transitions name declared postures — and the sixth, which is the permission the
+execution machine exists to grant, was compared to nothing.
+
+Reading it produced four rules, and the corpus already satisfied three of them:
+
+| rule | today |
+|---|---|
+| every posture declares it, as a boolean | 10 of 10 |
+| a terminal posture permits nothing — `mission_diode.md`:1727's *"no hazardous verb is enabled in ABORTED"*, verified statically at startup | `complete`, `aborted`: false |
+| the machine permits hazardous actions *somewhere*, or it can authorize nothing | `execute`: true |
+| every transition **into** a permitting posture re-reads `mission.abort_latched` — TV-E (`:1395`), and invariant E's vehicle-side half | `prepare -> execute` does |
+
+The fourth is the one with teeth and it is the one the machine happened to get right: the latch is
+re-read on the way into the only posture that can act, and now nothing can stop doing that without
+the linter saying so.
+
+### Four of the eight non-terminal postures could not be left by any guard that reads anything
+
+The same reading found the round's real defect, and it is not in the field — it is one block down.
+`transition_evidence` had five entries for a machine with ten postures, and the five covered the
+*forward* path: safe → standby → prepare → execute → hold, plus the abort. So `init`, `hold`,
+`recovery` and `aborting` were the source of no transition at all, which means the guards that leave
+them — `INITIALIZED`, `g_resume`, `g_standby`, `SAFE_EFFECTS_CONFIRMED` — declared **no telemetry
+dependency**, while `mission_diode.md`:1720-1729 puts *"every guard declares telemetry
+dependencies"* in the list a startup verifies statically.
+
+**The three that matter are the three that resume something**, and the corpus had already written
+the argument for them, one transition away. `safe -> standby`'s entry says it in as many words:
+
+> *a latched abort dominates the transition; deciding on a stale latch is how a fleet resumes an
+> abandoned mission.*
+
+Resuming from `hold`, standing down from `recovery` and confirming safe effects after an abort are
+the same decision about the same latch, and none of the three said what it read. All four are
+declared now, with the reasons in the file: the latch and the mode on all three, the phase on the
+two that resume into a mission, and `gnc.body_rate_xyz_deg_s` on `hold -> execute` — the channel
+whose staleness is one of the two ways *into* `hold`, re-read on the way out, which is what
+`execute -> hold` already named it for.
+
+`aborting -> aborted` is the fourth and it is honest about what it cannot say: *what confirms the
+safe effects is the executive's event*, and this vehicle has no single channel that means "quiet" —
+the breakers, the valves and the engine states each carry part of it and nothing aggregates them.
+The entry declares the latch it is confirming against and the mode it is leaving, and the note says
+the rest is the far side's.
+
+### And the round's own debt was not counted
+
+Writing the debt this round leaves behind — *nothing joins `hazardous_actions_permitted` to the
+verbs it constrains* — put a new entry in `mission.yaml#open_debts` and **the headline count did not
+move.** That is the fourth time the same asymmetry has been found. `channels.yaml`'s eight have been
+counted since the section existed; `coupling.yaml`'s eight were counted when its shopping list
+turned out to be read by nobody; `vehicle.yaml`'s nine and the domains' twenty-four were counted
+when a search for an EVA note opened the file it was sitting in — and `mission.yaml`, written last,
+was still outside the number, along with `presentation.yaml`.
+
+Thirteen obligations were therefore owed, written down, and **not fatal under `--strict`**, which is
+the only thing a debt is for. **255 became 268**: nine in `mission.yaml` and four in
+`presentation.yaml`, and the one this round added is the ninth of the nine — the first debt in the
+folder's history to be counted on the day it was written rather than a year later.
+
+The invariants table's row E was rewritten in the same pass, because it had said *"the posture
+machine gives `aborting`/`aborted` no hazardous actions"* since it was written: true of the data,
+enforced by nothing, which is the shape of claim this folder keeps finding in its own prose. It now
+says which half is mechanical and which half is the executive's.
+
+**176 became 177 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking eleven copies in `.scratch/r15/`: a terminal posture permitting hazardous
+actions, a permission that is a word rather than a boolean, a machine that permits action nowhere,
+the latch dropped from the transition into the permitting posture, each of the four guards deleted
+from `transition_evidence` in turn, a debt deleted from each of the two newly-counted lists (267 in
+both cases), and the unbroken corpus composing at 268 with both files in its debt list.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
@@ -5367,7 +5448,7 @@ whether the linter would catch a violation. An invariant that nothing checks is 
 | B | `AgentRequest ⇏ ActuatorEffect` — always a trusted step between them | Not a property of this folder. It is the diode's, and it is the reason the vehicle is behind a window at all (`docs/diode-contract.md`, `design.md` §8). |
 | C | `Effect(i,t) ⇒ Guards(i,t)` — validity at admission is not enough | Every verb declares `gate`, `interlocks`, `allowed_phases` and `conflict_domain`; the linter refuses an interlock that resolves to no threshold, and the phases a verb allows must be phases the mission declares. `avionics_diode.md:496-508` adds the tenth term the predicate was missing — an irreversible action needs a synchronised clock, because its deadline is measured against one — and the linter now requires `requires_time_sync` on every irreversible verb. |
 | D | `RequiredTelemetryStale ⇒ ¬HazardousEffect` | **New, and the reason for this round.** Every threshold's point must resolve to a maximum decision age, a declared age may not be shorter than the publish period, and every entry of `mission.yaml#transition_evidence` must be meetable by the channel it names. |
-| E | `AbortLatched ⇒ ¬Permit(hazardous)` | Partly. `mission.abort_latched` is a P0 channel and the posture machine gives `aborting`/`aborted` no hazardous actions; the dominance rule itself is the executive's to implement, and the vehicle's contribution is that the latch is published and unambiguous. |
+| E | `AbortLatched ⇒ ¬Permit(hazardous)` | **In part, and the part is now mechanical.** Ten postures declare `hazardous_actions_permitted`; exactly one (`execute`) says yes, the two terminal postures say no — the property `mission_diode.md`:1727 puts in the list a startup verifies statically — and every transition *into* a permitting posture must require `mission.abort_latched` within its evidence, which is TV-E's vehicle-side half. The dominance rule itself is still the executive's, and what the vehicle cannot yet say is which commands the permission ranges over: a verb carries `irreversible` and not `hazardous`, so the join between the permission and the command surface is named in `mission.yaml#open_debts` rather than assumed. |
 | F | `AgentWrite(TelemetryMirror) ⇏ Change(MissionState)` | Not a property of this folder — it is the window's, and `plant.md`'s truth/evidence boundary is the vehicle-side half of it. |
 | G | `Accepted(seq_n) ⇒ seq_n > highwater` | The canonical chain's (V-02, C-21): `seq` + `boot_id` + `stream_id`. The vehicle publishes the sequence; the ledger is the executive's. |
 | H | `Effect ⇒ RemainingAfterEffect ≥ SafetyReserve` | The reserve floors: `prop_cutoff_guard_5`, `o2_reserve_10`, `water_reserve_20`, `cooling_water_reserve`, `rcs_propellant_reserve` and their siblings, each with an `interlock: true` guard evaluated at request time. |

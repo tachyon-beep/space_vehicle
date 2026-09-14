@@ -5848,6 +5848,14 @@ def check_presentation(
         )
         return
 
+    # The same asymmetry, in the same round and for the same reason: this file's four `open_debts`
+    # were read by no code at all. They are the conformance rows the probe cannot exercise, the
+    # `service` layer's commanded-versus-derived split, the precision-and-rate confirmation owed to
+    # the plant, and the honest half of a mirror bound — none of them marginal, and all of them
+    # outside the number that exists to count what is owed.
+    for row in doc.get("open_debts") or []:
+        report.debt("presentation.yaml:open_debts", str(row))
+
     # 1. The contract this file claims to satisfy has to be the frozen one.
     if doc.get("contract_status") != "frozen":
         report.refuse(
@@ -8159,7 +8167,19 @@ def check_mission_model(mission: dict[str, Any], report: Report) -> None:
     very instrumentation whose failure is a reason to abort."* A present-but-empty list is that
     decision; an **absent** one is indistinguishable from an oversight, which is the same
     distinction `interlocks: none` draws for a command.
+
+    And this file's own `open_debts` are counted here, which is how the round found the fourth
+    instance of an asymmetry that had already been repaired in three places. The round wrote one
+    entry into this list — the permission below, and the verbs it is not joined to — and **the
+    headline count did not move**: `channels.yaml`'s eight are counted since the section existed,
+    `coupling.yaml`'s eight when its shopping list turned out to be read by nobody, `vehicle.yaml`'s
+    nine and the domains' twenty-four when a search for an EVA note opened the file it was sitting
+    in, and this file, written last, was still outside the number. A debt that is not counted is not
+    fatal under `--strict`, which is the only thing a debt is for.
     """
+    for row in mission.get("open_debts") or []:
+        report.debt("mission.yaml:open_debts", str(row))
+
     postures = [
         str(p.get("id"))
         for p in mission.get("postures") or []
@@ -8227,6 +8247,84 @@ def check_mission_model(mission: dict[str, Any], report: Report) -> None:
                 "the reason it must stay empty — but an absent field is indistinguishable from an "
                 "oversight, and this is the evidence a safety transition is judged on",
             )
+
+    # `hazardous_actions_permitted` is the field that decides whether a fleet may act at all, and
+    # nothing read it: the block's other fields were validated and this one was declared ten times
+    # and compared to nothing. *`mission_diode.md`:1727* puts "no hazardous verb is enabled in
+    # ABORTED" in the list a startup must verify statically, and TV-E (`:1395`) refuses any
+    # hazardous request with the abort latch set — so the field is a safety property with a
+    # published test vector behind it, declared per posture and unread.
+    permitting: set[str] = set()
+    terminals: set[str] = set()
+    for posture in mission.get("postures") or []:
+        if not isinstance(posture, dict):
+            continue
+        pid = str(posture.get("id"))
+        where = f"mission.yaml:posture {pid}"
+        permitted = posture.get("hazardous_actions_permitted")
+        if not isinstance(permitted, bool):
+            report.refuse(
+                f"{where}.hazardous_actions_permitted",
+                f"is {permitted!r}, not a boolean. This says whether a fleet may act from this "
+                "posture at all, and a value that merely reads like a yes is a permission nothing "
+                "can evaluate",
+            )
+            continue
+        if posture.get("terminal") is True:
+            terminals.add(pid)
+            if permitted:
+                report.refuse(
+                    f"{where}.hazardous_actions_permitted",
+                    "is true on a terminal posture. `mission_diode.md`:1727 lists *no hazardous verb "
+                    "is enabled in ABORTED* among the properties to verify statically: a mission "
+                    "that is over is not one a fleet may still act from",
+                )
+        elif permitted:
+            permitting.add(pid)
+    if postures and not permitting:
+        report.refuse(
+            "mission.yaml:postures",
+            "permits hazardous actions in no posture, so the machine can authorize nothing and the "
+            "mission it exists to run cannot be run",
+        )
+
+    # And the two things a transition is for, neither of which was read either: where it *arrives*
+    # decides whether the latch has to be re-read, and a posture with no outbound row is a mode
+    # whose guard reads nothing.
+    sources: set[str] = set()
+    for row in mission.get("transition_evidence") or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("transition") or "")
+        if "->" not in text:
+            continue
+        source, _, target = text.partition("->")
+        source, target = source.strip(), target.strip()
+        head = target.split()[0] if target.split() else ""
+        sources.add(source)
+        # Invariant E, vehicle-side, and the one place it can be held: TV-E refuses any hazardous
+        # request with the abort latch set, so every transition *into* a posture that permits
+        # hazardous actions is a last chance to read the latch. `prepare -> execute` does.
+        if head in permitting:
+            requires = row.get("requires")
+            if isinstance(requires, dict) and "mission.abort_latched" not in requires:
+                report.refuse(
+                    f"mission.yaml:transition {text!r}",
+                    f"arrives at {head!r}, which permits hazardous actions, and requires no "
+                    "`mission.abort_latched`. Invariant E: a latched abort dominates every hazardous "
+                    "effect, and this transition is the last place the latch can be read before one",
+                )
+    for pid in postures:
+        if pid in terminals or pid in sources:
+            continue
+        report.refuse(
+            f"mission.yaml:posture {pid}",
+            "is the source of no transition in `transition_evidence`, so the guard that leaves it "
+            "declares no telemetry dependency. `mission_diode.md`:1720-1729 puts *every guard "
+            "declares its telemetry dependencies* in the list a startup verifies statically, and "
+            "`any -> aborting` is not a way out of a posture: it is the abort path, which every "
+            "posture has and which is deliberately evidence-free",
+        )
 
     # The objectives are the score. A challenge whose scoring is unvalidated is a challenge whose
     # result nobody can defend.

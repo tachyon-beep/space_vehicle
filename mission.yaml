@@ -464,6 +464,25 @@ comms_blackout:
 # --------------------------------------------------------------------------------------
 transition_evidence:
 
+  # The four entries below the flow — `init -> safe`, `hold -> execute`, `recovery -> standby` and
+  # `aborting -> aborted` — are the round that read `hazardous_actions_permitted`: every other
+  # guard in this block declared its telemetry dependencies and these four declared none, which is
+  # exactly what `mission_diode.md`:1720-1729 puts in the list a startup must verify statically
+  # ("every guard declares telemetry dependencies"). The three that *resume* anything are the ones
+  # that mattered: the principle is already written one transition down, on `safe -> standby` —
+  # "deciding on a stale latch is how a fleet resumes an abandoned mission" — and resuming from
+  # `hold`, standing down from `recovery` and confirming safe effects after an abort are the same
+  # decision about the same latch.
+  - transition: "init -> safe"
+    guard: INITIALIZED
+    requires:
+      power.dc_bus_a_v: {max_age_ms: 100, why: "the vehicle has power to be operated at all; the executive's own startup checks are not this file's to declare"}
+      mission.posture: {max_age_ms: 1000, why: "the posture being left"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:307-317 — INIT leaves on INITIALIZED"
+      note: "the abort latch is deliberately absent: `safe` permits no hazardous actions, so a latched abort does not have to dominate this transition — invariant E is about permitting, and the two entries that *do* arrive at a permitting posture require it"
+
   - transition: "safe -> standby"
     guard: g_safe_exit
     requires:
@@ -515,6 +534,35 @@ transition_evidence:
         rule: on this vehicle an *unexplained* attitude rate is F-04's first clue, and a fleet
         deciding what to do about it on a stale rate is deciding about the wrong vehicle
 
+  - transition: "hold -> execute"
+    guard: g_resume
+    requires:
+      mission.abort_latched: {max_age_ms: 1000, why: "invariant E, and the same sentence `safe -> standby` carries: a latched abort dominates the transition, and deciding on a stale latch is how a fleet resumes an abandoned mission"}
+      mission.phase: {max_age_ms: 1000, why: "the phase is a term in every verb's authorization, so a resume that cannot read it resumes into an unknown activity"}
+      mission.posture: {max_age_ms: 1000, why: "the posture being left"}
+      gnc.body_rate_xyz_deg_s: {max_age_ms: 200, why: "the channel whose staleness is one of the two ways *into* `hold`: resuming on a rate that is still stale is leaving the posture on the evidence that caused it"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:398-402 — REQUEST_RESUME with g_resume; the channel set is this vehicle's, and the rate is the one `execute -> hold` above already names"
+      note: >-
+        the transition a fleet takes when it decides the emergency is over, and until this round
+        it was the only guard in the machine that resuming was authorized against with no
+        telemetry dependency declared at all
+
+  - transition: "recovery -> standby"
+    guard: g_standby
+    requires:
+      mission.abort_latched: {max_age_ms: 1000, why: "a recovery that ran while an abort was latched stands the vehicle down into a mission that is already abandoned"}
+      mission.phase: {max_age_ms: 1000, why: "the phase term, as everywhere else"}
+      mission.posture: {max_age_ms: 1000, why: "the posture being left"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:404-410 — RECOVERY_COMPLETE with g_standby"
+      note: >-
+        what a recovery *achieved* is the fault's own business and is declared by the domain that
+        owns the fault; what this transition adds is the mode and the latch, which are the two
+        terms the executive's own guard is written over
+
   - transition: "any -> aborting"
     guard: ABORT
     requires: {}
@@ -527,6 +575,21 @@ transition_evidence:
         instrumentation whose failure is a reason to abort — the same reasoning that gives
         `enter_safe_hold` no interlocks in the RCS domain. A safety transition that can be
         blocked by the condition it protects against is not a safety transition.
+
+  - transition: "aborting -> aborted"
+    guard: SAFE_EFFECTS_CONFIRMED
+    requires:
+      mission.abort_latched: {max_age_ms: 1000, why: "the transition exists because the latch is set; a confirmation read against a cleared latch is a confirmation of a different mission"}
+      mission.posture: {max_age_ms: 1000, why: "the posture being left"}
+    provenance:
+      basis: historical
+      source: "mission_diode.md:342-348 — SAFE_EFFECTS_CONFIRMED, and invariant J behind the terminal posture"
+      note: >-
+        what *confirms* the safe effects is the executive's event, and this file does not pretend
+        otherwise: there is no single channel on this vehicle that means "quiet" — the breakers,
+        the valves and the engine states each carry part of it and nothing aggregates them. What
+        the vehicle contributes to the guard is the latch it is confirming against and the mode it
+        is leaving, which is what the two entries name
 
 # --------------------------------------------------------------------------------------
 # Δv budget. Every figure below is a published *velocity change* from the Apollo 11 mission
@@ -980,6 +1043,8 @@ landing_site:
       is the reason the LM-as-lifeboat decision is affordable at all — the half of the vehicle the
       crew would move into is the half that can always be talked to.
 open_debts:
+
+  - "**`hazardous_actions_permitted` is held, and the verbs it constrains are not joined to it.** Ten postures declare whether a fleet may act from them, exactly one (`execute`) says yes, and until this round no tool read the field — the other five fields of the block were validated and this one, which is the permission the whole execution machine exists to grant, was compared to nothing. What is held now is the safety property `mission_diode.md`:1727 puts in the startup verification list (*no hazardous verb is enabled in ABORTED*), that the terminal postures permit nothing, that the machine permits action somewhere, and the vehicle-side half of TV-E: every transition *into* a posture that permits hazardous actions must re-read `mission.abort_latched`, which `prepare -> execute` does. What is still unjoined is the other half of the sentence: the vehicle declares eleven irreversible verbs and two armed one-way events, and *nothing says which verbs the permission is about*. `irreversible: true` is the nearest thing to that vocabulary and it is a different claim — it is about whether an effect can be undone, not about whether it may be attempted from `recovery` while the crew are working a fault. Until a verb carries the hazardous flag, `hazardous_actions_permitted` is a property of the executive's gate rather than of the vehicle's command surface, and the gate is the far side's to build."
 
   - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
   - "**The sequence of blackouts, not their count.** `plant.py --blackout` gives the number: 23.5 h silent across the five orbital phases, 46.5 min in every 117.8, and the LM's surface link is continuous because the site declares it so. What is still unbudgeted is *which* manoeuvres land in the dark. A phase with 12 occultations and a phase with 20 are different experiments, and the alignment of the first blackout against the phase's start is a free parameter of the arrival geometry — it depends on where in the orbit the vehicle was at LOI, which depends on the transfer plane, which depends on the same lunar ephemeris the three owed orbital elements need. One datum closes three debts, and this is the third of them."
