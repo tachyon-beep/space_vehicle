@@ -5210,13 +5210,36 @@ def resolve_dotted(document: Any, dotted: str) -> Any:
     return node
 
 
-def load_documents(root: Path, vehicle: Any, coupling: Any, mission: Any) -> dict[str, Any]:
-    """Every document a declared source may point into, keyed by the path a source writes."""
+def load_documents(
+    root: Path, vehicle: Any, coupling: Any, mission: Any, channels: Any = None
+) -> dict[str, Any]:
+    """Every document a declared source may point into, keyed by the path a source writes.
+
+    `channels.yaml` is present but *computed* rather than read: the registry's publishing
+    statistics are properties of the channel list rather than keys in the file, and the one that
+    matters is the slowest period, because that is what an aggregate staleness limit is twice. It
+    is synthesised here so `derives_from` can name it like any other source, which means the number
+    is re-derived on every run instead of being a figure somebody typed once.
+    """
     documents = {
         "vehicle.yaml": vehicle or {},
         "coupling.yaml": coupling or {},
         "mission.yaml": mission or {},
     }
+    if isinstance(channels, dict):
+        rates = [
+            float(row["rate_hz"])
+            for rows in channels.values()
+            if isinstance(rows, list)
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("rate_hz"), (int, float))
+            and row["rate_hz"] > 0
+        ]
+        if rates:
+            # The slowest *publishing* channel. Channels at zero are published on change rather
+            # than on a cadence, so they have no period to be stale against.
+            documents["channels.yaml"] = {"slowest_publish_period_ms": 1000.0 / min(rates)}
     domains = root / "domains"
     if domains.is_dir():
         for path in sorted(domains.glob("*/*.yaml")):
@@ -7067,7 +7090,9 @@ def main(argv: list[str] | None = None) -> int:
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
-    check_threshold_derivations(root, load_documents(root, vehicle, coupling, mission), report)
+    check_threshold_derivations(
+        root, load_documents(root, vehicle, coupling, mission, channels), report
+    )
     check_presentation_references(root, presentation or {}, coupling or {}, mission or {}, report)
     check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)

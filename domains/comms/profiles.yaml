@@ -71,6 +71,11 @@ thresholds:
     latched: true
     severity: WARNING
     point_units: "deg, the gimbal's mechanical limit"
+    derives_from: "domains/comms/components.yaml:components.gimbal.range_deg"
+    derives_note: >-
+      the limit *is* the gimbal's mechanical range, and the note above already says so:
+      past it the error grows with the vehicle's attitude and no amount of gimbal motion
+      helps. A second number here would be a second opinion about one mechanism.
     provenance:
       basis: apollo
       ref: "apollo_diode.md:163"

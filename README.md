@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **203** the plant
+pack-voltage state, and the missing charging efficiency). The **201** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 134. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 131. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 251 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 248 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 251 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 248 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2884,6 +2884,48 @@ factor converts.
 Four checks, each verified by breaking it: a supplied source with the right limit (composes), with
 a wrong one (refused), a renamed source (refused — it reads exactly like an unset one), and a
 missing note (refused). **254 became 251.**
+
+## A limit that is a property of the registry
+
+Last round gave thresholds a way to say *where* their limit comes from. This round used it on two
+more, and one of them turned out to be **derivable all along**.
+
+`sensor_stale`'s own reason says the value *"cannot be a constant and is therefore a function of
+the active profile"*, and that each **point** has its own limit of one publish period while this is
+the **aggregate's** at twice the slowest. So the number was in the registry the whole time: 0.05 Hz
+is the slowest publishing channel — one per 20 s — and twice that is **40,000 ms**. Channels at
+`rate_hz: 0` are published on change and have no period to be stale against, which is why the
+source is the slowest *positive* rate.
+
+`channels.yaml` has no such key in it, so the linter **computes** the statistic and hands it to the
+same resolver every other `derives_from` uses:
+
+```yaml
+    derives_from: "channels.yaml:slowest_publish_period_ms"
+    derives_factor: 2
+```
+
+That is what makes it re-derived on every run rather than a figure somebody typed once — **change a
+channel's rate and the threshold is refused until it moves with it**, verified by slowing
+`crew.location` from 0.05 Hz to 0.02 Hz and watching the limit refuse as 40,000 against 100,000.
+
+`hga_scan_limit` was the other kind: its note says the value is *"owed with the gimbal's range"*,
+and `comms.components.gimbal.range_deg` is itself `UNCONFIGURED` — **the same double count as last
+round's three**, so it takes a `derives_from` and stops being counted twice.
+
+### What the value cannot carry, stated rather than implied
+
+The default profile's limit is not the minimal profile's. `avionics.minimal` scales `above`
+thresholds by 0.5 — which would **tighten** `sensor_stale` to 20,000 ms, where that profile's own
+note says dropping channels raises the slowest period and therefore *loosens* it, "which is the
+correct direction". Nothing applies the factors yet, so the interaction is recorded in the
+threshold's provenance rather than resolved, and it is a real piece of future work: a limit that is
+a function of the *channel set* is not a limit a per-comparator factor can scale.
+
+**251 became 248.** The two thresholds are resolved or de-duplicated; a third obligation of a
+different kind survives beside them — *"is latched but its assert and clear values are not both
+set"* — which is the correct state for a latched comparator whose terms are now derived rather than
+declared.
 
 ## Authoring convention: no flow mappings
 

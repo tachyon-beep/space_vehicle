@@ -195,13 +195,26 @@ thresholds:
   - id: sensor_stale
     point: avionics.oldest_sample_age_ms
     comparator: above
-    assert: UNCONFIGURED
-    clear: UNCONFIGURED
+    assert: 40000
+    clear: 20000
     dwell_assert_ms: 2000
     dwell_clear_s: 5
     latched: true
     severity: WARNING
     point_units: "ms: 2x the slowest publish period in the active profile"
+    derives_from: "channels.yaml:slowest_publish_period_ms"
+    derives_factor: 2
+    derives_note: >-
+      twice the slowest publish period the registry declares, which is 40,000 ms against the slowest
+      publishing channel's 0.05 Hz and is the point at which that member has missed a scheduled
+      refresh rather than merely being the slowest. `clear` is set to one period, because a set whose
+      slowest member is back on its own cadence is not stale. Channels at `rate_hz: 0` are published
+      on change and have no period to be stale against, which is why the source is the slowest
+      *positive* rate. What this value cannot carry is the profile dependence the reason above
+      describes: it is the default profile's limit, and the `avionics` alternatives scale `above`
+      thresholds by their own factor, which would *tighten* this one where the `minimal` profile's own
+      note says dropping channels must loosen it. Nothing applies the factors yet, so the interaction
+      is recorded here rather than resolved
     provenance:
       basis: chosen
       reason: >-
