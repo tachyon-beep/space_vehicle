@@ -833,7 +833,14 @@ edges:
   - id: E-CABIN-HEAT-CSM
     sensitivity:
       value: 0.008
-      computation: "1 / 125"
+      # The conductance of *this* compartment's zone, not a number the two cabins share. The CSM
+      # and the LM happen to be lumped identically at 125 W/K, and until this round both edges
+      # wrote the same literal — so re-rating one cabin's conductance would have left both edges
+      # describing the other's.
+      derivation:
+        expression: "1 / conductance_w_per_k"
+        inputs:
+          conductance_w_per_k: "domains/thermal/components.yaml:state.zone_csm_cabin_t.conductance_w_per_k"
       unit: "K per W"
       basis: derived
       relation: "the cabin's heat rate raises its equilibrium by 1/G = 0.008 K per watt, the same conductance the cabin state is lumped with"
@@ -883,7 +890,10 @@ edges:
   - id: E-CABIN-HEAT-LM
     sensitivity:
       value: 0.008
-      computation: "1 / 125"
+      derivation:
+        expression: "1 / conductance_w_per_k"
+        inputs:
+          conductance_w_per_k: "domains/thermal/components.yaml:state.zone_lm_cabin_t.conductance_w_per_k"
       unit: "K per W"
       basis: derived
       relation: "as E-CABIN-HEAT-CSM, at the second compartment"
@@ -988,7 +998,13 @@ edges:
   - id: E-PROP-ENG
     sensitivity:
       value: 0.00032423409
-      computation: "1 / (314.5 * 9.80665)"
+      # The Isp is `vehicle.yaml#propulsion`'s, which is the file the Δv budget and the mass
+      # closure are walked with; the 9.80665 is standard gravity and stays a literal, because it
+      # is a constant of nature rather than a declaration about this vehicle.
+      derivation:
+        expression: "1 / (isp_s * 9.80665)"
+        inputs:
+          isp_s: "vehicle.yaml:propulsion.sps.isp_s"
       unit: "kg/s per N"
       basis: derived
       relation: "the tank drains at thrust / (Isp x g0): Isp 314.5 s gives 3084.2 N per kg/s, so the drain is 1/3084.2 = 0.000324234 kg/s for every newton. Read the other way it is the same number and the same engine — 3084.2 N per kg/s is what it produces — and the edge is stated as a drain because a stock discharges through its outbound edges, and this is one."
@@ -1030,7 +1046,15 @@ edges:
     kind: rate
     sensitivity:
       value: 0.0003516262803
-      computation: "1 / (290.0 * 9.80665)"
+      # The article, not a system: all forty-four thrusters are `thruster_100lbf`, whose Isp is
+      # declared **once** in `domains/rcs/components.yaml`, while `vehicle.yaml#propulsion` carries
+      # it three times — once per system that flies it. Binding the single declaration is the
+      # honest choice for a node (`prop_rcs`) that all three draw from, and round 106's join holds
+      # the domain's copy and the three vehicle entries equal in both directions either way.
+      derivation:
+        expression: "1 / (isp_s * 9.80665)"
+        inputs:
+          isp_s: "domains/rcs/components.yaml:components.thruster_100lbf.isp_s"
       unit: "kg/s per N"
       basis: derived
       relation: "as E-PROP-ENG, at the thruster: Isp 290 s gives 2843.9 N per kg/s, so the tank drains 1/2843.9 = 0.000351626 kg/s for every newton of thrust. The inverse is the RCS domain's own published figure, `capability.mass_flow_per_thruster` = 445/2843.9 = 0.15647 kg/s"
@@ -1443,7 +1467,13 @@ edges:
     kind: rate
     sensitivity:
       value: 0.0357
-      computation: "1 / 28"
+      # The bus's own nominal, which the buses did not declare until this round: they carried a
+      # `v_band` envelope and nothing else, so the 28 V that turns every watt on this vehicle into
+      # amps was a battery's `v_nominal`, the low end of a fuel cell's 27-31 V range, and prose.
+      derivation:
+        expression: "1 / v_bus"
+        inputs:
+          v_bus: "domains/power/components.yaml:components.csm_bus_a.v_nominal"
       unit: "A per W"
       basis: derived
       relation: "the transmitter's DC input is the load, so the sensitivity is 1 / V_bus = 1/28 = 0.0357 A per W; the 36 W transceiver and the 72 W power amplifier are `dc_w` in vehicle.yaml#comms.transmitters"
@@ -1463,7 +1493,14 @@ edges:
     advances: orbital_state
     sensitivity:
       value: 2.2683e-05
-      computation: "1 / 44085"
+      # The mass is the heaviest configuration's, named rather than inlined: the relation says
+      # "at the heaviest configuration, `csm_lm_docked` at 44,085 kg", and `check_vehicle` already
+      # re-derives that configuration's mass closure from its own breakdown. So this edge is now
+      # two closures deep the way `E-GEOM-LINK` is: breakdown to total mass to acceleration.
+      derivation:
+        expression: "1 / mass_kg"
+        inputs:
+          mass_kg: "vehicle.yaml:configurations.csm_lm_docked.mass_kg"
       unit: "m/s2 per N"
       basis: derived
       relation: "a = F/m, so the sensitivity is 1/m(t). At the heaviest configuration, `csm_lm_docked` at 44,085 kg, that is 2.268e-5 m/s2 per N. The plant uses the live mass from vehicle.yaml#configurations, because the same newton accelerates the LM twice as hard once the CSM is gone"
@@ -2173,6 +2210,21 @@ failure_chains:
 # the wanting edge for each UNCONFIGURED above; this list is the human-readable version.
 # --------------------------------------------------------------------------------------
 open_debts:
+
+  - >-
+    Three sensitivities still inline a number the corpus declares nowhere, and each is a *datum in a
+    sentence* rather than a missing one. `E-BUS-PUMP`'s `(200 * 0.45359237 / 3600) / 28` carries the
+    pump's nominal 200 lb/hr — which is not a field on the pump, on `coolant_flow` or on the loop,
+    whose `flow_l_min: [1.3, 1.7]` is a *band* the 1.44 L/min nominal sits inside — and it also
+    needs the coolant density to become a scalar, which is the same datum round 104 found living in
+    `loop_primary_thermal_mass`'s relation. `E-ZONE-ATM` and `E-ZONE-ATM-LM` are worse: their
+    `5 * 6894.757 / 295` carries the cabin's nominal pressure **and** temperature, and neither is a
+    field — `atmosphere_model` declares the volume and a `temperature_from` naming the zone
+    *states*, and 5 psia and 295 K appear only in its `check` prose and in the cabin zone's source
+    string. The remedy in each case is the one `mission.yaml#comms_blackout`'s `mu_moon` got: the
+    number becomes a field where it belongs, and the derivation binds it. Until then the three edges
+    keep their arithmetic but their inputs are copies, which is exactly what the other twelve edges
+    stopped being.
 
   # Round 50 added `advances` and `drains` and made the stock classifier dimensional; round 51
   # asked what would actually fix the ratio edges rather than how to describe them better. The

@@ -340,6 +340,13 @@ components:
     class: bus
     vehicle: csm
     v_band: [27.0, 30.5]
+    # The band above is the *envelope*; this is the number every watt-to-amp conversion on the
+    # vehicle divides by. Until this round the bus carried the band and no nominal, and three
+    # edges wrote `1/28` — a figure that was a battery's `v_nominal`, the low end of a fuel
+    # cell's 27-31 V range, and prose, but never a declaration about the bus itself. 28 V is what
+    # the corpus's own arithmetic already uses (`apollo_diode.md:157`'s "28 V bus"), so declaring
+    # it is a promotion rather than a choice.
+    v_nominal: 28
     provenance:
       basis: apollo
       ref: "apollo_diode.md:73"
@@ -349,6 +356,7 @@ components:
     class: bus
     vehicle: csm
     v_band: [27.0, 30.5]
+    v_nominal: 28
     provenance:
       basis: apollo
       ref: "apollo_diode.md:74"
@@ -357,6 +365,7 @@ components:
     class: bus
     vehicle: lm
     v_band: [26.0, 31.0]
+    v_nominal: 28
     provenance:
       basis: chosen
       reason: "the LM ran a single 28 V bus with no second source; the band is chosen because no source gives an LM bus envelope, and it is deliberately narrower than the CSM's so a shared threshold cannot be reused by accident"

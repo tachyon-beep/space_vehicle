@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -4542,6 +4542,78 @@ expression does not use, an input that is neither number nor source, a source po
 antenna, and the unbroken corpus silent at 253. `rederive`'s own path was regression-checked under
 the new comparison: `E-WATER-RAD`'s computation broken from `2.45e6` to `2.4e6` is still refused by
 name.
+
+## Six more edges, and the declaration three of them were missing
+
+The mechanism from the last round reached five more edges whose inputs were declared all along, and
+finding the sixth turned up a declaration the corpus did not have.
+
+| edge | was | now binds |
+|---|---|---|
+| `E-PROP-ENG` | `1 / (314.5 * 9.80665)` | `vehicle.yaml#propulsion.sps.isp_s` |
+| `E-RCSP-RCS` | `1 / (290.0 * 9.80665)` | `domains/rcs/components.yaml`'s `thruster_100lbf.isp_s` |
+| `E-ENG-DYN` | `1 / 44085` | `vehicle.yaml#configurations.csm_lm_docked.mass_kg` |
+| `E-CABIN-HEAT-CSM` | `1 / 125` | `zone_csm_cabin_t.conductance_w_per_k` |
+| `E-CABIN-HEAT-LM` | `1 / 125` | `zone_lm_cabin_t.conductance_w_per_k` |
+| `E-AMP-LOAD` | `1 / 28` | `csm_bus_a.v_nominal` — **a field that did not exist** |
+
+Three of those needed an argument rather than a lookup.
+
+**The RCS Isp has four declarations and one authority.** All forty-four thrusters are
+`thruster_100lbf`, whose `isp_s` is declared **once**, in `domains/rcs/components.yaml`; the vehicle
+file carries it three times — once per system that flies it. The edge's node is `prop_rcs`, which
+all three systems draw from, so the thing it is about is the *article*, and the article's single
+declaration is the honest source. Round 106's join holds the domain's copy and the three vehicle
+entries equal in both directions, so the choice is safe either way — but it is a choice, and binding
+`rcs_sm` would have said the shared propellant node belongs to one system.
+
+**The two cabin conductances are two numbers that happen to be equal.** The CSM's cabin zone and the
+LM's are each lumped at 125 W/K, and both edges wrote the same literal. So re-rating one cabin's
+conductance would have left *both* edges describing the other's. Each edge now binds its own
+compartment's field, and the fixture asserts the negative that matters: re-rate the CSM's and the
+LM's edge must stay silent.
+
+**And `E-AMP-LOAD`'s `1 / 28` had nothing to bind to.** `domains/power/components.yaml` declared
+`csm_bus_a`, `csm_bus_b` and `lm_bus` with a `v_band` envelope and **no nominal**:
+
+```yaml
+  - id: csm_bus_a
+    v_band: [27.0, 30.5]
+```
+
+So the 28 V that turns every watt on this vehicle into amps — the number in `E-AMP-LOAD`'s `1 / 28`,
+in `E-BUS-PUMP`'s `(200 * 0.45359237 / 3600) / 28`, and inside the prose of both — was a *battery's*
+`v_nominal`, the low end of a fuel cell's 27-31 V range, and a string in `apollo_diode.md:157`. Not
+one of those is a declaration about the bus. The bus declares `v_nominal: 28` now, sourced from the
+same places the corpus's own arithmetic already was, and the edge binds it. This is the `mu_moon`
+fix arriving at the quantity every electrical conversion on the vehicle divides by.
+
+### The three that are left, and why
+
+Twelve edges carry a derivation. Three still carry a `computation`, and in each case the reason is
+the same: **the number it inlines is declared nowhere, so there is nothing to bind it to.**
+
+`E-BUS-PUMP`'s `(200 * 0.45359237 / 3600) / 28` needs the pump's nominal 200 lb/hr — which is not a
+field on the pump, on `coolant_flow` or on the loop, whose `flow_l_min: [1.3, 1.7]` is a *band* the
+1.44 L/min nominal sits inside — and it needs the coolant density to become a scalar, which is the
+datum round 104 found living inside `loop_primary_thermal_mass`'s relation. `E-ZONE-ATM` and
+`E-ZONE-ATM-LM` are worse: their `5 * 6894.757 / 295` carries the cabin's nominal pressure **and**
+temperature, and neither is a field anywhere — `atmosphere_model` declares the volume and a
+`temperature_from` naming the zone *states*, while 5 psia and 295 K appear only in its `check` prose
+and in the cabin zone's own source string.
+
+That is a debt rather than an oversight, so it is declared as one, in `coupling.yaml`'s `open_debts`,
+where the count reaches it: the remedy in each case is the one `mu_moon` got. **253 became 254.**
+
+Verified by breaking seven copies: the SPS re-rated in **both** files so the join is silent and only
+the edge can catch it, the RCS article's Isp moved, the heaviest configuration's mass moved, one
+cabin's conductance re-rated with the other cabin's edge asserted *silent*, the bus's nominal
+voltage moved, the bus declaring no nominal at all so the source stops resolving, and the unbroken
+corpus silent. Every one refused by name.
+
+And the pins moved together, one of them by failing: `tools/plant.py` still said "253 declared
+debts" in two places, and the scan added last round caught it rather than letting the number drift
+the way the 202 it replaced had.
 
 ## The invariants, and which of them are enforced
 
