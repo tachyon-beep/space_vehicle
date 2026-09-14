@@ -3332,6 +3332,64 @@ def check_domain(
                 "(electrical_diode.md:845), so the note is the only place its action is stated",
             )
 
+    # --------------------------------------------------------------------------------------
+    # The `internal` sentinel's intra-domain order, which was exempt from the rule that exists
+    # to fix exactly this.
+    #
+    # `check_domains` requires every node with more than one producing state to declare a
+    # `state_order` or to claim `independent`, and its own comment states the rule generally:
+    # *"each node with more than one producing state declares either an order or that it has
+    # none."* The loop that implements it reads `if node and node != "internal"`, and nothing
+    # in `plant.md` or `coupling.yaml` says why. So **54 states across nine domains are still
+    # decided by the alphabet**, which is the outcome the rule was written against: the comment
+    # beside it records that the tiebreak sorted `link_snr` before `tx_power` on a node where
+    # transmit power is a term in the link budget.
+    #
+    # The sentinel is worse than a node in this respect, not better. A node's producing states
+    # are at least joined by edges that say what feeds what, so the graph is a second opinion
+    # when the order is wrong; `internal` states have **no edges at all** — that is what the
+    # sentinel means — so the alphabet is the only signal there is.
+    #
+    # The order is a within-domain fact and so it is declared within the domain: `internal` is
+    # one sentinel shared by eleven domains, and `plant.md` §2 forbids a domain calling another,
+    # so a single vehicle-wide list would be asserting an order across domains that do not run
+    # in one. Nine domains owe this declaration today and none of them can be filled in from the
+    # corpus, so it is reported as a debt rather than refused: the honest instrument for a
+    # declaration that is needed and that no source supplies.
+    # --------------------------------------------------------------------------------------
+    on_sentinel = sorted(
+        str(state.get("id"))
+        for state in components.get("state") or []
+        if isinstance(state, dict) and str(state.get("node")) == "internal" and state.get("id")
+    )
+    if len(on_sentinel) > 1:
+        order = components.get("internal_order")
+        iwhere = f"{where}:internal_order"
+        if order is None:
+            report.debt(
+                iwhere,
+                f"is unset, and this domain advances {len(on_sentinel)} states on the `internal` "
+                f"sentinel ({', '.join(on_sentinel)}). Nothing joins them and no edge can, so the "
+                "frozen lexicographic tiebreak alone decides which advances first — the outcome "
+                "`state_order` exists to prevent on a node",
+            )
+        elif order == "independent":
+            if not components.get("internal_order_note"):
+                report.refuse(
+                    iwhere,
+                    "declares its `internal` order independent without a reason. Independence is a "
+                    "claim about the physics and it needs to be on the record",
+                )
+        elif not isinstance(order, list):
+            report.refuse(iwhere, f"is {order!r}, which is neither a list nor 'independent'")
+        elif sorted(str(s) for s in order) != on_sentinel:
+            report.refuse(
+                iwhere,
+                f"lists {sorted(str(s) for s in order)} and this domain's states on the sentinel "
+                f"are {on_sentinel}. An order naming a state that is not here is an order that has "
+                "drifted from the states it orders",
+            )
+
 
 def check_outbound_extremes(
     root: Path, report: Report, policies: dict[str, dict[str, Any]]
@@ -3458,6 +3516,14 @@ def check_domains(
             components = load(path / "components.yaml", Report()) or {}
             for state in components.get("state") or []:
                 node = str(state.get("node"))
+                # `internal` is not a node — it is the sentinel for "this domain advances it
+                # itself, in no declared tick position" — so it is not in `coupling.yaml#nodes`
+                # and cannot carry a `state_order` here. It is not exempt from the *rule*, only
+                # from this loop: `check_domain` requires the same declaration per domain, as
+                # `components.yaml#internal_order`. Leaving the sentinel out of both places was
+                # how 54 states across nine domains came to be ordered by the alphabet, and the
+                # exclusion sat here uncommented and unjustified in `plant.md` and in
+                # `coupling.yaml` alike.
                 if node and node != "internal":
                     by_node.setdefault(node, []).append((path.name, str(state.get("id"))))
     node_docs = (coupling or {}).get("nodes") or {}

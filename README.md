@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 232 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 241 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 232 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 241 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,9 +184,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **232** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **241** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **26** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **35** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
 pack-voltage state, and the missing charging efficiency). The **193** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 107 scalars and the prose half 116. The largest single field is `basis` at 28 —
+The literal half is 107 scalars and the prose half 134. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 232 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 241 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 232 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 241 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2512,6 +2512,43 @@ unknowns were the ones absent from the figure that measures how much is left.**
 The general form is the folder's oldest finding pointed at the tool that enforces it: *a file's own
 statement that a section is read is not evidence that it is.* Every other count in this folder is
 held by a reader; a comment claiming one exists was itself the unread declaration.
+
+## The ordering rule said "every node", and the code said "unless `internal`"
+
+The requirement is stated in the linter's own words, beside the check that enforces it:
+
+> So each node with more than one producing state declares either an order or that it has none.
+
+It is not a formality, and the comment records why: the frozen lexicographic tiebreak sorted
+`link_snr` **before** `tx_power`, on a node where transmit power is a term in the link budget — so
+the derived order computed this tick's signal-to-noise ratio from last tick's power. *"Silence about
+them means the alphabet decides."*
+
+The loop that implements it reads:
+
+```python
+                if node and node != "internal":
+```
+
+**`internal` is not a node.** It is the sentinel for *"this domain advances it itself, in no declared
+tick position"*, so it cannot appear in `coupling.yaml#nodes` and cannot carry a `state_order`
+there. But it is not exempt from the rule, and nothing said so — not `plant.md`, not `coupling.yaml`,
+not a comment at the exclusion. **54 states across nine domains were ordered by the alphabet**, and
+the sentinel is the worse place for it rather than the better one: a node's producing states are at
+least joined by edges that say what feeds what, so the graph is a second opinion when the order is
+wrong. `internal` states have **no edges at all** — that is what the sentinel means — so the alphabet
+was the only signal there was.
+
+A domain's own states are the right scope, because `internal` is one sentinel shared by eleven
+domains and `plant.md` §2 forbids a domain calling another; a single vehicle-wide list would assert
+an order across domains that never run in one. So `components.yaml#internal_order` is the
+declaration, the same two answers are accepted (a list, or `independent` with a reason), and the
+declaration is checked against the states actually on the sentinel — an order that names a state
+that is not there has drifted from what it orders.
+
+**Nine domains owe it and not one can be filled in from the corpus**, so each is a debt naming its
+own states rather than a refusal. That is the honest instrument for a declaration that is needed and
+that no source supplies: **232 became 241**, and nothing was added that was not already true.
 
 ## Authoring convention: no flow mappings
 
