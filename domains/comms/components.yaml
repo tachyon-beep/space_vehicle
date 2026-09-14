@@ -71,6 +71,10 @@ components:
     # is short for `high_gain`. What it buys is the whole of `check_comms_bindings`: every field
     # these two views of one antenna share is compared, without a list naming which ones.
     vehicle_keys: [high_gain]
+    # Which relation governs the two figures below. Declared in both files, so `check_comms_bindings`
+    # compares it for free: what the vehicle-level file and this component must agree about is not
+    # only the gain and the width but what kind of pair they are.
+    pattern: aperture
     gain_db: 26.7
     beamwidth_deg: 9.4
     steerable: true
@@ -94,6 +98,7 @@ components:
     # `count` below is the four helices NR publishes, which is a different number from the two
     # selectable antennas and is not a quantity either file states twice.
     vehicle_keys: [omni_a, omni_b]
+    pattern: near_isotropic
     gain_db: 2
     count: 4
     provenance:

@@ -606,6 +606,12 @@ comms:
         source: "PSR: LM S-band 18.6 W high power. The dc_w figure is chosen, as above"
   antennas:
     - id: high_gain
+      # `pattern` is the declaration `check_antenna_patterns` needs to be a rule rather than a rule
+      # with a silent exception in it: an aperture's half-power beamwidth is its gain's own
+      # consequence, and the three feeds below are feeds on this one aperture, so the declaration
+      # governs them too. Its own provenance note states the relation and does the arithmetic; this
+      # is the field that lets a tool do it on every run.
+      pattern: aperture
       gain_db: 26.7
       beamwidth_deg: 9.4
       steerable: true
@@ -629,14 +635,28 @@ comms:
           beam the same 2 deg would be 48 dB down, which would make apollo's "good link" range a
           range in which no link exists
     - id: omni_a
+      pattern: near_isotropic
+      pattern_note: >-
+        the gain-beamwidth product is meaningless this close to isotropic — it would put a 2 dB
+        radiator at 161 degrees — so the 180 here is a nominal coverage figure rather than a
+        half-power width, and the two figures are independent. The sentence used to live in the
+        `provenance` note below, where the relation it is about is stated and nothing reads it; it
+        is the justification for an exemption from a rule, so it belongs with the declaration of
+        the exemption
       gain_db: 2
       beamwidth_deg: 180
       steerable: false
       provenance:
         basis: historical
         source: "NR: four flush omni helices rated 15 W continuous; the individual gain is chosen to a nominal 2 dB"
-        note: "the gain-beamwidth product is meaningless this close to isotropic (it would give 161 deg), so the nominal 180 is kept rather than derived."
     - id: omni_b
+      pattern: near_isotropic
+      pattern_note: >-
+        the second of the four flush helices, identical to `omni_a` in every figure, so it carries
+        the same declaration for the same reason: a nominal 180-degree coverage figure that the
+        gain-beamwidth product does not determine and would put at 161 degrees. Written out here
+        rather than pointed at, because a note whose content is another entry's is a note that
+        reorders badly and reads as sourced either way
       gain_db: 2
       beamwidth_deg: 180
       steerable: false

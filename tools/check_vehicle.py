@@ -437,7 +437,7 @@ class Report:
                 print(f"  - {row}")
 
 
-def duplicate_keys(text: str) -> list[tuple[int, str]]:
+def duplicate_keys(text: str, document: Any = None) -> list[tuple[int, str]]:
     """Every mapping key written twice in one mapping, with the line of the second.
 
     PyYAML accepts a duplicate key and lets the last one win, which makes this the quietest
@@ -450,11 +450,15 @@ def duplicate_keys(text: str) -> list[tuple[int, str]]:
 
     Nothing is ever written twice on purpose in these files, so a duplicate is always a fault and
     the check needs no exceptions. It found 49 of them across five files.
+
+    The composed document may be passed in: `load` has already parsed the file to check it, and
+    parsing it a second time here was half of everything this linter spent its time on.
     """
-    try:
-        document = yaml.compose(text)
-    except yaml.YAMLError:
-        return []  # the parse refusal is `load`'s, and it names the line better
+    if document is None:
+        try:
+            document = yaml.compose(text)
+        except yaml.YAMLError:
+            return []  # the parse refusal is `load`'s, and it names the line better
     found: list[tuple[int, str]] = []
 
     def walk(node: Any, trail: str = "") -> None:
@@ -648,12 +652,53 @@ def absorbed_keys(text: str) -> list[tuple[int, str, int]]:
     return found
 
 
+# The parse cache, and the reason the linter is fast enough to be a test fixture.
+#
+# `load` is called **586 times** for this corpus's thirty-odd files, because every check that joins
+# two documents reads both of them again, and each call parsed its file twice: once with
+# `yaml.compose` for the duplicate-key walk and once with `safe_load` for the document. Profiling a
+# run puts **95 % of it** in those two parses — 1172 documents composed to produce thirty.
+#
+# So the *parse* is memoised, keyed by the path and its mtime and size rather than by the path
+# alone: a caller that rewrites a file between two loads is a real pattern (a fixture that moves a
+# value, a plant that reloads the world) and must not be served a stale document. Everything the
+# call site does with the result still runs on every load — the duplicate-key walk, the absorbed-key
+# walk and `check_answered_debts` all report per call, exactly as before — so what the linter says
+# is unchanged and only the parsing is shared.
+_PARSE_CACHE: dict[tuple[str, int, int], tuple[str, Any, dict[str, Any] | None, str | None]] = {}
+
+
+def _parsed(path: Path) -> tuple[str, Any, dict[str, Any] | None, str | None]:
+    """One file's text, its composed node, its loaded document, and its parse error if it had one."""
+    try:
+        stat = path.stat()
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = (str(path), 0, 0)
+    hit = _PARSE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    text = path.read_text()
+    try:
+        composed: Any = yaml.compose(text)
+    except yaml.YAMLError:
+        composed = None
+    try:
+        data: dict[str, Any] | None = yaml.safe_load(text)
+        error: str | None = None
+    except yaml.YAMLError as exc:
+        data, error = None, str(exc)
+    result = (text, composed, data, error)
+    _PARSE_CACHE[key] = result
+    return result
+
+
 def load(path: Path, report: Report) -> dict[str, Any] | None:
     if not path.exists():
         report.refuse(path.name, "not present")
         return None
-    text = path.read_text()
-    for line, trail in duplicate_keys(text):
+    text, composed, data, error = _parsed(path)
+    for line, trail in duplicate_keys(text, composed):
         report.refuse(
             f"{path.name}:{line}",
             f"writes {trail!r} a second time in the same mapping. The last one wins and the first "
@@ -666,10 +711,8 @@ def load(path: Path, report: Report) -> dict[str, Any] | None:
             "is prose rather than a key and the declaration does not exist in the parsed document. "
             "Dedent it to the level of its siblings",
         )
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:  # a config that does not parse is not a config
-        report.refuse(path.name, f"does not parse: {exc}")
+    if error is not None:  # a config that does not parse is not a config
+        report.refuse(path.name, f"does not parse: {error}")
         return None
     if not isinstance(data, dict):
         report.refuse(path.name, "is not a mapping")
@@ -4720,6 +4763,26 @@ def check_propulsion(doc: dict[str, Any], vehicle: dict[str, Any], report: Repor
 # share is compared, and that is the point: **a hand-written list of what to compare is how a shared
 # field gets left out.** This check's own first version listed four fields and the engines share six,
 # which is precisely the defect three rounds had been spent finding in other joins.
+def comparable(entry: dict[str, Any], subject: dict[str, Any], structural: set[str]) -> list[str]:
+    """The keys two views of one machine both state, and neither of which is prose.
+
+    This is the intersection rule the four joins use, written once because it is the same rule four
+    times. A hand-written list of what to compare is how a shared field gets left out — correct on
+    the day it is written and silently wrong the day somebody adds a field to both files — so what
+    is compared is `set(a) & set(b)` minus a declared structural set.
+
+    The `*_note` suffix is excluded for the same reason `note` is. A note is a sentence attached to
+    a claim (`state_order_note`, `initial_note`, `pattern_note`), and two files describing one
+    machine never owe each other the same sentence; comparing one would refuse the moment either
+    side's wording improved.
+    """
+    return sorted(
+        key
+        for key in set(entry) & set(subject)
+        if key not in structural and not key.endswith("_note")
+    )
+
+
 PROPULSION_STRUCTURAL = {
     "id",
     "kind",
@@ -4820,7 +4883,7 @@ def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                         f"claims vehicle engine {key!r} and declares no `isp_s`, so the mass flow "
                         "through it cannot be computed from this file at all",
                     )
-                for field in sorted((set(one) & set(c)) - PROPULSION_STRUCTURAL):
+                for field in comparable(one, c, PROPULSION_STRUCTURAL):
                     if one[field] != c[field]:
                         report.refuse(
                             where,
@@ -4889,6 +4952,144 @@ COMMS_STRUCTURAL = {
     "unit",
     "inputs",
 }
+
+
+# The ideal-aperture constant, in the form the corpus states it: `G = 41253 / theta^2`, with `G`
+# linear and `theta` the half-power beamwidth in degrees. 41253 is `4 * pi` steradians carried into
+# degrees squared, and the figure is written in three places — `vehicle.yaml`'s own note on the
+# high-gain antenna, `domains/comms/components.yaml`'s note on `hga`, and `E-GEOM-LINK`'s relation —
+# and evaluated in none of them.
+IDEAL_APERTURE_PRODUCT = 41253.0
+
+# What an antenna's `pattern` may say. `aperture` means the two published figures are one figure:
+# the half-power beamwidth is the gain's own consequence, so a change to either re-derives the
+# other. `near_isotropic` means they are independent — a flush omni's 180 degrees is a nominal
+# coverage figure rather than a half-power width this close to isotropic — and the claim carries a
+# `pattern_note`, the way `state_order: independent` carries a `state_order_note`.
+ANTENNA_PATTERNS = {"aperture", "near_isotropic"}
+
+# How far a declared beamwidth may sit from the one a gain implies, in degrees. The corpus declares
+# beamwidths to one decimal place, so half a unit in the last place is the widest two figures can
+# differ and still be the same declared number: 26.7 dB gives 9.3915 degrees and the entry says
+# 9.4. It is a *degree* tolerance rather than a relative one because the precision is in degrees,
+# and it is tight enough to catch a one-step gain change: 26.8 dB would need 9.35.
+BEAMWIDTH_TOLERANCE_DEG = 0.05
+
+
+def check_antenna_patterns(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The gain and the beamwidth are one figure, and the corpus says so in three files and checks it nowhere.
+
+    `vehicle.yaml`'s note on the high-gain antenna is the sentence this check exists for:
+
+        "the gains are sourced and the beamwidths are **derived**, because the first version of this
+         entry carried `beamwidth_deg: 1.0` and that number is not physically possible beside a
+         26.7 dB gain. Any aperture antenna obeys the gain-beamwidth product `G = 41253 / theta^2`
+         with theta in degrees, so 26.7 dB (467.7 linear) is a 9.4 deg beam — a 1.0 deg beam would
+         need 46 dB."
+
+    So the folder knows the relation, has already caught one impossible number with it, and left it
+    as prose in three files. The four declarations it governs are:
+
+    | antenna | gain | beamwidth | `10^(G/10) * theta^2` |
+    |---|---|---|---|
+    | `high_gain` (narrow) | 26.7 dB | 9.4 deg | 41,329 |
+    | `high_gain.beams.wide` | 9.2 dB | 70.4 deg | 41,272 |
+    | `high_gain.beams.medium` | 20.7 dB | 18.7 deg | 41,224 |
+    | `high_gain.beams.narrow` | 26.7 dB | 9.4 deg | 41,329 |
+
+    — every one within 0.2 % of 41,253, against a tolerance of half a unit in the last declared
+    place. The figure is not decoration: `E-GEOM-LINK`'s -0.54 dB per degree is
+    `-24 * 2 / 9.4^2`, so the beamwidth this identity determines is what every pointing loss the
+    fleet ever reads is scaled by. A gain and a width that cannot both be true make that slope a
+    consequence of a number nobody checked — and because the antenna is declared in two files, the
+    *join* would catch a divergence between them while this is the only thing that can catch the
+    vehicle-level pair drifting together.
+
+    The rule needs one declaration to be universal, and the corpus already makes the case for it:
+    the omni's 180 degrees is *not* a half-power width. 2 dBi against the product would be 161
+    degrees, and the domain's own note says the product "is meaningless this close to isotropic".
+    So every antenna that declares both figures declares which relation governs them, `aperture` or
+    `near_isotropic`, and the second is a claim that carries its reason — the discipline
+    `state_order: independent` gets, arriving at the one quantity on this vehicle where a wrong
+    number was already found.
+    """
+    antennas = ((vehicle or {}).get("comms") or {}).get("antennas") or []
+    if not antennas:
+        report.debt(
+            "vehicle.yaml#comms.antennas",
+            "is missing or empty, so the gain-beamwidth product has nothing to be evaluated against",
+        )
+        return
+
+    for antenna in antennas:
+        if not isinstance(antenna, dict) or not antenna.get("id"):
+            continue
+        aid = str(antenna["id"])
+        where = f"vehicle.yaml:comms.antennas.{aid}"
+        pattern = antenna.get("pattern")
+        # A beam is a feed on the same aperture, so the antenna's `pattern` governs its beams too:
+        # there is no way for one feed of a dish to be an aperture and another not to be.
+        figures: list[tuple[str, Any, Any]] = [
+            ("", antenna.get("gain_db"), antenna.get("beamwidth_deg"))
+        ]
+        for beam in antenna.get("beams") or []:
+            if isinstance(beam, dict):
+                figures.append(
+                    (
+                        f".beams.{beam.get('id')}",
+                        beam.get("gain_db"),
+                        beam.get("beamwidth_deg"),
+                    )
+                )
+        # A figure is a pair only when both halves are there. One without the other is not this
+        # check's business: `sband_steerable` owes both, and the debt that says so is
+        # `check_comms_bindings`'.
+        pairs = [
+            (label, gain, width)
+            for label, gain, width in figures
+            if isinstance(gain, (int, float)) and isinstance(width, (int, float))
+        ]
+        if not pairs:
+            continue
+        # The declaration is one per antenna, so its absence and its reason are reported once.
+        # Asking it per figure would report one gap four times on the high-gain antenna — its own
+        # pair and its three feeds — which is the same lie as reporting it in only one of them.
+        if pattern not in ANTENNA_PATTERNS:
+            label, gain, width = pairs[0]
+            report.refuse(
+                where,
+                f"declares a gain of {gain} dB and a beamwidth of {width} deg and no `pattern`, so "
+                "nothing says whether the two are one figure or two. Declare one of "
+                f"{sorted(ANTENNA_PATTERNS)}: an aperture's half-power beamwidth is its gain's own "
+                "consequence through `G = 41253 / theta^2`, and a near-isotropic radiator's is a "
+                "nominal coverage figure that the product does not determine",
+            )
+            continue
+        if pattern == "near_isotropic":
+            if not antenna.get("pattern_note"):
+                report.refuse(
+                    where,
+                    "declares its pattern near-isotropic without a `pattern_note`. The claim "
+                    "exempts its two figures from the gain-beamwidth product every other antenna is "
+                    "held to, and an exemption without a reason is how a rule stops being one — the "
+                    "same discipline `state_order: independent` carries",
+                )
+            continue
+        for label, gain, width in pairs:
+            fwhere = f"{where}{label}"
+            derived = math.sqrt(IDEAL_APERTURE_PRODUCT / (10 ** (float(gain) / 10.0)))
+            if abs(derived - float(width)) > BEAMWIDTH_TOLERANCE_DEG:
+                product = (10 ** (float(gain) / 10.0)) * float(width) * float(width)
+                report.refuse(
+                    fwhere,
+                    f"declares {gain} dB with a {width}-degree beamwidth, and the ideal-aperture "
+                    f"product `G = 41253 / theta^2` puts the half-power width of a {gain} dB "
+                    f"aperture at {derived:.2f} degrees (the declared pair gives {product:,.0f} "
+                    "against 41,253). Two figures that are one figure: this beamwidth is what "
+                    "`E-GEOM-LINK`'s pointing loss is scaled by, so a gain and a width that cannot "
+                    "both be true make every SNR the fleet reads a consequence of a number nobody "
+                    "checked",
+                )
 
 
 def check_comms_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
@@ -5011,7 +5212,7 @@ def check_comms_bindings(root: Path, vehicle: dict[str, Any], report: Report) ->
                 subjects.append((f"{cid}.levels.{key}", level))
             section = sections[cls][0]
             for label, subject in subjects:
-                for field in sorted((set(entry) & set(subject)) - COMMS_STRUCTURAL):
+                for field in comparable(entry, subject, COMMS_STRUCTURAL):
                     if entry[field] != subject[field]:
                         report.refuse(
                             cwhere,
@@ -6287,7 +6488,7 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
         # propulsion, comms and rejection joins. The comparison is the intersection of the keys the
         # two views share, and `THERMAL_STRUCTURAL` is the declared set of keys that are never a
         # quantity either states.
-        for field in sorted((set(one) & set(two)) - THERMAL_STRUCTURAL):
+        for field in comparable(one, two, THERMAL_STRUCTURAL):
             if one[field] != two[field]:
                 report.refuse(
                     f"{where}.{loop_id}",
@@ -6390,7 +6591,7 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
                 )
                 continue
             claimed.add(key)
-            for field in sorted((set(entry) & set(component)) - THERMAL_STRUCTURAL):
+            for field in comparable(entry, component, THERMAL_STRUCTURAL):
                 if entry[field] != component[field]:
                     report.refuse(
                         cwhere,
@@ -8390,6 +8591,7 @@ def main(argv: list[str] | None = None) -> int:
         check_electrical_bindings(root, vehicle, report)
         check_thermal_bindings(root, vehicle, report)
         check_comms_bindings(root, vehicle, report)
+        check_antenna_patterns(root, vehicle, report)
         check_one_way_configurations(root, vehicle, report)
         check_initial_sources(root, vehicle, coupling, report)
     else:

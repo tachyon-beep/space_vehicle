@@ -4311,6 +4311,139 @@ radiator that does not exist, a vehicle radiator claimed by nothing, and — the
 list exists for — a loop's `flow_l_min` moved in one file. Every one refused by name; the unbroken
 corpus silent and still at 253 debts.
 
+## The gain and the beamwidth are one figure, and the corpus says so in three files
+
+The note on `vehicle.yaml#comms.antennas.high_gain` is the sentence this round exists for:
+
+> the gains are sourced and the beamwidths are **derived**, because the first version of this entry
+> carried `beamwidth_deg: 1.0` and that number is not physically possible beside a 26.7 dB gain.
+> Any aperture antenna obeys the gain-beamwidth product `G = 41253 / theta^2` with theta in degrees,
+> so 26.7 dB (467.7 linear) is a 9.4 deg beam — a 1.0 deg beam would need 46 dB.
+
+So the folder knew the relation, had already used it to catch one impossible number, and left it as
+prose. The same identity is stated again in `domains/comms/components.yaml`'s note on `hga`, and a
+third time in `E-GEOM-LINK`'s relation, which computes its slope as `-24 * 2 / 9.4^2` — and **no
+tool evaluated it anywhere.** Four declarations are governed by it:
+
+| declaration | gain | beamwidth | `10^(G/10) * theta^2` |
+|---|---|---|---|
+| `high_gain` | 26.7 dB | 9.4 deg | 41,329 |
+| `high_gain.beams.wide` | 9.2 dB | 70.4 deg | 41,272 |
+| `high_gain.beams.medium` | 20.7 dB | 18.7 deg | 41,224 |
+| `high_gain.beams.narrow` | 26.7 dB | 9.4 deg | 41,329 |
+
+Every one within 0.2 % of 41,253 — and the fourth is the same pair as the first, which is its own
+small finding: the antenna and its narrow feed are one number written twice in one file.
+
+**Why it is worth a check rather than a note.** `E-GEOM-LINK`'s −0.54 dB per degree *is*
+`-24 * theta / theta_3dB^2` at a 2-degree operating point, so the beamwidth this identity determines
+is what every pointing loss the fleet ever reads is scaled by. The antenna is declared in two files,
+so last round's join catches a divergence *between* them — but a pair that drifts **together**, in
+both files, is invisible to every check in this folder except this one. That is the case the second
+fixture sets up, and before this round it composed.
+
+**The rule needs one declaration to be universal, and the corpus already makes the case for it.**
+The omni's 180 degrees is not a half-power width: 2 dBi against the product would be 161 degrees,
+and the entry's own note says so — "the gain-beamwidth product is meaningless this close to
+isotropic (it would give 161 deg), so the nominal 180 is kept rather than derived". So every antenna
+that declares both figures now declares which relation governs them:
+
+```yaml
+    - id: high_gain
+      pattern: aperture
+    - id: omni_a
+      pattern: near_isotropic
+      pattern_note: >-
+        the gain-beamwidth product is meaningless this close to isotropic ...
+```
+
+`near_isotropic` is a claim that *exempts* its antenna from the rule every other antenna is held to,
+and a claim like that carries its reason — the discipline `state_order: independent` has carried
+since the worklist rounds. It is also the honest answer to the obvious objection that a lazy author
+could mark an aperture `near_isotropic` to escape: the exemption is a declaration a reader can see
+and disagree with, which is a different thing from a rule with a silent hole in it.
+
+The declaration is made in **both** files — `hga` carries `pattern: aperture` and the domain's
+`omni` carries `near_isotropic` — so last round's join compares it for free. What the two files must
+agree about is not only the gain and the width but what *kind* of pair they are.
+
+**A near-miss the writing of this check produced.** The first version reported a missing declaration
+and a missing reason inside the per-figure loop, which meant the high-gain antenna — one declaration
+governing four pairs — would have reported the same gap four times. That is "one unknown under
+several names" arriving in the linter for the fifth time, and it is the same lie in the other
+direction as the debt count that doubled in round 104. The declaration is now checked once per
+antenna and only the product is checked per pair; the fixture asserts the count is exactly one.
+
+Two smaller things came with it. The four joins now share one `comparable()` helper rather than
+repeating `sorted((set(a) & set(b)) - STRUCTURAL)` four times, and it excludes any key ending in
+`_note` — a note is a sentence attached to a claim, and two files describing one machine never owe
+each other the same sentence, which `pattern_note` would otherwise have made them do. And the
+`omni_a` provenance note that explained the 180 degrees moved to the `pattern_note` it is the
+justification for, because a reason for an exemption belongs with the declaration of the exemption
+rather than in the prose block beside it.
+
+Verified by breaking eleven copies: the gain moved on the vehicle side only, the width moved in
+*both* files so that the join is silent, each of the three feeds broken in turn, the declaration
+removed, a near-isotropic claim made without a reason, the omni claimed as an aperture, the owed LM
+antenna given figures and no pattern, and the domain's copy of the declaration drifted from the
+vehicle's. Every one refused by name; the unbroken corpus silent and still at **253** debts, since
+this round declared what was already true rather than filling anything in.
+
+## The linter parsed every file twice, and the suite was paying for it
+
+This round's check pushed the test suite past the timeout it is run under, and finding out why was
+worth more than the check. A profile of one linter run:
+
+```
+        1    0.002   35.427   35.427 check_vehicle.py:8423(main)
+      586    0.041   35.284   35.284 check_vehicle.py:651(load)
+     1172    0.002   33.724   33.724 yaml/composer.py:29(get_single_node)
+      586    0.036   17.544   17.544 yaml/__init__.py:74(load)
+```
+
+**586 loads of a corpus with thirty-odd files, and 1172 documents composed to produce thirty** —
+because `load` parsed each file twice, once with `yaml.compose` for the duplicate-key walk and once
+with `safe_load` for the document, and because every check that joins two documents reads both of
+them again. Ninety-five per cent of the linter's run was YAML parsing, and the test suite is built
+out of linter invocations — every `run_linter` in it starts a fresh process — so the suite was
+spending most of nine minutes re-reading the same thirty files.
+
+The *parse* is memoised now, keyed by the path **and its mtime and size** rather than by the path
+alone: a caller that rewrites a file between two loads is a real pattern — a fixture that moves a
+value, a plant that reloads the world — and must not be served a stale document. Everything the call
+site does with the result still runs on every load: the duplicate-key walk, the absorbed-key walk and
+`check_answered_debts` all report per call, exactly as before.
+
+**The equivalence was checked rather than asserted**, by running the committed linter and this one
+over the same corpus and diffing. Identical output under `--strict`, `--phases`, `--debts` and
+`--order`, and identical on a deliberately broken copy — five refusals in the same order with the
+same text, four of them present in both versions and the fifth the new check's.
+
+The linter went from **13.0 s to 1.9 s**, and the vehicle suite from **534 s to 87 s**.
+`plant.py --readiness` did not move at all, 1.19 s before and 1.20 s after, and that is the
+measurement that says the diagnosis was right rather than merely plausible: the plant loads the
+world once per run and never paid the repeated-load cost, so a change that removes only repeated
+parsing should leave it exactly where it was.
+
+That last number is the point of writing it down. This folder's method is to verify every refusal by
+breaking a copy, and the cost of one broken copy was fourteen seconds — which is why the fixtures in
+`tests/test_vehicle_config.py` had begun to be rationed, and why this round's own check first
+reported a missing declaration four times rather than once (see below). A slow referee is a referee
+that gets consulted less.
+
+**And the round found the folder's oldest defect in the tools' own prose, one file over.**
+`tools/plant.py`'s docstring told a reader that "`check_vehicle.py` does that for the *definition* —
+it reports 202 declared debts by path", and the comment above its debt counter said "the linter
+reports 202 debts". Both were true when they were written, neither was read by anything since, and
+the linter has reported 253 since the comms join: a reader sizing what is left from that sentence
+was 51 obligations out. They say 253 now, and `test_the_readme_status_matches_the_tools` scans
+`tools/*.py` for the phrase as well as the README — because a figure a reader uses to size the
+remaining work is the figure this folder exists to keep honest, and *where* it is written makes no
+difference to that. The scan is limited to the tools and to the `N declared debts` form, since
+quotation marks are everywhere in Python and stripping them the way the README's scan does would
+mangle the text; a tool that wants to record a historical count quotes it, exactly as the README's
+own history section does.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
