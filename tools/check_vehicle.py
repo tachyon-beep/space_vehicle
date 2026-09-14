@@ -6896,6 +6896,22 @@ def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                     bwhere,
                     f"declares {battery.get('ah')} Ah and {unit.get('id')!r} is {unit.get('ah')} Ah",
                 )
+            # `chemistry` is the second shared field and it was the one outside this loop, which is
+            # the shape `check_thermal_bindings` was fixed for one round ago: a field two views of
+            # one machine both carry, that nothing compares. It matters more than the Ah does.
+            # `electrical_diode.md:124` gives chemistry its own row in the table of what changes the
+            # model — "voltage, temperature, charge limits, SOC model" — so it is not a label, it is
+            # the derating curve, and `consumables_diode.md:145` leaves it UNSPECIFIED with the
+            # usable-energy model "supplied externally". Two files disagreeing about it is two
+            # batteries wearing one name.
+            if "chemistry" in battery and unit.get("chemistry") != battery["chemistry"]:
+                report.refuse(
+                    bwhere,
+                    f"declares {battery['chemistry']!r} and {unit.get('id')!r} is built as "
+                    f"{unit.get('chemistry')!r}. Chemistry is what sets the discharge curve and the "
+                    "usable-energy derating, so a group and its units disagreeing is a battery "
+                    "sized against one electrochemistry and flown on another",
+                )
             # The two files express the same cell's voltage in the shapes their readers need: a
             # group carries a *range* (open-circuit down to loaded) and a unit carries the nominal
             # it is modelled at. The nominal has to lie inside the range, which is the claim the
@@ -6915,6 +6931,23 @@ def check_electrical_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                     f"declares {battery.get('v')} V and {unit.get('id')!r} is modelled at "
                     f"{nominal!r} V",
                 )
+
+        # And the field is declared for one group of the vehicle's three. The two LM groups carry
+        # neither, in either file — and the specification is explicit that this is a gap rather than
+        # a silence: `electrical_diode.md:18` lists battery chemistry among the quantities that are
+        # unspecified and "must be resolved before a flight design is frozen", and `:124` names a
+        # reference default of Li-ion which this vehicle deliberately does not follow, because the
+        # cells Apollo flew were silver-zinc. The choice is right and the departure from the
+        # published default is recorded nowhere, which is the part worth a debt.
+        if not battery.get("chemistry"):
+            report.debt(
+                bwhere,
+                "declares no `chemistry`, while `csm_entry` declares one in both files. It is not a "
+                "silence the spec permits — `electrical_diode.md:124` gives chemistry its own row "
+                "for what it changes, and `consumables_diode.md:145` leaves the usable-energy model "
+                "it drives UNSPECIFIED. Owed: the LM cells' electrochemistry, or a note saying the "
+                "reference Li-ion default is declined here for the same reason it is on the CSM",
+            )
 
 
 def check_objectives(

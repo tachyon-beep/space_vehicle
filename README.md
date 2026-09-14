@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 250 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **250** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -3894,6 +3894,67 @@ debts for two unknowns, because both views omit the same field. That is *one unk
 names*, the pattern this folder has now found five times in the corpus, appearing for the first time
 in the linter's own output. A count that doubles a gap because a thing is written twice is the same
 lie as a count that halves it. The debt is reported once per loop and names both files.
+
+## The same blind spot in the electrical join, and a field worth more than the Ah
+
+The round that added `coolant_mass_kg` to `check_thermal_bindings` ended by asking the obvious
+question of its own fix: **if one join held a shared field outside its compared list, do the
+others?** There is exactly one other join of that shape. `check_electrical_bindings` links
+`vehicle.yaml#electrical` to `domains/power/components.yaml` through `domain_group`, and it compares
+the quantities by hand — `count` against the unit list, `ah` against `ah`, the loaded range against
+`v_nominal` — so the same question has to be asked of it rather than read off a list.
+
+Asking it of the data rather than of the code is what found the answer: intersect the key sets of
+the group and its units, subtract the ones the check names, and the remainder is the blind spot.
+
+| group | shared keys | compared | outside the comparison |
+|---|---|---|---|
+| `fuel_cells` | `bus_v` | `bus_v` (and `modules` ↔ the unit list, `power_w_each` ↔ `rated_w`) | — |
+| `battery_csm` | `ah`, **`chemistry`** | `ah` | **`chemistry`** |
+| `battery_lm_ascent` | `ah` | `ah` | — |
+| `battery_lm_descent` | `ah` | `ah` | — |
+
+It is one field, on one group, and the two copies agree — `"silver-oxide/zinc"` in both — which is
+exactly the state `coolant_mass_kg` was in before it was compared. **A field that two files agree on
+and nothing compares is not a field that is correct; it is a field that has not drifted *yet*.**
+
+And chemistry is the last field in this file that should be left to drift, because the specification
+gives it its own row in the table of what changes the model:
+
+> | Battery chemistry | Changes voltage, temperature, charge limits, SOC model | Reference Li-ion only |
+> — `electrical_diode.md:124`
+
+It is not a label on a box; it is the discharge curve and the usable-energy derating. The same
+corpus says so twice more from the other side: `electrical_diode.md:18` lists battery chemistry among
+the quantities that are **unspecified** and "must be resolved before a flight design is frozen", and
+`consumables_diode.md:145` records it as `UNSPECIFIED` with "usable-energy and derating models
+supplied externally."
+
+So the vehicle's own position is a deliberate departure that nothing records. The spec's reference
+default is Li-ion; the cells Apollo flew were silver-zinc, and the corpus chooses the flown chemistry
+over the reference one — correctly, and silently. **`csm_entry` carries the value, its provenance
+block cites "3 x 40 Ah entry batteries, 20 cells, 37.2 V open circuit, 27 V minimum loaded" and never
+mentions the electrochemistry at all, and the two LM groups carry neither the field nor a note
+declining the default.** A reader asking why this vehicle is not Li-ion finds no answer, and — worse
+for a challenge — a team that wants to know what its batteries will actually do finds the answer
+implied by a string in a file that one of the three groups does not have.
+
+**250 became 252.** The join now compares `chemistry` where both files carry it, in both directions,
+and the two LM groups owe either the electrochemistry or the note. Verified the way this folder
+requires: a `nickel-cadmium` in one of the CSM's three units is refused by name against the group's
+`silver-oxide/zinc`, and the unbroken corpus is silent.
+
+**And the round's own near-miss belongs here, because it is the mistake this file keeps warning
+about.** The chemistry comparison went in between the `ah` check and the voltage chain, and the debt
+block went in between those two — which put the *entire* voltage comparison, the range/nominal claim
+this check's own test calls "the interesting one", inside `if not battery.get("chemistry"):`. It went
+from running for all three groups to running for none of the CSM's units, and it read a `unit`
+leaked from a loop that had already finished. The linter composed, the debt count came out right,
+and nothing in the output looked wrong: a block inserted into an `if`/`elif` chain takes the rest of
+the chain with it and does not announce itself. What noticed was the fixture needle 30 lines into
+`test_the_linter_refuses_an_electrical_inventory_that_drifted` — a test written rounds earlier for a
+different reason, failing on an edit made this round. The `elif` was restored, and the new refusal
+now has its own fixture needle so the next person to move it finds out the same way.
 
 ## The invariants, and which of them are enforced
 
