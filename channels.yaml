@@ -2581,7 +2581,7 @@ crew_positions:
       observation — which is the coverage that no channel on this vehicle provides.
 
 open_debts:
-  - "**`service` covers two things a fault treats differently.** Twelve of the 22 channels no fault perturbs are `layer: service`, and so are 117 of the channels faults *do* perturb — because the layer holds both a *decision* (`rcs.mode`, `power.load_shed_class`, `controls.switches`: something the crew or an agent set, which no physical mechanism writes) and a *conclusion* (`avionics.sensor_health_[class]`, `avionics.redundancy_disagreement`, `avionics.computer_mode`: something the vehicle computed, which a fault moves immediately). The epistemic mapping is right that both are \"an A with a different subject\" for the contract's purposes, and the contract is not where the difference bites; fault injection is. What would separate them is a field — `origin: commanded | derived` — and until it exists the only way to say a channel is untouchable by any fault is to list it in a `coverage.unperturbed`, which is what all eleven domains now do."
+  - "**`service` covers two things a fault treats differently.** The layer holds both a *decision* (`rcs.mode`, `power.load_shed_class`, `controls.switches`: something the crew or an agent set, which no physical mechanism writes) and a *conclusion* (`avionics.sensor_health_[class]`, `avionics.redundancy_disagreement`, `avionics.computer_mode`: something the vehicle computed, which a fault moves immediately), and the split across the fault line is what shows it: **most of the registry's `service` channels are perturbed and a quarter of them are not.** The counts are `coverage` above rather than here, because they were here and two of the three were wrong. The epistemic mapping is right that both are \"an A with a different subject\" for the contract's purposes, and the contract is not where the difference bites; fault injection is. What would separate them is a field — `origin: commanded | derived` — and until it exists the only way to say a channel is untouchable by any fault is to list it in a `coverage.unperturbed`, which is what all eleven domains now do."
   - "**Half of the LM's atmosphere registry gap is closed; the other half is now a question rather than a list.** `eclss.lm_absorber_capacity_pct` exists as of round 42, because the vehicle turned out to have two absorbers sharing one counter and the LM's was unobservable — the counter split (`coupling.yaml:absorber_capacity_lm`) and the channel followed it. `lm_cabin_regulator_state` still does not exist, and the reason has changed. It is no longer that the registry has no room: it is that the corpus publishes ONE `cabin_regulator_state` (apollo_diode.md:95) with no vehicle qualifier and says nothing about how the LM's pressure control is built — a two-position regulator like the CSM's, a relief valve, or a continuous bleed. ECL-13, ECL-14 and ECL-19 are injectable without it, because their effect on pressure and ppO2 is observable; what is missing is the easy diagnosis, so on the LM a regulator fault has to be inferred from its signature where the CSM reads a mode. Adding the channel now would mean inventing the mechanism; the question that closes it is which of the three the LM's cabin pressure control is."
   - "**`range_kind` is declared and the check it enables is written; what remains is the judgement
     inside it.** 57 channels carry the field — 43 `band`, 14 `scale` — and the values were assigned
@@ -2599,3 +2599,28 @@ open_debts:
   - "No channel yet carries the crew's own speech; whether dialogue is a channel at all is D-07 and is John's call."
   - "gnc.position_xyz_km and gnc.velocity_xyz_m_s are published at 2 Hz with 0.01 km precision, but the initial state they start from is not set: mission.yaml owes a parking-orbit or post-TLI position and velocity in EARTH_J2000, and a perilune for the descent phase."
   - "structure.docking_latches is declared a count; it needs the actual latch count per docking interface or the F-15 and rendezvous chains cannot distinguish a partial dock from a full one."
+
+# --------------------------------------------------------------------------------------
+# The registry's coverage, as data rather than as the sentence it used to be. The claim
+# below was prose in `open_debts` and two of its three numbers had drifted — it said
+# "Twelve of the 22" when fifteen of twenty is what the policy says, and it said faults
+# perturb 117 `layer: service` channels when they perturb 42. Nothing read it, so nothing
+# could notice, which is the folder's recurring finding arriving at its own registry.
+#
+# Prose cannot be checked, so the numbers move here and `check_layer_coverage` compares
+# each one to the policy. The `open_debts` entry keeps the reasoning and drops the counts.
+# --------------------------------------------------------------------------------------
+coverage:
+  # How many registered channels no fault in any domain perturbs, and the layer split on
+  # both sides of that line. `service` is the layer that made the claim worth writing: it
+  # holds both a *decision* (`rcs.mode`: something the crew or an agent set, which no
+  # physical mechanism writes) and a *conclusion* (`avionics.computer_mode`: something the
+  # vehicle computed, which a fault moves immediately), so a third of it is untouchable and
+  # two thirds of it is the first thing a fault moves.
+  unperturbed: 20
+  unperturbed_service_layer: 15
+  perturbed_service_layer: 42
+  provenance:
+    basis: derived
+    relation: "counted over `channels.yaml`'s registered ids against every `perturbs` list in the eleven `domains/*/fault_policy.yaml`. Exact id matching, which is also the rule `check_fault_coverage` uses per domain: a fault that names a template perturbs the template, and a fault that names one instance of a template is a fault that named a channel this registry does not have"
+    note: "the third number is the one that had drifted furthest — 117 against an actual 42 — and it drifted in the direction that made the argument look stronger. The `service` layer is 57 channels of the registry's 148, so 'so are 117 of the ones faults do perturb' was never arithmetically possible; a count with no reader does not have to be plausible"

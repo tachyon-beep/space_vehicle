@@ -233,7 +233,7 @@ thresholds:
     point_units: "kg of |observed - ledger|"
     provenance:
       basis: UNCONFIGURED
-      note: "the tolerance must exceed the pressure-inference uncertainty for a cryogenic tank, which depends on a sensor model that does not exist yet. consumables_diode.md:852 forbids a universal value and this is why: too tight and the residual cries wolf, too loose and the slow leak it exists to catch is invisible"
+      note: "the tolerance must exceed the pressure-inference uncertainty for a cryogenic tank, which depends on a sensor model that does not exist yet. consumables_diode.md:852 forbids a universal value and this is why: too tight and the residual cries wolf, too loose and the slow leak it exists to catch is invisible. It is a separate entry from the O2 tolerance's because the two are separate numbers even where the argument they rest on is shared"
   - id: recon_mismatch_o2
     point: "res.recon_o2_kg"
     comparator: above
@@ -243,9 +243,10 @@ thresholds:
     dwell_clear_s: 600
     latched: true
     severity: WARNING
+    point_units: kg of |observed - ledger|
     provenance:
       basis: UNCONFIGURED
-      note: "as above"
+      note: "owed because consumables_diode.md:852 refuses a universal tolerance and means it per resource: the limit has to exceed the pressure-inference uncertainty of the tank being watched, and O2 is drawn from a cryogenic tank like the main propellant's, so the same missing sensor model is what this number waits on. Too tight and the residual cries wolf, too loose and the slow leak it exists to catch stays invisible. It is a separate entry from the main propellant's because the two tolerances are separate numbers even where the argument they rest on is shared"
 
   - id: h2_reserve_20
     point: res.h2_remaining_kg

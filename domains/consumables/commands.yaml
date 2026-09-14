@@ -126,7 +126,7 @@ declined:
     why: "an allocation is a granted claim — the same primitive, one state further along"
   - verb: release_allocation
     corpus: "consumables_diode.md:1011"
-    why: "as above"
+    why: "the inverse of a declined verb is a declined verb, and the inverse is the sharper half here: request_allocation is declined because an allocation *is* a granted claim, so a release verb is the one command that would let a fleet hand that claim back — the deconfliction primitive one state further along rather than a separate idea about resources"
   - verb: request_transfer
     corpus: "consumables_diode.md:1012"
     why: >-

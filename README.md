@@ -17,7 +17,7 @@ attached, so that a plant can be built against them and a run can be interpreted
 | `mission.yaml` | The profile: eight phases summing to 192.0 h, the ten-posture execution machine, the freshness manifest, the derived lunar occultation, MET epoch, crew, the Δv budget, objectives, the three scenario postures. |
 | `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, six declared cycles and the fifteen failure chains. The linter derives the 39-node tick order from it. |
 | `presentation.yaml` | The vehicle's side of the frozen window: the epistemic mapping, the six files, the frame envelope, the mirror and its bound, the ring's cadence classes, and which of `diode_probe.py`'s twelve checks the configuration satisfies. |
-| `channels.yaml` | The point dictionary: 146 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound. |
+| `channels.yaml` | The point dictionary: 148 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound, plus the registry's own `coverage` block. |
 | `domains/<name>/` | One landed subsystem: `components` · `points` · `profiles` · `commands` · `fault_policy`. |
 | `tools/check_vehicle.py` | The linter. `--order` prints the derived 39-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
 | `tools/generate_help.py` | Emits the vehicle's `HELP.md` from the command registries — §8's only place a verb name may appear, so it is generated rather than written. |
@@ -169,12 +169,14 @@ most of it. The linter's SPS figure is 4 % above the flight-measured 15,727 kg (
 SPS firing), which is the expected error from not modelling thrust build-up and tailoff; the
 direction of that error is stated in `check_propulsion` rather than tuned away.
 
-147 channels resolve against the failure chains' clues and the crew perception bound. The phase
+20 of the registry's 148 channels are perturbed by no fault at all, and the layer split on both sides
+of that line is `channels.yaml#coverage` — where the linter holds it against all eleven fault policies,
+because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 141
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
+**All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 223 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -2356,6 +2358,83 @@ leaving a quantity unset.
 
 The distinction the round turns on: **an owed value is a declaration; a placeholder is a declaration
 about a value that is in use.** Before this round the folder could not tell them apart.
+
+## A declaration that only points at another declaration
+
+Two `note:` fields said only **"as above"** — `recon_mismatch_o2`, whose sibling carried the whole
+argument, and `release_allocation`, whose `release_reservation` one entry up had a sentence of its
+own. Neither was wrong, which is why nothing caught them: every check in the linter reads *values*,
+and `note` was the one field with no reader at all.
+
+The failure a bare pointer produces is positional. "Above" means whatever happens to precede it, so
+reordering a file silently repoints the note: the entry goes on looking sourced while its
+justification has moved to a different claim. It also costs the reader the sentence that says why the
+entry exists separately — and here `consumables_diode.md:852` refuses a universal reconciliation
+tolerance *per resource*, so the two limits are separate numbers even where the argument is shared.
+
+`check_pointer_notes` refuses a pointer with nothing behind it, and **five pointer notes survive**
+because each keeps a clause: *"as above, for the LM"*, *"as above, at apollo's second propellant
+level"*, *"as above; 2 K wider than the CSM's upper limit because …"*. The clause is the whole reason
+the second entry exists rather than being merged into the first, so the check measures what makes
+those good rather than the pattern of their opening words. Its first cut had no word boundary and
+refused `as aboveboard` — a check that refuses correct prose is worse than no check, because the only
+way to satisfy it is to rewrite a sentence that was already right.
+
+The same pass found the fourth instance of one unknown under several names, in the other direction:
+`recon_mismatch_main_propellant` declared `point_units: "kg of |observed - ledger|"` and
+`recon_mismatch_o2` declared nothing, on the same channel template with the same `unit: kg`. Nothing
+broke — `point_units` is read only as an *exemption* from the unit-agreement check, so its absence
+cannot be seen by the check that reads it. **A field consulted only when it is present cannot report
+its own absence**, which is what made a matched pair disagree invisibly.
+
+## Every count in prose had drifted, and there were five of them
+
+This folder's oldest finding is that a declaration no tool reads has already drifted. The rounds that
+established it fixed the *values*. This round asked the same question of the **numbers written in
+sentences**, and found that not one of them was right:
+
+| where | said | is |
+|---|---|---|
+| `README.md`, the status paragraph | *"252 declared debts"* | 223 |
+| `README.md`, the file table | *"146 canonical channels"* | 148 |
+| `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
+| `README.md`, the same paragraph | *"141 thresholds"* | 142 |
+| `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
+| `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 223 |
+
+The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
+first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
+**this file** for asserting a debt count of 252. The distinction it drew is the right one — a figure
+the README asserts is a claim, a figure it quotes is evidence — and a table whose whole subject is
+what the file *used* to say belongs on the evidence side of it.
+
+The 117 is the one that matters, because it was never arithmetically possible: the `service` layer is
+57 of the registry's 148 channels, so no split of it reaches 117. It sat in the file through several
+rounds of channel additions. **A number in prose has no reader, and a number with no reader does not
+have to be plausible.**
+
+Three fixes, and the third is the one that generalises:
+
+1. **The registry's coverage claim is data.** `channels.yaml#coverage` declares the counts the
+   sentence used to carry, and `check_layer_coverage` holds each against all eleven fault policies —
+   the vehicle-wide half of a claim each domain already makes for itself. Verified by putting each
+   historical value back: *"claims 117 and the policies give 42."*
+2. **The README test reads every occurrence, not the first.** It had pinned the *presence* of the
+   right figure, so a file carrying "223" in one paragraph and "252" in another satisfied it — the
+   folder's own finding arriving at the test that exists to catch it. It now requires all unquoted
+   debt counts to agree, **and it immediately found a third stale one** that a grep for the known
+   value had missed.
+3. **A quoted figure is evidence, not a claim.** The section recording this very drift says *it said
+   "… with 254 declared debts …" while the tools said 124, 45 and 252* — and those numbers are the
+   record. Quoted spans come out before the comparison, which is the difference between the file
+   asserting a figure and the file reporting that it once asserted a different one.
+
+Two more, smaller: the reconciliation README's prose count of *these* tests said one hundred
+twenty-six while the file held one hundred thirty-four, and is now derived from the test module's own
+globals so that adding a test and forgetting the sentence fails; and that README's per-file rows are
+labelled for what they are — **a changelog, not a status board** — rather than silently carrying the
+figures of the round each was written in.
 
 ## Authoring convention: no flow mappings
 

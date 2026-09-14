@@ -900,6 +900,167 @@ def check_basis(where: str, basis: str | None, extra: dict[str, Any], report: Re
         report.refuse(where, "basis is `historical` but no external source is given")
 
 
+PROSE_FIELDS = {"note", "notes", "reason", "relation", "why"}
+
+# A note is allowed to point at another entry — "as above, for the LM" is a real argument
+# given twice with the difference stated once — but the pointer has to leave a clause behind.
+POINTER_PHRASE = re.compile(
+    r"\A\s*(?:as\s+above\b|see\s+above\b|same\s+as\s+above\b|as\s+before\b|ditto\b|ibid\b\.?)"
+    r"\s*[,;:.\u2014\u2013-]*\s*",
+    re.IGNORECASE,
+)
+
+
+def prose_strings(node: Any, trail: str = "") -> list[tuple[str, str]]:
+    """Every string under a prose key, whatever shape it is written in.
+
+    `walk_unset`'s sibling for the opposite failure. `walk_unset` finds a value that is
+    *absent*; this finds one that is *present and empty of content*, which no scalar-level
+    walk can see because `note: "as above"` is a perfectly good string.
+    """
+    if isinstance(node, str):
+        return [(trail, node)]
+    if isinstance(node, dict):
+        found: list[tuple[str, str]] = []
+        for key, value in node.items():
+            found.extend(prose_strings(value, f"{trail}.{key}" if trail else str(key)))
+        return found
+    if isinstance(node, list):
+        found = []
+        for index, value in enumerate(node):
+            found.extend(prose_strings(value, f"{trail}[{index}]"))
+        return found
+    return []
+
+
+def prose_fields(node: Any, trail: str = "") -> list[tuple[str, str]]:
+    """Locate every prose field in a document and hand back its strings."""
+    found: list[tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{trail}.{key}" if trail else str(key)
+            if str(key) in PROSE_FIELDS:
+                found.extend(prose_strings(value, here))
+            else:
+                found.extend(prose_fields(value, here))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(prose_fields(value, f"{trail}[{index}]"))
+    return found
+
+
+def check_pointer_notes(docs: Iterable[tuple[str, Any]], report: Report) -> None:
+    """A note may point at another entry, but it has to say what *this* entry is.
+
+    A bare `note: "as above"` is a declaration whose content lives somewhere else, and it
+    fails in the specific way this folder keeps re-learning: it is a declaration no tool
+    reads, so it drifts and nothing notices. The drift here is positional — "above" means
+    whatever happens to precede it, so reordering a file silently repoints the note, and
+    the entry goes on looking sourced while its justification has moved to a different
+    claim. It also fails for a reader, which is the more immediate cost: `recon_mismatch_o2`
+    said only "as above" while `consumables_diode.md:852` refuses a universal tolerance
+    *per resource*, so the two thresholds are separate numbers even where the argument is
+    shared, and the entry owed the reader that sentence rather than a direction to look in.
+
+    Only a *leading* pointer phrase with nothing substantive behind it is refused. The
+    four other pointer notes in the corpus each keep a clause — "for the LM", "at apollo's
+    second propellant level", "2 K wider than the CSM's upper limit because ..." — and that
+    clause is the whole reason the second entry exists rather than being merged into the
+    first. The check therefore measures what makes those four good, not the pattern of
+    their opening words.
+    """
+    for name, doc in docs:
+        if doc is None:
+            continue
+        for trail, text in prose_fields(doc):
+            match = POINTER_PHRASE.match(text)
+            if not match:
+                continue
+            remainder = text[match.end() :].strip()
+            if len(remainder) < 8:
+                report.refuse(
+                    f"{name}:{trail}",
+                    f"is {text.strip()!r} — a pointer with nothing behind it. Say what this "
+                    "entry's own argument is; a note that only points is a note that moves "
+                    "when the file is reordered, and the reader cannot tell which claim it "
+                    "was borrowing",
+                )
+
+
+def check_layer_coverage(
+    channels: dict[str, Any] | None,
+    faults_by_domain: dict[str, list[Any]],
+    report: Report,
+) -> None:
+    """The registry's own coverage claim, compared to the eleven policies it summarises.
+
+    `check_fault_coverage` holds each domain's `unperturbed` list to its own faults. Nothing held
+    the *vehicle-wide* claim, which lived in `channels.yaml:open_debts` as a sentence and had two
+    of its three numbers wrong: it said "Twelve of the 22" where the policy gives fifteen of
+    twenty, and it said faults perturb 117 `layer: service` channels where they perturb 42.
+
+    The second was never arithmetically possible, which is the part worth keeping. The `service`
+    layer is 57 of the registry's 148 channels, so no split of it can produce 117 perturbed — and
+    the sentence sat in the file through several rounds of channel additions because **a number in
+    prose has no reader, and a number with no reader does not have to be plausible.** The two
+    domain-level claims beside it were caught the moment they became fields (round 44, five of
+    eight wrong). This one stayed prose for thirty more rounds and is the last of them.
+
+    The comparison is exact and whole-registry, matching `check_fault_coverage`'s rule per domain:
+    a fault that names a template perturbs the template, and a fault that names one instance of a
+    template has named a channel this registry does not have.
+    """
+    coverage = (channels or {}).get("coverage")
+    if not isinstance(coverage, dict):
+        return
+
+    def flatten(name: Any) -> str:
+        return re.sub(r"\[[^\]]*\]", "[]", str(name))
+
+    registry: set[str] = set()
+    layers: dict[str, Any] = {}
+    for section, rows in (channels or {}).items():
+        if section in {"coverage", "crew_positions", "open_debts", "defaults"}:
+            continue
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and row.get("id"):
+                registry.add(flatten(row["id"]))
+                layers[flatten(row["id"])] = row.get("layer")
+    if not registry:
+        return
+
+    perturbed = {
+        flatten(channel)
+        for faults in faults_by_domain.values()
+        for fault in faults
+        if isinstance(fault, dict)
+        for channel in (fault.get("perturbs") or [])
+    }
+    unperturbed = registry - perturbed
+    derived = {
+        "unperturbed": len(unperturbed),
+        "unperturbed_service_layer": sum(1 for c in unperturbed if layers.get(c) == "service"),
+        "perturbed_service_layer": sum(1 for c in perturbed if layers.get(c) == "service"),
+    }
+    where = "channels.yaml:coverage"
+    for field, actual in derived.items():
+        claim = coverage.get(field)
+        if not isinstance(claim, int):
+            report.refuse(
+                f"{where}.{field}",
+                f"states no integer count (got {claim!r}), so this part of the claim is prose. The "
+                "whole point of the block is that the number is data the linter can disagree with",
+            )
+        elif claim != actual:
+            report.refuse(
+                f"{where}.{field}",
+                f"claims {claim} and the policies give {actual}. A coverage claim that is more "
+                "optimistic than the policy is the direction this drifts without anybody noticing",
+            )
+
+
 PLANT_DOMAINS = {
     "power",
     "eclss",
@@ -1074,6 +1235,10 @@ def check_channels(doc: dict[str, Any], report: Report) -> dict[str, dict[str, A
                 report.refuse("channels.yaml:defaults", f"quality code {code!r} is not canonical")
             continue
         if section == "crew_positions":
+            continue
+        if section == "coverage":
+            # Not channels: the registry's own coverage claim, as data. `check_layer_coverage`
+            # reads it against the eleven fault policies, because the claim spans all of them.
             continue
         if section == "open_debts":
             for row in rows or []:
@@ -2345,6 +2510,9 @@ def check_domain(
 
     check_fault_components(path, docs, node_ids, components_elsewhere or set(), report)
     check_placeholders(docs, report)
+    check_pointer_notes(
+        ((f"domains/{name}/{filename}", doc) for filename, doc in docs.items()), report
+    )
     check_fault_coverage(path, docs, report)
     check_profiles(path, docs, report)
 
@@ -5668,6 +5836,11 @@ def main(argv: list[str] | None = None) -> int:
     ):
         for trail in walk_unset(doc):
             report.debt(f"{name}.{trail}", "is UNCONFIGURED")
+        # The prose walk joins the scalar walk over the same documents. A note is not a value
+        # and cannot be counted as a debt, but it can be *empty*, and the two failures live in
+        # the same fields: `walk_unset` reads `basis`, `check_pointer_notes` reads the `note`
+        # beside it.
+        check_pointer_notes(((name, doc),), report)
 
     registry: dict[str, dict[str, Any]] = {}
     if channels is not None:
@@ -5700,6 +5873,7 @@ def main(argv: list[str] | None = None) -> int:
     check_range_kinds(registry, report)
     threshold_ids: set[str] = set()
     all_commands: dict[str, dict[str, Any]] = {}
+    all_faults: dict[str, list[Any]] = {}
     if (root / "domains").is_dir():
         for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
             profiles = load(path / "profiles.yaml", Report()) or {}
@@ -5707,7 +5881,12 @@ def main(argv: list[str] | None = None) -> int:
                 if threshold.get("id"):
                     threshold_ids.add(str(threshold["id"]))
             all_commands[path.name] = load(path / "commands.yaml", Report()) or {}
+            policy = load(path / "fault_policy.yaml", Report()) or {}
+            all_faults[path.name] = policy.get("faults") or []
     check_profile_immutability(all_commands, threshold_ids, report)
+    # The vehicle-wide half of a claim each domain already makes for itself. It needs every
+    # domain's policy at once, which is why it is here rather than inside `check_domains`.
+    check_layer_coverage(channels, all_faults, report)
     check_domains(root, registry, coupling, channels, report)
     # `vehicle.yaml` is the file every cross-file check joins against, so when it cannot be
     # loaded the answer is not to run them with a hole in the middle of the argument list — it is
