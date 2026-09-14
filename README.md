@@ -4058,6 +4058,73 @@ rather than on the physics. That is the fixture doing its job: a needle that no 
 message somebody changed, and the temptation to loosen it is the temptation to stop testing what it
 asserted. The needles were updated to the new message, not generalised until they matched anything.
 
+## The denominator of every partial pressure, declared seven times and read by nothing
+
+The instrument built last round flattens every YAML file to `(key, value, path)` triples and keeps
+the groups where one value appears in two or more files. Most of its 104 hits are vocabulary
+values — `dwell_assert_ms = 2000` spans ten domains because it means the same thing in all of them.
+The signal is the rest, and the largest single piece of it was this:
+
+    volume_m3 = 5.9        vehicle.yaml#thermal.zones[csm_cabin]
+                           domains/thermal/components.yaml#zones[csm_cabin]
+                           domains/eclss/components.yaml#components[csm_cabin_volume]
+                           domains/eclss/components.yaml#atmosphere_model.volume_m3.csm
+
+and the same four for the LM's 6.7 — **seven scalars in three files, and until this round no tool
+read any of them.** That is worth stating precisely, because it is easy to read past:
+`check_thermal_bindings` holds the two zone *id sets* equal and compares no field at all;
+`csm_cabin_volume` is a component of class `volume`, which no check looks at; and
+`atmosphere_model.volume_m3` was read by nothing whatsoever.
+
+**Why this one matters more than the last four.** The volume is `V` in the relation
+`atmosphere_model` states as the law the whole life-support model rests on —
+`P = (sum_i n_i) R T / V`. It is what turns a gas *mass* into the partial pressure a crew member
+reads and an agent decides on. So it sits underneath `eclss.pp_o2_mmhg` on one side and every
+thermal time constant in the zone on the other, and the LM's oxygen initial of 3.013592 kg is a
+*derived* figure computed from the LM's 6.7. Move the volume in one file and the plant's
+atmosphere changes while the checkout's does not: the crew would be breathing a cabin that only
+exists in the copy that happened to be loaded.
+
+**And the corpus knows, and undercounts itself doing it.** The LM oxygen initial's own relation
+says, in as many words:
+
+> The corpus states the relation once and the volume twice, so this is a computed consequence
+> rather than a second published number.
+
+It is seven times. That note is not careless — it is what a duplicate nobody reads looks like from
+the inside: a copy is counted by whoever remembers writing it, and no instrument was counting. It
+is the fourth round in a row that this folder's recurring sentence has been true of the folder
+itself, and the first where the *comment claiming the count* was the thing that was wrong.
+
+**The check, and the mistake in its first version.** The authority is `atmosphere_model.volume_m3`,
+because that is the one place the physics law itself reads, and every other declaration is held
+against it. The link needed no new field: `check_thermal_bindings` already holds the zone ids equal
+across the two files that carry zones, so the cabin zone of each vehicle is `<vehicle>_cabin` and
+the pair is known.
+
+The first version keyed on each zone's own `vehicle` field instead, which meant *any* zone of the
+right vehicle was compared against that vehicle's cabin — and would have refused a perfectly good
+3.0 m³ csm_service_bay for disagreeing with a 5.9 m³ cabin it is not. The volume the law divides by
+belongs to `<vehicle>_cabin` and to nothing else; every other zone of the vehicle has a volume of
+its own that the atmosphere model says nothing about. What surfaced it was a fixture whose needle
+stopped appearing: the break was supposed to produce "does not contain" and produced "must be one
+number" instead, which is the fixture telling me the rule was not the rule I thought I had written.
+The corrected check has a **negative** test now — a service-bay volume must not be refused — because
+that is the failure mode the correction exists to prevent.
+
+Verified by breaking six copies: the authority moved under each of the other three declarations,
+the cabin zone stripped of its volume, and the `class: volume` component renamed out of its class.
+Every one refused by name; the unbroken corpus still composes at 252 debts.
+
+**And this check reproduced the folder's other oldest bug on its first run.** It read
+`vehicle.get("thermal")` where the vehicle document may be `None` — that is what "does not parse"
+means — so an unparseable `vehicle.yaml` crashed the linter inside the new check and replaced the
+report with a traceback, burying the one line that mattered. That is verbatim the failure
+`test_an_unloadable_vehicle_refuses_instead_of_crashing` was written for, several rounds ago, and
+it caught the reintroduction without being changed. Ten call sites in this file now guard the
+vehicle document the same way, and the guard is not a convention anybody remembers: it is a test
+that corrupts the file and demands a refusal instead of a stack trace.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

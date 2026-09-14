@@ -6151,6 +6151,117 @@ CONFORMANCE_STATUSES = {
 }
 
 
+def check_cabin_volumes(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The denominator of every partial pressure the crew read, declared seven times.
+
+    `atmosphere_model` states the law the whole life-support model rests on —
+    `P = (sum_i n_i) R T / V` — and `V` is the cabin volume. It is also the figure that turns a gas
+    *mass* into the partial pressure a crew member reads and an agent decides on, so it sits
+    underneath `eclss.pp_o2_mmhg` on one side and every thermal time constant on the other.
+
+    It is declared seven times in three files: twice in `vehicle.yaml#thermal.zones`, twice in
+    `domains/thermal/components.yaml#zones`, twice as `class: volume` components in
+    `domains/eclss/components.yaml`, and once more as `atmosphere_model.volume_m3` in that same
+    file. Until this check, **no tool read any of them.** `check_thermal_bindings` holds the two
+    zone *id sets* equal and compares no field; `csm_cabin_volume` is a component of a class no
+    check looks at.
+
+    The corpus knows it is duplicated and undercounts itself doing it: the LM oxygen initial's own
+    relation says "The corpus states the relation once and the volume twice." It is seven times, and
+    the note that says two is itself evidence for why this folder keeps finding the same shape —
+    a copy nobody reads is a copy nobody counts.
+
+    The link is not invented. `check_thermal_bindings` already holds the zone ids equal between the
+    two files that carry zones, and the thermal domain's zones carry the `vehicle` each one is. So
+    the authority is `atmosphere_model.volume_m3`, keyed by vehicle — the one place the physics law
+    itself reads — and every other declaration is held against it.
+    """
+    eclss = load(root / "domains" / "eclss" / "components.yaml", report) or {}
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    model = eclss.get("atmosphere_model") or {}
+    volumes = model.get("volume_m3")
+    if not isinstance(volumes, dict) or not volumes:
+        report.debt(
+            "domains/eclss/components.yaml:atmosphere_model",
+            "declares no `volume_m3` per compartment, so the ideal-gas relation stated beside it "
+            "has no denominator and no cabin volume in the vehicle can be held against anything",
+        )
+        return
+    volumes = {str(k): v for k, v in volumes.items()}
+
+    claimed: set[str] = set()
+    for c in eclss.get("components") or []:
+        if not isinstance(c, dict) or c.get("class") != "volume":
+            continue
+        cid = str(c.get("id"))
+        where = f"domains/eclss/components.yaml:{cid}"
+        which = str(c.get("vehicle"))
+        if which not in volumes:
+            report.refuse(
+                where,
+                f"names vehicle {which!r}, which atmosphere_model.volume_m3 does not declare; it "
+                f"declares {sorted(volumes)}",
+            )
+            continue
+        claimed.add(which)
+        if c.get("volume_m3") != volumes[which]:
+            report.refuse(
+                where,
+                f"declares {c.get('volume_m3')!r} m3 for the {which} cabin and "
+                f"atmosphere_model.volume_m3.{which} declares {volumes[which]!r}. This is `V` in "
+                "the law the crew's partial pressures come from, so two values is two atmospheres "
+                "— and the one the crew read is whichever the plant happened to load",
+            )
+    for which in sorted(volumes):
+        if which not in claimed:
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model",
+                f"declares a cabin volume for {which!r} and no component of class `volume` carries "
+                "it, so the compartment the law is stated for is not one the domain models",
+            )
+
+    zones_two = {str(z.get("id")): z for z in thermal.get("zones") or [] if isinstance(z, dict)}
+    zones_one = {
+        str(z.get("id")): z
+        for z in ((vehicle or {}).get("thermal") or {}).get("zones") or []
+        if isinstance(z, dict)
+    }
+    # The volume the law divides by belongs to the *cabin* zone of each vehicle, and the zones are
+    # named for it. Nothing here is keyed on a zone's `vehicle` field: `atmosphere_model.volume_m3`
+    # is keyed by vehicle, and every other zone of that vehicle — the avionics bay, the service bay,
+    # the descent bay — has a volume of its own that the atmosphere model says nothing about. The
+    # first version of this check compared any zone of the right vehicle against the cabin, which
+    # would have refused a perfectly good service-bay volume for disagreeing with a cabin.
+    for which in sorted(volumes):
+        zid = f"{which}_cabin"
+        for label, doc in (
+            ("vehicle.yaml#thermal.zones", zones_one.get(zid)),
+            ("domains/thermal/components.yaml#zones", zones_two.get(zid)),
+        ):
+            if not isinstance(doc, dict):
+                report.refuse(
+                    label,
+                    f"lists no zone {zid!r}, and atmosphere_model.volume_m3 declares a "
+                    f"{which} compartment. The law is stated for a cabin this file does not carry",
+                )
+                continue
+            if "volume_m3" not in doc:
+                report.refuse(
+                    f"{label}.{zid}",
+                    "declares no `volume_m3`, so the ideal-gas relation the crew's partial "
+                    "pressures come from has no denominator for this compartment",
+                )
+                continue
+            if doc["volume_m3"] != volumes[which]:
+                report.refuse(
+                    f"{label}.{zid}",
+                    f"declares {doc['volume_m3']!r} m3 for the {which} cabin and "
+                    f"atmosphere_model.volume_m3.{which} declares {volumes[which]!r}. The volume is "
+                    "the denominator of every partial pressure the crew read and of every thermal "
+                    "time constant in this zone, so the two must be one number",
+                )
+
+
 def check_presentation_references(
     root: Path,
     presentation: dict[str, Any],
@@ -8019,6 +8130,7 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_thermal_budget(root, report)
+    check_cabin_volumes(root, vehicle, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)
     if mission is not None:
