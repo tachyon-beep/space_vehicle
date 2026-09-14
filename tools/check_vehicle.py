@@ -3357,6 +3357,69 @@ def check_domain(
     # corpus, so it is reported as a debt rather than refused: the honest instrument for a
     # declaration that is needed and that no source supplies.
     # --------------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------------
+    # A stock's initial condition, which the plant now integrates from and which the
+    # configuration declared nowhere.
+    #
+    # `advance()`'s stock branch used to return the tick's net flux *as* the node's new value,
+    # so it never read the level and never needed one. With that fixed the level is required,
+    # and `vehicle.yaml#consumables`, `coupling.yaml`'s `preloaded` prose and the atmosphere
+    # model all turned out to carry the numbers already — in three places, none of them the
+    # state that integrates the tank. That is the folder's recurring shape exactly, and the
+    # reason it went unnoticed for so long is worth stating: **a branch that never reads a
+    # value never reports it missing.**
+    #
+    # Two rules. Every stock declares `initial`, because a tank with no declared starting
+    # amount is a tank that begins at whatever the code initialises it to. And a *numeric*
+    # initial says where it came from — either a resolvable path into another document
+    # (`initial_source`, checked by `check_initial_sources` where both documents are loaded) or
+    # its own provenance block — because a number with neither is a guess wearing a unit.
+    # --------------------------------------------------------------------------------------
+    for state in components.get("state") or []:
+        if not isinstance(state, dict) or state.get("method") != "stock":
+            continue
+        sid = str(state.get("id"))
+        swhere = f"{where}:state {sid}"
+        if "initial" not in state:
+            report.refuse(
+                f"{swhere}.initial",
+                "is a stock and declares no initial condition. A stock is the one class that "
+                "carries a value across ticks, so its starting amount is a number the plant must "
+                "have before it can subtract anything from it",
+            )
+            continue
+        initial = state.get("initial")
+        if initial == "UNCONFIGURED":
+            if not state.get("initial_note"):
+                report.refuse(
+                    f"{swhere}.initial",
+                    "is UNCONFIGURED with no `initial_note`. An owed starting amount is a decision "
+                    "about the mission, and the note is where what would close it is written",
+                )
+            continue
+        if not isinstance(initial, (int, float)):
+            report.refuse(
+                f"{swhere}.initial",
+                f"is {initial!r}, which is neither a number nor `UNCONFIGURED`",
+            )
+            continue
+        source = state.get("initial_source")
+        provenance = state.get("initial_provenance")
+        if not source and not isinstance(provenance, dict):
+            report.refuse(
+                f"{swhere}.initial",
+                f"is the number {initial!r} with neither `initial_source` nor "
+                "`initial_provenance`. A grounding is what separates a published load from a "
+                "figure somebody typed",
+            )
+        elif isinstance(provenance, dict):
+            check_basis(
+                f"{swhere}.initial_provenance",
+                provenance.get("basis"),
+                provenance,
+                report,
+            )
+
     on_sentinel = sorted(
         str(state.get("id"))
         for state in components.get("state") or []
@@ -4646,6 +4709,102 @@ def check_one_way_configurations(root: Path, vehicle: dict[str, Any], report: Re
                     "that leaves the vehicle as it found it has either written an endpoint wrong "
                     "or is a consumable decision wearing an irreversible verb — which is what "
                     "`hatch_open_surface` is, and it is unarmed",
+                )
+
+
+def check_initial_sources(
+    root: Path, vehicle: dict[str, Any], coupling: dict[str, Any], report: Report
+) -> None:
+    """A stock's `initial_source` must resolve, and the two documents must agree.
+
+    This is the half of the initial condition that keeps it from becoming a *second* declaration
+    of a number that already exists. `vehicle.yaml#consumables` says the CSM carries 279 kg of
+    oxygen and `o2_csm_kg` says it starts at 279; without a check those are two numbers that
+    happen to match today, which is precisely the shape this folder has spent ten rounds
+    removing. The field is named `initial_source` rather than `initial_provenance` for that
+    reason: a provenance block *describes* where a value came from, and a source *is* the other
+    declaration, resolvable and comparable.
+
+    The path is dotted and rooted at a top-level section, so `vehicle.yaml:consumables.csm.o2_kg`
+    and `coupling.yaml:absorber_capacity_csm.exhausted_at` both resolve. A source that names a
+    missing document, a missing key, or a non-numeric value is refused rather than skipped: each
+    of those is a link that has stopped linking, which is how the absorber's man-hour ratings and
+    the LM's leak both survived review in the first place.
+    """
+    documents = {
+        "vehicle.yaml": vehicle or {},
+        "coupling.yaml": coupling or {},
+    }
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if not isinstance(state, dict) or state.get("method") != "stock":
+                continue
+            source = state.get("initial_source")
+            if not source:
+                continue
+            swhere = f"domains/{path.parent.name}/components.yaml:state {state.get('id')}"
+            text = str(source)
+            if ":" not in text:
+                report.refuse(
+                    f"{swhere}.initial_source",
+                    f"is {text!r}, which names no document. The form is `<file>.yaml:<dotted.path>`",
+                )
+                continue
+            filename, dotted = text.split(":", 1)
+            document = documents.get(filename)
+            if document is None:
+                report.refuse(
+                    f"{swhere}.initial_source",
+                    f"names {filename!r}, and the documents this check can resolve are "
+                    f"{sorted(documents)}",
+                )
+                continue
+            node: Any = document
+            missing = False
+            for step in dotted.split("."):
+                if isinstance(node, dict) and step in node:
+                    node = node[step]
+                elif isinstance(node, list):
+                    # `coupling.yaml` holds its nodes as a sequence with `id` fields rather than as
+                    # a mapping, so a path through it has to step by name. Without this the
+                    # absorber's two `initial_source`s refused on the first run — which is the check
+                    # working, and worth recording: the path failed because the *document's shape*
+                    # is not the one the path assumed, not because the number was wrong.
+                    found = next(
+                        (
+                            row
+                            for row in node
+                            if isinstance(row, dict) and str(row.get("id")) == step
+                        ),
+                        None,
+                    )
+                    if found is None:
+                        missing = True
+                        break
+                    node = found
+                else:
+                    missing = True
+                    break
+            if missing:
+                report.refuse(
+                    f"{swhere}.initial_source",
+                    f"is {text!r} and {filename} has no {dotted!r}. A link that has stopped "
+                    "linking reads exactly like a link that works",
+                )
+                continue
+            if not isinstance(node, (int, float)):
+                report.refuse(
+                    f"{swhere}.initial_source",
+                    f"resolves to {node!r}, which is not a number to compare an initial against",
+                )
+                continue
+            if abs(float(node) - float(state["initial"])) > 1e-9:
+                report.refuse(
+                    f"{swhere}",
+                    f"declares `initial: {state['initial']}` and `initial_source: {text}` resolves "
+                    f"to {node}. One of the two is the load and the other is a copy of it, and "
+                    "nothing but this check keeps them the same number",
                 )
 
 
@@ -6074,6 +6233,7 @@ def main(argv: list[str] | None = None) -> int:
         check_electrical_bindings(root, vehicle, report)
         check_thermal_bindings(root, vehicle, report)
         check_one_way_configurations(root, vehicle, report)
+        check_initial_sources(root, vehicle, coupling, report)
     else:
         report.refuse(
             "vehicle.yaml",

@@ -826,6 +826,39 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
 
     if state.method == "stock":
         quantum = float(state.spec["quantum"])
+        # --------------------------------------------------------------------------------------
+        # **The level, which this branch never read.** `stock_flux` returns a *delta* —
+        # `sensitivity x driver x dt`, in the node's own unit, which its docstring says outright —
+        # and the branch summed those deltas and returned the sum as the node's new value. So a
+        # tank holding 279 kg with a 1 mg drain became `-0.001` on the first tick instead of
+        # `278.999`: **the integrator did not integrate**, in the one class the plant claims it can
+        # advance, and `--build-order` counted such states as "ready now".
+        #
+        # The bug hid a missing declaration and the missing declaration hid the bug. A stock's
+        # starting amount is written down nowhere in this vehicle: `vehicle.yaml#consumables` has
+        # the loads, `coupling.yaml`'s `preloaded` prose names them a second time, and no *state*
+        # carries one. Nothing noticed, because a branch that never reads the level never needs it.
+        #
+        # So the level is read, and where there is none the plant refuses **by name** rather than
+        # starting from an implicit zero. A tank that silently begins empty is the same class of
+        # error as a stock that fills without ever draining, and it is worse in one way: an empty
+        # tank and a full one look identical on the first tick of a mission nobody has run.
+        # --------------------------------------------------------------------------------------
+        current = values.get(state.node)
+        if current is None:
+            raise Unconfigured(
+                f"{where}.initial",
+                f"is a stock and nothing supplies a level for `{state.node}` to integrate from, so "
+                "the plant has no amount to subtract a drain from. A stock's starting amount is its "
+                "initial condition and the configuration declares none: `vehicle.yaml#consumables` "
+                "carries the loads for the tanks and `preloaded` names them in prose, but the state "
+                "that integrates the tank is where the number has to be to be used",
+            )
+        if not isinstance(current, (int, float)):
+            raise Unconfigured(
+                f"{where}.initial",
+                f"integrates `{state.node}` from {current!r}, which is not a number",
+            )
         total = 0.0
         for edge in incoming:
             total += stock_flux(world, edge, values, dt)
@@ -849,11 +882,40 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             if edge.drains is not None and edge.drains != state.id:
                 continue
             total -= stock_flux(world, edge, values, dt, driver_node=edge.target)
-        if abs(total) and abs(total) < quantum:
-            # plant.md §4: a flow below the quantum is a modelling error, not a rounding one, and
-            # the accumulator must still carry it rather than lose it.
-            return {state.node: None}
-        return {state.node: total}
+        # --------------------------------------------------------------------------------------
+        # `plant.md` §4's Bresenham residual accumulator, which the branch did not have either.
+        #
+        # **"Every stock uses a Bresenham residual accumulator**: `moved = (scaled + acc) // SCALE;
+        # acc = (scaled + acc) % SCALE` ... Exact to the quantum over any horizon, integer-only,
+        # horizon-independent." The worked example is this vehicle's own: the nominal leak is
+        # `0.0064 g/s` against a 1 mg quantum, so `0.128` quanta per tick, which rounds to zero
+        # every tick — *"the leak never happens"*. Without the accumulator the sub-quantum branch
+        # below returned `None`, which `step` committed, so the tank's value became `None` on the
+        # first slow tick and every tick after it raised against a `None` level.
+        #
+        # The residual is carried in the same value map as the level, under a key namespaced to the
+        # state. That is where it belongs while the stock is a float: §4's `acc` is part of the
+        # stock's *representation*, and the representation here is the map. When the fixed-point
+        # mantissa lands the residual moves inside it, and this key disappears.
+        # --------------------------------------------------------------------------------------
+        residual_key = f"{state.id}__residual"
+        carried = float(values.get(residual_key) or 0.0)
+        quanta = (total + carried) / quantum
+        moved = math.floor(quanta)
+        level = current + moved * quantum
+        # "**Zero-crossing raises an event and records a shortfall.** Never clamp silently, never go
+        # negative. The shortfall is the evidence." The event queue is step 3 and is a no-op until
+        # there are latched states, so the shortfall is returned with the level and named here.
+        shortfall = 0.0
+        if level < 0.0:
+            shortfall = -level
+            level = 0.0
+            moved = round((level - current) / quantum) if quantum else 0
+        return {
+            state.node: level,
+            residual_key: (total + carried) - moved * quantum,
+            f"{state.id}__shortfall": shortfall,
+        }
 
     if state.method == "hazard":
         raise Unconfigured(
@@ -868,6 +930,44 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         "state's relation, a `discrete` state's transitions and a `dynamics` state's equations "
         "are domain code, and the configuration deliberately does not pretend to carry them",
     )
+
+
+def initial_values(world: World) -> dict[str, Any]:
+    """The value map at t=0, from the stocks' own declared initial conditions.
+
+    Until this existed the plant had no answer to "what is the vehicle holding at the start", and
+    it did not need one: `advance()`'s stock branch returned the tick's net flux as the node's
+    value, so it never read a level and never asked for one. Fixing the integrator made the
+    question unavoidable, and the configuration turned out to be able to answer most of it —
+    `vehicle.yaml#consumables` has the loads, the atmosphere model derives the cabin oxygen from
+    the published volume and pressure, the absorbers' man-hour ratings are on their own coupling
+    nodes, and the accumulators start at zero because that is what an accumulator is.
+
+    **Keyed by node, which is the plant's own key space, not by channel.** `advance()` returns
+    `{state.node: value}` and `step()` commits that map, so this is the seed of the same map and
+    nothing here is a projection. The frame's `values` will want the *published* channel names,
+    and that is the publisher's step rather than the plant's: `eclss.pp_o2_mmhg` is a partial
+    pressure in millimetres of mercury while `csm_cabin_o2_kg` is a mass in kilograms, so the
+    projection is a unit conversion and calling the mass by the channel's name would be a wrong
+    number wearing the right one.
+
+    A stock the configuration has not given a value is left out rather than guessed, and the plant
+    refuses by name when a tick reaches it — which is the behaviour the check beside this wants.
+    """
+    values: dict[str, Any] = {}
+    for state in world.states:
+        if state.method != "stock":
+            continue
+        # `internal` is excluded for the reason `step` excludes it: the sentinel is one key shared
+        # by every state that lives on it, so seeding it would let twenty-five accumulators
+        # overwrite each other into a single value that means nothing. A state advanced with its
+        # domain keeps its own storage in the domain, which is what the sentinel says.
+        if state.node == "internal":
+            continue
+        initial = (state.spec or {}).get("initial")
+        if isinstance(initial, (int, float)):
+            values[state.node] = float(initial)
+    return values
 
 
 def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
@@ -1091,7 +1191,9 @@ def main(argv: list[str] | None = None) -> int:
             boot_id="0" * 32,
             met_s=0.0,
             sensor_time_s=0.0,
-            values={},
+            # The declared initial conditions, so a frame carries the vehicle's starting state
+            # rather than nothing. See `initial_values` for why these are node keys.
+            values=initial_values(world),
             quality={},
             phase="translunar_coast",
             vehicle="csm",

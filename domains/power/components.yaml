@@ -123,6 +123,9 @@ state:
     method: stock
     node: battery_energy
     unit: J
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the placement. `vehicle.yaml#electrical.batteries` declares three groups by `ah` and `v`, and `battery_energy` is one node; which group presents to it is `domain_group`'s question and it is answered for the power inventory rather than for this state
     quantum: 1.0
     min_flow_per_s: UNCONFIGURED
     note: >-

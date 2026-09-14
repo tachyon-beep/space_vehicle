@@ -51,6 +51,7 @@ from plant import (  # noqa: E402
     World,
     capability_snapshot,
     gate_instantiations,
+    initial_values,
     load_world,
 )
 
@@ -140,6 +141,11 @@ class Console:
         tripped_interlocks: set[str] | None = None,
     ) -> None:
         self.world = world
+        # The value map the frames carry, seeded once from the stocks' declared initial
+        # conditions. It lives on the console rather than being rebuilt per frame because it is
+        # the thing a tick will advance: `step()` takes it and returns it committed, so when the
+        # plant can advance a state this is where the new value lands.
+        self.values: dict[str, Any] = initial_values(world)
         self.root = root
         self.slug = slug
         self.phase = phase
@@ -640,7 +646,12 @@ class Console:
             "state_revision": self.ticks,
             "vehicle": "csm",
             "phase": self.phase,
-            "values": {},
+            # The declared initial conditions rather than nothing. `plant.md` puts the
+            # measurements and estimates in the *ring* and the software state in the mirror, and
+            # this field had been empty since it was written: a fleet could issue fifty-four
+            # commands and read back no quantity at all. See `plant.initial_values` for why the
+            # keys are nodes rather than published channel names.
+            "values": dict(self.values),
             "quality": {},
             "injected": False,
         }

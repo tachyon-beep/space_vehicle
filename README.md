@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 241 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 241 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **241** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **251** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **35** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **193** the plant
+pack-voltage state, and the missing charging efficiency). The **203** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1755,10 +1755,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    11    9 %  ready now — the two classes the reference plant can advance
-    12   10 %  owes a value — the cheapest to close, and the debt count already tracks them
-    36   30 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    61   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    11    8 %  ready now — the two classes the reference plant can advance
+    24   18 %  owes a value — the cheapest to close, and the debt count already tracks them
+    28   21 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    71   53 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 107 scalars and the prose half 134. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 134. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 241 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 251 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 241 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 251 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2549,6 +2549,100 @@ that is not there has drifted from what it orders.
 **Nine domains owe it and not one can be filled in from the corpus**, so each is a debt naming its
 own states rather than a refusal. That is the honest instrument for a declaration that is needed and
 that no source supplies: **232 became 241**, and nothing was added that was not already true.
+
+## The integrator did not integrate, and the fleet could not see the vehicle
+
+Two defects held each other up, and each one hid the other.
+
+**`advance()`'s stock branch never read the stock.** `stock_flux` returns a *delta* —
+`sensitivity x driver x dt`, in the node's own unit, which its own docstring says outright — and
+the branch summed those deltas and returned the sum as the node's new value:
+
+```python
+        return {state.node: total}
+```
+
+So a tank holding 279 kg with a drain became `-6.4e-06` on the first tick. **The one class the
+plant claims it can advance did not integrate**, in the class `--build-order` counts as *"ready
+now — the two classes the reference plant can advance"*. The `lag` branch three lines above reads
+`current`; this one did not:
+
+```python
+        current = float(values.get(state.node) or driver)      # lag
+```
+
+**And no stock declared a starting amount**, so there was nothing to read. That is why nobody
+noticed: a branch that never reads a level never reports one missing. The numbers were all in the
+corpus already, in three places — `vehicle.yaml#consumables` carries the loads, `coupling.yaml`'s
+`preloaded` prose names them a second time, `atmosphere_model` derives the cabin oxygen from the
+published volume and pressure — and **none of them in the state that integrates the tank.**
+
+Three fixes, and the third is the point of the round:
+
+1. **The level is read and integrated.** And where there is none the plant refuses *by name* at
+   `{state}.initial` rather than starting from an implicit zero — an empty tank and a full one look
+   identical on the first tick of a mission nobody has run.
+2. **The Bresenham residual accumulator**, which `plant.md` §4 specifies and the branch did not
+   have either. The contract's own worked example is this vehicle's: a 0.0064 g/s leak against a
+   1 mg quantum is **0.128 quanta per tick** at the 50 Hz tick, so every tick rounds to zero and
+   *"the leak never happens"*. Without it the sub-quantum branch returned `None`, which `step`
+   committed — so the tank's value became `None` on the first slow tick. The residual is carried in
+   the same map as the level while the stock is a float; when §4's fixed-point mantissa lands it
+   moves inside the representation and that key disappears.
+3. **Every stock declares `initial`**, and a numeric one says where it came from: `initial_source`,
+   a resolvable path into the document that declares the same number, or its own
+   `initial_provenance`. A figure with neither is a guess wearing a unit.
+
+| stock | starts at | from |
+|---|---:|---|
+| `o2_csm_kg` | 279 kg | `vehicle.yaml:consumables.csm.o2_kg` |
+| `h2_csm_kg` | 24.5 kg | `vehicle.yaml:consumables.csm.h2_kg` |
+| `water_potable_kg` | 14 kg | `vehicle.yaml:consumables.csm.water_potable_kg` |
+| `water_cooling_kg` | 13 kg | `vehicle.yaml:consumables.csm.water_cooling_kg` |
+| `o2_lm_kg` | 24.1 kg | `vehicle.yaml:consumables.lm.o2_kg` |
+| `absorber_man_hours_csm` | 72 | `coupling.yaml:nodes.absorber_capacity_csm.exhausted_at` |
+| `absorber_man_hours_lm` | 41 | `coupling.yaml:nodes.absorber_capacity_lm.exhausted_at` |
+| `csm_cabin_o2_kg` | 2.653760 kg | the atmosphere model's own ideal-gas relation |
+| `lm_cabin_o2_kg` | 3.013592 kg | the same relation on the LM's 6.7 m³ |
+| six accumulators | 0 | *chosen* — an accumulator starts empty |
+
+**`initial_source` is checked, not decorative**, and that is what keeps this from becoming a
+*second* declaration of a number that already exists. `check_initial_sources` resolves the path and
+requires the two to agree. It refused on its first run — for a reason worth keeping: `coupling.yaml`
+holds its nodes as a **sequence with `id` fields**, so a dotted path has to step by name there, and
+the failure was the path's assumption about the document's shape rather than the number.
+
+**Ten stocks still owe it** and are counted: `prop_main` and `prop_rcs` are one node each feeding
+three engines whose loads `vehicle.yaml#propulsion` declares separately, so a single initial would
+be a choice about which tank the node *is*; the helium charge is published nowhere; the three
+non-oxygen cabin gases need partial-pressure fractions no source gives; and `battery_charge_j`
+needs the group-to-node placement. **241 became 251.**
+
+## The fleet could read nothing, and now it reads nine quantities
+
+The ring's frames had carried `"values": {}` since the console was written — a literal empty dict in
+`write_frame`, never a plant call. A fleet could issue fifty-four commands and read back **no
+quantity at all**. `presentation.yaml#mirror` says why that matters and where the numbers belong:
+
+> the mirror carries the vehicle's own **software state** and the mission envelope ... It carries no
+> measurements and no estimates: a reading belongs in the ring, where a fleet can see what it did
+> over time, and a mirror that carried readings would give a fleet one current number and no history.
+
+The ring is exactly where the tanks belong, and the seed makes them appear:
+
+```
+values:
+  o2_csm: 279.0          h2_csm: 24.5             absorber_capacity_csm: 72.0
+  o2_lm: 24.1            water_potable: 14.0      absorber_capacity_lm: 41.0
+  cabin_atm: 2.65376     water_cooling: 13.0      lm_cabin_atm: 3.013592
+```
+
+The keys are **nodes, not channel names**, and that is deliberate rather than unfinished:
+`advance()` returns `{state.node: value}` and `step()` commits that map, so this is the seed of the
+plant's own key space and nothing here is a projection. Projecting to the published channel names is
+the publisher's step and it is not a rename — `eclss.pp_o2_mmhg` is a partial pressure in
+millimetres of mercury while `csm_cabin_o2_kg` is a mass in kilograms, so calling the mass by the
+channel's name would be a wrong number wearing the right one.
 
 ## Authoring convention: no flow mappings
 

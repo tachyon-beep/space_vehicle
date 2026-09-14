@@ -107,6 +107,8 @@ state:
     node: o2_csm
     method: stock
     unit: kg
+    initial: 279
+    initial_source: "vehicle.yaml:consumables.csm.o2_kg"
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -116,6 +118,8 @@ state:
     node: o2_lm
     method: stock
     unit: kg
+    initial: 24.1
+    initial_source: "vehicle.yaml:consumables.lm.o2_kg"
     quantum: 1.0e-6
     min_flow_per_s: 6.3e-6
     provenance:
@@ -125,6 +129,8 @@ state:
     node: h2_csm
     method: stock
     unit: kg
+    initial: 24.5
+    initial_source: "vehicle.yaml:consumables.csm.h2_kg"
     quantum: 1.0e-5
     min_flow_per_s: 1.28e-4
     provenance:
@@ -134,6 +140,8 @@ state:
     node: water_potable
     method: stock
     unit: kg
+    initial: 14
+    initial_source: "vehicle.yaml:consumables.csm.water_potable_kg"
     quantum: 1.0e-5
     min_flow_per_s: 7.9e-5
     provenance:
@@ -143,6 +151,8 @@ state:
     node: water_cooling
     method: stock
     unit: kg
+    initial: 13
+    initial_source: "vehicle.yaml:consumables.csm.water_cooling_kg"
     quantum: 1.0e-4
     min_flow_per_s: 8.9e-4
     provenance:
@@ -152,6 +162,9 @@ state:
     node: prop_main
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the tank split. `prop_main` is one node feeding three engines whose loads `vehicle.yaml#propulsion` declares separately (SPS 18,508 kg, LM descent 8,248, LM ascent 2,376), so a single initial for the node would be a choice about which tank it *is* rather than a figure anything publishes
     quantum: 1.0e-4
     min_flow_per_s: 29.57
     provenance:
@@ -161,6 +174,9 @@ state:
     node: prop_rcs
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the tank split, as `prop_main`'s: `vehicle.yaml#propulsion` declares three RCS loads (SM 608 kg, CM 112, LM 288) against the one node
     quantum: 1.0e-5
     min_flow_per_s: 0.1565
     provenance:
@@ -170,6 +186,9 @@ state:
     node: pressurant_he
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      no source gives a helium charge. `vehicle.yaml#propulsion.sps.pressurant` states the system and its pressures (3,600 psia nominal, regulated to 186) and no mass, which is why the node's `preloaded` note can say the stock is constant for the whole mission without ever saying what it holds
     quantum: 1.0e-5
     quantum_placeholder: >-
       chosen against a *quantum and minimum-flow* rule this entry cannot satisfy: the stock's
@@ -185,6 +204,8 @@ state:
     node: absorber_capacity_csm
     method: stock
     unit: man_hours
+    initial: 72
+    initial_source: "coupling.yaml:nodes.absorber_capacity_csm.exhausted_at"
     quantum: 1.0e-4
     min_flow_per_s: 2.78e-4
     provenance:
@@ -194,6 +215,8 @@ state:
     node: absorber_capacity_lm
     method: stock
     unit: man_hours
+    initial: 41
+    initial_source: "coupling.yaml:nodes.absorber_capacity_lm.exhausted_at"
     quantum: 1.0e-4
     min_flow_per_s: 5.56e-4
     provenance:

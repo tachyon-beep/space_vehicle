@@ -182,6 +182,10 @@ state:
     node: internal
     method: stock
     unit: "map[thruster_id,N*s]"
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: "the accumulator starts empty and nothing in the mission pre-loads it. It is the *residue* of a fixed-point integration rather than an inventory, so its only honest starting value is zero — and saying so is what separates it from the tanks, whose initial amount is a fact about the pad"
     quantum: 0.000445
     provenance:
       basis: derived
@@ -216,6 +220,10 @@ state:
     node: internal
     method: stock
     unit: N*s
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: "the accumulator starts empty and nothing in the mission pre-loads it. It is the *residue* of a fixed-point integration rather than an inventory, so its only honest starting value is zero — and saying so is what separates it from the tanks, whose initial amount is a fact about the pad"
     quantum: 0.000445
     provenance:
       basis: apollo

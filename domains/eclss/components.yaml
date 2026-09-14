@@ -54,6 +54,11 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
+    initial: 2.653760
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the ideal-gas relation the atmosphere model already states: 34,474 Pa over the CSM cabin's 5.9 m3 at 295 K is 82.93 mol, and at 32 g/mol that is 2.653760 kg of oxygen. atmosphere_model.check.total_pressure_at_5_psia works the same sum and rounds it to '2.65 kg ... the initial load the mission starts with'
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -63,6 +68,9 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -72,6 +80,9 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-6
     min_flow_per_s: 3.16e-5
     provenance:
@@ -81,6 +92,9 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-5
     min_flow_per_s: 1.0e-5
     provenance:
@@ -90,6 +104,10 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
+    initial: 3.013592
+    initial_provenance:
+      basis: derived
+      relation: "the same relation on the LM cabin's own 6.7 m3, which atmosphere_model.volume_m3 declares per compartment: 94.1747 mol, 3.013592 kg. The corpus states the relation once and the volume twice, so this is a computed consequence rather than a second published number"
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -99,6 +117,9 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-6
     min_flow_per_s: 3.16e-5
     provenance:
@@ -108,6 +129,9 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-05
     min_flow_per_s: 1.0e-05
     provenance:
@@ -123,6 +147,9 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
+    initial: UNCONFIGURED
+    initial_note: >-
+      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:

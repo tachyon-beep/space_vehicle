@@ -457,6 +457,10 @@ state:
     node: internal
     method: stock
     unit: "map[group,N*s]"
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: "the accumulator starts empty and nothing in the mission pre-loads it. It is the *residue* of a fixed-point integration rather than an inventory, so its only honest starting value is zero — and saying so is what separates it from the twenty tanks whose initial amount is a fact about the pad"
     quantum: 1e-06
     provenance:
       basis: historical
@@ -531,6 +535,10 @@ state:
     node: internal
     method: stock
     unit: count
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: "the accumulator starts empty and nothing in the mission pre-loads it. It is the *residue* of a fixed-point integration rather than an inventory, so its only honest starting value is zero — and saying so is what separates it from the twenty tanks whose initial amount is a fact about the pad"
     quantum: 1
     min_flow_per_s: 1
     provenance:
