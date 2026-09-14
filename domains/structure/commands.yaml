@@ -100,7 +100,13 @@ commands:
         values: [csm, lm]
       hatch:
         type: enum
-        values: [crew_csm, crew_lm, tunnel]
+        # The hatches this domain declares, by their own ids. The values were `crew_csm`,
+        # `crew_lm` and `tunnel`, and **the first two name nothing anywhere in the corpus** —
+        # no component, no state, no node, no vehicle entry — so a fleet could command a hatch
+        # the vehicle does not have while `hatch_crew_csm` and `hatch_crew_lm` were commanded
+        # by nothing. The tunnel is the volume *between* the two hatches rather than a third
+        # one, which is why it is not here.
+        values: [hatch_crew_csm, hatch_crew_lm]
       state:
         type: enum
         values: [closed, latched, open]
@@ -129,7 +135,9 @@ commands:
     argument_schema:
       interface:
         type: enum
-        values: [csm_lm_forward]
+        # `csm_lm_forward` named nothing either; `docking_interface` is the component this
+        # domain declares, and it is the only interface on the vehicle.
+        values: [docking_interface]
       latch:
         type: enum
         values: [all, one]

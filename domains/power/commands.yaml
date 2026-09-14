@@ -18,10 +18,15 @@ domain: power
 commands:
   - verb: set_source
     argument_schema:
+      # A bus's sources are both the fuel cells and the batteries, and the two are different
+      # *classes* here — `source` generates, `storage` stores — so the argument declares that it
+      # names components rather than a class. What the declaration buys is the check: every value
+      # must be a component of this domain, which is what catches a name that was renamed.
       source: {type: enum, values: [fc_1, fc_2, fc_3, battery_csm_1, battery_csm_2, battery_csm_3,
                                   battery_lm_descent_1, battery_lm_descent_2,
                                   battery_lm_descent_3, battery_lm_descent_4,
-                                  battery_lm_ascent_1, battery_lm_ascent_2]}
+                                  battery_lm_ascent_1, battery_lm_ascent_2],
+               names: component}
       state: {type: enum, values: [on, off]}
     authority: A2
     gate: {kind: preference, variable: source_<source>_enable}

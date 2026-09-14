@@ -6764,6 +6764,44 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
             "thermal domain, so nothing holds its figures against the object a fault would name",
         )
 
+    # A component that says which loop it is on, and the loops that have nothing on them.
+    #
+    # Three pumps and a bypass valve carry a `loop` field naming the circuit they belong to, and
+    # **no tool read it**: the field is the whole of the membership question — which machine is on
+    # which string — and the model answers it in one word per component. Writing the link down
+    # found the other half immediately. `loop_primary` has both CSM pumps and the bypass valve,
+    # `loop_lm` has its own, and `loop_secondary` has **nothing**: no pump to drive it, no valve to
+    # route it, no node and no state. The fleet can still select it — `set_coolant_loop`'s `mode`
+    # enum exists to choose between the strings and three verbs take a `loop` argument whose values
+    # include it — so a command team can put the vehicle on a loop that cannot flow. That is a debt
+    # rather than a refusal: the second string is a real thing `apollo_diode.md:97` describes, and
+    # what is missing is whether the model carries its pump, or treats it as a passive spare the
+    # commands should not offer.
+    on_loop: dict[str, list[str]] = {}
+    for component in domain.get("components") or []:
+        if not isinstance(component, dict) or not component.get("loop"):
+            continue
+        cid = str(component.get("id"))
+        target = str(component["loop"])
+        if target not in set(declared):
+            report.refuse(
+                f"domains/thermal/components.yaml:{cid}",
+                f"declares `loop: {target}`, which is not a loop vehicle.yaml#thermal.loops "
+                f"declares; it declares {sorted(declared)}. A component on a circuit that does "
+                "not exist is a machine the cooling model cannot place",
+            )
+            continue
+        on_loop.setdefault(target, []).append(cid)
+    for loop_id in sorted(declared):
+        if loop_id not in on_loop:
+            report.debt(
+                f"vehicle.yaml#thermal.loops.{loop_id}",
+                "is declared by both files and has no component of the thermal domain on it — no "
+                "pump drives it, so the loop cannot flow, and three verbs offer it as a `loop` "
+                "argument. Either the loop gets the pump and the valve the vehicle has, or it is a "
+                "passive string the command surface should not offer",
+            )
+
     # The zones. Both files list the same six, and the domain's `vehicle` is what binds a zone to
     # the compartment whose atmosphere it is; a zone named in one file and not the other is a
     # compartment that is either unregulated or unwatched, and the two are hard to tell apart.
@@ -7319,6 +7357,124 @@ def check_edge_derivations(
                 f"declares {value!r}. A derived value that no longer re-derives is a value nobody "
                 "has checked since the declaration it came from moved",
             )
+
+
+def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> None:
+    """An argument a fleet can send names something the vehicle has.
+
+    `pump_1`, `pump_2` and `pump_lm` are components of the thermal domain, and `set_coolant_pump`
+    offers them as an enum. Rename one, or add a fourth that does not exist, and **nothing
+    noticed**: adding `pump_9` to the schema composed, and adding it to the schema is exactly how a
+    fleet comes to be offered a pump the vehicle does not have. The console validates a command
+    against this enum, so a name in it is a name the record will accept.
+
+    The binding is inferred from the argument's *name* wherever it can be: an argument called
+    `pump` names pumps, `loop` names loops, `engine` names engines, `hatch` names hatches. That
+    works for fourteen arguments across six domains and it is silent on vocabularies, which is the
+    point — `mode: [primary, secondary, series, isolated]` names no object and must not be read as
+    one. The alternative trigger, "every value in this enum is a component id", was measured rather
+    than guessed and produces five false refusals: `select_sensor.group` names `imu` and `radar`
+    beside `cabin_pressure` and `co2`, `ask_crew.position` names `tunnel` beside five crew
+    stations, `select_nav_source.source` names `radar` beside four modes, and two more. A rule that
+    is wrong five times on the corpus it is written for is a rule nobody will keep.
+
+    Two arguments name inventory rather than machinery, and one of them has to say so:
+    `select_antenna.antenna`'s values are the *vehicle-level* antenna ids — `high_gain`, `omni_a`,
+    `sband_steerable` — which the domain's components claim through `vehicle_keys`, except for
+    `sband_steerable`, which nothing claims. That gap is already one report, in
+    `check_comms_bindings`, and a second here would be the same unknown counted twice. So an
+    argument may declare `names: vehicle_entry`, and the test is then that every value is an id
+    `vehicle.yaml` declares — which `sband_steerable` is.
+
+    What the rule does *not* reach is an argument whose name matches no class and which declares
+    nothing: `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker` and
+    `set_bus_tie.tie` name components in their domains and are unchecked, because nothing about the
+    word `bank` says it means a `heater`. Declaring `names: component` on them is what fixes that,
+    and it is the same declaration the rule uses when the name does match.
+    """
+    vehicle_ids: set[str] = set()
+
+    def collect(node: Any) -> None:
+        if isinstance(node, dict):
+            if isinstance(node.get("id"), str):
+                vehicle_ids.add(node["id"])
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for value in node:
+                collect(value)
+
+    collect(documents.get("vehicle.yaml") or {})
+
+    for filename in sorted(documents):
+        if not filename.endswith("commands.yaml"):
+            continue
+        domain = filename.split("/")[1]
+        components = documents.get(f"domains/{domain}/components.yaml") or {}
+        classes: dict[str, set[str]] = {}
+        for key in ("components", "state"):
+            for entry in components.get(key) or []:
+                if isinstance(entry, dict) and entry.get("id") and entry.get("class"):
+                    classes.setdefault(str(entry["class"]), set()).add(str(entry["id"]))
+        every = set().union(*classes.values()) if classes else set()
+        for verb in (documents[filename].get("commands") or []):
+            if not isinstance(verb, dict):
+                continue
+            for argument, spec in (verb.get("argument_schema") or {}).items():
+                if not isinstance(spec, dict) or spec.get("type") != "enum":
+                    continue
+                declared = str(spec.get("names") or "")
+                named_class = argument if argument in classes else ""
+                if not declared and not named_class:
+                    continue
+                where = f"domains/{domain}/commands.yaml:{verb.get('verb')}.{argument}"
+                values = [str(v) for v in spec.get("values") or []]
+                if declared == "vehicle_entry":
+                    for value in values:
+                        if value not in vehicle_ids:
+                            report.refuse(
+                                f"{where}",
+                                f"names {value!r}, which vehicle.yaml does not declare as any "
+                                "object's id. An argument declared to name vehicle-level inventory "
+                                "may only name inventory that exists",
+                            )
+                    continue
+                if declared and declared != "component":
+                    report.refuse(
+                        f"{where}",
+                        f"declares `names: {declared!r}`, and the only vocabularies this rule knows "
+                        "are `component` and `vehicle_entry`",
+                    )
+                    continue
+                # `names: component` widens the test to every class in the domain, which is what
+                # an argument like `set_source.source` needs: a bus's sources are its fuel cells
+                # *and* its batteries, and the two are different classes. The name-match narrowing
+                # is the default, not an override of what the file declared.
+                known = every if declared == "component" else classes.get(named_class, set())
+                narrow = bool(named_class) and declared != "component"
+                for value in values:
+                    if value in known:
+                        continue
+                    # The message has to describe the test that actually ran. The first version
+                    # kept the class wording whenever the *name* matched a class, so an argument
+                    # that had declared the wider vocabulary refused with "not a 'source'" while
+                    # the test was "not a component of this domain" — a refusal that misdescribes
+                    # its own rule is the thing this whole effort exists to remove, and a fixture
+                    # whose needle did not appear is what found it.
+                    if narrow:
+                        report.refuse(
+                            f"{where}",
+                            f"names {value!r}, which is not a {named_class!r} in this domain; it "
+                            f"declares {sorted(known)}. An argument called `{argument}` names "
+                            f"{argument}s, and a name the vehicle does not have is a command the "
+                            "record accepts and nothing can execute",
+                        )
+                    else:
+                        report.refuse(
+                            f"{where}",
+                            f"names {value!r}, which is not a component of this domain; it declares "
+                            f"{sorted(known)}",
+                        )
 
 
 def check_threshold_derivations(root: Path, documents: dict[str, Any], report: Report) -> None:
@@ -9047,6 +9203,7 @@ def main(argv: list[str] | None = None) -> int:
     documents = load_documents(root, vehicle, coupling, mission, channels)
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
+    check_argument_vocabularies(documents, report)
     check_presentation_references(
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )

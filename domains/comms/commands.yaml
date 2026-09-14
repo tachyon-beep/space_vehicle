@@ -63,7 +63,11 @@ commands:
 
   - verb: select_antenna
     argument_schema:
-      antenna: {type: enum, values: [high_gain, omni_a, omni_b, sband_steerable]}
+      # The values are the *vehicle-level* antenna ids, which this domain's components claim through
+      # `vehicle_keys` — `hga` claims `high_gain`, `omni` claims `omni_a` and `omni_b` — so the
+      # argument declares that, and the rule that binds an argument called `antenna` to the
+      # domain's antennas asks the vehicle file instead of this one.
+      antenna: {type: enum, values: [high_gain, omni_a, omni_b, sband_steerable], names: vehicle_entry}
     authority: A1
     gate: {kind: preference, variable: antenna_<antenna>_enable}
     interlocks: none - reviewed

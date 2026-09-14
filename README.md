@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -4751,6 +4751,77 @@ edge, a regulated zone stripped of its link, a link naming a threshold that does
 whose threshold's limit falls outside it, the unbroken corpus silent — and the two negatives that
 make the dwell rule a rule: the avionics bay's divergence reported once, and the two cabins, whose
 dwells already agree, reported not at all.
+
+## Two verbs offered names the vehicle does not have, and a loop with nothing on it
+
+The round started from a probe rather than a hunch: `set_coolant_pump` offers `pump_1`, `pump_2` and
+`pump_lm`, so **adding a fourth — `pump_9` — composes**. Nothing bound a verb's argument to the
+objects it names, and the console validates a command against exactly that enum, so a name in it is
+a name the record accepts. A fleet offered a pump the vehicle does not have gets a resolved command
+and no machinery.
+
+The binding is inferred from the argument's *name* wherever it can be — an argument called `pump`
+names pumps, `hatch` names hatches, `engine` names engines — which reaches **fourteen arguments
+across six domains** and is silent on vocabularies, which is the point: `mode: [primary, secondary,
+series, isolated]` names no object and must not be read as one.
+
+**The alternative trigger was measured rather than guessed**, and it is wrong five times on this
+corpus: "every value in this enum is a component id" refuses `select_sensor.group`, which names
+`imu` and `radar` beside `cabin_pressure` and `co2`; `ask_crew.position`, which names `tunnel`
+beside five crew stations; `select_nav_source.source`, which names `radar` beside four modes; and
+two more. A rule that refuses five legitimate declarations is a rule nobody keeps, so the name is
+the trigger and the file can declare when its name misleads — which two arguments do:
+`select_antenna.antenna` names the *vehicle-level* antenna ids (which the domain's components claim
+through `vehicle_keys`) and `set_source.source` names the fuel cells **and** the batteries, which
+are two classes here, `source` and `storage`.
+
+### What it found
+
+| verb | argument | was | is |
+|---|---|---|---|
+| `set_hatch_valve` | `hatch` | `crew_csm`, `crew_lm`, `tunnel` | `hatch_crew_csm`, `hatch_crew_lm` |
+| `set_docking_latch` | `interface` | `csm_lm_forward` | `docking_interface` |
+
+**Four names, and three of them appear nowhere else in the corpus at all** — not as a component, a
+state, a coupling node or a vehicle entry. `crew_csm` and `crew_lm` exist only inside
+`set_hatch_valve`'s enum, and `csm_lm_forward` only inside `set_docking_latch`'s, so a fleet
+commanding either named something the vehicle has never heard of. Beside them, the two hatches the
+structure domain *does* declare — `hatch_crew_csm` ("the CSM hatch") and `hatch_crew_lm` ("the
+hatch that opens onto the lunar surface") — were commanded by nothing. The tunnel is the volume
+between those two hatches rather than a third one, which is why it is not in the list.
+
+### And the loop half found the round's real gap
+
+Three pumps and a bypass valve each carry a `loop` field naming their circuit, and **no tool read
+it**. The field is the whole of the membership question, and writing the link down answered it:
+
+| loop | what is on it |
+|---|---|
+| `loop_primary` | `pump_1`, `pump_2`, `bypass_valve` |
+| `loop_lm` | `pump_lm` |
+| `loop_secondary` | **nothing** |
+
+No pump drives the secondary loop, so it cannot flow — and three verbs offer it as a `loop`
+argument while `set_coolant_loop`'s `mode` enum exists to select between the strings. A command
+team can put the vehicle on a loop that cannot flow, and the plant would have no pump speed to
+derive a flow from. **That is a debt rather than a refusal**: the second string is a real thing
+`apollo_diode.md:97` describes ("two water-glycol loops with primary and secondary pumps"), and
+what is owed is whether the model carries its pump, or whether the vehicle has a passive spare the
+command surface should not offer. **252 became 253.**
+
+**And the check's own first version repeated the thing it was written to catch.** It kept the class
+wording in its refusal whenever the *argument's name* matched a class, so `set_source.source` —
+which declares the wider `names: component` — refused a `battery_9` with "not a `source` in this
+domain" while the test that had actually run was "not a component of this domain". A refusal that
+misdescribes its own rule is the defect this whole effort exists to remove, and what found it was a
+fixture whose needle did not appear — the same way round 5 found the permissive comparison.
+
+Verified by breaking ten copies: a pump, a loop and an engine the vehicle does not have offered as
+argument values, a hatch argument offering the tunnel (a component, but not a hatch), a
+vehicle-entry argument naming a domain component instead, a component argument naming something
+that is not one, an argument declaring a vocabulary the rule does not know, a pump placed on a loop
+that does not exist, the one loop with nothing on it reported once and the two with machinery
+reported not at all, and the unbroken corpus silent at 253.
 
 ## The invariants, and which of them are enforced
 
