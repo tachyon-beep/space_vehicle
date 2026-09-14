@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 223 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 232 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 223 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 232 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **223** is every obligation the linter can name,
-prose ones included — `channels.yaml`'s four, `coupling.yaml`'s eight and the eleven domains' **24** are engineering
-debts written as sentences (thermal time constants, loop transit, the throttle law, the inertia tensor,
-the crisis gains, the source resistance, the missing pack-voltage state, and the missing
-charging efficiency). The **193** the plant
+Two counts, and the difference is deliberate. The **232** is every obligation the linter can name,
+prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
+the eleven domains' **26** are engineering debts written as sentences (thermal time constants, loop
+transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
+pack-voltage state, and the missing charging efficiency). The **193** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 223 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 232 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 223 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 232 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2435,6 +2435,83 @@ twenty-six while the file held one hundred thirty-four, and is now derived from 
 globals so that adding a test and forgetting the sentence fails; and that README's per-file rows are
 labelled for what they are — **a changelog, not a status board** — rather than silently carrying the
 figures of the round each was written in.
+
+## The vehicle the mission spent 7.5 hours in had no configuration
+
+`one_way_events` declares five irreversible actions, and each one carries `verb`, `arm_required`,
+`observable` — all three checked — beside `from_configuration`, `to_configuration`, `consequence`
+and `irreversibility`, **none of which any tool read**. The three fields saying an event is
+irreversible were checked; the two saying *what it irreversibly does* were not.
+
+`check_one_way_configurations` reads them, and found this on its first run:
+
+```
+lm_ascent_jettison: needs arming and runs `csm_alone -> csm_alone`, which changes nothing
+```
+
+`csm_alone` is defined as *"CSM alone after the LM is jettisoned"*. The event that removes the
+ascent stage **began in the configuration it produces**, and that was only expressible because the
+vehicle it actually begins in had no configuration at all. The mission spends **7.5 hours** there —
+`lunar_orbit_docked`, the phase whose own name says "docked again" and whose single declared
+configuration said `csm_alone`.
+
+**Three files were individually consistent and jointly wrong:**
+
+| file | what it said | what it meant |
+|---|---|---|
+| `mission.yaml` | `lunar_orbit_docked: [csm_alone]` | a phase named "docked" with nothing docked |
+| `mission.yaml` | `ascent_rendezvous: [lm_ascent_stage, csm_alone]` | rendezvous ending with the LM already gone |
+| `structure/components.yaml` | `csm_alone -> csm_alone` | the ascent stage leaving a vehicle without it |
+
+`csm_lm_ascent_docked` is the fifth configuration now — 33,695 kg, `derived` as `csm_alone`'s six
+components plus `lm_ascent_stage`'s four, which is the rule `csm_lm_docked` already used when it
+added the CSM at TLI to the LM at separation for landing. No figure in it is new; only the pairing
+is. The two phases either side of it now name the same vehicle in order.
+
+**And the corpus's own numbers are 34 kg apart**, which is recorded rather than smoothed. The
+published ascent stage is 4,888 kg at liftoff and 2,478 kg at jettison, "the difference being the
+ascent propellant burned" — 2,410 kg. But the declared load is 2,376 kg, and the declared
+components at jettison sum to 2,512. So either the load is 34 kg light or a stage mass is 34 kg
+heavy, and no source in the corpus says which. It is in `vehicle.yaml#open_debts`, because the
+configuration a fleet flies the last 7.5 hours of the lunar phase in is one of the two numbers a
+rendezvous propellant budget gets checked against.
+
+## A configuration declared two masses, and only one was checked
+
+`mass_kg` and `mass_breakdown_total_kg` are the same quantity written twice. The breakdown was
+summed against the second; the first went to `check_propulsion` as a burn's wet mass. **Nothing
+required them to agree**, and a 400 kg disagreement on every configuration composed cleanly — with
+the README quoting the unchecked one in its mass-closure table. A fleet's trajectory and its mass
+closure would have been working from two different vehicles.
+
+This is the fifth time the folder has found one quantity under two names (the phase sum, the cabin
+leak, the bay's mass-and-conductance, the threshold's `assert`/`clear`). It differs from all four:
+**both names are right.** The breakdown's total really is the configuration's mass, so the fix is
+not to collapse the pair but to make it agree.
+
+## The file's own comment said these were counted, and nothing counted them
+
+`VEHICLE_SECTIONS` has carried this beside `vehicle.yaml`'s `open_debts` since the list was written:
+
+```python
+    "open_debts",  # counted and printed, like every other open_debts in the folder
+```
+
+It was not true. `channels.yaml`, `coupling.yaml` and the eleven domains each report theirs;
+`vehicle.yaml`'s **nine** were read by no code at all, and dropping eight of them left the headline
+count unchanged at 223. They are now counted, and **223 became 232** — with no unknown removed and
+nine added that were always there.
+
+What was missing from the number that exists to count what is missing is not marginal: the inertia
+tensor and centre of mass per configuration, the six thermal zones' heat capacities and
+conductances, the LM sublimator's rejection capacity, the minimum impulse bit for all three RCS
+systems, the forty-four thrusters' geometry, the fuel cell's reactant consumption per kWh, the
+ullage motors and the power inventory's unchecked relationships. **The vehicle's largest remaining
+unknowns were the ones absent from the figure that measures how much is left.**
+
+The general form is the folder's oldest finding pointed at the tool that enforces it: *a file's own
+statement that a section is read is not evidence that it is.* Every other count in this folder is
+held by a reader; a comment claiming one exists was itself the unread declaration.
 
 ## Authoring convention: no flow mappings
 

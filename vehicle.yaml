@@ -263,6 +263,47 @@ configurations:
       basis: historical
       source: "PSR App C-I: LM ascent stage at liftoff 10,777 lb = 4,888 kg; at jettison 5,463 lb = 2,478 kg, the difference being the ascent propellant burned"
 
+  # --------------------------------------------------------------------------------------
+  # The fifth configuration, and it was missing for as long as the others existed. Between
+  # "docking complete" and "LM jettison" the vehicle is neither of the two configurations
+  # that bracket it: the ascent stage is attached and the crew have transferred to the CSM.
+  # The mission spends **7.5 hours** there — `lunar_orbit_docked`, the phase whose own name
+  # says "docked again" — and the model had no vehicle to put in it.
+  #
+  # What surfaced it was `check_one_way_configurations`, which is the first thing to read any
+  # `one_way_event`'s endpoints. `lm_ascent_jettison` ran `csm_alone -> csm_alone`: the event
+  # that *removes* the ascent stage began in the configuration defined as "CSM alone after the
+  # LM is jettisoned", because there was nothing else it could have named.
+  #
+  # The LM side is at **liftoff** mass rather than at jettison, which overstates the reference
+  # by the ascent propellant the mission spends. That is the same rule `csm_lm_docked` uses —
+  # each side at the reference moment its own configuration names — and it is stated rather
+  # than smoothed, because the alternative was a single opaque lump for the ascent stage whose
+  # value contradicts the components it is meant to be made of. See `open_debts` below.
+  # --------------------------------------------------------------------------------------
+  - id: csm_lm_ascent_docked
+    name: "CSM and LM ascent stage docked, after rendezvous and before jettison"
+    crew_aboard: 3
+    crew_in: csm
+    mass_kg: 33695
+    mass_breakdown_total_kg: 33695
+    mass_breakdown:
+      csm_cm_at_entry: 5487
+      csm_sm_inert: 4037
+      csm_sps_propellant: 18508
+      csm_sm_rcs_propellant: 608
+      csm_cm_rcs_propellant: 112
+      csm_residual_and_stores: 55
+      lm_ascent_stage_dry: 2132
+      lm_ascent_propellant: 2376
+      lm_rcs_propellant: 288
+      lm_consumables: 92
+    provenance:
+      basis: derived
+      relation: "`csm_alone`'s six components plus `lm_ascent_stage`'s four: 28,807 + 4,888 = 33,695 kg. Each side is at the reference moment its own configuration names, which is the rule `csm_lm_docked` already uses when it adds the CSM at TLI to the LM at separation for landing"
+      note: "the two halves are the same nineteen components those configurations already declare, so the sum is re-derivable rather than rounded, and no figure here is new. What is new is only the pairing"
+
+# --------------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------------
 # Propulsion. Loads are flight-measured. The linter flies each engine's burns in phase order
 # against its tank and reports the reserve — see check_propulsion, which has to be
@@ -693,6 +734,7 @@ electrical:
     note: "The LM has no fuel cells; its batteries are the sole power source (PSR, NR equipment list). That is what makes LM power a countdown rather than a budget, and it is the constraint that turns the crisis posture into a resource-allocation problem."
 open_debts:
   - "The **power inventory's relationships** are unchecked beyond the two views agreeing. `demand_w`, `inrush_w`, `bus`, `rated_w`, `ah` and `v_nominal` are read by nothing — 17 components and 25 loads — and the load budget closes exactly (CSM 1723 W, LM 1007 W) with nothing holding it there. What would close it is the same shape as the mass closure: the per-vehicle demand sum against the declared total, every load's `bus` being a bus of its own vehicle, each bus's connected load against the rated capacity of the sources presenting to it, and the battery `ah x v_nominal` against the energy the mission plans on. The last of those is the one with teeth, because `battery_charge_j` declares no capacity at all: what the vehicle actually carries in joules exists only as a product nobody computes."
+  - "**The LM ascent stage at jettison weighs 34 kg less than its own components say it should.** `lm_ascent_stage`'s source gives the ascent stage at liftoff as 10,777 lb = 4,888 kg and at jettison as 5,463 lb = 2,478 kg, 'the difference being the ascent propellant burned'. But the declared components at that moment are dry 2,132 + RCS propellant 288 + consumables 92 = **2,512 kg** with no ascent propellant left, and 2,512 is 34 kg more than the published 2,478. Put the other way: the flight's own masses imply 2,410 kg of ascent propellant burned, while the declared load is 2,376 kg — so either the load is 34 kg light or one of the stage masses is 34 kg heavy, and no source here says which. It matters beyond bookkeeping: `csm_lm_ascent_docked` above is the configuration a fleet flies the final 7.5 hours of the lunar-orbit phase in, and its mass is one of the two numbers a rendezvous propellant budget would be checked against. Resolving it means a source for the ascent stage's dry mass that the corpus does not have, so it is named rather than assumed."
 
   - "Inertia tensor and centre of mass per configuration. The Apollo 11 mission report tabulates c.g. and inertia per mission phase, but the axis datum lives in the CSM/LM Operational Data Book (SNA-8-D-027), which is not reachable, so the tabulated values cannot be converted to physical offsets. rcs_diode.md:119-121 names both as Unknown and says what they block: attitude gains, achievable angular acceleration, the allocator, the thruster torque-arm matrix. Until they exist E-RCS-DYN is UNCONFIGURED and the vehicle cannot tumble."
   - "Node heat capacities and conductances for the six thermal zones. thermal_diode.md:965 declares every thermal constant UNSPECIFIED and refuses to infer them; without them the thermal edges have no tau and the thermal domain cannot be integrated. This is the largest single debt in the vehicle."

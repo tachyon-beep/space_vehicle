@@ -298,7 +298,7 @@ one_way_events:
   - id: lm_ascent_jettison
     verb: execute_event
     arm_required: true
-    from_configuration: csm_alone
+    from_configuration: csm_lm_ascent_docked
     to_configuration: csm_alone
     consequence: "the LM ascent stage leaves; the CSM loses its lifeboat and its consumable reserve, and gains nothing"
     observable: [structure.stage_state, structure.docking_latches, eclss.cabin_pressure_psia]

@@ -3562,8 +3562,26 @@ def check_vehicle_sections(doc: dict[str, Any], report: Report) -> None:
 
 
 def check_vehicle(doc: dict[str, Any], report: Report) -> None:
-    """Mass closure, and the configuration names the mission refers to."""
+    """Mass closure, the configuration names the mission refers to, and the file's own debts."""
     check_vehicle_sections(doc, report)
+    # --------------------------------------------------------------------------------------
+    # `vehicle.yaml#open_debts` is counted here, and until it was, it was counted nowhere.
+    # `VEHICLE_SECTIONS` has carried the comment *"counted and printed, like every other
+    # `open_debts` in the folder"* since the list was written, and it was not true: `channels.yaml`,
+    # `coupling.yaml` and the eleven domains each report theirs, and this file's **nine** entries
+    # were read by no code at all. Dropping eight of the nine left the headline count at 223.
+    #
+    # The nine are not marginal. They are the power inventory's unchecked relationships, the
+    # inertia tensor and centre of mass per configuration, the thermal zones' heat capacities and
+    # conductances, the LM sublimator's rejection, the minimum impulse bit for all three RCS
+    # systems, the forty-four thrusters' geometry, the fuel cell's reactant consumption and the
+    # ullage motors — which is to say **the vehicle's largest remaining unknowns were the ones
+    # missing from the number that exists to count them.** A file's own statement that a section
+    # is read is not evidence that it is, which is this folder's oldest finding pointed at the
+    # tool that enforces it.
+    # --------------------------------------------------------------------------------------
+    for row in doc.get("open_debts") or []:
+        report.debt("vehicle.yaml:open_debts", str(row))
     for cfg in doc.get("configurations") or []:
         where = f"vehicle.yaml:configuration {cfg.get('id')}"
         if "mass_kg" not in cfg:
@@ -3584,6 +3602,28 @@ def check_vehicle(doc: dict[str, Any], report: Report) -> None:
                 report.refuse(
                     where,
                     f"mass breakdown sums to {total:g} kg but the total is stated as {stated:g} kg",
+                )
+            # ------------------------------------------------------------------------------
+            # `mass_kg` and `mass_breakdown_total_kg` are the same number written twice, and
+            # for as long as both have existed only one of them was read by anything: the
+            # breakdown was summed against `mass_breakdown_total_kg`, and `mass_kg` went to
+            # the rocket equation as a burn's wet mass (`check_propulsion`). **Nothing
+            # required the two to agree**, and a 400 kg disagreement on every configuration
+            # composed cleanly — with the README quoting the unchecked one in its mass-closure
+            # table. Two fields for one quantity is the shape that drifts, and this is the
+            # third time it has been found in a different pair: the phase sum (round 45), the
+            # cabin leak (67), the bay's mass-and-conductance (73), the threshold's
+            # `assert`/`clear` (74). The difference here is that both names are right — the
+            # breakdown's total *is* the configuration's mass — so the fix is not to collapse
+            # them but to make them say the same thing.
+            # ------------------------------------------------------------------------------
+            if isinstance(cfg.get("mass_kg"), (int, float)) and abs(cfg["mass_kg"] - stated) > 1.0:
+                report.refuse(
+                    where,
+                    f"declares `mass_kg: {cfg['mass_kg']:g}` and `mass_breakdown_total_kg: "
+                    f"{stated:g}`, which are the same quantity. The rocket equation flies the "
+                    "first and the breakdown is summed against the second, so a fleet's "
+                    "trajectory and its mass closure would be working from different vehicles",
                 )
 
 
@@ -4474,6 +4514,73 @@ def check_power_inventory(root: Path, report: Report) -> None:
                 f"declares the ascent stage at {asc} Wh and the ascent cells carry "
                 f"{energy.get('battery_lm_ascent')} Wh",
             )
+
+
+def check_one_way_configurations(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """An irreversible event's two endpoints, joined against the configurations they name.
+
+    Every `one_way_event` declares `from_configuration` and `to_configuration`, and until this
+    check existed **no tool read either one**. What was read was `verb`, `arm_required` and
+    `observable` — so the three fields that say an event is irreversible were checked and the two
+    that say *what it irreversibly does* were not.
+
+    Writing the join found the defect it was written for. `lm_ascent_jettison` declared
+    `csm_alone -> csm_alone`: a transition that changes nothing, on the one armed event whose whole
+    consequence is that *the LM ascent stage leaves*. `csm_alone` is defined as "CSM alone after
+    the LM is jettisoned", so the event began in the configuration it produces — which is only
+    possible because there was no configuration for the vehicle it actually begins in. The mission
+    spends **7.5 hours** in `lunar_orbit_docked`, a phase whose own name says "docked again" and
+    whose single declared configuration said `csm_alone`.
+
+    Two rules, and the second is the one that generalises. A name must resolve, because a dangling
+    endpoint is a transition nobody can place in the mission. And an **armed** event must actually
+    change configuration, because arming exists to gate exactly that: a one-way action that leaves
+    the vehicle in the configuration it found it is either a consumable decision wearing an
+    irreversible verb — which is `hatch_open_surface`, unarmed, and says so in its own
+    `irreversibility` — or it is an endpoint that has been written wrong.
+    """
+    configurations = {
+        str(c.get("id")) for c in (vehicle or {}).get("configurations") or [] if isinstance(c, dict)
+    }
+    if not configurations:
+        return
+    # Two endpoints are deliberately not configuration ids, and each says why in its own words:
+    # `pyro_fire` acts on one of five devices, so the vehicle it leaves is a function of the
+    # device rather than of the event. Both are declared here rather than recognised by pattern,
+    # so a third one cannot be introduced by writing prose that happens to look like these.
+    sentinels = {"any", "depends on the device"}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for event in components.get("one_way_events") or []:
+            if not isinstance(event, dict):
+                continue
+            ewhere = f"domains/{path.parent.name}/components.yaml:one_way_event {event.get('id')}"
+            ends = {}
+            for field in ("from_configuration", "to_configuration"):
+                value = event.get(field)
+                if value is None:
+                    report.refuse(ewhere, f"declares no `{field}`")
+                    continue
+                text = str(value)
+                ends[field] = text
+                if text not in configurations and text not in sentinels:
+                    report.refuse(
+                        ewhere,
+                        f"`{field}: {text!r}` is neither a configuration `vehicle.yaml` declares "
+                        f"nor one of the two non-configuration endpoints {sorted(sentinels)}. "
+                        "Nothing read this field before, so a renamed configuration left the event "
+                        "pointing at a vehicle that no longer existed",
+                    )
+            start, end = ends.get("from_configuration"), ends.get("to_configuration")
+            if event.get("arm_required") and start in configurations and start == end:
+                report.refuse(
+                    ewhere,
+                    f"needs arming and runs `{start} -> {end}`, which changes nothing. Arming "
+                    "exists to gate an irreversible change of configuration, so an armed event "
+                    "that leaves the vehicle as it found it has either written an endpoint wrong "
+                    "or is a consumable decision wearing an irreversible verb — which is what "
+                    "`hatch_open_surface` is, and it is unarmed",
+                )
 
 
 def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
@@ -5900,6 +6007,7 @@ def main(argv: list[str] | None = None) -> int:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)
         check_thermal_bindings(root, vehicle, report)
+        check_one_way_configurations(root, vehicle, report)
     else:
         report.refuse(
             "vehicle.yaml",

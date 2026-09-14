@@ -206,7 +206,7 @@ phases:
     name: "ascent and rendezvous, LM ascent stage alone"
     duration_h: 3.5
     starts_at_h: 121.5
-    configurations: [lm_ascent_stage, csm_alone]
+    configurations: [lm_ascent_stage, csm_lm_ascent_docked]
     entry: "ascent engine ignition; the descent stage is left on the surface"
     exit: "docking complete and the crew transferred to the CSM"
     provenance:
@@ -217,7 +217,7 @@ phases:
     name: "lunar orbit, docked again, TEI preparation"
     duration_h: 7.5
     starts_at_h: 125.0
-    configurations: [csm_alone]
+    configurations: [csm_lm_ascent_docked, csm_alone]
     entry: "docking complete; the LM ascent stage is jettisoned or retained as a contingency"
     exit: "TEI burn armed and committed"
     provenance:
