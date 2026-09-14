@@ -2033,7 +2033,16 @@ consumables:
     priority: P3
     range: [null, null]
     events: ["sustained beyond the configured tolerance"]
-    inputs: ["res.ledger_[resource]_kg", "res.[resource]_kg"]
+    # `delta_recon = observed - ledger`, and the observation side was `res.[resource]_kg` — a name
+    # the registry has never declared. The ledger is a template and the observations are not: the
+    # six resources publish their amounts under names of their own (`o2_remaining_kg`,
+    # `water_potable_kg`, `battery_energy_wh`), so there is no `res.[resource]_kg` to point at and
+    # there cannot be one. The residual's two terms are both named now, which is what the row's own
+    # note demands of it — "the residual is only evidence if both of its terms are visible" — and
+    # the first check to read a value in this field is what found the missing one.
+    inputs: ["res.ledger_[resource]_kg", "res.o2_remaining_kg", "res.h2_remaining_kg",
+             "res.water_potable_kg", "res.water_cooling_kg", "res.main_propellant_kg",
+             "res.rcs_propellant_kg", "res.battery_energy_wh"]
     event_class: alarm
     provenance:
       basis: apollo

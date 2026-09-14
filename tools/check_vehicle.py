@@ -1453,6 +1453,7 @@ def derive_schedule(doc: dict[str, Any], report: Report) -> list[str]:
 def check_channels(doc: dict[str, Any], report: Report) -> dict[str, dict[str, Any]]:
     """Build the channel registry, and refuse the vocabulary faults it can see."""
     registry: dict[str, dict[str, Any]] = {}
+    declared_inputs: list[tuple[str, str]] = []
     for section, rows in doc.items():
         if section in {"schema_version", "source", "vocabulary"}:
             continue
@@ -1511,6 +1512,22 @@ def check_channels(doc: dict[str, Any], report: Report) -> dict[str, dict[str, A
             check_basis(where, prov.get("basis"), prov, report)
             if prov.get("basis") == "derived" and not row.get("inputs"):
                 report.refuse(where, "provenance says derived but the row lists no inputs")
+            # And the inputs themselves were **counted and never resolved**. The field was
+            # *required* of every `derived` row — so the corpus has 30-odd of them — and no tool
+            # read a single value: rename `comm.tx_power_w` and the row goes on naming a channel
+            # that does not exist, which is the same silence `derives_from` was given a resolution
+            # for on the threshold side. A channel's inputs are the channels its value is a
+            # function of, so a name that resolves to nothing is a claim about nothing.
+            # And the inputs themselves were **counted and never resolved**. The field was
+            # *required* of every `derived` row — so the corpus has thirty-odd of them — and no
+            # tool read a single value: rename a channel a row is derived from and the row goes on
+            # naming a channel that does not exist. The resolution happens after this loop rather
+            # than inside it, because a row may name a channel declared *below* it: the first
+            # version resolved here and refused eleven legitimate references, which is this
+            # folder's own shape arriving in the check written to catch it — a value looked up
+            # before the thing it points at exists.
+            for source_id in row.get("inputs") or []:
+                declared_inputs.append((where, str(source_id)))
             # A rejected name appearing in a *value* position is a dialect leaking in. The
             # scan is deliberately narrow: a provenance note that quotes a rejected name in
             # order to reject it is documentation, not a fault, and a linter that flags its
@@ -1528,6 +1545,19 @@ def check_channels(doc: dict[str, Any], report: Report) -> dict[str, dict[str, A
             for bad, fix in REJECTED.items():
                 if re.search(rf"\b{re.escape(bad)}\b", scanned):
                     report.refuse(where, f"uses {bad!r} in a value position; canonical is {fix}")
+    # The second pass, with the whole registry in hand and through the index rather than the raw
+    # id set: the corpus names an *instantiated* template among a row's inputs —
+    # `gnc.body_rate_xyz_deg_s` for `gnc.body_rate_[axis]_deg_s` — which is the resolution every
+    # other channel reference in this file gets.
+    source_index = ChannelIndex(registry)
+    for where, source_id in declared_inputs:
+        if source_id not in source_index:
+            report.refuse(
+                where,
+                f"lists {source_id!r} among its inputs, and no row in this registry declares it. "
+                "The field is required of every `derived` row and was read by nothing, so this is "
+                "the first check that has ever looked at a value in it",
+            )
     return registry
 
 
@@ -3716,6 +3746,26 @@ def check_domain(
                         "contract and the perception bound disagree, and the crew would be "
                         "reporting something they cannot see",
                     )
+
+        # And the position's own `controls`, which is the unchecked half of the pair above: a
+        # panel's `shows` is held to the registry *and* to the perception bound, and the same
+        # position's `controls` — the channels a crew member can operate — was held to neither. A
+        # control a person cannot find on their own panel is a control the record will accept and
+        # the crew will report as absent, which is exactly the gap the display contract exists to
+        # close.
+        for cid in position.get("controls") or []:
+            if cid not in index:
+                report.refuse(
+                    pwhere,
+                    f"controls {cid!r}, which is not a registered channel. What a position can "
+                    "operate and what it can see are two lists, and only the second was checked",
+                )
+            elif cid not in allowed:
+                report.refuse(
+                    pwhere,
+                    f"controls {cid!r}, which this position cannot perceive. A crew member who can "
+                    "operate a switch and cannot see its state is a crew member operating blind",
+                )
 
     # The station vocabulary is written in three places and must be one list: the bound's
     # `crew_positions`, the `crew.location_[id]` channel that indexes a report to a station, and
@@ -6562,11 +6612,14 @@ THERMAL_STRUCTURAL = {
 
 
 # The keys of a thermal zone that are never a quantity the two files both state. Identity and the
-# prose keys — and deliberately *not* `regulated`, `volume_m3`, `limit_c`, `source` or the cabin's
-# nominal pressure and temperature, which are exactly what two views of one zone have to agree
-# about. `source` is on this list's other side for a reason worth stating: on a zone it is not
-# provenance prose but the heater bank that drives it, so it is a reference and belongs in the
-# comparison.
+# prose keys — and deliberately *not* `regulated`, `volume_m3`, `limit_c` or the cabin's nominal
+# pressure and temperature, which are exactly what two views of one zone have to agree about.
+#
+# What the intersection cannot reach is a field only one side carries, and the two zone lists are
+# not the same shape: `source` and `vehicle` are on the domain's zones and not on `vehicle.yaml`'s,
+# while `limit_c`, `dwell_min_s` and `implemented_by` are the other way round. A one-sided field is
+# invisible here by construction, so each needs its own reader — `source` got one when the probe
+# for this round found that renaming `heater_bank_csm` composed, and `vehicle` has not.
 ZONE_STRUCTURAL = {
     "id",
     "provenance",
@@ -6860,6 +6913,28 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
             "vehicle.yaml#thermal.zones",
             f"lists {sorted(zone_one)} and the thermal domain lists {sorted(zone_two)}",
         )
+    # A zone's `source` is the heater bank that drives it, and **nothing resolved it**: rename
+    # `heater_bank_csm` and the raw value moves under both copies at once, so the zone join is
+    # silent too, and the zone goes on naming a bank the vehicle does not have. Three of the six
+    # zones declare no source at all, which is the honest answer for an unregulated compartment —
+    # so the rule is that a source, where it is declared, is a component of this domain.
+    heater_banks = {
+        str(c.get("id"))
+        for c in domain.get("components") or []
+        if isinstance(c, dict) and c.get("class") == "heater"
+    }
+    for zid, zone in sorted(zone_two.items()):
+        source = zone.get("source")
+        if source is None:
+            continue
+        if str(source) not in heater_banks:
+            report.refuse(
+                f"domains/thermal/components.yaml#zones.{zid}",
+                f"declares `source: {source}`, and no component of class `heater` in this domain "
+                f"carries that id; it declares {sorted(heater_banks)}. A zone names the bank that "
+                "drives it, and three of the six name nothing because they are unregulated",
+            )
+
     for zid in sorted(set(zone_one) & set(zone_two)):
         one, two = zone_one[zid], zone_two[zid]
         for field in comparable(one, two, ZONE_STRUCTURAL):

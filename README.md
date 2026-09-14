@@ -4942,6 +4942,77 @@ its conductance, a supply that puts the cabin under its own floor, an equilibriu
 longer re-derives, and the unbroken corpus composing at 253 — which did not move, because this
 round declared links that were already being used rather than filling anything in.
 
+## Which declared links a rename silences: asked of the corpus, not of the tool
+
+The last round found one check resolving four of its inputs by convention. The question this round
+asked is the same question asked of everything: **which declared references does the linter
+actually resolve?** It was answered by measurement — one broken reference per case, a field whose
+value names another declaration changed to a name that exists nowhere, eleven cases:
+
+| declared reference | verdict |
+|---|---|
+| a state's `moved_by` naming a verb | **held** |
+| a state's `moved_by` naming an event | **held** |
+| a threshold's `point` | **held** |
+| a point's `from` | **held** |
+| a fault's `perturbs` | **held** |
+| a one-way event's `observable` | **held** |
+| a verb's `interlocks` | **held** |
+| a `heat_inputs` key naming a zone | **held** |
+| **a channel row's `inputs`** | quiet |
+| **a crew position's `controls`** | quiet |
+| **a thermal zone's `source`** | quiet |
+
+Three quiet, and each is **the unchecked half of a pair the linter already held somewhere else**:
+`inputs` beside the threshold's `derives_from`, `controls` beside the same position's panels'
+`shows`, and a zone's `source` beside the zone's `implemented_by` and `cooled_by`.
+
+### `inputs` was required and never read
+
+The sharpest of the three, because it is not merely unchecked: **every `derived` row must carry
+`inputs`** — so the corpus has thirty-odd lists of channel names — and no tool had ever read a value
+in one. The first check that did found the reconciliation channel's own residual:
+
+```yaml
+    inputs: ["res.ledger_[resource]_kg", "res.[resource]_kg"]
+```
+
+`delta_recon = observed - ledger`, says the row's own note, and the row's own provenance says "the
+residual is only evidence if both of its terms are visible". One of the two terms — the
+observation — was `res.[resource]_kg`, **a channel no row has ever declared and none can**: the six
+resources publish their amounts under names of their own (`o2_remaining_kg`, `water_potable_kg`,
+`battery_energy_wh`), so there is no template to point at. The residual's terms are both named now,
+and the first list of reconcilable resources is written down.
+
+`controls` is the same shape one file over: a position's panels' `shows` is held to the registry
+*and* to that position's perception bound, while the position's own `controls` — the channels a
+crew member can operate — was held to neither. All seven controls are registered and perceivable
+today, so the rule costs nothing and closes the pair.
+
+And a zone's `source` is the heater bank that drives it, declared on the domain's zones and resolved
+by nothing.
+
+### Two things went wrong writing it, and both are this folder's shapes
+
+The `inputs` resolution first ran **inside the row loop**, where the registry is still being built,
+and refused eleven legitimate forward references — a value looked up before the thing it points at
+exists. It resolves in a second pass now, with the whole registry in hand, through the same
+`ChannelIndex` every other channel reference uses.
+
+And the zone-source check read `vehicle.yaml`'s zones, **where `source` is not a field at all**:
+`source` and `vehicle` are on the domain's zones and not on the vehicle file's, while `limit_c`,
+`dwell_min_s` and `implemented_by` are the other way round. A field only one side carries is
+invisible to the intersection rule by construction — so the round-6 comment claiming `source`
+"belongs in the comparison" was wrong about the data, and the check was vacuous until the probe
+said so. The comment is corrected and the asymmetry written down where the next person will meet
+it: **a one-sided field needs its own reader**, and `vehicle` has not got one.
+
+Verified by breaking seven copies: an input naming a channel that does not exist, an input naming a
+template instantiation that does not resolve, a control that is not a channel, a control the
+position cannot perceive, a zone's source naming a heater that does not exist, the residual asserted
+to name both of its terms, and the unbroken corpus composing at **253** — which did not move,
+because this round resolved references that were already written.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
