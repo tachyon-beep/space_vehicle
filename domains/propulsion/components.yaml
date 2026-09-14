@@ -154,6 +154,7 @@ components:
     isp_s: 314.5
     throttleable: false
     qualified_restarts: 50
+    vehicle_keys: [sps]
     provenance:
       basis: historical
       source: "20,500 lbf = 91,188 N; Isp 314.5 s; 100 psia chamber; qualified for 50 restarts, of which Apollo 11 used 5"
@@ -167,6 +168,7 @@ components:
     isp_s: 305
     operating_band_pct: [10.5, 92.5]
     non_operating_band_pct: [65, 92.5]
+    vehicle_keys: [lm_dps]
     provenance:
       basis: historical
       source: "the DPS experience report: 9,710 lbf operating maximum and 1,050 lbf minimum, 10:1 range, with 65-92.5 % a NON-OPERATING region. Isp 305 s is the NASA end-of-duty-cycle requirement; the 311 s in circulation traces only to Wikipedia"
@@ -177,6 +179,7 @@ components:
     thrust_n: 15569
     isp_s: 309.4
     throttleable: false
+    vehicle_keys: [lm_aps]
     provenance:
       basis: historical
       source: "3,500 lbf nominal (3,464 predicted, 3,439 measured) = 15,569 N; Isp 309.4 predicted"

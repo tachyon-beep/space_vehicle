@@ -401,6 +401,7 @@ components:
     thrust_n: 445
     isp_s: 290
     count: 44
+    vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]
     provenance:
       basis: historical
       source: "vehicle.yaml#propulsion.rcs_sm/rcs_cm/rcs_lm — 16 SM + 12 CM + 16 LM = 44 thrusters, all 100 lbf, from A11 Tbl 8-XI and 9-XV"
@@ -438,6 +439,7 @@ components:
     class: string
     thrusters: 8
     feeds: 2
+    vehicle_keys: [rcs_sm]
     provenance:
       basis: historical
       source: "vehicle.yaml#propulsion.rcs_sm — 16 thrusters in 4 quads; the SM flew two independent systems, which is what makes a string isolable"
@@ -450,6 +452,7 @@ components:
     class: string
     thrusters: 8
     feeds: 2
+    vehicle_keys: [rcs_sm]
     provenance:
       basis: historical
       source: "as the primary string. This is the one Apollo 13 ran on after the SM's other systems were lost"
@@ -460,6 +463,7 @@ components:
     class: string
     thrusters: 12
     feeds: 2
+    vehicle_keys: [rcs_cm]
     provenance:
       basis: historical
       source: "vehicle.yaml#propulsion.rcs_cm — two systems of six thrusters (A11 Tbl 8-XI)"
@@ -470,6 +474,7 @@ components:
     class: string
     thrusters: 16
     feeds: 4
+    vehicle_keys: [rcs_lm]
     provenance:
       basis: historical
       source: "vehicle.yaml#propulsion.rcs_lm — 16 thrusters in 4 clusters of 4 (A11 Tbl 9-XV)"

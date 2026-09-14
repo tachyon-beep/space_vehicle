@@ -3956,6 +3956,56 @@ the chain with it and does not announce itself. What noticed was the fixture nee
 different reason, failing on an edit made this round. The `elif` was restored, and the new refusal
 now has its own fixture needle so the next person to move it finds out the same way.
 
+## The engines the mission is flown on, in two files and joined by nothing
+
+The last two rounds fixed one join and then hunted the same blind spot in the other. This round
+asked the question one step further out, and it found something larger than a field outside a
+compared list: **two views of one machine with no join at all.**
+
+`check_propulsion` decides whether the mission closes. It walks the Δv budget through each tank in
+phase order, and it reads `isp_s` and the propellant load from `vehicle.yaml#propulsion` and nothing
+else — which is right, because that file is the vehicle-level view the mass closure also sums. What
+it does not read is the other copy:
+
+| `vehicle.yaml#propulsion` | copy | `isp_s` | thrust |
+|---|---|---|---|
+| `sps` | `domains/propulsion/components.yaml:sps` | 314.5 | 91,188 N |
+| `lm_dps` | `domains/propulsion/components.yaml:dps` | 305 | 43,192 / 4,671 N |
+| `lm_aps` | `domains/propulsion/components.yaml:aps` | 309.4 | 15,569 N |
+| `rcs_sm`, `rcs_cm`, `rcs_lm` | `domains/rcs/components.yaml:thruster_100lbf` | 290 | 445 N |
+
+and those are the copies the plant computes with. The RCS domain's mass flow is stated in its own
+words as `mdot = F / (Isp * g0) = 445 / (290 * 9.80665)`; the propulsion domain's engines carry the
+thrust the thrust curve is built on. Every figure agreed when the check was written, and nothing was
+keeping them agreeing.
+
+**The direction a divergence fails in is the one this folder exists to prevent.** An SPS re-rated in
+the domain and not in `vehicle.yaml` leaves `check_propulsion` reporting a healthy reserve while the
+plant burns propellant at the domain's Isp. The mission looks flyable and is not — which is verbatim
+the failure mode `check_propulsion`'s own docstring says it exists to catch, arriving from the side
+it was not looking at. It is the third instance of this family in three rounds and the first one
+where the quantity decides whether the vehicle can fly.
+
+The link is declared rather than inferred, for the reason `domain_group` is: the files name one
+engine differently (`lm_dps` against `dps`), so a rule guessed from the string would have to know
+that `lm` and `l` are the same vehicle. Eight components now carry `vehicle_keys`, and one of them
+carries three — `thruster_100lbf` is all forty-four thrusters, because its own note says forty-four
+near-identical entries would be "forty-four places for the arithmetic to differ".
+
+**The third closure is arithmetic rather than equality, and it was free.** The vehicle declares each
+RCS system's thruster count, the domain breaks each system into strings, and the article count is
+what the systems add up to — so 16 + 12 + 16 = 44, and 8 + 8 = 16, 12 = 12, 16 = 16. Three
+relationships that were true and unchecked now close against each other, and they cost one field
+each.
+
+Verified the way this folder requires, by breaking nine copies: a `314` against the vehicle's 314.5
+s, a 43,000 N against 43,192, a 40-article count against 44, a ten-thruster CM string against
+twelve, an engine unlinked, a link naming an engine that does not exist, an SPS pointed at another
+engine so nothing claims it, and a component stripped of the `isp_s` the plant needs — every one
+refused by name, and the unbroken corpus silent. `--strict` still exits 2, and the debt count did
+not move: **the two files were already right; what was missing was anything that would notice if
+they stopped being.**
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

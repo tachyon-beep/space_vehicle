@@ -4714,6 +4714,115 @@ def check_propulsion(doc: dict[str, Any], vehicle: dict[str, Any], report: Repor
                 )
 
 
+def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The engine figures the mission is flown on, declared twice and joined by nothing.
+
+    `check_propulsion` walks the mission's Δv budget through each tank and decides whether it
+    closes. It reads `isp_s` and the propellant load from `vehicle.yaml#propulsion` and nothing
+    else, which is right: that file is the vehicle-level view the mass closure also sums.
+
+    What it does not read is the other copy. `domains/propulsion/components.yaml` declares `isp_s`
+    on all three main engines and `domains/rcs/components.yaml` declares it on the 100 lbf article,
+    and those are the copies the plant uses — the RCS domain computes its mass flow as
+    `mdot = F / (Isp * g0)` from its own 290 s. So the same numbers exist twice with nothing
+    between them, and the direction a divergence fails in is the one this folder exists to
+    prevent: an SPS re-rated in the domain and not in `vehicle.yaml` leaves the budget check
+    reporting a healthy reserve while the plant burns propellant at the domain's Isp. The mission
+    looks flyable and is not — `check_propulsion`'s own docstring, arrived at from the other side.
+
+    The link is declared rather than inferred for the same reason `domain_group` is: the two files
+    name one engine differently (`lm_dps` against `dps`), and one component stands for three
+    vehicle entries where the article is identical — `thruster_100lbf` is all forty-four, because
+    its own note says forty-four near-identical entries would be forty-four places for the
+    arithmetic to differ.
+
+    Three closures, and the third is arithmetic rather than equality: an engine's `isp_s` and
+    thrust figures are the vehicle entry's; a thruster's `count` is the sum of the `thrusters` its
+    vehicle entries declare; and the strings claiming a system sum to that system's `thrusters`.
+    """
+    propulsion = (vehicle or {}).get("propulsion") or {}
+    if not propulsion:
+        report.debt(
+            "vehicle.yaml#propulsion",
+            "is missing, so the engines the domains declare have nothing to be held against",
+        )
+        return
+
+    claiming: dict[str, list[str]] = {}
+    declared: dict[str, list[int]] = {}
+    for rel, cls in (("propulsion", "engine"), ("rcs", "thruster"), ("rcs", "string")):
+        doc = load(root / "domains" / rel / "components.yaml", report) or {}
+        for c in doc.get("components") or []:
+            if not isinstance(c, dict) or c.get("class") != cls:
+                continue
+            cid = str(c.get("id"))
+            where = f"domains/{rel}/components.yaml:{cid}"
+            keys = c.get("vehicle_keys")
+            if not isinstance(keys, list) or not keys:
+                report.refuse(
+                    where,
+                    f"is a {cls!r} and declares no `vehicle_keys`. Its figures are the ones the "
+                    "plant computes with, so a component claiming no vehicle entry is a copy "
+                    "nothing holds against the entry the mission is flown on",
+                )
+                continue
+            for key in (str(k) for k in keys):
+                if key not in propulsion:
+                    report.refuse(
+                        where,
+                        f"names vehicle engine {key!r}, which vehicle.yaml#propulsion does not "
+                        f"declare; it declares {sorted(propulsion)}",
+                    )
+                    continue
+                claiming.setdefault(key, []).append(cid)
+                one = propulsion[key]
+                if cls == "string":
+                    declared.setdefault(key, []).append(int(c.get("thrusters") or 0))
+                    continue
+                if "isp_s" not in c:
+                    report.refuse(
+                        where,
+                        f"claims vehicle engine {key!r} and declares no `isp_s`, so the mass flow "
+                        "through it cannot be computed from this file at all",
+                    )
+                for field in ("isp_s", "thrust_n", "thrust_max_n", "thrust_min_n"):
+                    if field in one and field in c and one[field] != c[field]:
+                        report.refuse(
+                            where,
+                            f"declares {field} {c[field]!r} and vehicle.yaml#propulsion.{key} "
+                            f"declares {one[field]!r}. The Δv budget is walked with the "
+                            "vehicle-level figure and the plant's mass flow is computed from this "
+                            "one, so the two disagreeing is a mission that closes on paper and "
+                            "does not close in the tank",
+                        )
+            # A thruster article's count is the number of thrusters its vehicle entries add up to.
+            if cls == "thruster" and "count" in c:
+                total = sum(int(propulsion[str(k)].get("thrusters") or 0) for k in keys)
+                if total and int(c["count"]) != total:
+                    report.refuse(
+                        where,
+                        f"declares {c['count']} articles and the vehicle entries it claims "
+                        f"({', '.join(str(k) for k in keys)}) total {total} thrusters",
+                    )
+
+    for key in sorted(propulsion):
+        if key not in claiming:
+            report.refuse(
+                f"vehicle.yaml:propulsion {key}",
+                "is claimed by no component in the propulsion or RCS domain. Every engine the "
+                "mission burns is one the plant has to be able to compute, so an unclaimed entry "
+                "is an engine that exists in the budget and not on the vehicle",
+            )
+    for key, counts in sorted(declared.items()):
+        want = int(propulsion[key].get("thrusters") or 0)
+        if want and sum(counts) != want:
+            report.refuse(
+                f"domains/rcs/components.yaml:strings for {key}",
+                f"declare {counts} = {sum(counts)} thrusters against the {want} that "
+                f"vehicle.yaml#propulsion.{key} carries",
+            )
+
+
 def decision_age_ms(row: dict[str, Any]) -> float | None:
     """The maximum age at which a channel may still be the basis of a decision.
 
@@ -7881,6 +7990,7 @@ def main(argv: list[str] | None = None) -> int:
         if vehicle is not None:
             check_mission(mission, vehicle, report)
             check_propulsion(mission, vehicle, report)
+            check_propulsion_bindings(root, vehicle, report)
             if channels is not None:
                 check_mission_bindings(channels, mission, registry, report, vehicle)
                 check_crew_bindings(
