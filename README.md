@@ -3236,6 +3236,34 @@ authored for exactly this reason — but a derived list is only as good as the c
 with the thing it describes. **The remaining twelve are real**: eight whose inbound coupling carries
 no sensitivity and four that genuinely have no driver.
 
+## "Cannot disagree" was the wrong claim about a sound classifier
+
+Round 95 fixed a real defect: `--build-order` was sending implementers to the wrong file for sixteen
+states. But it fixed two *instances*, and the sentence above the classifier still promised more than
+anything can deliver —
+
+> The classes are `advance()`'s own refusal order, so this cannot disagree with what the plant
+> actually does when it gets there.
+
+**They do disagree, thirty-six times.** Run `advance` over every state with a permissive value map —
+every node supplied a number, so a refusal is about *structure* rather than about a value missing
+somewhere else — and thirty-six states land in a different bucket. The useful result is that **not
+one of them is unexplained**:
+
+| kind | count | what it is |
+|---|---:|---|
+| the worklist counting more | 23 | `advance` refuses on the parameter its *method* needs and nothing else; `build_order` walks the whole spec, so an unset `initial` or `moved_by` or `basis` is reported as an owed value even where the plant would advance the state from a number it was handed |
+| the `internal` sentinel | 13 | `build_order` routes it to `rule`; `advance` calls it a missing edge. No edge can reach the sentinel, so its driver is domain code |
+
+So the classifier is **sound** and the sentence was wrong. The two answer different questions on
+purpose: `advance` asks *"can I compute this right now"*, and the worklist asks *"what is missing
+from the definition"*. The first kind is the worklist being deliberately stricter, which is the
+honest direction for a list whose whole job is to name what is left.
+
+What the classification must not do is **send a reader somewhere the answer is not** — and that,
+not agreement with `advance`, is the property worth holding. It is what round 95 fixed, and it is
+now pinned by a test that fails on any disagreement which is not one of the two kinds above.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -1032,8 +1032,26 @@ def build_order(world: World) -> dict[str, list[State]]:
     anybody lands anything, and a stale build order is worse than none because it sends the next
     reader to work that is already done.
 
-    The classes are `advance()`'s own refusal order, so this cannot disagree with what the plant
-    actually does when it gets there — the classification is the same sequence of tests:
+    **The classes are `advance()`'s refusal order, and this is deliberately *stricter* than it.**
+    The sentence here used to claim the two "cannot disagree", and they can: run `advance` over
+    every state with a permissive value map and thirty-six of them land somewhere else. Every one
+    is one of two kinds, and neither is a defect —
+
+      * **twenty-three are this classifier counting more.** `advance` refuses on the parameter its
+        *method* needs (`tau_s`, `quantum`, `delay_s`, `lambda_per_h`) and on nothing else; this
+        walks the whole spec, so a state whose `initial` or `moved_by` or `basis` is unset is
+        reported as owing a value even where the plant would advance it from a number it was
+        handed. That is the honest direction for a *worklist*: the spec is incomplete and the
+        bucket says so.
+      * **thirteen are the `internal` sentinel**, which this routes to `rule` and `advance` calls a
+        missing edge. No edge can reach the sentinel — it is not a node — so its driver is domain
+        code, and `rule` is the file an implementer should open.
+
+    So the two describe different questions on purpose: `advance` answers *"can I compute this
+    right now"*, and this answers *"what is missing from the definition"*. What the classification
+    must not do is send a reader somewhere the answer is not — and it did, for sixteen states,
+    until the `preloaded` exemption and the sentinel routing above were added. The same sequence of
+    tests, then, with two deliberate differences:
 
       * **a value** — the method's named parameter is unset, or the state carries an `UNCONFIGURED`
         anywhere in its spec. These are the cheapest to close and the ones the debt count already
