@@ -895,7 +895,7 @@ edges:
     from: environment_heat
     to: radiator_reject
     kind: algebraic
-    advances: radiator_rejection_w
+    advances: zone_radiator_t
   - id: E-WATER-RAD
     sensitivity:
       value: 4.0816e-07
@@ -913,7 +913,7 @@ edges:
     from: water_cooling
     to: radiator_reject
     kind: rate
-    advances: radiator_rejection_w
+    advances: zone_radiator_t
   - id: E-PROP-ENG
     sensitivity:
       value: 0.00032423409

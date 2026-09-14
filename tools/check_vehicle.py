@@ -4477,8 +4477,14 @@ def check_domains(
             # irreversible events. Demanding an edge for those would be demanding the graph model
             # a mechanism it does not describe — so the rule is `advance`'s own: a `lag`, `stock`,
             # `delay` or `dynamics` state needs a driver, unless it is a tank filled at the pad.
-            needs_edge = producers & advanced_for
-            undriven = sorted(needs_edge - advanced)
+            # **Only the head of the order.** A state that comes after another on the same node
+            # may be derived from its predecessor — that is what an intra-node order is *for*, and
+            # `source_converter_v` follows `fuel_cell_power_w` exactly that way. A state the order
+            # puts **first** has no predecessor to be derived from, so an edge is the only thing
+            # that can drive it. Demanding an edge for the later ones would demand the graph model
+            # a derivation the order already declares.
+            head = str(order[0])
+            undriven = sorted({head} & advanced_for - advanced)
             for state_id in undriven:
                 report.debt(
                     f"{where}",
