@@ -470,6 +470,12 @@ zones:
   - id: csm_cabin
     vehicle: csm
     volume_m3: 5.9
+    # The same four links the vehicle-level zone carries, so the zone join compares them: a zone
+    # whose model is described differently in the two files is two compartments wearing one name.
+    cooled_by: loop_primary
+    temperature_state: zone_csm_cabin_t
+    heat_state: cabin_heat_csm_w
+    equilibrium_state: cabin_eq_csm_k
     # The cabin's nominal state, mirrored so that the zone join compares it. `vehicle.yaml` is the
     # authority for both — the pressure is in psia because that is the unit NR publishes it in, and
     # the two edges that differentiate the ideal-gas law convert it.
@@ -497,6 +503,10 @@ zones:
   - id: lm_cabin
     vehicle: lm
     volume_m3: 6.7
+    cooled_by: loop_lm
+    temperature_state: zone_lm_cabin_t
+    heat_state: cabin_heat_lm_w
+    equilibrium_state: cabin_eq_lm_k
     nominal_pressure_psia: 5
     nominal_temperature_k: 295
     regulated: true

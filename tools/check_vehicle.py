@@ -8089,83 +8089,138 @@ def check_cabin_equilibrium(root: Path, vehicle: dict[str, Any], report: Report)
     supply is the *mixed* supply at 7.2 C, which puts the two cabins at 13.06 C and 13.82 C, inside
     their bands with margin. The check is what makes the difference visible, because either
     assignment is plausible in isolation.
+
+    **And until this round it found all four of its inputs by convention**, which is the defect it
+    exists to catch arriving at the check itself. The loop came from a hand-written map, the heat
+    state from `f"cabin_heat_{zone.split('_')[0]}_w"`, the cabin's temperature state from a scan for
+    a node named `cabin_zone_t` or `lm_cabin_zone_t`, and the equilibrium state from
+    `f"cabin_eq_{zone.split('_')[0]}_k"` — and every lookup ended in a `continue` or an
+    `if ... is not None`. So **renaming `cabin_heat_csm_w` composed**: the check that makes a
+    swapped supply visible went quiet and said nothing, and so did a rename of any of the other
+    three. The zone declares the four links now, a link that does not resolve is refused, and the
+    two tests that encode the pairing read the declaration rather than repeating it.
     """
     thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    eclss = load(root / "domains" / "eclss" / "components.yaml", report) or {}
     if not thermal or not vehicle:
         return
+    # Which compartments the atmosphere model is stated for, which is the declared link between a
+    # vehicle and its cabin zone: `check_cabin_volumes` already uses it, and it is keyed by vehicle
+    # while the zones are named for it.
+    cabins = (eclss.get("atmosphere_model") or {}).get("volume_m3")
+    if not isinstance(cabins, dict) or not cabins:
+        return
     zones = {str(z.get("id")): z for z in (vehicle.get("thermal") or {}).get("zones") or []}
-    loops = {
-        str(loop.get("id")): loop for loop in (vehicle.get("thermal") or {}).get("loops") or []
-    }
-    # Which loop serves which compartment. Declared here rather than inferred because the two loops
-    # are the CSM's and the LM's and nothing in either file says so.
-    served = {"csm_cabin": "loop_primary", "lm_cabin": "loop_lm"}
+    loops = {str(x.get("id")): x for x in (vehicle.get("thermal") or {}).get("loops") or []}
     states = {str(s.get("id")): s for s in thermal.get("state") or [] if isinstance(s, dict)}
-    for zone, loop_id in sorted(served.items()):
-        zone_doc = zones.get(zone)
-        loop = loops.get(loop_id)
-        if not zone_doc or not loop:
+
+    for which in sorted(cabins):
+        zone_id = f"{which}_cabin"
+        where = f"vehicle.yaml#thermal.zones.{zone_id}"
+        zone = zones.get(zone_id)
+        if not isinstance(zone, dict):
+            report.refuse(
+                where,
+                "is the compartment `atmosphere_model.volume_m3` states the ideal-gas law for, and "
+                "no zone in this file carries it, so nothing holds its equilibrium anywhere",
+            )
             continue
-        bands = zone_doc.get("limit_c") or [None, None]
+        loop = loops.get(str(zone.get("cooled_by")))
+        if loop is None:
+            report.refuse(
+                f"{where}.cooled_by",
+                f"names {zone.get('cooled_by')!r}, which is not a loop vehicle.yaml#thermal.loops "
+                f"declares; it declares {sorted(loops)}. The cabin's equilibrium is its coolant "
+                "supply plus its own heat rise, so a cabin with no loop has no supply temperature",
+            )
+            continue
+
+        # The three states, resolved rather than assumed. Every one of these was a `continue`
+        # before, which is how a rename turned the whole check off.
+        resolved: dict[str, dict[str, Any]] = {}
+        unresolved = False
+        for field in ("temperature_state", "heat_state", "equilibrium_state"):
+            name = zone.get(field)
+            state = states.get(str(name))
+            if state is None:
+                report.refuse(
+                    f"{where}.{field}",
+                    f"names {name!r}, which is not a state in domains/thermal/components.yaml; it "
+                    f"declares {sorted(states)}. This check used to find this one by convention and "
+                    "skip in silence when it could not",
+                )
+                unresolved = True
+                continue
+            resolved[field] = state
+        if unresolved:
+            continue
+        cabin = resolved["temperature_state"]
+        heat = resolved["heat_state"]
+        eq_state = resolved["equilibrium_state"]
+
         supply = loop.get("supply_c")
         if not isinstance(supply, (int, float)):
             report.refuse(
-                f"vehicle.yaml#thermal.loops.{loop_id}",
-                f"serves {zone} and states no single `supply_c` figure. A band here is the "
+                f"vehicle.yaml#thermal.loops.{loop.get('id')}",
+                f"serves {zone_id} and states no single `supply_c` figure. A band here is the "
                 "evaporator outlet's range rather than the mixed supply the cabin sees, and the "
                 "difference is several kelvin of cabin temperature",
             )
             continue
-        heat = states.get(f"cabin_heat_{zone.split('_')[0]}_w")
-        cabin = states.get(
-            next(
-                (
-                    sid
-                    for sid, s in states.items()
-                    if str(s.get("node"))
-                    == ("cabin_zone_t" if zone == "csm_cabin" else "lm_cabin_zone_t")
-                ),
-                "",
+        conductance = cabin.get("conductance_w_per_k")
+        if not isinstance(conductance, (int, float)) or conductance == 0:
+            report.refuse(
+                f"domains/thermal/components.yaml:state {cabin.get('id')}",
+                f"carries no numeric `conductance_w_per_k`, and {zone_id} names it as the state it "
+                "is modelled by. The cabin's rise above its supply is Q/G, so a conductance that is "
+                "absent is a rise that cannot be computed",
             )
-        )
-        if not heat or not cabin or not cabin.get("conductance_w_per_k"):
             continue
-        equilibrium_c = float(supply) + float(heat.get("total_w") or 0) / float(
-            cabin["conductance_w_per_k"]
-        )
-        equilibrium = equilibrium_c
+        # `total_w` was read as `float(heat.get('total_w') or 0)`, which is zero for an unset value
+        # and a `ValueError` for the string `UNCONFIGURED` — so the one input this check most
+        # depends on was the one that would either vanish or crash it.
+        total_w = heat.get("total_w")
+        if not isinstance(total_w, (int, float)):
+            report.refuse(
+                f"domains/thermal/components.yaml:state {heat.get('id')}",
+                f"declares {total_w!r} as its `total_w`, and {zone_id} names it as the heat this "
+                "compartment's equipment puts in. The equilibrium is `supply + Q/G`, so a heat rate "
+                "that is not a number is a cabin whose temperature cannot be checked",
+            )
+            continue
+        equilibrium_c = float(supply) + float(total_w) / float(conductance)
+
         # The state that carries this figure is re-derived too, in kelvin. Two declarations of one
         # quantity is the shape that drifts, and here it would drift in the quiet direction: the
         # cabin would relax toward a stale equilibrium while the loads and the supply moved on.
-        eq_state = states.get(f"cabin_eq_{zone.split('_')[0]}_k")
-        if eq_state is not None:
-            declared_k = eq_state.get("total_k")
-            computed_k = equilibrium_c + 273.15
-            if not isinstance(declared_k, (int, float)) or abs(declared_k - computed_k) > 0.02:
-                report.refuse(
-                    f"domains/thermal/components.yaml:state {eq_state.get('id')}",
-                    f"declares {declared_k!r} K and the supply plus Q/G is {computed_k:.2f} K. The "
-                    "cabin would relax toward an equilibrium its own declarations do not produce",
-                )
-            rederive(
-                f"domains/thermal/components.yaml:state {eq_state.get('id')}",
-                declared_k,
-                (eq_state.get("provenance") or {}).get("computation"),
-                report,
-            )
-        low, high = (bands + [None, None])[:2]
-        if isinstance(low, (int, float)) and equilibrium < low:
+        declared_k = eq_state.get("total_k")
+        computed_k = equilibrium_c + 273.15
+        if not isinstance(declared_k, (int, float)) or abs(declared_k - computed_k) > 0.02:
             report.refuse(
-                f"vehicle.yaml#thermal.zones.{zone}",
-                f"has a {low} C floor and its equipment's {heat.get('total_w')} W over a "
-                f"{cabin['conductance_w_per_k']} W/K conductance puts it at {equilibrium:.2f} C on a "
+                f"domains/thermal/components.yaml:state {eq_state.get('id')}",
+                f"declares {declared_k!r} K and the supply plus Q/G is {computed_k:.2f} K. The "
+                "cabin would relax toward an equilibrium its own declarations do not produce",
+            )
+        rederive(
+            f"domains/thermal/components.yaml:state {eq_state.get('id')}",
+            declared_k,
+            (eq_state.get("provenance") or {}).get("computation"),
+            report,
+        )
+        bands = zone.get("limit_c") or [None, None]
+        low, high = (bands + [None, None])[:2]
+        if isinstance(low, (int, float)) and equilibrium_c < low:
+            report.refuse(
+                f"vehicle.yaml#thermal.zones.{zone_id}",
+                f"has a {low} C floor and its equipment's {total_w} W over a "
+                f"{conductance} W/K conductance puts it at {equilibrium_c:.2f} C on a "
                 f"{supply} C supply. The vehicle would trip its own cabin-low alarm in a nominal "
                 "mission, which means one of the four declarations is wrong",
             )
-        if isinstance(high, (int, float)) and equilibrium > high:
+        if isinstance(high, (int, float)) and equilibrium_c > high:
             report.refuse(
-                f"vehicle.yaml#thermal.zones.{zone}",
-                f"has a {high} C ceiling and its equilibrium at {equilibrium:.2f} C is above it",
+                f"vehicle.yaml#thermal.zones.{zone_id}",
+                f"has a {high} C ceiling and its equilibrium at {equilibrium_c:.2f} C is above it",
             )
 
 

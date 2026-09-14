@@ -4881,6 +4881,67 @@ under the channel's, the channel promising a key over a state that holds one val
 vocabulary drifted, the one channel that publishes about a keyed state asserted by name with the
 seven template channels asserted silent, and the unbroken corpus composing at 253.
 
+## The check that found the swapped supply found its own inputs by convention
+
+`check_cabin_equilibrium` is the check whose docstring says the difference it makes is visible:
+`loop_primary` declared `supply_c: [2.8, 7.2]` and `evaporator_outlet_c: 5.3` against a source
+reading *"mixed supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range"*, and
+either assignment is plausible in isolation — while the lower end puts both cabins under their own
+10 C floor on every cold pass. That check found all four of its inputs itself:
+
+| input | how it was found |
+|---|---|
+| the loop | `served = {"csm_cabin": "loop_primary", "lm_cabin": "loop_lm"}` — a literal in the tool |
+| the heat state | `f"cabin_heat_{zone.split('_')[0]}_w"` — string surgery on the zone id |
+| the cabin's temperature state | a scan for a node named `cabin_zone_t` or `lm_cabin_zone_t` |
+| the equilibrium state | `f"cabin_eq_{zone.split('_')[0]}_k"` |
+
+**And every one of those lookups ended in a `continue` or an `if ... is not None`.** So the probe
+this round started from is a rename: `cabin_heat_csm_w` → `cabin_heat_csm_x`, and the linter
+**composed**. The check that makes a swapped supply visible went quiet and said nothing — this
+folder's oldest sentence, arriving at the check that exists to make a difference visible.
+
+Writing the fixture that unsets the heat rate found the other half. `float(heat.get("total_w") or
+0)` is zero for a missing value and a `ValueError` for the string `UNCONFIGURED`, and the committed
+version does exactly that:
+
+```
+File "check_vehicle.py", line 8133, in check_cabin_equilibrium
+    equilibrium_c = float(supply) + float(heat.get("total_w") or 0) / float(
+ValueError: could not convert string to float: 'UNCONFIGURED'
+```
+
+— a traceback instead of a report, from the input the check most depends on. That is the failure
+`test_an_unloadable_vehicle_refuses_instead_of_crashing` was written for, and the second time a
+check has been caught crashing on the value it exists to diagnose.
+
+### The links are declared now
+
+Each cabin zone declares what it is in the model:
+
+```yaml
+        cooled_by: loop_primary
+        temperature_state: zone_csm_cabin_t
+        heat_state: cabin_heat_csm_w
+        equilibrium_state: cabin_eq_csm_k
+```
+
+The check resolves them, **refuses one that does not**, and refuses a state that does not carry the
+figure it is named for — a `temperature_state` with no `conductance_w_per_k`, a `heat_state` with
+no numeric `total_w`. The hand-written `served` map and both pieces of string surgery are gone.
+
+The links are declared on both sides of the zone join, so the join compares them: a zone whose model
+is described differently in the two files is two compartments wearing one name. And **the two tests
+that used to repeat the pairing read the declaration now** — they held a hand-written list of
+`(zone, loop, heat, cabin, equilibrium)` tuples, which is the same defect one level up, in the file
+that exists to catch it.
+
+Verified by breaking nine copies: each of the four links renamed with both files moved so the join
+is silent and only the resolution can catch it, an unset heat rate, a temperature state stripped of
+its conductance, a supply that puts the cabin under its own floor, an equilibrium state that no
+longer re-derives, and the unbroken corpus composing at 253 — which did not move, because this
+round declared links that were already being used rather than filling anything in.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

@@ -551,6 +551,17 @@ thermal:
         # edges that differentiate the law convert it, the way `E-BUS-PUMP` converts pounds.
         nominal_pressure_psia: 5
         nominal_temperature_k: 295
+        # What this compartment *is* in the model, declared rather than looked up by convention.
+        # `check_cabin_equilibrium` used to find all four of these by hand — a literal map for the
+        # loop, `f"cabin_heat_{zone.split('_')[0]}_w"` for the heat, a scan for a node named
+        # `cabin_zone_t` for the temperature, and `f"cabin_eq_{zone.split('_')[0]}_k"` for the
+        # equilibrium — and each lookup ended in a `continue`, so renaming `cabin_heat_csm_w`
+        # turned the check off in silence. The links are declarations now, and a link that does not
+        # resolve is refused.
+        cooled_by: loop_primary
+        temperature_state: zone_csm_cabin_t
+        heat_state: cabin_heat_csm_w
+        equilibrium_state: cabin_eq_csm_k
         provenance:
           basis: apollo
           ref: "apollo_diode.md:89"
@@ -585,6 +596,10 @@ thermal:
         # they shared.
         nominal_pressure_psia: 5
         nominal_temperature_k: 295
+        cooled_by: loop_lm
+        temperature_state: zone_lm_cabin_t
+        heat_state: cabin_heat_lm_w
+        equilibrium_state: cabin_eq_lm_k
         provenance:
           basis: historical
           source: "NR: LM cabin 235 cu ft pressurised = 6.7 m3 at about 5 psia, roughly 160 cu ft habitable. The limits mirror the CSM cabin's because no source distinguishes them"
