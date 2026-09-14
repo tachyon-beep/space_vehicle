@@ -6671,6 +6671,120 @@ def check_initial_sources(
             )
 
 
+def check_consumers(documents: dict[str, Any], report: Report) -> None:
+    """Every draw on a stock, against the stock it draws and the edge it says carries it.
+
+    `domains/consumables/components.yaml#consumers` is the domain's ledger of consumers — twelve
+    entries, each naming the stock it draws down, the coupling edge it corresponds to and a rate —
+    and until this round **the word `consumers` appeared in no tool in the folder**. What made the
+    omission visible is the block's own header, which promises something checkable: *"Every draw on
+    a stock, with the edge it corresponds to in coupling.yaml **or the reason it has none**."*
+
+    Four rules, and the first three are that sentence taken literally:
+
+      - the `stock` is a node this domain advances with a stock state, because a consumer of a node
+        nobody integrates is a rate with nothing to subtract it from;
+      - a named `edge` is a declared edge, and **it touches that stock**. Half of a pair of edges
+        about one quantity reads exactly like the other half — which is how two of these came to
+        name the edge that *computes* the draw rather than the one that drains the stock;
+      - an entry with no `edge` carries the reason, because prose is the only form a reason can
+        take and the header says there is one;
+      - a declared `derivation` is evaluated against the entry's rate by `check_declared_derivation`,
+        the rule the edges already use, rather than by a second copy of it.
+
+    Writing it found a number that had already been caught once, one file over. `E-FC-WATER`'s note
+    records that its sensitivity *"read 0.45 until the arithmetic was done, and 0.45 is not a number
+    this reaction can produce: it asserts that 55 % of the reactant mass becomes neither electricity
+    nor water nor heat"*. The edge was corrected to 1.126 and the check that re-evaluates every
+    `computation` was written for it — and the **consumer** entry for the same reaction still
+    declared `rate_kg_s: 0.45`, with the identical sentence as its relation, in the one block no
+    tool opened.
+    """
+    coupling = documents.get("coupling.yaml") or {}
+    by_id = {
+        str(e.get("id")): e
+        for e in coupling.get("edges") or []
+        if isinstance(e, dict)
+    }
+    for key in sorted(documents):
+        if not (key.startswith("domains/") and key.endswith("/components.yaml")):
+            continue
+        components = documents[key]
+        entries = components.get("consumers") if isinstance(components, dict) else None
+        if not entries:
+            continue
+        name = key.split("/")[1]
+        stocks = {
+            str(state.get("node"))
+            for state in components.get("state") or []
+            if isinstance(state, dict) and state.get("method") == "stock"
+        }
+        for position, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                report.refuse(
+                    f"{key}:consumers[{position}]",
+                    f"is a {type(entry).__name__}, which is not a mapping",
+                )
+                continue
+            where = f"{key}:consumers[{position}] {entry.get('id')}"
+            stock = entry.get("stock")
+            if stock is None:
+                report.refuse(
+                    f"{where}.stock",
+                    "is not declared, so there is nothing to subtract the rate from",
+                )
+            elif str(stock) not in stocks:
+                report.refuse(
+                    f"{where}.stock",
+                    f"names {stock!r}, which no stock state of {name} advances. A consumer of a "
+                    "node this domain does not integrate is a rate nothing spends",
+                )
+            edge_id = entry.get("edge")
+            if edge_id is None:
+                if not (entry.get("provenance") or {}).get("note"):
+                    report.refuse(
+                        f"{where}.edge",
+                        "is not declared and no `provenance.note` says where the draw is carried "
+                        "instead. The block's header promises \"the edge it corresponds to in "
+                        "coupling.yaml or the reason it has none\", and for this entry it is "
+                        "neither",
+                    )
+            else:
+                edge = by_id.get(str(edge_id))
+                if edge is None:
+                    report.refuse(
+                        f"{where}.edge",
+                        f"names {edge_id!r}, which coupling.yaml does not declare",
+                    )
+                elif str(stock) not in (str(edge.get("from")), str(edge.get("to"))):
+                    report.refuse(
+                        f"{where}.edge",
+                        f"names `{edge_id}`, which carries {edge.get('from')!r} to "
+                        f"{edge.get('to')!r} and never touches {stock!r}. The edge that computes a "
+                        "draw and the edge that takes the stock down are one hop apart and read "
+                        "alike",
+                    )
+            derivation = entry.get("derivation")
+            if derivation is None:
+                continue
+            rates = [field for field in ("rate_kg_s", "rate_man_hours_s") if field in entry]
+            if len(rates) != 1:
+                report.refuse(
+                    f"{where}.derivation",
+                    f"is declared and the entry declares {rates or 'no rate'}. A derivation holds "
+                    "one rate against its own arithmetic, and which rate it holds is the field name",
+                )
+                continue
+            check_declared_derivation(
+                f"{where}.derivation",
+                derivation,
+                entry.get(rates[0]),
+                f"`{rates[0]}`",
+                documents,
+                report,
+            )
+
+
 def check_domain_reads(documents: dict[str, Any], report: Report) -> None:
     """A domain's declared reads against the edges that make it read them.
 
@@ -7573,119 +7687,142 @@ def check_edge_derivations(
         if not isinstance(edge, dict):
             continue
         sensitivity = edge.get("sensitivity")
-        if not isinstance(sensitivity, dict):
+        if not isinstance(sensitivity, dict) or sensitivity.get("derivation") is None:
             continue
-        derivation = sensitivity.get("derivation")
-        if derivation is None:
-            continue
-        where = f"coupling.yaml:edges[{index}] {edge.get('id')}.sensitivity.derivation"
-        if not isinstance(derivation, dict):
-            report.refuse(where, f"is a {type(derivation).__name__}, which is not a mapping")
-            continue
-        expression = derivation.get("expression")
-        if not isinstance(expression, str) or not expression.strip():
-            report.refuse(f"{where}.expression", f"is {expression!r}, not an expression")
-            continue
-        inputs = derivation.get("inputs")
-        if not isinstance(inputs, dict) or not inputs:
-            report.refuse(
-                f"{where}.inputs",
-                f"is {inputs!r}. Every name the expression uses is bound here, and an expression "
-                "with no bindings is a `computation` rather than a derivation",
-            )
-            continue
-
-        named = set(IDENTIFIER.findall(expression))
-        for unknown in sorted(named - set(inputs)):
-            report.refuse(
-                f"{where}.inputs",
-                f"binds no {unknown!r}, which the expression uses. An unbound name is a number the "
-                "expression expects from somewhere this file does not say",
-            )
-        for unused in sorted(set(inputs) - named):
-            report.refuse(
-                f"{where}.inputs",
-                f"binds {unused!r}, which the expression does not use, so nothing reads it",
-            )
-        if named - set(inputs) or set(inputs) - named:
-            continue
-
-        values: dict[str, float] = {}
-        complete = True
-        for key in sorted(inputs):
-            raw = inputs[key]
-            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
-                values[key] = float(raw)
-                continue
-            text = str(raw)
-            if ":" not in text:
-                report.refuse(
-                    f"{where}.inputs.{key}",
-                    f"is {text!r}, which is neither a number nor a source. A source names its "
-                    "document, in the `<file>.yaml:<dotted.path>` form `derives_from` uses",
-                )
-                complete = False
-                continue
-            filename, dotted = text.split(":", 1)
-            if filename not in documents:
-                report.refuse(
-                    f"{where}.inputs.{key}",
-                    f"names {filename!r}, and the documents this check can resolve are "
-                    f"{sorted(documents)}",
-                )
-                complete = False
-                continue
-            resolved = resolve_dotted(documents[filename], dotted)
-            if resolved is None:
-                report.refuse(
-                    f"{where}.inputs.{key}",
-                    f"is {text!r} and {filename} has no {dotted!r}. A source that has been renamed "
-                    "reads exactly like a source that is unset",
-                )
-                complete = False
-                continue
-            if resolved == "UNCONFIGURED":
-                # The obligation is counted where the quantity lives, and this edge is a use of it
-                # rather than a second unknown. Nothing to check until it lands.
-                complete = False
-                continue
-            if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
-                report.refuse(
-                    f"{where}.inputs.{key}",
-                    f"resolves to {resolved!r}, which is not a number to derive a value from",
-                )
-                complete = False
-                continue
-            values[key] = float(resolved)
-        if not complete:
-            continue
-
-        value = sensitivity.get("value")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            report.refuse(
-                where,
-                f"states a derivation and the sensitivity's `value` is {value!r}, which there is "
-                "nothing to hold it against",
-            )
-            continue
-        # `values=values` binds the mapping as a default rather than closing over the loop's
-        # variable, which is the same substitution written so that it cannot become a late binding.
-        substituted = IDENTIFIER.sub(
-            lambda match, values=values: repr(values[match.group(0)]), expression
+        check_declared_derivation(
+            f"coupling.yaml:edges[{index}] {edge.get('id')}.sensitivity.derivation",
+            sensitivity["derivation"],
+            sensitivity.get("value"),
+            "the sensitivity",
+            documents,
+            report,
         )
-        try:
-            derived = evaluate_expression(substituted)
-        except Exception as exc:  # noqa: BLE001 - any failure is a refusal
-            report.refuse(f"{where}.expression", f"cannot be evaluated: {exc}")
+
+
+def check_declared_derivation(
+    where: str,
+    derivation: Any,
+    value: Any,
+    subject: str,
+    documents: dict[str, Any],
+    report: Report,
+) -> None:
+    """One `derivation`, evaluated against the value it claims to produce.
+
+    Extracted so that the rule has **one implementation** when a second kind of declaration wants
+    it: an edge's `sensitivity` has carried a `derivation` since the round that found `E-GEOM-LINK`
+    scaling every pointing loss by the slope of a beam that no longer existed, and a consumables
+    consumer's `rate_kg_s` is the same shape of claim — an arithmetic over named inputs, where each
+    input is either a number or a `"<file>.yaml:<dotted.path>"` source. A second copy of these
+    twelve refusals is the defect this folder spends its rounds removing, so the second binding
+    site calls this one instead.
+    """
+    if not isinstance(derivation, dict):
+        report.refuse(where, f"is a {type(derivation).__name__}, which is not a mapping")
+        return
+    expression = derivation.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        report.refuse(f"{where}.expression", f"is {expression!r}, not an expression")
+        return
+    inputs = derivation.get("inputs")
+    if not isinstance(inputs, dict) or not inputs:
+        report.refuse(
+            f"{where}.inputs",
+            f"is {inputs!r}. Every name the expression uses is bound here, and an expression "
+            "with no bindings is a `computation` rather than a derivation",
+        )
+        return
+
+    named = set(IDENTIFIER.findall(expression))
+    for unknown in sorted(named - set(inputs)):
+        report.refuse(
+            f"{where}.inputs",
+            f"binds no {unknown!r}, which the expression uses. An unbound name is a number the "
+            "expression expects from somewhere this file does not say",
+        )
+    for unused in sorted(set(inputs) - named):
+        report.refuse(
+            f"{where}.inputs",
+            f"binds {unused!r}, which the expression does not use, so nothing reads it",
+        )
+    if named - set(inputs) or set(inputs) - named:
+        return
+
+    values: dict[str, float] = {}
+    complete = True
+    for key in sorted(inputs):
+        raw = inputs[key]
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            values[key] = float(raw)
             continue
-        if not agrees_with_derivation(float(value), derived):
-            shown = ", ".join(f"{k}={values[k]:g}" for k in sorted(values))
+        text = str(raw)
+        if ":" not in text:
             report.refuse(
-                where,
-                f"derives {derived:.6g} from {expression!r} at {shown}, and the sensitivity "
-                f"declares {value!r}. A derived value that no longer re-derives is a value nobody "
-                "has checked since the declaration it came from moved",
+                f"{where}.inputs.{key}",
+                f"is {text!r}, which is neither a number nor a source. A source names its "
+                "document, in the `<file>.yaml:<dotted.path>` form `derives_from` uses",
             )
+            complete = False
+            continue
+        filename, dotted = text.split(":", 1)
+        if filename not in documents:
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"names {filename!r}, and the documents this check can resolve are "
+                f"{sorted(documents)}",
+            )
+            complete = False
+            continue
+        resolved = resolve_dotted(documents[filename], dotted)
+        if resolved is None:
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"is {text!r} and {filename} has no {dotted!r}. A source that has been renamed "
+                "reads exactly like a source that is unset",
+            )
+            complete = False
+            continue
+        if resolved == "UNCONFIGURED":
+            # The obligation is counted where the quantity lives, and this is a use of it rather
+            # than a second unknown. Nothing to check until it lands.
+            complete = False
+            continue
+        if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"resolves to {resolved!r}, which is not a number to derive a value from",
+            )
+            complete = False
+            continue
+        values[key] = float(resolved)
+    if not complete:
+        return
+
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        report.refuse(
+            where,
+            f"states a derivation and {subject} is {value!r}, which there is nothing to hold "
+            "it against",
+        )
+        return
+    # `values=values` binds the mapping as a default rather than closing over the loop's
+    # variable, which is the same substitution written so that it cannot become a late binding.
+    substituted = IDENTIFIER.sub(
+        lambda match, values=values: repr(values[match.group(0)]), expression
+    )
+    try:
+        derived = evaluate_expression(substituted)
+    except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+        report.refuse(f"{where}.expression", f"cannot be evaluated: {exc}")
+        return
+    if not agrees_with_derivation(float(value), derived):
+        shown = ", ".join(f"{k}={values[k]:g}" for k in sorted(values))
+        report.refuse(
+            where,
+            f"derives {derived:.6g} from {expression!r} at {shown}, and {subject} "
+            f"declares {value!r}. A derived value that no longer re-derives is a value nobody "
+            "has checked since the declaration it came from moved",
+        )
 
 
 def check_spacecraft_vocabulary(documents: dict[str, Any], report: Report) -> None:
@@ -9676,6 +9813,7 @@ def main(argv: list[str] | None = None) -> int:
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_domain_reads(documents, report)
+    check_consumers(documents, report)
     check_argument_vocabularies(documents, report)
     check_spacecraft_vocabulary(documents, report)
     check_presentation_references(

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 255 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 255 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **255** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **198** the plant
+pack-voltage state, and the missing charging efficiency). The **200** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -5259,6 +5259,100 @@ cross-domain, and the one read inside a declared cycle named as declared.
 **174 became 175 vehicle tests**, and the pins moved together: the debt count (253), the
 reconciliation's two, and the plant's own copy. Plant unchanged: 108 of 134 states fully configured,
 26 with a debt, 57 of 77 edges carrying a sensitivity, 198 unset scalars. `--strict` exits 2.
+
+## Twelve draws on the stocks, and the block that had no reader
+
+Round 13 ended by naming this one, having found it on the way past: `domains/consumables/
+components.yaml#consumers` is the domain's ledger of every draw on a stock — twelve entries, each
+naming the stock it draws down, the coupling edge it corresponds to and a rate — and **the word
+`consumers` appeared in no tool in the folder.** What made the omission visible is the block's own
+header, which promises something checkable: *"Every draw on a stock, with the edge it corresponds to
+in coupling.yaml **or the reason it has none**."*
+
+Four rules, and the first three are that sentence taken literally: the stock is a node this domain
+advances with a stock state; a named edge is declared **and touches that stock**; an entry with no
+edge carries the reason; and a declared `derivation` is evaluated against the entry's rate by the
+same rule the edges use — `check_declared_derivation`, extracted from `check_edge_derivations` so
+that the twelve refusals that hold a derivation have one implementation rather than two.
+
+**Seven of the twelve failed the sentence, and one of them had already been caught once.**
+
+| entry | was | is |
+|---|---|---|
+| `fuel_cell_o2` | `edge: E-FC-DRAW-O2` | `E-O2-DRAW` |
+| `fuel_cell_h2` | `edge: E-FC-DRAW-H2` | `E-H2-DRAW` |
+| `fuel_cell_product_water` | `rate_kg_s: 0.45` | `UNCONFIGURED`, with the reason |
+| `crew_metabolic_o2` | no edge, no reason | the reason, and a derivation |
+| `cabin_leak` | no edge, no reason | the reason, and a derivation |
+| `evaporator_water` | `edge: E-RAD-WATER`, `rate_kg_s: 8.9e-4` | `E-WATER-RAD`, `9.5714e-4`, with a derivation |
+| `crew_potable_water` | no edge | `E-CREW-WATER`, with a derivation |
+| `co2_removal`, `co2_removal_lm` | no edge | `E-ATM-ABSORB`, `E-LM-ATM-ABSORB` |
+
+The two fuel-cell references are the pair-of-edges failure: `E-FC-DRAW-O2` is `fuel_cell ->
+fc_o2_draw`, the edge that *computes* the draw, and the edge that takes the stock down is
+`E-O2-DRAW`, `o2_csm -> fc_o2_draw`. They are one hop apart, they are both about the same kilogram
+of oxygen per second, and a reference to either reads like a reference to the other.
+
+### The 0.45 was already known to be fabricated
+
+`E-FC-WATER`'s own note is the record of an earlier round finding this number:
+
+> *this read 0.45 until the arithmetic was done, and 0.45 is not a number this reaction can produce:
+> it asserts that 55 % of the reactant mass becomes neither electricity nor water nor heat, in a
+> plant that conserves its stocks exactly. The old `relation` read "0.45 kg of product water per kg
+> of reactants consumed", which is the value restated with a unit phrase attached and derives
+> nothing — that is what a fabricated number looks like when it is wearing a derivation's clothes.*
+
+The edge was corrected to 1.126 and a check was written to re-evaluate every `computation`, which is
+why the edge cannot drift again. The **consumer** entry for the same reaction still read
+`rate_kg_s: 0.45`, with that sentence, word for word, as its own relation — because the fix went
+into the file that had a check and the copy was in the block that had none. It is now owed rather
+than guessed, which is also the honest answer: the rate is 1.126 x the cell's oxygen draw, and that
+draw is the unpublished kg-per-kWh figure its two sibling entries are already unset for. *Three
+names for one unknown*, and the debt count went **up** by two because a fabricated number became a
+declared one.
+
+### And the water rate was the constant round 61 replaced
+
+`evaporator_water` declared 8.9e-4 kg/s with a relation citing 2.45e6 J/kg — and 2,345 W / 2.45e6
+J/kg is **9.5714e-4**, not 8.9e-4, because 8.9e-4 is 2,345 W at 3.8e-7 kg/s per W. That 3.8e-7 is the
+figure `E-RAD-WATER` carried until round 61 swapped the water cycle's edges and left it computing
+`1/2.45e6`; the edge was corrected, a `computation` was added to keep it corrected, and the two
+copies in this file — the consumer's rate and `water_cooling_kg`'s `min_flow_per_s`, whose note did
+the arithmetic out loud — kept the old constant for another forty rounds. The check now holds the
+rate against `E-WATER-RAD`'s own per-watt figure and the evaporator's published capacity, so the
+chain is three links long and every one of them is evaluated: 2.45e6 J/kg (the edge's `computation`)
+→ 4.0816e-7 kg/s per W (the swapped edge) → 9.5714e-4 kg/s (the consumer's derivation).
+
+### Six rates are held against their own arithmetic, and two deliberately are not
+
+| entry | expression | what it binds |
+|---|---|---|
+| `evaporator_water` | `rejection_w * kg_per_s_per_w` | the thermal domain's evaporator capacity, the edge's own sensitivity |
+| `sps_burn` | `thrust_n / (isp_s * g0)` | `vehicle.yaml#propulsion.sps` |
+| `rcs_firings` | `thrust_n / (isp_s * g0)` | `vehicle.yaml#propulsion.rcs_sm` |
+| `crew_potable_water` | `water_kg_per_crew_day * crew / seconds_per_day` | the metabolic table, `mission.yaml#crew.size` |
+| `crew_metabolic_o2` | `o2_kg_per_crew_day * crew / seconds_per_day` | the same, at the oxygen rate |
+| `cabin_leak` | `csm_kg_per_h / seconds_per_hour` | `vehicle.yaml#consumables.leak` |
+
+The two absorber rates are named against their edges and **not** given derivations, and the reason is
+in the file rather than left implicit: their rate is `E-ATM-ABSORB`'s 26.37 man-hours per kg times
+eclss's removal rate, but 26.37 is itself a four-figure rounding of `1/0.03792 = 26.3713`, so a
+derivation from the edge's value would refuse 5.56e-4 at its third figure on a rounding chain rather
+than on a disagreement. That is a fixture the verifier keeps, so the judgement is checked rather than
+asserted.
+
+**253 became 255, 198 became 200, and 175 became 176 vehicle tests.** Plant unchanged otherwise: 108
+of 134 states fully configured, 26 with a debt, 57 of 77 edges carrying a sensitivity. `--strict`
+exits 2.
+
+Verified by breaking twelve copies in `.scratch/r14/`: the evaporator's rate back at the constant the
+edges carried before round 61, a consumer naming the edge that computes the draw, an edge that is not
+declared, a stock this domain does not integrate, an edge-less consumer losing its reason, a
+derivation's source renamed and a source that is not a source, a binding the expression never uses
+and a name it never binds, an entry with a derivation and two rates, the LM absorber's rate derived
+from the rounded sensitivity (which refuses, and is why it is not declared), and the unbroken corpus
+composing at 255.
 
 ## The invariants, and which of them are enforced
 

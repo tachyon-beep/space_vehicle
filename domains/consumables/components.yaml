@@ -164,10 +164,10 @@ state:
     initial: 13
     initial_source: "vehicle.yaml:consumables.csm.water_cooling_kg"
     quantum: 1.0e-4
-    min_flow_per_s: 8.9e-4
+    min_flow_per_s: 9.5714e-4
     provenance:
       basis: derived
-      relation: "quantum 100 mg against the evaporator's full rate, 2,345 W x 3.8e-7 kg/s per W = 8.9e-4 kg/s. The evaporator is the fastest consumer in the domain, which is why this stock has the coarsest quantum"
+      relation: "quantum 100 mg against the evaporator's full rate, 2,345 W x 4.0816e-7 kg/s per W = 9.5714e-4 kg/s. The evaporator is the fastest consumer in the domain, which is why this stock has the coarsest quantum. This read 8.9e-4 — the same rate computed from 3.8e-7, which is the constant `E-RAD-WATER` carried until round 61 swapped the water cycle's edges and left this copy behind, in a file no check opened"
   - id: prop_main_kg
     node: prop_main
     method: stock
@@ -241,14 +241,14 @@ consumers:
 
   - id: fuel_cell_o2
     stock: o2_csm
-    edge: E-FC-DRAW-O2
+    edge: E-O2-DRAW
     rate_kg_s: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
       note: "the cell's kg-per-kWh reactant figure is NOT published; vehicle.yaml#electrical carries only the standby sustain flow of 4.72 kg O2/h"
   - id: fuel_cell_h2
     stock: h2_csm
-    edge: E-FC-DRAW-H2
+    edge: E-H2-DRAW
     rate_kg_s: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
@@ -256,32 +256,57 @@ consumers:
   - id: fuel_cell_product_water
     stock: water_potable
     edge: E-FC-WATER
-    rate_kg_s: 0.45
+    rate_kg_s: UNCONFIGURED
     provenance:
-      basis: derived
-      relation: "0.45 kg of product water per kg of reactants consumed (vehicle.yaml#propulsion's relation for the same reaction)"
+      basis: UNCONFIGURED
+      note: "the rate is 1.126 x the cell's oxygen draw and that draw is the unpublished kg-per-kWh figure the two entries above are unset for, so this is the third name for one unknown rather than a number. It said 0.45 until this round, which is the figure `E-FC-WATER`'s own note records as the one that was corrected: 0.45 kg of water per kg of reactants asserts that 55 % of the reactant mass becomes neither electricity nor water nor heat. The edge was fixed and this copy was not, because the edge carried a `computation` the linter re-evaluates and this block had no reader at all"
   - id: crew_metabolic_o2
     stock: o2_csm
     rate_kg_s: 3.16e-5
+    derivation:
+      expression: "o2_kg_per_crew_day * crew / seconds_per_day"
+      inputs:
+        o2_kg_per_crew_day: "vehicle.yaml:consumables.metabolic.o2_kg_per_crew_day"
+        crew: "mission.yaml:crew.size"
+        seconds_per_day: 86400
     provenance:
       basis: historical
       source: "0.91 kg per crew-day for three crew (vehicle.yaml#consumables, from the NR planning rates for a 154 lb man)"
+      note: "no edge names this draw: the crew breathe from the cabin, and the tank supplies them through `E-O2-SUPPLY-CSM`, whose flow is the sum of this draw and the leak below. The stock is the tank because that is what the supply is charged against"
   - id: cabin_leak
     stock: o2_csm
     rate_kg_s: 6.4e-6
+    derivation:
+      expression: "csm_kg_per_h / seconds_per_hour"
+      inputs:
+        csm_kg_per_h: "vehicle.yaml:consumables.leak.csm_kg_per_h"
+        seconds_per_hour: 3600
     provenance:
       basis: historical
       source: "the Apollo 11 LM flight leak of 0.05 lb/hr against a 0.2 lb/hr specification"
+      note: "as the metabolic draw above: the leak is a property of the cabin rather than of the tank, and the tank's makeup reaches it through the same supply edge. The derivation is from the *declared* 0.023 kg/h rather than from the published pound figure, because the declared figure is the corpus's own 2-significant-figure conversion of it and 6.4e-6 is that conversion's consequence — deriving it from 0.05 lb/hr would refuse on a rounding chain rather than on a disagreement"
   - id: evaporator_water
     stock: water_cooling
-    edge: E-RAD-WATER
-    rate_kg_s: 8.9e-4
+    edge: E-WATER-RAD
+    rate_kg_s: 9.5714e-4
+    derivation:
+      expression: "rejection_w * kg_per_s_per_w"
+      inputs:
+        rejection_w: "domains/thermal/components.yaml:components.evaporator_csm.rejection_w"
+        kg_per_s_per_w: "coupling.yaml:edges.E-WATER-RAD.sensitivity.value"
     provenance:
       basis: derived
-      relation: "the latent heat of vaporisation at about 280 K, 2.45e6 J/kg, applied to the published 2,345 W evaporator capacity"
+      relation: "the latent heat of vaporisation at about 280 K, 2.45e6 J/kg, applied to the published 2,345 W evaporator capacity: 2,345 x 4.0816e-7 kg/s per W = 9.5714e-4 kg/s. It read 8.9e-4, and named `E-RAD-WATER` — the limit edge, whose 2.45e6 J per kg is the constant the old arithmetic ignored in favour of 3.8e-7"
   - id: crew_potable_water
     stock: water_potable
+    edge: E-CREW-WATER
     rate_kg_s: 7.9e-5
+    derivation:
+      expression: "water_kg_per_crew_day * crew / seconds_per_day"
+      inputs:
+        water_kg_per_crew_day: "vehicle.yaml:consumables.metabolic.water_kg_per_crew_day"
+        crew: "mission.yaml:crew.size"
+        seconds_per_day: 86400
     provenance:
       basis: historical
       source: "2.27 kg per crew-day for three (vehicle.yaml#consumables)"
@@ -289,6 +314,12 @@ consumers:
     stock: prop_main
     edge: E-PROP-ENG
     rate_kg_s: 29.57
+    derivation:
+      expression: "thrust_n / (isp_s * g0)"
+      inputs:
+        thrust_n: "vehicle.yaml:propulsion.sps.thrust_n"
+        isp_s: "vehicle.yaml:propulsion.sps.isp_s"
+        g0: 9.80665
     provenance:
       basis: derived
       relation: "20,500 lbf at Isp 314.5 s, mdot = F/(Isp g0)"
@@ -296,6 +327,12 @@ consumers:
     stock: prop_rcs
     edge: E-RCSP-RCS
     rate_kg_s: 0.1565
+    derivation:
+      expression: "thrust_n / (isp_s * g0)"
+      inputs:
+        thrust_n: "vehicle.yaml:propulsion.rcs_sm.thrust_n"
+        isp_s: "vehicle.yaml:propulsion.rcs_sm.isp_s"
+        g0: 9.80665
     provenance:
       basis: derived
       relation: "445 N at Isp 290 s, per thruster"
@@ -308,18 +345,22 @@ consumers:
       note: "regulated blowdown; the regulator's behaviour is owed (vehicle.yaml#open_debts)"
   - id: co2_removal
     stock: absorber_capacity_csm
+    edge: E-ATM-ABSORB
     crew_cabin: csm
     rate_man_hours_s: 8.3e-4
     provenance:
       basis: derived
       relation: "three crew at one man-hour of removal each per hour, 8.3e-4 man-hours/s while all three are in the CM. From undocking to docking only the commander is aboard, and the rate falls to 2.78e-4 — which is why the field is a rate and not a total, and why the cabin is declared: the draw follows the crew, and the crew split is a mission event rather than a constant"
+      note: "the edge is named and no derivation is, deliberately: the rate is `E-ATM-ABSORB`'s 26.37 man-hours per kg times eclss's removal rate, but that sensitivity is itself a 4-significant-figure rounding of 1/0.03792, so a derivation from it would refuse at this field's third figure on a rounding chain rather than on a disagreement. 26.37 x 3.159722e-5 = 8.332e-4 against the 8.3e-4 declared"
   - id: co2_removal_lm
     stock: absorber_capacity_lm
+    edge: E-LM-ATM-ABSORB
     crew_cabin: lm
     rate_man_hours_s: 5.56e-4
     provenance:
       basis: derived
       relation: "two crew at one man-hour of removal each per hour. The LM's counter is spent by the two crew who are in it and by nobody else, which is the whole content of the split: before round 42 a crew on the surface drained the CSM element at the LM's rate and the two absorbers were one number"
+      note: "as the CSM's: 26.37 x 2.106481e-5 = 5.5548e-4, and 5.56e-4 is that to three figures from the *exact* 1/0.03792 = 26.3713 rather than from the edge's rounded 26.37, which is why the derivation is not declared"
 
 # --------------------------------------------------------------------------------------
 # The ledger pair. For each stock that has an independent observation, both terms and the
