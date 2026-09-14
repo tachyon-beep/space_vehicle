@@ -3091,6 +3091,34 @@ A margin objective now has to declare its **`sense`** as well — `higher_is_bet
 spent down, `closest_to_limit` for a zone that ran near its band. A margin without a direction is a
 number whose good end nobody wrote down.
 
+## A layer declared twice, and only the registry's copy checked
+
+`layer` is what the contract asks about a channel — *"how much should I trust this"* — and it is
+declared **three times** for the same channel: in `channels.yaml`, again in the domain's
+`points.yaml`, and a third time as a key in `presentation.yaml#epistemic_layers.mapping`.
+
+The registry validates its own. A channel whose layer is outside `{measurement, estimate, service}`
+is refused, and so is one with no layer at all. The domain's copy was compared against **nothing** —
+so `layer: servicee` composed, and so did a point claiming `measurement` for a channel the registry
+calls `service`.
+
+That is round 79's `mass_kg` exactly — one quantity declared twice with only one of the two read —
+except that here it is the **copy** that is unchecked, which is the worse direction. What a
+disagreement decides is not cosmetic, and `presentation.yaml` says so:
+
+> a service state is layer A with a different subject, not a fourth layer ... it decides whether a
+> commanded valve position carries a quality code
+
+A domain that marked a service channel as a measurement would put a `SUSPECT` code on a statement of
+what the vehicle *did*, and a fleet would go looking for a sensor fault in `rcs.mode`.
+
+**All 142 points agree today** — which is the condition under which the 143rd is added wrong, and
+the whole reason the join is worth having.
+
+The mapping's keys are the third declaration, and they are checked against the registry as well: a
+layer with no mapping is a kind of channel the contract has no layer for, and a mapping for a layer
+no channel declares is a decision about nothing. Both directions are refused.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

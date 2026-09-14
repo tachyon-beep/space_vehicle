@@ -3064,6 +3064,35 @@ def check_domain(
             report.refuse(f"domains/{name}/points.yaml", "a point declares no channel")
         elif cid not in index:
             report.refuse(pwhere, "is not a registered channel in channels.yaml")
+        else:
+            # ----------------------------------------------------------------------------------
+            # **`layer`, which is the registry's and is restated here unchecked.**
+            #
+            # The registry validates its own copy — a channel with a layer outside
+            # `{measurement, estimate, service}` is refused, and so is one with no layer at all —
+            # and the domain's `points.yaml` repeats the field for the same channel with nothing
+            # comparing the two. That is round 79's `mass_kg` exactly: one quantity declared twice
+            # with only one of the two read, except that here it is the *copy* that is unchecked.
+            #
+            # What a disagreement decides is not cosmetic, and `presentation.yaml` says so:
+            # a service state is layer A with a different subject, and the mapping "decides whether
+            # a commanded valve position carries a quality code". A domain that marked a service
+            # channel as a measurement would put a SUSPECT code on a statement of what the vehicle
+            # did, and a fleet would go looking for a sensor fault in `rcs.mode`.
+            #
+            # All 142 points agree today — which is the condition under which the 143rd is added
+            # wrong, and the reason the join is worth having.
+            # ----------------------------------------------------------------------------------
+            registered = index.row(str(cid)) or {}
+            stated = point.get("layer") if isinstance(point, dict) else None
+            if stated != registered.get("layer"):
+                report.refuse(
+                    f"{pwhere}.layer",
+                    f"is {stated!r} and `channels.yaml` registers {cid!r} as "
+                    f"{registered.get('layer')!r}. The registry's layer is the one the epistemic "
+                    "mapping is written against, so a point that restates it differently decides "
+                    "on its own whether the channel carries a quality code",
+                )
         # `from` names what the point reads, and it has to be something that exists: a state in
         # this domain, or a coupling node the domain reads. It is not decoration — the enum
         # binding above compares a channel's vocabulary with its source's, and a `from` that
@@ -5660,6 +5689,7 @@ def check_presentation_references(
     coupling: dict[str, Any],
     mission: dict[str, Any],
     report: Report,
+    channels: dict[str, Any] | None = None,
 ) -> None:
     """Four path references and a conformance table, none of which anything resolved.
 
@@ -5755,6 +5785,36 @@ def check_presentation_references(
             for field in ("property", "vehicle"):
                 if not str(row.get(field) or "").strip():
                     report.refuse(cwhere, f"declares no `{field}`")
+
+    # The epistemic mapping's keys are the registry's layer vocabulary, and nothing compared them.
+    # It is a three-word vocabulary declared in one file and *used* in another, which is the shape
+    # that drifts: a fourth layer added to the registry would be a kind of channel with no mapping
+    # to the contract, and the check that reads the mapping would skip it silently. Every layer the
+    # registry declares must have a mapping, and the mapping must map nothing else.
+    mapping = ((presentation.get("epistemic_layers") or {}).get("mapping")) or {}
+    layers = {
+        str(row.get("layer"))
+        for rows in (channels or {}).values()
+        if isinstance(rows, list)
+        for row in rows
+        if isinstance(row, dict) and row.get("layer")
+    }
+    if mapping and layers:
+        unmapped = sorted(layers - set(map(str, mapping)))
+        extra = sorted(set(map(str, mapping)) - layers)
+        if unmapped:
+            report.refuse(
+                "presentation.yaml:epistemic_layers.mapping",
+                f"does not map {unmapped}, which `channels.yaml` uses as a layer. A layer with no "
+                "mapping is a kind of channel the contract has no layer for, and the publisher "
+                "would have to invent one",
+            )
+        if extra:
+            report.refuse(
+                "presentation.yaml:epistemic_layers.mapping",
+                f"maps {extra}, which is not a layer any channel declares. A mapping for a layer "
+                "that does not exist is a decision about nothing",
+            )
 
     # `mission.yaml`'s seed is the one declaration determinism rests on — `plant.md` §6 keys every
     # stochastic stream to it — and its provenance was a block nothing validated.
@@ -7454,7 +7514,9 @@ def main(argv: list[str] | None = None) -> int:
     check_threshold_derivations(
         root, load_documents(root, vehicle, coupling, mission, channels), report
     )
-    check_presentation_references(root, presentation or {}, coupling or {}, mission or {}, report)
+    check_presentation_references(
+        root, presentation or {}, coupling or {}, mission or {}, report, channels
+    )
     check_thermal_budget(root, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)
