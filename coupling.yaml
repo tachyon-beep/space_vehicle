@@ -107,6 +107,11 @@ nodes:
     unit: man_hours
     apollo: "846"
     exhausted_at: 72
+    # The same number `vehicle.yaml#consumables.co2_removal` publishes, bound rather than copied.
+    # `E-ATM-ABSORB` cannot see this gap: its sensitivity is man-hours per kg CO2 and the rating
+    # *cancels* out of it, so an 80 here would still derive 26.37 while this counter exhausted at
+    # 72. The rating bites here and nowhere else, which is why the link is declared here.
+    exhausted_at_source: "vehicle.yaml:consumables.co2_removal.csm_element_man_hours"
     note: >-
       the CSM's LiOH element, on a nominal 72 man-hour rotation (vehicle.yaml#consumables, from NR
       and PSR). Separate from the LM's because the two compartments cannot equalise between
@@ -126,6 +131,7 @@ nodes:
     unit: man_hours
     apollo: "846"
     exhausted_at: 41
+    exhausted_at_source: "vehicle.yaml:consumables.co2_removal.lm_primary_man_hours"
     note: >-
       the LM's primary cartridge, rated 41 man-hours (NR and PSR, vehicle.yaml#consumables). The
       secondary is 78 and there are six spares, and NONE of them is reachable: `set_absorber_path`
@@ -704,7 +710,20 @@ edges:
     drains: lm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
-      computation: "41 / (41 * 0.91 / 24)"
+      # The rating and the metabolic rate are both declared elsewhere, so they are bound rather
+      # than inlined: 41 is `vehicle.yaml#consumables.co2_removal.lm_primary_man_hours` and the
+      # 0.91 is the published planning rate. The expression keeps the rating in it because the
+      # corpus's own argument is that it cancels, and keeping it is what makes the cancellation
+      # something the linter evaluates rather than something the prose asserts. What that does
+      # *not* buy is worth stating, because it is the opposite of what it looks like: the value is
+      # the same at any rating, so a rating change cannot be caught through this edge at all. The
+      # counter's own `exhausted_at_source` is where the number bites, which is why the rating is
+      # bound in both places.
+      derivation:
+        expression: "rating_h / (rating_h * o2_per_crew_day / 24)"
+        inputs:
+          rating_h: "vehicle.yaml:consumables.co2_removal.lm_primary_man_hours"
+          o2_per_crew_day: "vehicle.yaml:consumables.metabolic.o2_kg_per_crew_day"
       unit: "man-hours per kg CO2"
       basis: derived
       relation: "the LM's primary cartridge is rated 41 man-hours (vehicle.yaml#consumables) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the cartridge removes 41 * 0.03792 = 1.554 kg and the sensitivity is 41/1.554 = 26.37 man-hours per kg. The rating cancels — 41/(41 x 0.03792) is 1/0.03792 — so this is man-hours per kg CO2 at ANY rating, which is why it read as the same number as the CSM's edge. It said 'the man-hour rating is the same cartridge class', and that is false: 41 against the CSM element's 72. The LM's absorber IS a different article from the CSM's (Apollo 13 turned on exactly that when the CM's would not fit and the crew built an adapter), and the arithmetic is the reason the sentence went unchallenged"
@@ -723,7 +742,10 @@ edges:
     advances: lm_cabin_co2_kg
     sensitivity:
       value: 0.03792
-      computation: "0.91 / 24"
+      derivation:
+        expression: "o2_per_crew_day / 24"
+        inputs:
+          o2_per_crew_day: "vehicle.yaml:consumables.metabolic.o2_kg_per_crew_day"
       unit: "kg/h per crew"
       basis: derived
       relation: "as E-CREW-ATM: 0.91 kg of oxygen per crew-day divided by 24 h. The LM carries two crew during the descent, the surface and the ascent, so the rate is per crew member and the count comes from the configuration"
@@ -747,7 +769,17 @@ edges:
     drains: csm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
-      computation: "72 / (72 * 0.91 / 24)"
+      # As E-LM-ATM-ABSORB, at the CSM's rating. The two edges read the same number because a
+      # man-hour is one crew-hour of removal and the rating cancels — which is exactly why round 42
+      # could substitute one rating for the other and leave a right answer with a wrong reason.
+      # The rating is bound here so the substitution is visible, but the *catch* is one file over:
+      # this edge derives the same value at 41 as at 72, so `coupling.yaml`'s counter is the only
+      # thing that can refuse a rating that no longer matches the figure it came from.
+      derivation:
+        expression: "rating_h / (rating_h * o2_per_crew_day / 24)"
+        inputs:
+          rating_h: "vehicle.yaml:consumables.co2_removal.csm_element_man_hours"
+          o2_per_crew_day: "vehicle.yaml:consumables.metabolic.o2_kg_per_crew_day"
       unit: "man-hours per kg CO2"
       basis: derived
       relation: "the CSM's LiOH element is rated 72 man-hours on its nominal rotation (vehicle.yaml#consumables, from NR and PSR) and a crew member produces 0.91/24 = 0.03792 kg of CO2 per hour, so the element removes 72 * 0.03792 = 2.731 kg and the sensitivity is 72/2.731 = 26.37 man-hours per kg. Until round 42 it computed from 41 and called that 'a primary LiOH cartridge', which is the LM cartridge's rating and not this edge's: the value survived the substitution because the rating cancels out of man-hours per kg, so this was a right number with a wrong reason — the kind a later reader corrects into a wrong number"
@@ -1617,6 +1649,17 @@ edges:
       unit: "dB per deg"
       basis: derived
       relation: "the standard quadratic pattern near boresight, G(theta) = G0 - 12*(theta/theta_3dB)^2 dB, whose slope is dG/dtheta = -24*theta/theta_3dB^2. At the 2 deg operating point with theta_3dB = 9.4 deg (vehicle.yaml#comms.antennas.high_gain, itself derived from the gain-beamwidth product) that is -0.54 dB per deg"
+      # The two numbers in that relation, bound by name rather than inlined — which is the whole
+      # difference between this and a `computation`. The beamwidth is a figure `vehicle.yaml` owns,
+      # and since the last round the linter ties it to the gain through the ideal-aperture product,
+      # so this edge is now two closures deep: gain to beamwidth to slope. The operating point was
+      # the last of the three living only inside a sentence, which is the shape `mu_moon` had in
+      # `mission.yaml#comms_blackout` before it became a field.
+      derivation:
+        expression: "-24 * theta / (theta_3db * theta_3db)"
+        inputs:
+          theta: 2
+          theta_3db: "vehicle.yaml:comms.antennas.high_gain.beamwidth_deg"
       at: "pointing error near 2 deg"
       note: >-
         where the antenna's *shape* becomes a number, and it is quadratic rather than linear —
@@ -1729,7 +1772,14 @@ edges:
     advances: csm_cabin_co2_kg
     sensitivity:
       value: 0.03792
-      computation: "0.91 / 24"
+      # The corpus's simplest derivation, and the one the whole consumables ledger divides by: the
+      # metabolic rates are published per crew-day and every edge that uses them wants an hour. The
+      # 0.91 was a literal in a `computation` until this round, which held it against itself and
+      # against nothing in `vehicle.yaml#consumables.metabolic` — the declaration it quotes.
+      derivation:
+        expression: "o2_per_crew_day / 24"
+        inputs:
+          o2_per_crew_day: "vehicle.yaml:consumables.metabolic.o2_kg_per_crew_day"
       unit: "kg/h per crew"
       basis: derived
       relation: "0.91 kg of oxygen per crew-day (vehicle.yaml#consumables.metabolic.o2_kg_per_crew_day), divided by 24 h. The same rate is the CO2 produced and the water and food consumed, at the published planning rates for a 154 lb man"
@@ -1751,7 +1801,10 @@ edges:
   - id: E-CREW-WATER
     sensitivity:
       value: 0.094583
-      computation: "2.27 / 24"
+      derivation:
+        expression: "water_per_crew_day / 24"
+        inputs:
+          water_per_crew_day: "vehicle.yaml:consumables.metabolic.water_kg_per_crew_day"
       unit: "kg/h per crew"
       basis: derived
       relation: >-

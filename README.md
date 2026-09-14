@@ -4444,6 +4444,105 @@ quotation marks are everywhere in Python and stripping them the way the README's
 mangle the text; a tool that wants to record a historical count quotes it, exactly as the README's
 own history section does.
 
+## The slope was a copy of three numbers, and the copies cannot be held to anything
+
+`rederive` has checked a sensitivity that states its own arithmetic since the round that found
+`E-RAD-WATER` declaring 3.8e-7 beside a relation computing `1/2.45e6 = 4.082e-7`. That mechanism is
+right and it has a hole this folder has been circling for ten rounds: **the numbers inside the
+expression are copies.** They are read from nowhere, so an edge can only be caught disagreeing with
+*itself*.
+
+`E-GEOM-LINK` is the case that makes the hole matter. Its −0.54 dB per degree is `-24 * 2 / 9.4^2`,
+and all three numbers belong to other files. 9.4 is `vehicle.yaml#comms.antennas.high_gain`'s
+half-power beamwidth — the figure the previous round tied to the gain through the ideal-aperture
+product — and 2 existed only inside a sentence. So the hole is two closures deep and the second one
+is open at the end:
+
+> Re-rate the antenna from 26.7 dB to 28 dB, **in both files and consistently**. The join is silent
+> because the two copies agree. The product check is silent because 28 dB and 8.1 degrees are a
+> consistent pair. `E-GEOM-LINK` goes on scaling every pointing loss the fleet reads by the slope of
+> a beam that no longer exists — and the whole point of the last round was to make the beamwidth
+> follow the gain.
+
+That fixture composed until this round, and it is the first one the new check refuses.
+
+**A sensitivity may now declare a `derivation`**: an arithmetic expression over named inputs, where
+each input is either a number or a `"<file>.yaml:<dotted.path>"` source in the syntax `derives_from`
+already uses.
+
+```yaml
+      derivation:
+        expression: "-24 * theta / (theta_3db * theta_3db)"
+        inputs:
+          theta: 2
+          theta_3db: "vehicle.yaml:comms.antennas.high_gain.beamwidth_deg"
+```
+
+Three rules make that a declaration rather than a program. Every identifier in the expression must be
+an input the file declares, and **every declared input must appear in the expression**, so neither a
+name nor a binding can go unread. A source that stops resolving is refused, because a renamed source
+reads exactly like an unset one, and a source that is `UNCONFIGURED` checks nothing, because the
+obligation is counted where the quantity lives rather than at its use. And the expression is
+evaluated only **after** substitution and only if what remains is arithmetic over numbers, so the
+configuration still cannot become executable — the safety property `rederive` was built with, kept
+by construction rather than by inspection.
+
+**Five more edges came with it, and they are why this is a mechanism rather than one edge's special
+case.** The two crew metabolic rates and the two absorber conversions carried the same shape:
+
+| edge | was | binds |
+|---|---|---|
+| `E-CREW-ATM`, `E-LM-CREW-ATM` | `computation: "0.91 / 24"` | the O2 planning rate |
+| `E-ATM-ABSORB`, `E-LM-ATM-ABSORB` | `computation: "41 / (41 * 0.91 / 24)"` | the rate, and the cartridge's rating |
+| `E-CREW-WATER` | `computation: "2.27 / 24"` | the water planning rate |
+
+One published figure — the 0.91 kg per crew-day — is now bound by **four** edges, so moving it
+refuses four by name. The fixture asserts exactly that.
+
+**And the comparison had to change, which the verification is what found.** The first version held a
+derivation to `rederive`'s flat 1 % and let a whole fixture through: moving the water rate from 2.27
+to 2.29 is 0.88 %, inside the tolerance, and 0.9 % of a metabolic rate is a full step in its second
+decimal. A single relative tolerance cannot separate that from `-0.54` against `-0.54325` — which is
+0.6 % away from its own derivation because **two significant figures is how it is written**. So the
+comparison is at the declared value's own precision: the derivation must round to the number in the
+file. `rederive` uses the same rule now, and the corpus composes under it unchanged, so the
+tightening cost nothing and closed a real hole.
+
+### The other end of the chain, which was missing its last link
+
+Looking for the same shape one field over found a chain with a link missing. The CSM's absorber
+counter is exhausted at **72** man-hours, which is `vehicle.yaml#consumables.co2_removal`'s published
+rating written a second time; the LM's is **41**, the same. And
+`domains/consumables/components.yaml`'s `absorber_man_hours_csm` resolves its own `initial` against
+the *node's* rating. So the chain ran **stock initial → node rating → nothing**.
+
+The edge beside it cannot see the gap either, and that is the interesting part: `E-ATM-ABSORB`'s
+sensitivity is man-hours per kg CO2 and the rating **cancels** out of it. Change
+`csm_element_man_hours` to 80 and the edge still derives 26.37 — correctly — while the counter it
+feeds is exhausted at 72. The rating bites in exactly one place and nothing was holding it there.
+
+So a consumption counter's rating names its source, `exhausted_at_source`, checked the way
+`initial_source` is; a rating with no source is reported as a **debt** rather than refused, because a
+chosen rating is a legitimate thing for a counter to have and what is owed is the decision. **The
+rule found both gaps the moment it looked — 253 became 255 — and closing them put it back to 253.**
+
+Writing it produced a small confession worth recording. The first version read
+`for node in (coupling or {}).get("nodes") or []`, and `nodes` is a **mapping** keyed by node id while
+`edges` beside it is a sequence. The loop ran zero times and reported nothing, and the linter
+composed: a check that passes because it never looked, which is the failure this whole effort is
+about, committed by the check written to catch it. What would have caught it is the debt it was
+supposed to report; what did catch it was running the break-a-copy fixture before believing the
+green.
+
+Verified by breaking seventeen copies: the antenna re-rated in both files consistently, the O2 rate
+moved under four edges, the water rate moved, a counter's rating drifted from the figure it names, a
+counter's source renamed and another pointed at a document that does not exist, a counter with no
+source at all, an expression unbalanced, a name the expression uses left unbound, a binding the
+expression does not use, an input that is neither number nor source, a source pointed at the owed LM
+antenna, and the unbroken corpus silent at 253. `rederive`'s own path was regression-checked under
+the new comparison: `E-WATER-RAD`'s computation broken from `2.45e6` to `2.4e6` is still refused by
+name.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

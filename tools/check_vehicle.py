@@ -478,6 +478,41 @@ def duplicate_keys(text: str, document: Any = None) -> list[tuple[int, str]]:
     return found
 
 
+def significant_figures(value: float) -> int:
+    """How many digits a declared number is written to, read off its own decimal representation."""
+    text = repr(float(value))
+    mantissa = text.split("e")[0].split("E")[0]
+    digits = mantissa.lstrip("-").replace(".", "").lstrip("0")
+    return max(len(digits.rstrip("0")) or len(digits), 1)
+
+
+def round_to_significant(value: float, digits: int) -> float:
+    if value == 0:
+        return 0.0
+    return float(f"{value:.{max(digits - 1, 0)}e}")
+
+
+def agrees_with_derivation(declared: float, derived: float) -> bool:
+    """Whether a derived number *is* the declared number, at the precision it is declared to.
+
+    A relative tolerance is the wrong instrument here, and the corpus proves it with two of its own
+    values. `E-GEOM-LINK` declares -0.54 dB per degree for a derivative that is -0.54325: it is
+    0.6 % away from its own derivation, because two significant figures is how it is written.
+    `E-CREW-WATER` declares 0.094583 for 2.27/24 = 0.09458333, which is 0.0004 % away, because six
+    is. One tolerance loose enough for the first is blind to a 0.9 % drift in the second — and
+    0.9 % of a metabolic rate is a whole step in its second decimal, which is a change somebody
+    would make on purpose. The first version of this check used a flat 1 % and let exactly that
+    through.
+
+    So the comparison is at the declared value's own precision: the derivation must round to the
+    number in the file. That is the claim a declared value makes about its own arithmetic, and it
+    is the same reading of precision the beamwidth tolerance uses — half a unit in the last place
+    is the widest two figures can differ and still be the same declared number.
+    """
+    digits = significant_figures(declared)
+    return round_to_significant(derived, digits) == round_to_significant(declared, digits)
+
+
 def rederive(where: str, declared: Any, computation: Any, report: Report) -> None:
     """A value that states its own arithmetic is re-derived, on every run.
 
@@ -500,13 +535,11 @@ def rederive(where: str, declared: Any, computation: Any, report: Report) -> Non
         report.refuse(where, "declares a `computation` and no numeric value to check it against")
         return
     try:
-        if not re.fullmatch(r"[0-9eE+\-*/(). \t]+", str(computation)):
-            raise ValueError("not a numeric expression")
-        computed = eval(str(computation), {"__builtins__": {}}, {})  # noqa: S307
+        computed = evaluate_expression(str(computation))
     except Exception as exc:  # noqa: BLE001 - any failure is a refusal
         report.refuse(where, f"has a `computation` the linter cannot evaluate: {exc}")
         return
-    if abs(computed - float(declared)) > abs(float(declared)) * 0.01 + 1e-12:
+    if not agrees_with_derivation(float(declared), computed):
         report.refuse(
             where,
             f"declares {declared!r} and its computation {computation!r} gives {computed:.6g}: a "
@@ -6358,33 +6391,11 @@ def check_initial_sources(
                     f"{sorted(documents)}",
                 )
                 continue
-            node: Any = document
-            missing = False
-            for step in dotted.split("."):
-                if isinstance(node, dict) and step in node:
-                    node = node[step]
-                elif isinstance(node, list):
-                    # `coupling.yaml` holds its nodes as a sequence with `id` fields rather than as
-                    # a mapping, so a path through it has to step by name. Without this the
-                    # absorber's two `initial_source`s refused on the first run — which is the check
-                    # working, and worth recording: the path failed because the *document's shape*
-                    # is not the one the path assumed, not because the number was wrong.
-                    found = next(
-                        (
-                            row
-                            for row in node
-                            if isinstance(row, dict) and str(row.get("id")) == step
-                        ),
-                        None,
-                    )
-                    if found is None:
-                        missing = True
-                        break
-                    node = found
-                else:
-                    missing = True
-                    break
-            if missing:
+            # `resolve_dotted` is the same walk `derives_from` and an edge's `derivation` use.
+            # This function had its own copy of it — the second implementation of one rule, which
+            # is the defect this folder keeps finding in the corpus and had here in the tool.
+            node = resolve_dotted(document, dotted)
+            if node is None:
                 report.refuse(
                     f"{swhere}.initial_source",
                     f"is {text!r} and {filename} has no {dotted!r}. A link that has stopped "
@@ -6404,6 +6415,75 @@ def check_initial_sources(
                     f"to {node}. One of the two is the load and the other is a copy of it, and "
                     "nothing but this check keeps them the same number",
                 )
+
+    # And the other end of the same chain, which was missing its last link.
+    #
+    # `absorber_capacity_csm.exhausted_at` is 72 man-hours and `absorber_capacity_lm`'s is 41.
+    # Both are `vehicle.yaml#consumables.co2_removal`'s published ratings written a second time,
+    # and both are what `domains/consumables/components.yaml`'s `absorber_man_hours_*` resolves its
+    # own `initial` against — so the chain ran *stock initial -> node rating -> nothing*: the last
+    # link, from the node back to the declaration the number came from, was the one no check held.
+    # The edge beside it cannot see the gap either, because its sensitivity is man-hours per kg and
+    # the rating **cancels** out of it: change `csm_element_man_hours` to 80 and `E-ATM-ABSORB`
+    # still derives 26.37 while the counter it feeds is exhausted at 72.
+    #
+    # A rating that comes from another declaration names it, and the link is checked the way an
+    # `initial_source` is. A rating with no source is reported as a debt rather than refused: a
+    # chosen rating is a legitimate thing for a counter to have, and what is owed is the decision
+    # rather than a number.
+    # `nodes` is a mapping keyed by node id; `edges` is a sequence. Both shapes appear in this one
+    # file, and reading the nodes as a sequence is how this loop first ran zero times and reported
+    # nothing — a check that passes because it never looked, which is the failure this whole effort
+    # is about, committed by the check written to catch it.
+    for node_id, node in sorted(((coupling or {}).get("nodes") or {}).items()):
+        if not isinstance(node, dict) or not isinstance(node.get("exhausted_at"), (int, float)):
+            continue
+        where = f"coupling.yaml:node {node_id}.exhausted_at"
+        source = node.get("exhausted_at_source")
+        if not source:
+            report.debt(
+                where,
+                "is a numeric rating and names no source. A counter's rating is either a published "
+                "figure this vehicle carries — in which case `<file>.yaml:<dotted.path>` says which "
+                "— or a choice, and the two are told apart by the field rather than by the reader",
+            )
+            continue
+        text = str(source)
+        if ":" not in text:
+            report.refuse(
+                f"{where}_source",
+                f"is {text!r}, which names no document. The form is `<file>.yaml:<dotted.path>`",
+            )
+            continue
+        filename, dotted = text.split(":", 1)
+        document = documents.get(filename)
+        if document is None:
+            report.refuse(
+                f"{where}_source",
+                f"names {filename!r}, and the documents this check can resolve are "
+                f"{sorted(documents)}",
+            )
+            continue
+        resolved = resolve_dotted(document, dotted)
+        if resolved is None:
+            report.refuse(
+                f"{where}_source",
+                f"is {text!r} and {filename} has no {dotted!r}. A link that has stopped linking "
+                "reads exactly like a link that works",
+            )
+            continue
+        if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
+            report.refuse(
+                f"{where}_source",
+                f"resolves to {resolved!r}, which is not a number to compare a rating against",
+            )
+            continue
+        if abs(float(resolved) - float(node["exhausted_at"])) > 1e-9:
+            report.refuse(
+                where,
+                f"declares {node['exhausted_at']} and `exhausted_at_source: {text}` resolves to "
+                f"{resolved}. One of the two is the rating and the other is a copy of it",
+            )
 
 
 # The keys of a thermal component that are never a quantity the two files both state: identity, the
@@ -6880,6 +6960,177 @@ def check_presentation_references(
     seed = mission.get("random_seed_provenance")
     if isinstance(seed, dict):
         check_basis("mission.yaml:random_seed_provenance", seed.get("basis"), seed, report)
+
+
+# The characters a re-derivable expression may use *after* its declared inputs have been
+# substituted. Identifiers are allowed in the expression the file writes, and are gone by the time
+# this is applied — which is what keeps the property `rederive` was built to have: the linter never
+# evaluates anything but arithmetic over numbers.
+NUMERIC_EXPRESSION = re.compile(r"[0-9eE+\-*/(). \t]+")
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def evaluate_expression(expression: str) -> float:
+    """Evaluate a numeric expression, or raise. One evaluator, so one definition of what is safe."""
+    if not NUMERIC_EXPRESSION.fullmatch(expression):
+        raise ValueError("not a numeric expression")
+    return float(eval(expression, {"__builtins__": {}}, {}))  # noqa: S307
+
+
+def check_edge_derivations(
+    coupling: dict[str, Any], documents: dict[str, Any], report: Report
+) -> None:
+    """An edge whose sensitivity is another declaration's function binds its inputs by name.
+
+    `rederive` already checks a sensitivity that states its own arithmetic: an edge carrying
+    `computation: "1 / 2.45e6"` is re-evaluated against its `value` on every run, which is how
+    `E-RAD-WATER`'s 7 % disagreement was caught. That idiom has one weakness, and it is the weakness
+    this folder spends its rounds on: **the numbers inside the expression are copies.** They are read
+    from nowhere, so they cannot be held to the declaration they came from, and the check can only
+    catch an edge that disagrees with *itself*.
+
+    `E-GEOM-LINK` is the case that matters. Its -0.54 dB per degree is `-24 * 2 / 9.4^2`, and both
+    numbers belong to other files: 9.4 is `vehicle.yaml#comms.antennas.high_gain`'s half-power
+    beamwidth — which since the last round is itself tied to the gain through the ideal-aperture
+    product — and 2 is the pointing error the derivative is taken at, which until this round existed
+    only inside a sentence. Re-rate the antenna from 26.7 dB to 28 dB, in **both** files and
+    consistently, so that no join can complain and no product check can either: the beamwidth becomes
+    8.1 degrees and this edge goes on scaling every pointing loss the fleet reads by the slope of a
+    beam that no longer exists.
+
+    So a sensitivity may declare a `derivation` instead — an arithmetic expression over named inputs,
+    where each input is either a number or a `"<file>.yaml:<dotted.path>"` source in the syntax
+    `derives_from` already uses. Three rules make it a declaration rather than a program:
+
+    - every identifier in the expression must be an input the file declares, and every declared input
+      must appear in the expression, so neither a name nor a binding can go unread;
+    - a source that does not resolve is refused rather than tolerated, because a renamed source reads
+      exactly like an unset one, and a source that is `UNCONFIGURED` checks nothing, because the
+      obligation is counted where the quantity lives rather than at its use;
+    - the expression is evaluated **after** substitution and only if what remains is arithmetic over
+      numbers, so the configuration still cannot become executable.
+
+    A `computation` is the degenerate case of this — an expression with no inputs — and stays as it
+    is: most relations that state arithmetic are genuinely about their own literals, and the one
+    place a literal was a *copy* of another declaration is what this check is for.
+    """
+    for index, edge in enumerate((coupling or {}).get("edges") or []):
+        if not isinstance(edge, dict):
+            continue
+        sensitivity = edge.get("sensitivity")
+        if not isinstance(sensitivity, dict):
+            continue
+        derivation = sensitivity.get("derivation")
+        if derivation is None:
+            continue
+        where = f"coupling.yaml:edges[{index}] {edge.get('id')}.sensitivity.derivation"
+        if not isinstance(derivation, dict):
+            report.refuse(where, f"is a {type(derivation).__name__}, which is not a mapping")
+            continue
+        expression = derivation.get("expression")
+        if not isinstance(expression, str) or not expression.strip():
+            report.refuse(f"{where}.expression", f"is {expression!r}, not an expression")
+            continue
+        inputs = derivation.get("inputs")
+        if not isinstance(inputs, dict) or not inputs:
+            report.refuse(
+                f"{where}.inputs",
+                f"is {inputs!r}. Every name the expression uses is bound here, and an expression "
+                "with no bindings is a `computation` rather than a derivation",
+            )
+            continue
+
+        named = set(IDENTIFIER.findall(expression))
+        for unknown in sorted(named - set(inputs)):
+            report.refuse(
+                f"{where}.inputs",
+                f"binds no {unknown!r}, which the expression uses. An unbound name is a number the "
+                "expression expects from somewhere this file does not say",
+            )
+        for unused in sorted(set(inputs) - named):
+            report.refuse(
+                f"{where}.inputs",
+                f"binds {unused!r}, which the expression does not use, so nothing reads it",
+            )
+        if named - set(inputs) or set(inputs) - named:
+            continue
+
+        values: dict[str, float] = {}
+        complete = True
+        for key in sorted(inputs):
+            raw = inputs[key]
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                values[key] = float(raw)
+                continue
+            text = str(raw)
+            if ":" not in text:
+                report.refuse(
+                    f"{where}.inputs.{key}",
+                    f"is {text!r}, which is neither a number nor a source. A source names its "
+                    "document, in the `<file>.yaml:<dotted.path>` form `derives_from` uses",
+                )
+                complete = False
+                continue
+            filename, dotted = text.split(":", 1)
+            if filename not in documents:
+                report.refuse(
+                    f"{where}.inputs.{key}",
+                    f"names {filename!r}, and the documents this check can resolve are "
+                    f"{sorted(documents)}",
+                )
+                complete = False
+                continue
+            resolved = resolve_dotted(documents[filename], dotted)
+            if resolved is None:
+                report.refuse(
+                    f"{where}.inputs.{key}",
+                    f"is {text!r} and {filename} has no {dotted!r}. A source that has been renamed "
+                    "reads exactly like a source that is unset",
+                )
+                complete = False
+                continue
+            if resolved == "UNCONFIGURED":
+                # The obligation is counted where the quantity lives, and this edge is a use of it
+                # rather than a second unknown. Nothing to check until it lands.
+                complete = False
+                continue
+            if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
+                report.refuse(
+                    f"{where}.inputs.{key}",
+                    f"resolves to {resolved!r}, which is not a number to derive a value from",
+                )
+                complete = False
+                continue
+            values[key] = float(resolved)
+        if not complete:
+            continue
+
+        value = sensitivity.get("value")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            report.refuse(
+                where,
+                f"states a derivation and the sensitivity's `value` is {value!r}, which there is "
+                "nothing to hold it against",
+            )
+            continue
+        # `values=values` binds the mapping as a default rather than closing over the loop's
+        # variable, which is the same substitution written so that it cannot become a late binding.
+        substituted = IDENTIFIER.sub(
+            lambda match, values=values: repr(values[match.group(0)]), expression
+        )
+        try:
+            derived = evaluate_expression(substituted)
+        except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+            report.refuse(f"{where}.expression", f"cannot be evaluated: {exc}")
+            continue
+        if not agrees_with_derivation(float(value), derived):
+            shown = ", ".join(f"{k}={values[k]:g}" for k in sorted(values))
+            report.refuse(
+                where,
+                f"derives {derived:.6g} from {expression!r} at {shown}, and the sensitivity "
+                f"declares {value!r}. A derived value that no longer re-derives is a value nobody "
+                "has checked since the declaration it came from moved",
+            )
 
 
 def check_threshold_derivations(root: Path, documents: dict[str, Any], report: Report) -> None:
@@ -8605,9 +8856,9 @@ def main(argv: list[str] | None = None) -> int:
     check_thermal_heat_inputs(root, report)
     check_gnc_substepping(root, mission, report)
     check_mission_model(mission or {}, report)
-    check_threshold_derivations(
-        root, load_documents(root, vehicle, coupling, mission, channels), report
-    )
+    documents = load_documents(root, vehicle, coupling, mission, channels)
+    check_threshold_derivations(root, documents, report)
+    check_edge_derivations(coupling or {}, documents, report)
     check_presentation_references(
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
