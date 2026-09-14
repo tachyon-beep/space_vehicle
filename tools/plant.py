@@ -1115,13 +1115,47 @@ def build_order(world: World) -> dict[str, list[State]]:
                 # same distinction `check_domain` draws for `internal_order`.
                 blocking_rule.append(state)
                 continue
-            if (
-                state.method in {"lag", "stock", "delay", "dynamics"}
-                and not incoming
-                and not preloaded
-            ):
-                blocking_edge.append(state)
-                continue
+            # **A state with no input at all owes an edge, whatever its method.**
+            #
+            # This test used to name four methods, on the reasoning that a `lag` or a `stock` is
+            # the kind of state an edge drives and an `algebraic` one is domain code. But the
+            # question a *worklist* answers is what is missing from the definition, and for a state
+            # with no inbound edge, no `preloaded` exemption and no sibling on its node, the answer
+            # is an input — no rule can be written without one.
+            #
+            # `bus_b_v` is the case, and it is the state the plant stops at. `power.dc_bus_b_v` is
+            # published, has an undervoltage threshold, three faults that perturb it and a place on
+            # a crew panel — and `bus_b` has **no inbound edge in the whole graph**. The tie is
+            # declared B -> tie -> A, so bus B is a *source* for bus A, while the state's own note
+            # calls it "second bus, cross-supported through the tie". `check_power_inventory` says
+            # the quiet part out loud — "which bus a source feeds is a routing decision the tie
+            # makes and the file does not state" — so the configuration knows, and the worklist was
+            # still sending an implementer to write code for a state that has nothing to read.
+            #
+            # `discrete` and `hazard` are excluded because they are exceptions in fact rather than
+            # by convention: a mode is moved by a command, an event or the domain's own logic, which
+            # `moved_by` declares, and a hazard is drawn rather than computed.
+            siblings = [o for o in world.states_on(state.node) if o.id != state.id]
+            declares_own_inputs = bool(
+                (state.spec.get("provenance") or {}).get("computation")
+                or state.spec.get("computation")
+            )
+            if not incoming and not preloaded:
+                # A `lag`, `stock`, `delay` or `dynamics` with no driver owes an edge wherever it
+                # sits — an integrator has to be integrated from something.
+                if state.method in {"lag", "stock", "delay", "dynamics"}:
+                    blocking_edge.append(state)
+                    continue
+                # And an `algebraic` one with no driver, no sibling and **no computation of its
+                # own** owes an edge too. The computation is the distinguisher, and the corpus
+                # draws it: `cabin_heat_csm_w` carries `total_w: 733` with a `computation` summing
+                # the loads `heat_inputs` assigns, so its inputs are declared outside the graph and
+                # it needs no edge. `bus_b_v` carries nothing — its own reason says it is "the same
+                # nodal solve over a *different source and load set*", and the load set is the part
+                # that exists.
+                if state.method == "algebraic" and not siblings and not declares_own_inputs:
+                    blocking_edge.append(state)
+                    continue
             if any(not e.usable for e in incoming):
                 blocking_edge.append(state)
                 continue

@@ -1565,7 +1565,7 @@ document.
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
 the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 82 of the 134 states need code before the plant can
+rules the configuration deliberately does not carry**, so 81 of the 134 states need code before the plant can
 walk a whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1757,8 +1757,8 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 
     15   11 %  ready now — the two classes the reference plant can advance
     26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
-    11    8 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    81   60 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -3340,6 +3340,47 @@ why they do not look like the same quantity.
 **249 became 248.** The other edges still owed are genuine: `E-RCS-DYN` needs the inertia tensor,
 `E-PUMP-COOL` and `E-RAD-THERM` are thermal constants `thermal_diode.md:965` refuses to publish,
 `E-PLATE-CRITICAL` is a derating slope, and `E-FC-HEAT` waits on the cell.
+
+## The state the plant stops at has nothing to compute from
+
+`--readiness` ends with the same sentence every time: the plant stops at the first thing it cannot
+compute, and that thing is `bus_b_v`. The worklist called it a **code** debt — an `algebraic` state,
+so domain code — and an implementer sent to write its rule would find **nothing to read**.
+
+`bus_b` has **no inbound edge anywhere in `coupling.yaml`**. Every electrical edge terminates on
+`bus_a`, and the tie runs `bus_b -> bus_tie -> bus_a` — so bus B is declared as a *source* for bus A
+while `bus_b_v`'s own note calls it *"second bus, cross-supported through the tie."*
+
+And the bus is real in every file except the one that says what feeds it:
+
+| where | what it says |
+|---|---|
+| `domains/power/components.yaml#loads` | **seven loads** on `csm_bus_b` — the suit fan, both coolant pumps, the heaters, the lighting |
+| `domains/power/profiles.yaml` | a `bus_b_undervoltage` threshold |
+| `domains/power/points.yaml` | the channel `power.dc_bus_b_v` |
+| `domains/power/fault_policy.yaml` | three faults perturb it, one of them *to* `csm_bus_b` |
+| `domains/crew/components.yaml` | it is on a crew panel |
+
+`check_power_inventory` says the quiet part out loud, and its own comment is why nothing caught this:
+
+> which bus a source feeds is a routing decision the tie makes **and the file does not state**, so
+> the honest bound is the vehicle's own total against the capacity presenting to it
+
+**The classification is what round 100 fixed.** `build_order`'s no-input test named four methods —
+`lag`, `stock`, `delay`, `dynamics` — on the reasoning that an `algebraic` state is domain code. But
+the question a worklist answers is *what is missing from the definition*, and for a state with no
+inbound edge, no `preloaded` exemption and no sibling on its node, the answer is an **input**.
+
+The rule now covers `algebraic` too, with a **computation as the distinguisher** — and the corpus
+draws that line itself. `cabin_heat_csm_w` carries `total_w: 733` with a `computation` summing the
+loads `heat_inputs` assigns, so its inputs are declared outside the graph and it needs no edge.
+`bus_b_v` carries nothing; its own reason says it is *"the same nodal solve over a different source
+and load set"*, and the source set is the part that does not exist.
+
+**Exactly one state moved**: `bus_b_v` from *owes a rule* to *owes an edge*. The worklist now says
+what the state actually lacks, and `bus_b_v`'s provenance names the gap for whoever closes it —
+declaring the tie's other direction, or giving bus B its own sources, is a modelling decision rather
+than a missing number.
 
 ## Authoring convention: no flow mappings
 
