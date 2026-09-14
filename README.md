@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 248 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 248 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 246 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **248** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **246** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **201** the plant
+pack-voltage state, and the missing charging efficiency). The **199** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -2333,7 +2333,7 @@ splits the owed list into literal scalars and prose obligations, groups the firs
 wants and the second by the file that keeps it. A reader is entitled to know which half of the
 headline number has been examined, and after two rounds both have been.
 
-The literal half is 117 scalars and the prose half 131. The largest single field is `basis` at 28 —
+The literal half is 117 scalars and the prose half 129. The largest single field is `basis` at 28 —
 provenance that has been declared unconfigured — followed by the threshold pairs.
 ## There was nothing to settle, and correcting that is the round
 
@@ -2395,13 +2395,13 @@ sentences**, and found that not one of them was right:
 
 | where | said | is |
 |---|---|---|
-| `README.md`, the status paragraph | *"252 declared debts"* | 248 |
+| `README.md`, the status paragraph | *"252 declared debts"* | 246 |
 | `README.md`, the file table | *"146 canonical channels"* | 148 |
 | `README.md`, "what composes today" | *"147 channels resolve"* | 20 of 148 are unperturbed by any fault |
 | `README.md`, the same paragraph | *"141 thresholds"* | 142 |
 | `channels.yaml#open_debts` | *"Twelve of the 22"* unperturbed are `service` | fifteen of twenty |
 | `channels.yaml#open_debts` | faults perturb *"117"* `service` channels | 42 |
-| `integration/reconciliation/README.md` | *"182 debts"* | 248 |
+| `integration/reconciliation/README.md` | *"182 debts"* | 246 |
 
 The middle column is quoted on purpose, and writing the table is how that rule proved itself: the
 first draft wrote the stale figures plain, and `test_the_readme_status_matches_the_tools` refused
@@ -2926,6 +2926,53 @@ a function of the *channel set* is not a limit a per-comparator factor can scale
 different kind survives beside them — *"is latched but its assert and clear values are not both
 set"* — which is the correct state for a latched comparator whose terms are now derived rather than
 declared.
+
+## One entry, two accounts of what its value is
+
+`uncommanded_acceleration` — `apollo_diode.md:210`'s "uncommanded impulse", and the hole the event
+audit found because F-04's first clue is a body rate and this channel is its corroboration — held
+**two different statements about what its limit is**:
+
+- `point_units`: *"g, above the largest component the configured thrust can explain"*
+- the note: *"The value is owed — it needs a noise floor and the smallest impulse the vehicle can
+  produce, and the second of those is the minimum impulse bit that `domains/rcs/` records as
+  unpublished"*
+
+Those are different questions, and only the second is genuinely owed. **The ceiling is derivable**
+from data the corpus already declares: every engine's thrust and every configuration's mass. The
+impulse bit sizes the *detectability* — an accelerometer cannot see a 4.45e-4 N·s pulse, so the
+alarm fires on the ceiling while a real uncommanded impulse below it stays invisible to this
+channel — and that obligation is already counted where it lives. Naming the two separately is what
+stops a limit being owed for a reason that does not apply to it.
+
+### Computed rather than quoted, and why it matters here
+
+The statistic is the **LM ascent engine on the ascent stage alone**: 15,569 N against 4,888 kg,
+which is **0.32479 g**. It wins by a hair over the CSM's own 0.32279 g with the LM gone:
+
+| engine | configuration | acceleration |
+|---|---|---:|
+| APS | `lm_ascent_stage` | **0.32479 g** |
+| SPS | `csm_alone` | 0.32279 g |
+| DPS | `lm_alone_stage` | 0.28828 g |
+
+**A reader who guessed which of the two it was would be 0.6 % wrong, in the direction that misses
+the event** — which is the argument for computing it rather than quoting it, and the reason the
+statistic lives beside `slowest_publish_period_ms` in a short, named table of the quantities that
+are properties of the corpus rather than keys in a file.
+
+### A tolerance that hid the thing it was checking
+
+The first version of the derivation check copied `rederive`'s one-per-cent tolerance, and weakening
+the ascent engine by 3 kN **composed in silence**: the ceiling moves to the CSM's figure, a 0.63 %
+change, and 0.63 is less than 1. A derived threshold is not an independent measurement that happens
+to agree with its derivation — it *is* the derivation, restated — so the only slack it needs is the
+rounding in its own decimal places, and the tolerance is 0.1 % now. The same edit refuses with
+*"is 0.3248 and `derives_from` resolves to 0.3227891902281783"*.
+
+**248 became 246.** And a bug in my own plumbing, found the same way: the statistics were merged
+*before* the domain files were loaded, so the acceleration ceiling silently computed to nothing —
+a computation whose inputs are absent produces no value and reports no error.
 
 ## Authoring convention: no flow mappings
 

@@ -5210,6 +5210,84 @@ def resolve_dotted(document: Any, dotted: str) -> Any:
     return node
 
 
+G0_M_S2 = 9.80665
+"""Standard gravity, for the one place a corpus statistic crosses into `g`."""
+
+# Which stage of the vehicle an engine belongs to, as the prefix its own components take in a
+# configuration's mass breakdown. The pairing is derived rather than listed: an engine flies a
+# configuration that carries its stage, which is a fact about the breakdown's keys.
+ENGINE_STAGE_PREFIX = {"sps": "csm_", "dps": "lm_descent_", "aps": "lm_ascent_"}
+
+
+def corpus_statistics(documents: dict[str, Any], channels: Any = None) -> dict[str, dict[str, Any]]:
+    """Quantities that are *properties of the corpus* rather than keys written in a file.
+
+    Two thresholds take their limit from something that is derivable but nowhere declared as a
+    number, and the honest way to give them a source is to compute it. `slowest_publish_period_ms`
+    is a property of the channel list — the registry declares each channel's `rate_hz` and no field
+    holds the slowest — and `max_explainable_acceleration_g` is a property of the configuration set
+    crossed with the engine set.
+
+    So they are computed here and merged into the documents a `derives_from` may point into, which
+    means they are re-derived on every run rather than being figures somebody typed once. The table
+    is deliberately short and named: a statistic that needs a paragraph to explain is a statistic
+    that belongs in the file it describes, and the two here are the ones that genuinely cannot be.
+
+    `max_explainable_acceleration_g` is the ceiling an accelerometer's reading has to exceed before
+    it is uncommanded: **the largest acceleration any engine the vehicle carries can produce in any
+    configuration that carries that engine's stage.** The LM's ascent engine wins, on the ascent
+    stage alone — 15,569 N against 4,888 kg, which is 0.32479 g, a hair above the CSM's own
+    0.32279 g with the LM gone. That near-tie is the reason the statistic is computed rather than
+    quoted: it is not obvious which of the two it is, and a reader who guessed would have a
+    threshold 0.6 % wrong in the direction that misses the event.
+    """
+    statistics: dict[str, dict[str, Any]] = {}
+
+    if isinstance(channels, dict):
+        rates = [
+            float(row["rate_hz"])
+            for rows in channels.values()
+            if isinstance(rows, list)
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("rate_hz"), (int, float))
+            and row["rate_hz"] > 0
+        ]
+        if rates:
+            # The slowest *publishing* channel. Channels at zero are published on change rather
+            # than on a cadence, so they have no period to be stale against.
+            statistics.setdefault("channels.yaml", {})["slowest_publish_period_ms"] = 1000.0 / min(
+                rates
+            )
+
+    vehicle = documents.get("vehicle.yaml") or {}
+    propulsion = documents.get("domains/propulsion/components.yaml") or {}
+    engines = {
+        str(component.get("id")): component.get("thrust_n") or component.get("thrust_max_n")
+        for component in propulsion.get("components") or []
+        if isinstance(component, dict) and component.get("class") == "engine"
+    }
+    best = 0.0
+    for engine, thrust in engines.items():
+        prefix = ENGINE_STAGE_PREFIX.get(engine)
+        if not isinstance(thrust, (int, float)) or prefix is None:
+            continue
+        for configuration in vehicle.get("configurations") or []:
+            if not isinstance(configuration, dict):
+                continue
+            breakdown = configuration.get("mass_breakdown") or {}
+            mass = configuration.get("mass_kg")
+            if not isinstance(mass, (int, float)) or mass <= 0:
+                continue
+            if not any(str(key).startswith(prefix) for key in breakdown):
+                continue
+            best = max(best, float(thrust) / float(mass))
+    if best:
+        statistics.setdefault("vehicle.yaml", {})["max_explainable_acceleration_g"] = best / G0_M_S2
+
+    return statistics
+
+
 def load_documents(
     root: Path, vehicle: Any, coupling: Any, mission: Any, channels: Any = None
 ) -> dict[str, Any]:
@@ -5226,24 +5304,18 @@ def load_documents(
         "coupling.yaml": coupling or {},
         "mission.yaml": mission or {},
     }
-    if isinstance(channels, dict):
-        rates = [
-            float(row["rate_hz"])
-            for rows in channels.values()
-            if isinstance(rows, list)
-            for row in rows
-            if isinstance(row, dict)
-            and isinstance(row.get("rate_hz"), (int, float))
-            and row["rate_hz"] > 0
-        ]
-        if rates:
-            # The slowest *publishing* channel. Channels at zero are published on change rather
-            # than on a cadence, so they have no period to be stale against.
-            documents["channels.yaml"] = {"slowest_publish_period_ms": 1000.0 / min(rates)}
     domains = root / "domains"
     if domains.is_dir():
         for path in sorted(domains.glob("*/*.yaml")):
             documents[path.relative_to(root).as_posix()] = load(path, Report()) or {}
+    # **After** the domain files, not before. The acceleration ceiling is a property of the engine
+    # set crossed with the configuration set, and the engines live in
+    # `domains/propulsion/components.yaml` — which is not in `documents` until this loop has run.
+    # Merging first computed the channels statistic and silently skipped the vehicle one, which is
+    # the failure mode this whole session keeps meeting: a computation whose inputs are absent
+    # produces no value and reports no error.
+    for filename, statistics in corpus_statistics(documents, channels).items():
+        documents.setdefault(filename, {}).update(statistics)
     return documents
 
 
@@ -5653,7 +5725,15 @@ def check_threshold_derivations(root: Path, documents: dict[str, Any], report: R
                     f"is UNCONFIGURED while `derives_from` resolves to {resolved!r}. A threshold "
                     f"that declares where its limit comes from takes it: {wanted:g} here",
                 )
-            elif abs(float(threshold["assert"]) - wanted) > abs(wanted) * 0.01 + 1e-12:
+            elif abs(float(threshold["assert"]) - wanted) > abs(wanted) * 1e-3 + 1e-12:
+                # **Tighter than `rederive`'s one per cent, and the reason is specific.** A derived
+                # threshold is not an independent measurement that happens to agree with its
+                # derivation; it *is* the derivation, restated, so the only slack it needs is the
+                # rounding in its own decimal places. One per cent was wide enough to hide the whole
+                # gap this check exists to protect: `uncommanded_acceleration`'s ceiling is the LM
+                # ascent engine at 0.32479 g, a hair above the CSM's own 0.32279 g with the LM gone,
+                # and weakening the ascent engine by 3 kN moves the ceiling to the CSM figure — a
+                # 0.63 % change that a one-per-cent tolerance accepted in silence.
                 report.refuse(
                     f"{where}.assert",
                     f"is {threshold['assert']} and `derives_from` resolves to {resolved!r} x "

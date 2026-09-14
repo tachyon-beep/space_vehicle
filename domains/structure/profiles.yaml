@@ -187,13 +187,24 @@ thresholds:
   - id: uncommanded_acceleration
     point: structure.accel_xyz_g
     comparator: above
-    assert: UNCONFIGURED
-    clear: UNCONFIGURED
+    assert: 0.3248
+    clear: 0.2
     dwell_assert_ms: 200
     dwell_clear_s: 5
     latched: true
     severity: WARNING
     point_units: "g, above the largest component the configured thrust can explain"
+    derives_from: "vehicle.yaml:max_explainable_acceleration_g"
+    derives_note: >-
+      the largest acceleration any engine the vehicle carries can produce in any configuration that
+      carries that engine's stage, which is the LM's ascent engine on the ascent stage alone:
+      15,569 N against 4,888 kg = 3.1852 m/s2 = 0.32479 g. It wins by a hair over the CSM's own
+      0.32279 g with the LM gone, which is why the figure is computed rather than quoted — a reader
+      who guessed which of the two it was would be 0.6 % wrong in the direction that misses the
+      event. `clear` is set well below it (0.2 g) because the assertion is about a ceiling nothing
+      can explain rather than about a band: a reading that has fallen back under anything an engine
+      could produce is no longer evidence of an uncommanded impulse, and a recovery edge near the
+      limit would hold the alarm on a vehicle that is merely manoeuvring
     provenance:
       basis: apollo
       ref: "apollo_diode.md:210"
@@ -202,9 +213,15 @@ thresholds:
         most consequential hole the event audit found: **F-04's first clue is a body rate and its
         corroboration is this channel**, so the accelerometer was registered, is on two crew
         positions' perceivable lists, and had no alarm on the one condition it exists to detect.
-        The value is owed — it needs a noise floor and the smallest impulse the vehicle can
-        produce, and the second of those is the minimum impulse bit that
-        `domains/rcs/` records as unpublished
+        **The ceiling is derivable and is now derived; what is still owed is the *detectability*,
+        which is a different question.** The limit is the largest acceleration the configured
+        thrust can explain, and every thrust and mass it needs are declared — see `derives_from`.
+        What this entry used to say it needed was a noise floor and the smallest impulse the
+        vehicle can produce, and that is right about a *sensitivity*: an accelerometer cannot see
+        a 4.45e-4 N*s pulse, so the alarm fires on the ceiling while a real uncommanded impulse
+        below it stays invisible to this channel. The minimum impulse bit `domains/rcs/` records
+        as unpublished is what sizes that blindness, and naming the two separately is what stops a
+        limit from being owed for a reason that does not apply to it
 
 profile_selection:
   selectable_by: A1
