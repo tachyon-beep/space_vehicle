@@ -3248,6 +3248,42 @@ def check_domain(
                         "can be in a condition it cannot report",
                     )
             continue
+        # A keyed state publishes a *value per key*, and this binding compared only the value
+        # vocabulary: change a channel's `map[hatch_id,...]` to `map[latch_id,...]` and the linter
+        # composed, which is how the fixture for this found it. So the key is compared too. The
+        # asymmetry is deliberate — a channel that promises a key over a state that holds a single
+        # value is publishing a key the state cannot hold, and is refused; a *projection* of a
+        # keyed state, like `structure.docking_latches`' count of `docking_latch_state`'s map, is a
+        # legitimate read and is the debt its own `open_debts` already carries.
+        chan_keys = re.findall(r"map\[([^,\]]*)", str(row.get("unit") or ""))
+        state_keys = re.findall(r"map\[([^,\]]*)", str(state.get("unit") or ""))
+        if chan_keys and (not state_keys or chan_keys[0].strip() != state_keys[0].strip()):
+            report.refuse(
+                f"domains/{name}/points.yaml:{cid}",
+                f"publishes {str(row.get('unit'))!r} from `{source}`, whose unit is "
+                f"{str(state.get('unit'))!r}. A keyed channel publishes a value *per key*, so the "
+                "key is half the claim and a channel whose key the state does not have is "
+                "publishing a value the vehicle cannot hold",
+            )
+            continue
+        if state_keys and not chan_keys and "[" not in str(cid):
+            # A channel whose *name* carries a placeholder is the keyed state instantiated one key
+            # at a time — `avionics.sensor_health_[class]` publishes `sensor_health`'s value for one
+            # class — and seven of those exist. A channel whose name carries no placeholder and
+            # whose unit has the value vocabulary but no key is publishing something *about* the
+            # map: `cw.active_lights` is a list of which systems are lit. The first version of this
+            # note fired on all seven instantiations too, describing them as projections, which is
+            # the mirror of round 7's refusal that described a test it had not run.
+            #
+            # A channel with no `enum[` at all — `structure.docking_latches`' count of
+            # `docking_latch_state`'s members — left this block further up, where the value
+            # vocabularies are compared, and is a projection whose own debt carries what it owes.
+            report.note(
+                f"domains/{name}/points.yaml:{cid}",
+                f"publishes {str(row.get('unit'))!r} from the keyed state `{source}` "
+                f"({str(state.get('unit'))!r}) and its own name carries no placeholder, so it "
+                "publishes something *about* the map rather than a key of it",
+            )
         chan_members = {m.strip() for m in chan_enums[0].split(",")}
         state_members = {m.strip() for m in state_enums[0].split(",")}
         if chan_members == state_members:

@@ -4823,6 +4823,64 @@ that is not one, an argument declaring a vocabulary the rule does not know, a pu
 that does not exist, the one loop with nothing on it reported once and the two with machinery
 reported not at all, and the unbroken corpus silent at 253.
 
+## One value stood for two hatches, and the gate said "any hatch"
+
+`hatch_state` was `enum[closed,latched,open]` — **one value for `hatch_crew_csm` and
+`hatch_crew_lm`** — while three things around it were written per hatch:
+
+- `set_hatch_valve` names *one* of them (and since the last round it names the two real components);
+- the threshold that guards the cabin's differential pressure carries
+  `gated_by: "any hatch in the open or latched position"` — the corpus's own words for the fact that
+  the channel cannot say which;
+- two faults in the domain are written against `hatch_crew_lm` — a seal leak and a stuck position
+  switch — and both perturb the shared value, so an LM hatch indication failure and a CSM one are
+  the same telemetry.
+
+So the vehicle could be in two different conditions, the CSM tunnel hatch open with the LM hatch
+sealed or the reverse, and publish one word for them. The LM's hatch is the one that opens onto the
+lunar surface and every opening costs an atmosphere; `mission.yaml#objectives.surface_mission` names
+this channel as part of what settles an EVA, and it could settle *that* a hatch moved but not which.
+
+**The domain already had the right shape two entries down.** `docking_latch_state` is
+`map[latch_id, enum[open,engaged,released,failed]]` and its own note gives the argument:
+
+> apollo publishes docking_latches as a count with a 'latch disagreement' event, which only means
+> something if the individual latches are modelled. A count cannot express `eleven of twelve
+> engaged`, and `eleven of twelve` is the state a crew has to reason about.
+
+The registry has carried `map[...]` channels since `controls.breakers`, and both are published, so
+`hatch_state` becomes `map[hatch_id,enum[closed,latched,open]]` and its channel mirrors it. This is
+the corpus's own convention arriving at the one state that was not keyed by its article — the same
+shape as the regulator position and the stage configuration that earlier rounds found, and the same
+fix the latches already had.
+
+### And it found a hole in the binding that holds a channel to its state
+
+That binding compares the two `enum[...]` lists, so a channel whose *value* vocabulary drifts is
+refused — and it has been for rounds. **It did not compare the key.** Change the channel's
+`map[hatch_id, ...]` to `map[latch_id, ...]` and the linter composed; the fixture written to catch
+the key drifting is what found it. The key is half the claim a keyed channel makes, so it is
+compared now, from either side.
+
+The asymmetry is deliberate and the difference matters. A channel that promises a key over a state
+holding a **single value** is refused: it is publishing a value the vehicle cannot hold. A channel
+that publishes *something about* a keyed state gets a **note** instead — `cw.active_lights` is a
+list of which systems are lit, and `structure.docking_latches` is a count of
+`docking_latch_state`'s members whose own debt carries what it owes.
+
+**The note's first version was wrong, and the same way round 7's refusal was.** It fired on all
+eight channels whose `from:` is a keyed state, describing seven *template* channels —
+`avionics.sensor_health_[class]` publishes `sensor_health`'s value for one class — as projections.
+A channel whose own name carries a placeholder is the keyed state instantiated one key at a time,
+which is the opposite of what the note said about it. It now fires only where the name carries no
+placeholder to instantiate the key, which is one channel, and the fixture asserts that count and
+names it.
+
+Verified by breaking six copies: the channel's key type changed under the state's, the state's
+under the channel's, the channel promising a key over a state that holds one value, the value
+vocabulary drifted, the one channel that publishes about a keyed state asserted by name with the
+seven template channels asserted silent, and the unbroken corpus composing at 253.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

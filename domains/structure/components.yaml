@@ -143,7 +143,16 @@ state:
   - id: hatch_state
     node: internal
     method: discrete
-    unit: "enum[closed,latched,open]"
+    # Keyed by hatch, and it was not until this round: one `enum[closed,latched,open]` stood for
+    # both hatches while `set_hatch_valve` names one of them, the threshold that guards the
+    # differential pressure is gated on "**any hatch** in the open or latched position", and two
+    # faults written against `hatch_crew_lm` move the shared value. So the vehicle could be in two
+    # different conditions — the CSM tunnel hatch open with the LM hatch sealed, or the reverse —
+    # and publish one word for them. The domain already has the right shape three lines down:
+    # `docking_latch_state` is `map[latch_id, ...]` and its own note says why, "a count cannot
+    # express `eleven of twelve engaged`, and `eleven of twelve` is the state a crew has to reason
+    # about". The registry has carried `map[...]` channels since `controls.breakers`.
+    unit: "map[hatch_id,enum[closed,latched,open]]"
     moved_by:
       - "command:set_hatch_valve"
     dwell:

@@ -2116,7 +2116,11 @@ structure:
       basis: apollo
       ref: "apollo_diode.md:206"
   - id: structure.hatch_state
-    unit: "enum[closed,latched,open]"
+    # Per hatch, because a single value could not say which one — and the LM's hatch opens onto the
+    # lunar surface while the CSM's is the tunnel's other end, so "a hatch is open" is not the
+    # question a fleet is asking. `mission.yaml#objectives.surface_mission` names this channel as
+    # part of what settles an EVA, and it can now settle *which* hatch rather than that one moved.
+    unit: "map[hatch_id,enum[closed,latched,open]]"
     layer: service
     precision: exact
     rate_hz: 1
