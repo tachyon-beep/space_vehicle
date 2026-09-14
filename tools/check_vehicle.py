@@ -145,6 +145,9 @@ FAULT_KINDS = {
 # disconnected". A `service` response acts without asking and therefore owes a note saying what it
 # did; an `advisory` one asks, and the note is where the asking is explained when it needs to be.
 FAULT_RESPONSES = {"service", "advisory"}
+# The time basis of a seeded hazard rate. One word, declared on all sixty-six rate-seeded faults,
+# and the scheduler multiplies by it — so it is a vocabulary rather than a string.
+SEEDING_RATE_UNITS = {"per_h"}
 
 # Keys that carry prose wherever they appear. Needed where a *string* has to be told from a
 # malformed mapping: `vehicle.yaml#electrical.batteries` holds three groups and one `note`, and the
@@ -3728,6 +3731,18 @@ def check_domain(
             report.refuse(
                 fwhere, "seeds on a hazard rate with no `unit`; a rate without a unit is not a rate"
             )
+        elif "hazard" in seeding and seeding.get("unit") not in SEEDING_RATE_UNITS:
+            # The unit is the rate's *time basis*, and `faults.py` scales the hazard by it over the
+            # mission's 192 h ladder. `per_hour` reads like `per_h` and is not it, and nothing
+            # compared the field: the whole vocabulary is one word, declared 66 times and validated
+            # nowhere, which is the shape that makes a misspelling a silent change of rate rather
+            # than a refusal.
+            report.refuse(
+                f"{fwhere}.seeding.unit",
+                f"is {seeding.get('unit')!r}, not one of {sorted(SEEDING_RATE_UNITS)}. The unit is "
+                "the rate's time basis — `faults.py` scales the hazard by it across the mission's "
+                "ladder — so a word that merely reads like the right one changes the rate",
+            )
         detection = fault.get("detection")
         if not isinstance(detection, dict):
             report.refuse(
@@ -4155,6 +4170,37 @@ def check_domains(
                 if isinstance(entry, dict) and entry.get("id")
             }
             policies[path.name] = load(path / "fault_policy.yaml", report) or {}
+
+    # --------------------------------------------------------------------------------------
+    # **Fault ids are unique across the whole vehicle, because they key the randomness.**
+    #
+    # `faults.py` derives every stochastic stream from `(master_seed, domain, component_id,
+    # purpose)` and `--check` asserts that name-keying holds — "no existing fault's events moved"
+    # is the property that makes a run reproducible when a fault is added. Two faults sharing an id
+    # inside one domain, or across two, would take the same stream: their draws would be the same
+    # numbers in the same order, and a vehicle with two faults would behave like a vehicle with one
+    # of them applied twice.
+    #
+    # Nothing compared the ids. The corpus has 128 of them and they are all distinct today, and it
+    # is the per-domain check that makes an *adversary* safe to extend: adding a fault is the one
+    # edit this folder expects to happen often.
+    # --------------------------------------------------------------------------------------
+    seen_faults: dict[str, str] = {}
+    for domain_name, policy in sorted(policies.items()):
+        for fault in (policy or {}).get("faults") or []:
+            if not isinstance(fault, dict) or not fault.get("id"):
+                continue
+            fid = str(fault["id"])
+            if fid in seen_faults:
+                report.refuse(
+                    f"domains/{domain_name}/fault_policy.yaml:fault {fid}",
+                    f"is declared again — it is already in `domains/{seen_faults[fid]}/`. Fault ids "
+                    "key the stochastic streams, so two faults under one id take the same draws in "
+                    "the same order and the vehicle behaves as though it had one of them twice",
+                )
+            else:
+                seen_faults[fid] = domain_name
+
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
             present.add(path.name)

@@ -3119,6 +3119,25 @@ The mapping's keys are the third declaration, and they are checked against the r
 layer with no mapping is a kind of channel the contract has no layer for, and a mapping for a layer
 no channel declares is a decision about nothing. Both directions are refused.
 
+## The adversary's ids and its rates
+
+Two more fields on the 128 faults that composed under mutation.
+
+**Fault ids are unique across the whole vehicle, because they key the randomness.** `faults.py`
+derives every stochastic stream from `(master_seed, domain, component_id, purpose)` and `--check`
+asserts that name-keying holds — *"no existing fault's events moved"* is the property that makes a
+run reproducible when a fault is added. Two faults sharing an id would take the **same stream**:
+their draws would be the same numbers in the same order, and a vehicle with two faults would behave
+like a vehicle with one of them applied twice.
+
+Nothing compared the ids, and the uniqueness has to hold **across** domains — a per-domain check
+would miss the case where `avionics` and `gnc` both name a fault `F-04`. All 128 are distinct today,
+and this is the one list the folder expects to grow: adding a fault is the edit that happens most.
+
+**`seeding.unit` is a one-word vocabulary declared 66 times and validated nowhere.** It is the
+rate's *time basis*, and `faults.py` scales the hazard by it across the mission's 192-hour ladder —
+so `per_hour`, which reads like `per_h`, is a silent change of rate rather than a refusal.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was
