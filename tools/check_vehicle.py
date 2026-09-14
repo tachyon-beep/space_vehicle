@@ -8091,6 +8091,11 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
     and it is the same declaration the rule uses when the name does match.
     """
     vehicle_ids: set[str] = set()
+    frame_ids = {
+        str(frame.get("id"))
+        for frame in (documents.get("vehicle.yaml") or {}).get("frames") or []
+        if isinstance(frame, dict) and frame.get("id")
+    }
 
     def collect(node: Any) -> None:
         if isinstance(node, dict):
@@ -8103,6 +8108,36 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
                 collect(value)
 
     collect(documents.get("vehicle.yaml") or {})
+
+    # And the references that are not arguments. `mission.yaml` declares the frame its state vector
+    # and its osculating elements are in, and both name `EARTH_J2000` — the authority's id. The rule
+    # is keyed on the document *and* the key because `frame` is overloaded in this corpus: in
+    # `presentation.yaml` it is the telemetry envelope, thirteen fields of it, and a rule that
+    # matched the word alone would read a frame registry into a packet layout. That is the fourth
+    # overloaded key this folder has found — after `vehicle` (three meanings), `source` (three) and
+    # `range` (two) — and the reason the rule is written where the meaning is known.
+    for where, holder in (
+        ("mission.yaml:initial_state", (documents.get("mission.yaml") or {}).get("initial_state")),
+        (
+            "mission.yaml:initial_state.osculating_elements",
+            ((documents.get("mission.yaml") or {}).get("initial_state") or {}).get(
+                "osculating_elements"
+            ),
+        ),
+    ):
+        named = (holder or {}).get("frame") if isinstance(holder, dict) else None
+        if named is None:
+            report.debt(
+                f"{where}.frame",
+                "is not declared, so the frame this vector is expressed in — the one thing "
+                "`gnc_diode.md:382` says makes a vector valid — is not stated",
+            )
+        elif str(named) not in frame_ids:
+            report.refuse(
+                f"{where}.frame",
+                f"names {named!r}, which `vehicle.yaml#frames` does not declare. The frames are "
+                f"{sorted(frame_ids)}",
+            )
 
     for filename in sorted(documents):
         if not filename.endswith("commands.yaml"):
@@ -8122,11 +8157,34 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
                 if not isinstance(spec, dict) or spec.get("type") != "enum":
                     continue
                 declared = str(spec.get("names") or "")
+                # An argument named `frame` names a frame, the way one named `pump` names pumps:
+                # the vocabulary is inferred from the name wherever the name says it, and `names:`
+                # is for the arguments whose names do not.
+                if not declared and argument == "frame":
+                    declared = "frame"
                 named_class = argument if argument in classes else ""
                 if not declared and not named_class:
                     continue
                 where = f"domains/{domain}/commands.yaml:{verb.get('verb')}.{argument}"
                 values = [str(v) for v in spec.get("values") or []]
+                if declared == "frame":
+                    # The frames a command may name, held to `vehicle.yaml#frames` — the same
+                    # authority `mission.yaml`'s state vector names and `gnc`'s own `frame`
+                    # argument already used. `rcs`'s two verbs offered `body`, `lvlh`,
+                    # `inertial_earth` and `inertial_moon`, which share **no value** with the
+                    # declared ids: the same four frames under a second vocabulary, in the file a
+                    # fleet reads, so a fleet told `EARTH_J2000` by `load_state_vector` was told
+                    # `inertial_earth` by `request_translation` and nothing joined the two.
+                    for value in values:
+                        if value not in frame_ids:
+                            report.refuse(
+                                f"{where}",
+                                f"names {value!r}, which `vehicle.yaml#frames` does not declare. "
+                                f"The vehicle's frames are {sorted(frame_ids)}; an argument that "
+                                "takes a frame is how a fleet says which one, and a second "
+                                "vocabulary for the same frame is a second vehicle",
+                            )
+                    continue
                 if declared == "vehicle_entry":
                     for value in values:
                         if value not in vehicle_ids:

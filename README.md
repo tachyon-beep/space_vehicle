@@ -5551,6 +5551,75 @@ precision that is not a number and one of zero, a display unit in another dimens
 same dimension (which composes), a numeric readout with no unit, a unit the map does not know, the
 unbroken corpus composing at 268, and the map naming both units the contract uses.
 
+## One vehicle, five frames, and two names for each of them
+
+`vehicle.yaml#frames` declares the reference frames and `mission.yaml` names the frame its state
+vector is in from that list. The corpus's own comment on the block states the rule it exists for —
+*"no vector is valid without a declared frame"* — and the generated `HELP.md`, which is the only
+description of the command surface a fleet ever sees, said this:
+
+```
+- `frame`: one of: EARTH_J2000, MOON_J2000, LVLH          (load_state_vector, gnc)
+- `frame`: one of: body, lvlh, inertial_earth, inertial_moon   (set_attitude_target, rcs)
+- `frame`: one of: body, lvlh, inertial_earth, inertial_moon   (request_translation, rcs)
+```
+
+**The second and third share no value with the first.** A fleet told to send `EARTH_J2000` by one
+verb was told to send `inertial_earth` by the next, for the same frame, and `vehicle.yaml#frames`
+declares neither lowercase name. Nothing joined the two vocabularies because nothing read either:
+the linter mentioned `EARTH_J2000` **zero times**, and an argument's *values* were the one part of
+an argument schema no rule looked at unless the argument's name happened to match a component class.
+
+The rule is `check_argument_vocabularies`' third vocabulary — after `component` and `vehicle_entry` —
+and it is inferred from the argument's name wherever the name says it: **an argument called `frame`
+names a frame, the way one called `pump` names pumps.** `names: frame` is the override for the
+arguments whose names do not say, and there are none today. The two verbs now offer the registry's
+ids, and the eight published gate variables follow them:
+
+```
+"rcs_target_BODY_enable", "rcs_target_LVLH_enable",
+"rcs_target_EARTH_J2000_enable", "rcs_target_MOON_J2000_enable"
+```
+
+The same check holds `mission.yaml`'s two frame references — the state vector's and the osculating
+elements' — which already named `EARTH_J2000` and were the reason the second vocabulary was visibly
+the odd one out. It is keyed on the document *and* the key, because **`frame` is overloaded**: in
+`presentation.yaml` it is the telemetry envelope, thirteen fields of it, and a rule that matched the
+word alone would read a frame registry into a packet layout. That is the fourth overloaded key this
+folder has found, after `vehicle` (three meanings), `source` (three) and `range` (two) — and the
+reason the rule is written where the meaning is known.
+
+A frame that is *absent* rather than wrong is a debt rather than a refusal, because a state vector
+with no frame is an omission whose fix is a decision: *"the frame this vector is expressed in — the
+one thing `gnc_diode.md`:382 says makes a vector valid — is not stated."*
+
+**268 stayed 268**, and the pins moved together: the test count, and the eight gate variable names
+that the mirror publishes (the count of published gate variables is unchanged — four values either
+way).
+
+### What this leaves in the same block, named rather than half-done
+
+`vehicle.yaml#conventions` is the same shape one screen up, and it is the next round's work. Its own
+comment calls the four conventions *"the document's most valuable export"* and says they are
+*"declared once, here, and `domains/gnc/` is what enforces them"* — and the enforcement is prose in
+three places: `domains/gnc/components.yaml`'s header repeats `[w,x,y,z]`, `domains/gnc/points.yaml`'s
+`attitude_q` note cites the block by name, and `domains/rcs/commands.yaml`'s quaternion argument says
+`"unit quaternion, w-first"` without citing anything. **The word `quaternion` appears zero times in
+the linter**, so the component order — which the comment itself calls "the single most consequential
+line in the document", because two agents can disagree about it while both being right about the
+physics — is a convention nothing holds. That is the next round's finding, recorded here with its
+evidence rather than left to be rediscovered.
+
+**179 became 180 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking ten copies in `.scratch/r18/`: both second vocabularies restored, a frame
+invented for one verb, a frame renamed in the registry, each of the two state-vector frame
+references renamed, a frame removed from the registry, a state vector with no frame (owed rather
+than refused), the unbroken corpus composing at 268, and the generated help text naming one frame
+vocabulary and no other.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

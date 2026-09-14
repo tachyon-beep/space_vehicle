@@ -81,7 +81,14 @@ commands:
 
   - verb: set_attitude_target
     argument_schema:
-      frame: {type: enum, values: [body, lvlh, inertial_earth, inertial_moon]}
+      # The frame ids, which is what `vehicle.yaml#frames` declares and what `gnc`'s
+      # `load_state_vector` already took: `body`, `lvlh`, `inertial_earth` and `inertial_moon` were
+      # this domain's own names for the same four frames, and the generated help offered a fleet
+      # `EARTH_J2000` from one verb and `inertial_earth` from the next. Nothing joined the two
+      # vocabularies, because nothing read either — the argument's *values* are now held to the
+      # frame registry by `check_argument_vocabularies`, which infers the vocabulary from the
+      # argument's name the way it infers `pump` from pumps.
+      frame: {type: enum, values: [BODY, LVLH, EARTH_J2000, MOON_J2000]}
       quaternion: {type: array, items: number, length: 4, note: "unit quaternion, w-first"}
       rate_limit_deg_s: {type: number, optional: true, minimum: 0}
       tolerance_profile: {type: enum, values: [tight, nominal, loose], optional: true}
@@ -145,7 +152,8 @@ commands:
 
   - verb: request_translation
     argument_schema:
-      frame: {type: enum, values: [body, lvlh, inertial_earth, inertial_moon]}
+      # As `set_attitude_target`'s: the declared frames, not this domain's names for them.
+      frame: {type: enum, values: [BODY, LVLH, EARTH_J2000, MOON_J2000]}
       dv_m_s: {type: number, optional: true, minimum: 0}
       impulse_ns: {type: number, optional: true, minimum: 0}
       window_s: {type: number, minimum: 0, maximum: 3600}
