@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -4124,6 +4124,115 @@ report with a traceback, burying the one line that mattered. That is verbatim th
 it caught the reintroduction without being changed. Ten call sites in this file now guard the
 vehicle document the same way, and the guard is not a convention anybody remembers: it is a test
 that corrupts the file and demands a refusal instead of a stack trace.
+
+## The link's hardware, declared twice, and the fourth join with nothing between the copies
+
+Three rounds fixed a join and then hunted the same blind spot in the next one. Round 106 found the
+largest version of it — two views of one machine with **no join at all** — and the instrument named
+where the next one was. This round closed it, and the shape is now familiar enough to state as a
+rule: *a file's own header saying "this is the domain's view of that" is a claim, not a check.*
+
+`vehicle.yaml#comms` is the vehicle-level bill of materials NR ch.18 and `apollo_diode.md:157-168`
+supply: four transmitters with their DC and RF watts, four antennas with their gains and
+beamwidths, the two telemetry rates and the VHF channels. When `domains/comms/` landed as the tenth
+domain, its component list was written as the domain's view of the same hardware, under a header
+that says exactly what the entries are for:
+
+> All of it is already in `vehicle.yaml#comms`; these entries are the domain's view of it, and they
+> exist so that a threshold or a fault can name the object it is about.
+
+Nothing read that sentence. Four components mirror four vehicle entries — one antenna standing for
+two (`omni` for `omni_a`/`omni_b`) and one transmitter for two power levels (`lm_sband` for
+`lm_sband_low`/`lm_sband_high`) — and the five fields the two views share were compared by no tool:
+
+| domain component | vehicle entry | shared and unread |
+|---|---|---|
+| `hga` | `high_gain` | `gain_db` 26.7, `beamwidth_deg` 9.4, `steerable` true |
+| `omni` | `omni_a`, `omni_b` | `gain_db` 2 |
+| `sband_transceiver` | `sband_transceiver` | `dc_w` 36, `rf_w` 2.8 |
+| `sband_power_amplifier` | `sband_power_amplifier` | `dc_w` 72, `rf_w` 11.2 |
+| `lm_sband` | `lm_sband_low`, `lm_sband_high` | `dc_w`/`rf_w`, under different names in each file |
+
+**A duplicate is worth what the copies have been used for, and these have been used.** The two
+coupling edges that make the link quantitative are derived from them, and both relations cite the
+*vehicle-level* copy by name:
+
+- `E-GEOM-LINK`'s −0.54 dB per degree is computed from `theta_3dB = 9.4 deg`, and its own relation
+  says that figure is "`vehicle.yaml#comms.antennas.high_gain`, itself derived from the
+  gain-beamwidth product";
+- `E-AMP-LOAD`'s 0.0357 A per watt is applied to "the 36 W transceiver and the 72 W power
+  amplifier", which its relation places "in `vehicle.yaml#comms.transmitters`".
+
+The domain's copy is the one a *fault* names — COM-02, COM-07 and COM-08 happen to
+`sband_power_amplifier` and `sband_transceiver` — and the one the domain's code will read when the
+link budget is implemented, which `domains/comms/components.yaml`'s own `open_debts` says is still
+owed. So an antenna re-rated on one side and not the other leaves the pointing loss belonging to a
+9.4-degree beam the domain no longer describes, and a transmitter re-rated leaves a fault reasoning
+about a load the edge does not carry. It is the same family the last four rounds have been closing
+and the first time its stale copy has been an edge's own arithmetic rather than a compared list —
+and the first time two edges have derived from one unjoined pair of files.
+
+Proven before it was fixed, the way this folder requires: a `gain_db` of 25.0 on `hga` and a `dc_w`
+of 40 on `sband_transceiver`, on a copy in `.scratch/`, and the linter composed at 252 debts while
+the vehicle described two links.
+
+**The link is declared, and it needs to be, twice over.** `hga` against `high_gain` is the same
+abbreviation problem `lm_dps` against `dps` was; and `lm_sband` against two vehicle entries is a
+difference of *shape* — one article with two power levels is two entries in a bill of materials. So
+the component carries `vehicle_keys` **and** a `levels` mapping keyed by the vehicle entry ids:
+
+```yaml
+    vehicle_keys: [lm_sband_low, lm_sband_high]
+    levels:
+      lm_sband_low:
+        dc_w: 20
+        rf_w: 0.75
+      lm_sband_high:
+        dc_w: 90
+        rf_w: 18.6
+```
+
+The keys are the link and the figures are under them, so a level cannot drift from the entry it
+belongs to and an entry cannot be dropped without taking its figures with it — both are checked. The
+component's first version carried `low_dc_w`, `high_dc_w`, `rf_w_low` and `rf_w_high`: four names no
+other component on the vehicle uses, matching nothing in the file they duplicate, and read by
+nothing. That is what a quantity looks like when it is written for a reader rather than for a rule.
+
+The comparison is the **intersection of the keys the two views share**, minus a declared structural
+set, exactly as `check_propulsion_bindings` now does it. There is no list of field names to fall out
+of date: `gain_db`, `beamwidth_deg` and `steerable` were compared the moment the link was declared,
+and a field added to both files later is compared without anybody remembering to come back here.
+The structural set is small and each member is argued: identity and the prose keys, `vehicle_keys`
+and `levels` (the subjects of the comparison rather than values in it), `beams` — the vehicle's
+per-feed table on the one antenna with three feeds, from which the component takes the narrow
+feed's figures, as its own provenance says — and `count`, which is the four omni helices NR
+publishes. That last one is the honest non-closure: neither file states a per-entry article count
+for an omni, so there is no second copy to compare it with, and saying so in the set is better than
+a rule that would have to invent the per-entry figure.
+
+**The reverse direction is a debt rather than a refusal, and the difference is deliberate.** A
+vehicle entry nothing claims is a gap in the modelling, not a contradiction between two files, and
+there is exactly one today: `vehicle.yaml#comms.antennas.sband_steerable`, the LM's steerable
+S-band antenna. Its gain and beamwidth are owed in `vehicle.yaml` — no source reached publishes
+them — and the antenna is nonetheless a member of the `comm.antenna` enum that `select_antenna`
+offers, so a fleet can put the vehicle on an antenna the domain has no object for: no fault, no
+threshold and no link budget on that side can be about it. **That is a different fact from the
+missing figure, and it is the one no file recorded.** The obvious repair is wrong: mirroring the two
+`UNCONFIGURED` values into a domain component would make one unknown count twice in the plant's own
+`UNCONFIGURED` scalar total — 199 would read 201 — which is the same lie as a count that halves a
+gap, and this folder has already written down why. Either the domain grows an object for the
+antenna, or the debt is answered with the decision not to model it. **252 became 253.**
+
+Verified the way this folder requires, by breaking fourteen copies: the domain's `gain_db` against
+the vehicle's 26.7, its `dc_w` against 36, its `rf_w` against 11.2, the *vehicle's* beamwidth moved
+under the domain's 9.4, `steerable` flipped, the omni re-rated against both its entries, a component
+stripped of its link, a link naming an antenna that does not exist, the LM's low `dc_w` and high
+`rf_w` drifted from their entries, a `levels` entry no `vehicle_keys` claims, a claimed entry left
+with no level, and a figure written at the multi-level component's own top level rather than under
+the entry it belongs to. Every one refused by name; the unbroken corpus silent, and its one
+debt the antenna above. **163 vehicle tests, 252 repo tests, `--strict` 2, ruff clean.** Plant unchanged:
+134 states over 57 nodes, 77 edges, 15 ready / 26 value / 11 edge / 82 rule, 199 `UNCONFIGURED`
+scalars.
 
 ## The invariants, and which of them are enforced
 

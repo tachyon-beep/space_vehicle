@@ -4858,6 +4858,201 @@ def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Repor
             )
 
 
+# The keys of a comms component that are never a quantity the two files both state. Identity and
+# the prose keys are the bulk of it. The four that are particular to this join:
+#
+#   `vehicle_keys`  the link itself, which is the subject of the comparison rather than a value in it
+#   `levels`        the domain's per-power-level table, which is compared entry by entry below
+#   `beams`         the vehicle's per-feed table on the one antenna that has three feeds; the
+#                   component takes the *narrow* feed's figures, which its own provenance argues
+#                   for, and a feed table is a list of sub-entries rather than a scalar
+#   `count`         the four omni helices NR publishes. That is a fact about articles, and neither
+#                   file states a per-entry article count for an omni, so there is no second copy
+#                   of it to compare — which is why it is here and not a closure below.
+COMMS_STRUCTURAL = {
+    "id",
+    "kind",
+    "class",
+    "vehicle_keys",
+    "levels",
+    "beams",
+    "count",
+    "provenance",
+    "note",
+    "notes",
+    "why",
+    "reason",
+    "source",
+    "ref",
+    "relation",
+    "basis",
+    "unit",
+    "inputs",
+}
+
+
+def check_comms_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
+    """The link's hardware, declared twice, and the fourth join with nothing between the copies.
+
+    `vehicle.yaml#comms` is the vehicle-level view: the transmitters with their DC and RF watts,
+    the antennas with their gains and beamwidths, the two telemetry rates and the VHF channels —
+    the bill of materials NR ch.18 and `apollo_diode.md:157-168` supply. When the tenth domain
+    landed, `domains/comms/components.yaml` was written as the domain's view of the same hardware,
+    and its own header states the claim this check exists to keep true:
+
+        "All of it is already in `vehicle.yaml#comms`; these entries are the domain's view of it,
+         and they exist so that a threshold or a fault can name the object it is about."
+
+    Nothing read that claim. Four components mirror four vehicle entries — one antenna standing
+    for two (`omni` for `omni_a`/`omni_b`) and one transmitter for two power levels (`lm_sband` for
+    `lm_sband_low`/`lm_sband_high`) — and the five fields they share, `gain_db`, `beamwidth_deg`,
+    `steerable`, `dc_w` and `rf_w`, were compared by no tool in this folder.
+
+    **The figures are not decoration, and the copies have already been used to derive things.**
+    `E-GEOM-LINK`'s -0.54 dB per degree is computed *from* the 9.4-degree beamwidth, and its own
+    relation cites `vehicle.yaml#comms.antennas.high_gain` by name; `E-AMP-LOAD`'s 0.0357 A per
+    watt is applied to "the 36 W transceiver and the 72 W power amplifier", which its relation says
+    are "`dc_w` in vehicle.yaml#comms.transmitters". So the vehicle-level copy is the one the
+    graph's arithmetic was argued from, while the domain's copy is the one a fault names — COM-02,
+    COM-07 and COM-08 happen to `sband_power_amplifier` and `sband_transceiver` — and the one the
+    domain's code will read when the link budget is implemented. A component re-rated on one side
+    and not the other leaves the pointing loss belonging to an antenna the domain no longer
+    describes, which is this folder's recurring failure arriving through a file that derives from
+    the quantity rather than one that states it.
+
+    The link is declared rather than inferred, for the reason `domain_group` and the propulsion
+    engines' `vehicle_keys` are: the files name one antenna `high_gain` and `hga`, and one
+    transmitter `lm_sband_low`/`lm_sband_high` against a single `lm_sband`, so a rule guessed from
+    the string would have to know that `hga` is short for `high_gain` and that one article with two
+    power levels is two entries in a bill of materials. `levels` is where the two shapes meet: it is
+    keyed by the vehicle entry ids, so the link and the figures are one declaration rather than two
+    that have to be kept in step.
+
+    The comparison is the **intersection of the keys the two views share**, minus
+    `COMMS_STRUCTURAL`, following `check_propulsion_bindings`. The reverse direction is a *debt*
+    rather than a refusal, and the difference is deliberate: a vehicle entry nothing claims is a
+    gap in the modelling rather than a contradiction between two files, and today's one instance is
+    the LM's steerable antenna, whose gain and beamwidth `vehicle.yaml` already owes and which
+    `select_antenna` offers anyway.
+    """
+    comms = (vehicle or {}).get("comms") or {}
+    domain = load(root / "domains" / "comms" / "components.yaml", report) or {}
+    components = domain.get("components") or []
+    if not comms or not components:
+        report.debt(
+            "vehicle.yaml#comms",
+            "either the vehicle's comms section or the comms domain's component list is missing, "
+            "so the two views of the link's hardware cannot be compared",
+        )
+        return
+
+    # A class name against a section name, joined by hand because the domain's is singular and the
+    # vehicle file's is plural. Two pairs, and neither is derivable from the other.
+    sections = {
+        "transmitter": ("transmitters", comms.get("transmitters") or []),
+        "antenna": ("antennas", comms.get("antennas") or []),
+    }
+    entries: dict[tuple[str, str], dict[str, Any]] = {}
+    for cls, (_, rows) in sections.items():
+        for entry in rows:
+            if isinstance(entry, dict) and entry.get("id"):
+                entries[(cls, str(entry["id"]))] = entry
+
+    claiming: dict[tuple[str, str], str] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        cls = str(component.get("class"))
+        if cls not in sections:
+            continue
+        cid = str(component.get("id"))
+        cwhere = f"domains/comms/components.yaml:{cid}"
+        keys = component.get("vehicle_keys")
+        if not isinstance(keys, list) or not keys:
+            report.refuse(
+                cwhere,
+                f"is a {cls!r} and declares no `vehicle_keys`. Its figures are the ones the link is "
+                "argued from, so a component claiming no vehicle entry is a copy nothing holds "
+                "against the entry the vehicle is described by",
+            )
+            continue
+        levels = component.get("levels")
+        if levels is not None and not isinstance(levels, dict):
+            report.refuse(
+                cwhere, f"declares `levels` as a {type(levels).__name__}, which is not a mapping"
+            )
+            levels = None
+        for key in (str(k) for k in keys):
+            entry = entries.get((cls, key))
+            if entry is None:
+                report.refuse(
+                    cwhere,
+                    f"names vehicle {cls} {key!r}, which vehicle.yaml#comms does not declare; it "
+                    f"declares {sorted(k for c, k in entries if c == cls)}",
+                )
+                continue
+            claiming[(cls, key)] = cid
+            # The subjects a vehicle entry is held against. A component with one position is one
+            # subject; a component standing for a multi-position article is two — its own top level,
+            # which says what is true of the article, and the level the entry belongs to. Comparing
+            # the top level as well is what makes the rule exceptionless: a figure written one
+            # level up from where it belongs is still a figure two files both state, and leaving it
+            # out would be a declaration no rule reads, which is the defect this check exists for.
+            subjects: list[tuple[str, dict[str, Any]]] = [(cid, component)]
+            if levels is not None:
+                level = levels.get(key)
+                if not isinstance(level, dict):
+                    report.refuse(
+                        cwhere,
+                        f"claims {key!r} and declares no `levels.{key}`, so the vehicle entry has "
+                        "no figures on this side to be held against",
+                    )
+                    continue
+                subjects.append((f"{cid}.levels.{key}", level))
+            section = sections[cls][0]
+            for label, subject in subjects:
+                for field in sorted((set(entry) & set(subject)) - COMMS_STRUCTURAL):
+                    if entry[field] != subject[field]:
+                        report.refuse(
+                            cwhere,
+                            f"declares {field} {subject[field]!r} at `{label}` and "
+                            f"vehicle.yaml#comms.{section}.{key} declares {entry[field]!r}. Two "
+                            "views of one article: the vehicle-level file is what the link budget "
+                            "and the coupling edges are argued from and this is what the domain "
+                            "names in a fault, so a figure the two disagree about is one antenna or "
+                            "transmitter described twice",
+                        )
+        if isinstance(levels, dict):
+            for extra in sorted(set(levels) - {str(k) for k in keys}):
+                report.refuse(
+                    cwhere,
+                    f"declares `levels.{extra}`, which no entry of `vehicle_keys` claims: a power "
+                    "level with no vehicle entry behind it is a figure nothing is held against",
+                )
+
+    for cls, key in sorted(entries):
+        if (cls, key) in claiming:
+            continue
+        section = sections[cls][0]
+        if cls == "antenna":
+            consequence = (
+                "`select_antenna` offers it, so a fleet can put the vehicle on an antenna this "
+                "domain has no object for: no fault, no threshold and no link budget here can be "
+                "about it, and its figures would come from the vehicle-level file alone"
+            )
+        else:
+            consequence = (
+                "a transmitter's DC draw is the bus load the link costs, so an unclaimed one is a "
+                "load no rule on this side can add"
+            )
+        report.debt(
+            f"vehicle.yaml:comms.{section}.{key}",
+            f"is declared by vehicle.yaml and claimed by no component of class {cls!r} in the "
+            f"comms domain, so nothing holds its figures against the copy the domain would use. "
+            f"{consequence}",
+        )
+
+
 def decision_age_ms(row: dict[str, Any]) -> float | None:
     """The maximum age at which a channel may still be the basis of a decision.
 
@@ -8110,14 +8305,15 @@ def main(argv: list[str] | None = None) -> int:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)
         check_thermal_bindings(root, vehicle, report)
+        check_comms_bindings(root, vehicle, report)
         check_one_way_configurations(root, vehicle, report)
         check_initial_sources(root, vehicle, coupling, report)
     else:
         report.refuse(
             "vehicle.yaml",
             "could not be loaded, so every check that joins another file against it — the "
-            "electrical and thermal inventories, the phase-to-configuration names, the crew "
-            "placements and the propulsion budgets — is unavailable for this run",
+            "electrical and thermal inventories, the comms hardware, the phase-to-configuration "
+            "names, the crew placements and the propulsion budgets — is unavailable for this run",
         )
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)

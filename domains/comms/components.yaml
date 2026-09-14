@@ -65,6 +65,12 @@ components:
   - id: hga
     kind: state
     class: antenna
+    # `vehicle_keys` is the link, and it is declared rather than inferred for the reason
+    # `domain_group` and the propulsion engines' is: the two files name one antenna differently
+    # (`high_gain` against `hga`), so a rule guessed from the string would have to know that `hga`
+    # is short for `high_gain`. What it buys is the whole of `check_comms_bindings`: every field
+    # these two views of one antenna share is compared, without a list naming which ones.
+    vehicle_keys: [high_gain]
     gain_db: 26.7
     beamwidth_deg: 9.4
     steerable: true
@@ -83,6 +89,11 @@ components:
   - id: omni
     kind: state
     class: antenna
+    # One component, two vehicle entries: `omni_a` and `omni_b` are the same hardware declared
+    # twice in `vehicle.yaml` because a *selection* needs two members and the article is one. The
+    # `count` below is the four helices NR publishes, which is a different number from the two
+    # selectable antennas and is not a quantity either file states twice.
+    vehicle_keys: [omni_a, omni_b]
     gain_db: 2
     count: 4
     provenance:
@@ -98,6 +109,7 @@ components:
   - id: sband_transceiver
     kind: flow
     class: transmitter
+    vehicle_keys: [sband_transceiver]
     dc_w: 36
     rf_w: 2.8
     provenance:
@@ -111,6 +123,7 @@ components:
   - id: sband_power_amplifier
     kind: flow
     class: transmitter
+    vehicle_keys: [sband_power_amplifier]
     dc_w: 72
     rf_w: 11.2
     provenance:
@@ -127,10 +140,23 @@ components:
   - id: lm_sband
     kind: flow
     class: transmitter
-    low_dc_w: 20
-    high_dc_w: 90
-    rf_w_low: 0.75
-    rf_w_high: 18.6
+    # The LM's transmitter is one article with two power levels; `vehicle.yaml` declares it as two
+    # entries, one per level, because that is how a bill of materials carries a two-position
+    # device. `levels` is where the two shapes meet: the keys are the vehicle entry ids, so the
+    # link and the figures are the same declaration rather than two that have to agree.
+    #
+    # The first version of this component carried `low_dc_w`, `high_dc_w`, `rf_w_low` and
+    # `rf_w_high` — four names no other component on the vehicle uses and no tool read, which is
+    # what a quantity looks like when it is written for a reader rather than for a rule. They are
+    # `dc_w` and `rf_w` now, twice, under the entry each belongs to.
+    vehicle_keys: [lm_sband_low, lm_sband_high]
+    levels:
+      lm_sband_low:
+        dc_w: 20
+        rf_w: 0.75
+      lm_sband_high:
+        dc_w: 90
+        rf_w: 18.6
     provenance:
       basis: historical
       source: "vehicle.yaml#comms.transmitters.lm_sband_low/high — PSR's 0.75 W and 18.6 W RF figures, with the DC inputs chosen because no LM transmitter input-power figure was found"
