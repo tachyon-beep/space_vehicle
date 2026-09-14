@@ -288,6 +288,19 @@ components:
     class: loop
     vehicle: csm
     fluid: "62.5 % ethylene glycol / 37.5 % water"
+    # The three figures below are one fluid, and until this round they lived in the *relations* of
+    # two states: `coolant_loop_t` worked out "25 L of 62.5/37.5 glycol-water at 1,050 kg/m3 is
+    # 26.25 kg" and `loop_transport_t` worked out "25 L at the published 200 lb/hr ... gives 1,042
+    # s of transit", and nothing could read either. The density is the conversion between the two
+    # flow figures the source publishes, and the mass is the density applied to the volume.
+    #
+    # Two flow units on purpose, and each is its own source's: `flow_l_min` is apollo's own
+    # operating band (1.3-1.7 L/min) and `nominal_flow_lb_per_h` is TN D-6718's published primary
+    # flow. The density is what makes them one quantity — 200 lb/hr is 1.43998 L/min at 1,050
+    # kg/m3, which is inside the band — and `check_thermal_bindings` holds all three together.
+    fluid_density_kg_m3: 1050
+    nominal_flow_lb_per_h: 200
+    coolant_mass_kg: 26.25
     flow_l_min: [1.3, 1.7]
     volume_l: 25
     provenance:
@@ -298,6 +311,11 @@ components:
     class: loop
     vehicle: csm
     fluid: "62.5 % ethylene glycol / 37.5 % water"
+    # The same fluid, so the same density; the mass follows from it and the chosen volume. No
+    # `nominal_flow_lb_per_h`: the secondary's band is scaled from the primary's and no source
+    # publishes a flow for it, so the nominal is a figure the primary has and this loop does not.
+    fluid_density_kg_m3: 1050
+    coolant_mass_kg: 18.9
     flow_l_min: [1.0, 1.5]
     volume_l: 18
     provenance:

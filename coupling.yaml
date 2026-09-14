@@ -1155,7 +1155,16 @@ edges:
     advances: coolant_flow_kg_s
     sensitivity:
       value: 8.9998e-04
-      computation: "(200 * 0.45359237 / 3600) / 28"
+      # Both numbers were copies. The 200 lb/hr is TN D-6718's published primary-loop flow, which
+      # the loop declares now in the unit its source publishes it in — and which is *inside* the
+      # band `flow_l_min` gives, because the loop's own density is what converts between the two.
+      # The 28 V is the bus nominal declared this round. The 0.45359237 is the international pound
+      # and stays a literal, like standard gravity in the edges beside it.
+      derivation:
+        expression: "(nominal_flow_lb_per_h * 0.45359237 / 3600) / v_bus"
+        inputs:
+          nominal_flow_lb_per_h: "vehicle.yaml:thermal.loops.loop_primary.nominal_flow_lb_per_h"
+          v_bus: "domains/power/components.yaml:components.csm_bus_a.v_nominal"
       unit: "kg/s per V"
       basis: derived
       relation: "a DC motor's speed follows its terminal voltage, and a centrifugal pump's flow follows its speed, so the flow tracks the bus linearly: the nominal 200 lb/hr = 0.02520 kg/s at 28 V gives 9.0e-4 kg/s per volt"
@@ -2212,19 +2221,16 @@ failure_chains:
 open_debts:
 
   - >-
-    Three sensitivities still inline a number the corpus declares nowhere, and each is a *datum in a
-    sentence* rather than a missing one. `E-BUS-PUMP`'s `(200 * 0.45359237 / 3600) / 28` carries the
-    pump's nominal 200 lb/hr — which is not a field on the pump, on `coolant_flow` or on the loop,
-    whose `flow_l_min: [1.3, 1.7]` is a *band* the 1.44 L/min nominal sits inside — and it also
-    needs the coolant density to become a scalar, which is the same datum round 104 found living in
-    `loop_primary_thermal_mass`'s relation. `E-ZONE-ATM` and `E-ZONE-ATM-LM` are worse: their
-    `5 * 6894.757 / 295` carries the cabin's nominal pressure **and** temperature, and neither is a
-    field — `atmosphere_model` declares the volume and a `temperature_from` naming the zone
-    *states*, and 5 psia and 295 K appear only in its `check` prose and in the cabin zone's source
-    string. The remedy in each case is the one `mission.yaml#comms_blackout`'s `mu_moon` got: the
-    number becomes a field where it belongs, and the derivation binds it. Until then the three edges
-    keep their arithmetic but their inputs are copies, which is exactly what the other twelve edges
-    stopped being.
+    Two sensitivities still inline a number the corpus declares nowhere, and each is a *datum in a
+    sentence* rather than a missing one: `E-ZONE-ATM` and `E-ZONE-ATM-LM` compute
+    `5 * 6894.757 / 295`, which carries the cabin's nominal pressure **and** temperature, and
+    neither is a field anywhere. `atmosphere_model` declares the volume and a `temperature_from`
+    naming the zone *states*, while 5 psia and 295 K appear only in its `check` prose and in the
+    cabin zone's own source string. The remedy is the one `mu_moon` got: the two numbers become
+    fields where they belong — the cabin's nominal pressure and temperature are properties of the
+    zone, which already declares its volume — and both edges bind them. The third edge that was in
+    this debt, `E-BUS-PUMP`, is bound: the loop declares its density and its published nominal flow
+    now, and the bus declares the voltage it divides by.
 
   # Round 50 added `advances` and `drains` and made the stock classifier dimensional; round 51
   # asked what would actually fix the ratio edges rather than how to describe them better. The

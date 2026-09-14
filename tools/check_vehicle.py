@@ -479,11 +479,23 @@ def duplicate_keys(text: str, document: Any = None) -> list[tuple[int, str]]:
 
 
 def significant_figures(value: float) -> int:
-    """How many digits a declared number is written to, read off its own decimal representation."""
+    """How many digits a declared number is written to, read off its own decimal representation.
+
+    Trailing zeros **count**, and that is the whole of this function's judgement. The first version
+    stripped them, so `coolant_mass_kg: 30` read as one significant figure — and one significant
+    figure of 26.25 is 30, so a coolant mass of 30 kg agreed with a volume and a density that
+    determine 26.25. The fixture written to catch exactly that did not fire, which is how the rule
+    was found to be too permissive.
+
+    A person who writes `30` means thirty rather than "thirty to one figure", and a person who
+    writes `1.0` means two digits. Counting what is written is the same reading of precision the
+    beamwidth tolerance uses — half a unit in the last place — and it errs toward refusing, which
+    is the direction a check is allowed to be wrong in.
+    """
     text = repr(float(value))
     mantissa = text.split("e")[0].split("E")[0]
     digits = mantissa.lstrip("-").replace(".", "").lstrip("0")
-    return max(len(digits.rstrip("0")) or len(digits), 1)
+    return max(len(digits), 1)
 
 
 def round_to_significant(value: float, digits: int) -> float:
@@ -6237,6 +6249,9 @@ def resolve_dotted(document: Any, dotted: str) -> Any:
 G0_M_S2 = 9.80665
 """Standard gravity, for the one place a corpus statistic crosses into `g`."""
 
+LB_TO_KG = 0.45359237
+"""The international pound, for the two places the corpus publishes a flow in lb/hr."""
+
 # Which stage of the vehicle an engine belongs to, as the prefix its own components take in a
 # configuration's mass breakdown. The pairing is derived rather than listed: an engine flies a
 # configuration that carries its stage, which is a fact about the breakdown's keys.
@@ -6594,7 +6609,48 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
                 "25 L at 1,050 kg/m3 is 26.25 kg — but it is written in prose rather than declared, "
                 "so the mass a heat-exchanger transient depends on is not a scalar the plant can read",
             )
+        # The fluid is one substance described three ways, and until this round the corpus
+        # described it in the *relations* of two states: `coolant_loop_t` worked out "25 L of
+        # 62.5/37.5 glycol-water at 1,050 kg/m3 is 26.25 kg" and `loop_transport_t` worked out
+        # "25 L at the published 200 lb/hr ... gives 1,042 s of transit", and a relation is prose
+        # that nothing reads. The declarations exist now, and these are the two relations between
+        # them — both stated in that prose and neither ever evaluated.
+        density = one.get("fluid_density_kg_m3", two.get("fluid_density_kg_m3"))
+        mass = one.get("coolant_mass_kg", two.get("coolant_mass_kg"))
         volume = one.get("loop_volume_l", one.get("volume_l"))
+        if volume is None:
+            volume = two.get("volume_l")
+        if all(isinstance(v, (int, float)) for v in (density, mass, volume)):
+            derived = float(volume) * float(density) / 1000.0
+            if not agrees_with_derivation(float(mass), derived):
+                report.refuse(
+                    f"{where}.{loop_id}",
+                    f"declares {volume} L of fluid at {density} kg/m3, which is {derived:g} kg, and "
+                    f"a coolant mass of {mass} kg. The mass *is* the density applied to the volume, "
+                    "so one of the three is a copy of a number the other two determine",
+                )
+        # And the loop's two flow figures, in their two sources' units. `flow_l_min` is apollo's
+        # operating band and `nominal_flow_lb_per_h` is TN D-6718's published flow; the density is
+        # what makes them one quantity, so the nominal converted at the density has to land inside
+        # the band. 200 lb/hr is 1.43998 L/min at 1,050 kg/m3, against a 1.3-1.7 band.
+        nominal = one.get("nominal_flow_lb_per_h", two.get("nominal_flow_lb_per_h"))
+        band = one.get("flow_l_min", two.get("flow_l_min"))
+        if (
+            isinstance(nominal, (int, float))
+            and isinstance(density, (int, float))
+            and isinstance(band, list)
+            and len(band) == 2
+        ):
+            as_l_min = float(nominal) * LB_TO_KG / 60.0 / float(density) * 1000.0
+            low, high = (float(band[0]), float(band[1]))
+            if not low <= as_l_min <= high:
+                report.refuse(
+                    f"{where}.{loop_id}",
+                    f"declares a nominal flow of {nominal} lb/hr and a band of {low}-{high} L/min, "
+                    f"and at the declared {density} kg/m3 the nominal is {as_l_min:.4g} L/min — "
+                    "outside its own band. The two figures are one flow in two units, and the "
+                    "density is the conversion between them",
+                )
         if volume is not None and two.get("volume_l") is not None and volume != two["volume_l"]:
             report.refuse(
                 f"{where}.{loop_id}",

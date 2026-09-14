@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 254 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 252 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 254 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 252 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **254** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **252** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -4614,6 +4614,79 @@ corpus silent. Every one refused by name.
 And the pins moved together, one of them by failing: `tools/plant.py` still said "253 declared
 debts" in two places, and the scan added last round caught it rather than letting the number drift
 the way the 202 it replaced had.
+
+## The loops' fluid was one substance described three ways, in two relations
+
+Round 104 opened a debt and named both ways to close it: two of the CSM's three coolant loops
+declared a volume and no coolant mass, because the density that turns one into the other lived in a
+sentence. The sentence was `domains/thermal/components.yaml`'s `coolant_loop_t`:
+
+> the loop's own mass over its mixing conductance: **25 L of 62.5/37.5 glycol-water at 1,050 kg/m3
+> is 26.25 kg**, with c_p about 3,600 J/kg-K, so C = 94,500 J/K; at the published **200 lb/hr**
+> = 0.0252 kg/s the through-flow refreshes that mass every 1,042 s
+
+and `loop_transport_t` states the same flow a second time, in the other unit:
+
+> **25 L at the published 200 lb/hr = 90.7 kg/h, i.e. 1.44 L/min of glycol-water at 1,050 kg/m3**,
+> gives 17.4 min = 1,042 s of transit
+
+So three quantities — the density, the published nominal flow, and the coolant mass — were doing
+real work in two relations and could be read by nothing. **And the density is not an independent
+datum: it is the conversion between the two flow figures the source publishes.** 200 lb/hr is a
+mass flow and 1.44 L/min is a volumetric one, and their quotient is 1,050 kg/m³ exactly.
+
+The loops declare all three now, on both sides of the join, and the two arithmetic facts the prose
+states are checked:
+
+```yaml
+    fluid_density_kg_m3: 1050
+    nominal_flow_lb_per_h: 200
+    coolant_mass_kg: 26.25
+    flow_l_min: [1.3, 1.7]
+```
+
+**Two flow units on purpose, and each is its own source's.** `flow_l_min` is Apollo's own operating
+band; `nominal_flow_lb_per_h` is TN D-6718's published primary flow. Declaring the nominal in
+litres would have been a conversion nobody could check; declaring it in pounds per hour and letting
+the check convert it at the declared density is what makes the two units one quantity. The rule is
+that the nominal, converted, must land inside the band — 200 lb/hr is 1.43998 L/min at 1,050 kg/m³,
+against 1.3–1.7 — and it fires from either end: move the nominal out, or move the density so the
+nominal no longer converts into the band.
+
+The other rule is the mass: **it *is* the density applied to the volume**, so one of the three is a
+copy of a number the other two determine. The LM's loop is the negative that matters — it declares a
+coolant mass and **no density**, because its mass is published directly (TN D-6724's "about 25 lb")
+rather than derived from a volume, and a density back-computed from the two would be a number
+invented to make a check pass. The rule applies where the density is declared, and the asymmetry is
+a fact about the sources.
+
+**That closes round 104's debt by the route round 104 recommended: 254 became 252.** The two retired
+debts are the two loops' coolant masses, and the field that closed them is the density each loop now
+carries.
+
+### The comparison rule was too permissive, and a fixture that did not fire is how it was found
+
+The fixture for the mass rule moved `coolant_mass_kg` from 26.25 to **30** in both files — and the
+linter composed. The reason is the precision rule from two rounds ago: it compared at the declared
+value's own precision, `significant_figures(30)` read `30` as **one** significant figure because it
+stripped trailing zeros, and one significant figure of 26.25 is 30. So a coolant mass of 30 kg
+"agreed" with a volume and a density that determine 26.25.
+
+Trailing zeros count now. A person who writes `30` means thirty rather than "thirty to one figure",
+and a person who writes `1.0` means two digits; counting what is written is the same reading of
+precision the beamwidth tolerance uses, and it errs toward refusing, which is the direction a check
+is allowed to be wrong in. The corpus composes unchanged under the stricter rule.
+
+**With it, the third edge from last round's debt is bound.** `E-BUS-PUMP`'s
+`(200 * 0.45359237 / 3600) / 28` now binds the loop's published flow and the bus's nominal voltage,
+because both are declarations — so the debt shrinks to the two cabin edges, which still need the
+cabin's nominal pressure and temperature to become fields.
+
+Verified by breaking eight copies: the mass that is not the density applied to the volume, the
+volume moved under a mass derived from it, the published nominal moved outside its own band, the
+density moved so the nominal no longer converts into the band, the density drifted in one file only
+so the *join* is what fires, the loop's flow moved under the pump edge, the LM loop asserted to owe
+no density, and the unbroken corpus silent at 252.
 
 ## The invariants, and which of them are enforced
 
