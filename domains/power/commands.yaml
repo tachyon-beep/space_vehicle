@@ -26,7 +26,7 @@ commands:
     authority: A2
     gate: {kind: preference, variable: source_<source>_enable}
     interlocks: [bus_a_undervoltage, load_margin_negative]
-    conflict_domain: power.source_<id>
+    conflict_domain: power.source_<source>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
     irreversible: false
@@ -73,7 +73,7 @@ commands:
     authority: A2
     gate: {kind: preference, variable: contactor_<battery>_enable}
     interlocks: [load_margin_negative]
-    conflict_domain: power.contactor_<id>
+    conflict_domain: power.contactor_<battery>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
     irreversible: false
@@ -125,7 +125,7 @@ commands:
     authority: A2
     gate: {kind: preference, variable: load_<load>_enable}
     interlocks: [lcl_overcurrent]
-    conflict_domain: power.load_<id>
+    conflict_domain: power.load_<load>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
     irreversible: false
@@ -153,7 +153,7 @@ commands:
     authority: A2
     gate: {kind: preference, variable: breaker_<breaker>_enable}
     interlocks: [lcl_overcurrent]
-    conflict_domain: power.breaker_<id>
+    conflict_domain: power.breaker_<breaker>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
     irreversible: false

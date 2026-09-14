@@ -2974,6 +2974,45 @@ rounding in its own decimal places, and the tolerance is 0.1 % now. The same edi
 *before* the domain files were loaded, so the acceleration ceiling silently computed to nothing —
 a computation whose inputs are absent produces no value and reports no error.
 
+## Four verbs left behind by a check that was written for the field
+
+`conflict_domain` says which commands must not both take effect in one tick — the console expands it
+and the first valid command in a domain wins. Nothing validated it, and a typo here does not fail:
+it makes the command's collisions **silently stop happening**, so two contradictory orders are both
+accepted. The console already knew the risk and said so in a comment:
+
+> `conflict_domains` falls back to the literal text ... "a domain that cannot be expanded is a
+> domain nothing can collide in, which is worse than a wrong one"
+
+A fallback at runtime is what the linter is for at build time.
+
+The check found four defects, and they are **the residue of the ten the gate check was written
+for**:
+
+| verb | declared | its argument is called |
+|---|---|---|
+| `set_source` | `power.source_<id>` | `source` |
+| `set_battery_contactor` | `power.contactor_<id>` | `battery` |
+| `set_load` | `power.load_<id>` | `load` |
+| `set_breaker` | `power.breaker_<id>` | `breaker` |
+
+Round 43's note records eight verbs writing *"a bare `<id>` where the argument was `antenna`,
+`source`, `load`, `breaker`, `battery`, `engine`, `pump`, `hatch` or `loop`"* — the **gate**
+templates were fixed and the **conflict domains** beside them were not, because the check was
+written for the field rather than for the defect.
+
+**The effect was over-broad rather than under-broad, which is why nothing noticed.** An
+unexpandable template falls back to its literal text, so *every* `set_source` shared one conflict
+domain no matter which source it named: two commands touching different sources in the same tick
+refused each other.
+
+Two rules now. The first segment must be a domain by **either** of its two names — `PREFIX_DOMAIN`
+exists so a reference may be qualified by the directory or by the channel prefix, and the corpus
+uses both, `res` and `prop` for two domains and the directory name for the other nine (so
+`comms.mode` and `comm.mode` are both accepted and `commsz.mode` is not). And every placeholder must
+name an **enum argument of its own verb**, which is exactly the rule the gate check above it applies
+to the gate template.
+
 ## Authoring convention: no flow mappings
 
 Every file here is **block form**, and that is a decision with a history. The definition was

@@ -3183,6 +3183,55 @@ def check_domain(
         # or `loop`, and two declared their values as a *sentence* — `[any id in
         # components.yaml#loads]` — which instantiates to nothing at all. Both are refusals now,
         # because a gate the mirror cannot publish is a closed gate a fleet cannot name.
+        # --------------------------------------------------------------------------------------
+        # `conflict_domain`, which the console groups commands by and nothing validated.
+        #
+        # The field says which commands must not both take effect in one tick: the console expands
+        # it and the first valid command in a domain wins. A typo therefore does not fail — it
+        # makes the command's collisions silently stop happening, and two contradictory orders are
+        # both accepted. The console already knows this: `conflict_domains` falls back to the
+        # literal text when a template will not expand, with the comment that "a domain that cannot
+        # be expanded is a domain nothing can collide in, which is worse than a wrong one". A
+        # fallback at runtime is what the linter is for at build time.
+        #
+        # Two rules, and the second is the one with a defect behind it. The first segment must be a
+        # domain by either of its two names — `PREFIX_DOMAIN` exists so a reference may be
+        # qualified by the directory or by the channel prefix, and the corpus uses both, `res` and
+        # `prop` for two domains and the directory name for the rest. And every `<placeholder>`
+        # must name an **enum argument of its own verb**, which is exactly the rule the gate check
+        # above applies to the gate template: `power.source_<id>` names no argument, because the
+        # verb's argument is called `source`.
+        #
+        # **Four verbs had that defect, and they are the residue of the ten the gate check was
+        # written for.** Round 43's note records eight verbs writing "a bare `<id>` where the
+        # argument was `antenna`, `source`, `load`, `breaker`, `battery`, `engine`, `pump`, `hatch`
+        # or `loop`" — the gate templates were fixed and the conflict domains beside them were not,
+        # because the check was written for the field rather than for the defect.
+        # --------------------------------------------------------------------------------------
+        conflict = str(verb.get("conflict_domain") or "").strip()
+        if not conflict:
+            report.refuse(vwhere, "declares no `conflict_domain`, so its collisions are undeclared")
+        else:
+            head = conflict.split(".")[0]
+            if head not in DOMAINS and head not in PREFIX_DOMAIN:
+                report.refuse(
+                    f"{vwhere}.conflict_domain",
+                    f"begins {head!r}, which is neither a domain directory ({sorted(DOMAINS)}) nor "
+                    f"a channel prefix ({sorted(PREFIX_DOMAIN)}). A command grouped under a name no "
+                    "other command shares is a command whose conflicts never happen",
+                )
+            for placeholder in re.findall(r"<([^>]+)>", conflict):
+                spec = (verb.get("argument_schema") or {}).get(placeholder)
+                if not isinstance(spec, dict) or spec.get("type") != "enum":
+                    report.refuse(
+                        f"{vwhere}.conflict_domain",
+                        f"declares {conflict!r}, whose placeholder <{placeholder}> names no enum "
+                        f"argument of this verb (it has "
+                        f"{sorted(verb.get('argument_schema') or {})}). The console expands the "
+                        "template by name, so a placeholder that names nothing leaves the command "
+                        "in a domain of its own",
+                    )
+
         gate = verb.get("gate")
         if isinstance(gate, dict) and gate.get("variable"):
             variable = str(gate["variable"])
