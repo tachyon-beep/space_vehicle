@@ -52,6 +52,16 @@ writes: [o2_csm, o2_lm, h2_csm, water_potable, water_cooling, prop_main, prop_rc
 # The ontology. All seven behaviours from `consumables_diode.md:19-30`, each with where it
 # lives on this vehicle. A behaviour that is not modelled says so and says why.
 # --------------------------------------------------------------------------------------
+open_debts:
+
+  - "The recorder's data storage is a Buffer on this vehicle and it is not yet modelled: during a
+    lunar occultation the vehicle must store telemetry and replay it, which is
+    `apollo_diode.md:903`'s operational fact rather than an interruption. It needs a node in
+    `coupling.yaml` and a producer in the comms domain, neither of which exists yet. Until this
+    round it was written in a `debt:` field inside `ontology` — a key that appears exactly once in
+    the corpus, in a block no tool read, so the sentence that says what would close the gap was
+    not in `--debts`, not in the count, and not fatal under `--strict`."
+
 ontology:
   - behaviour: Stock
     model: "conserved quantity with inflows, outflows, loss and adjustment"
@@ -69,11 +79,6 @@ ontology:
   - behaviour: Buffer
     model: "finite capacity with occupancy, ingress, egress and drops"
     on_this_vehicle: UNCONFIGURED
-    debt: >-
-      the recorder's data storage is a real Buffer on this vehicle and it is not yet modelled:
-      during a lunar occultation the vehicle must store telemetry and replay it, which is
-      apollo_diode.md:903's operational fact rather than an interruption. It needs a node in
-      coupling.yaml and a producer in the comms domain, neither of which exists yet.
     provenance:
       basis: apollo
       ref: "apollo_diode.md:898-903"

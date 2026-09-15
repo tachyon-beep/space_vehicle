@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 288 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 289 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 288 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 289 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **288** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **289** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -6983,7 +6983,7 @@ loses the figure, because the two constants are gnc's and are declared there:
 - The note now says what the entry claims and where the two figures live, instead of naming a third
   one.
 
-**289 became 288 declared debts, and 215 became 214 unset scalars.** Both moves are subtractions of a
+**The count went from 289 to 288** — a duplicate subtracted rather than a question answered — **and the unset scalars from 215 to 214.** Both moves are subtractions of a
 duplicate rather than an answer to a question: nothing was learned about the IMU, one of its three
 recorded unknowns was the same unknown written down a second time in a file that said it was
 recorded once. Round 74 removed this inflation from `assert`/`clear` in one file and the
@@ -7431,6 +7431,78 @@ Two new refusals, both about the mechanism rather than the arithmetic:
 | places the rule was written | 3 | 1 |
 | refusals for one wrong `total_w` | 2 | 1 |
 | tests in `tests/test_vehicle_config.py` | 209 | **210** |
+
+## A debt written in a key nobody reads is not a debt
+
+`domains/consumables/components.yaml#ontology` is seven behaviours the corpus's catalog names — Stock,
+Rate/capacity, Buffer, Inventory, Entitlement, Margin, Opportunity — each with the model it means and
+a sentence saying **where it is modelled on this vehicle**. It is the block a reader reaches for to
+answer "what kind of resource is this", and it was read by no tool.
+
+The consequence was not the seven sentences, which are true. It was the one **key nobody had
+declared**. The Buffer entry — the recorder's data storage, which `apollo_diode.md:898-903` makes
+operational rather than incidental, because behind the Moon telemetry is stored and replayed — carried
+its obligation in a field named `debt`:
+
+```yaml
+  - behaviour: Buffer
+    model: "finite capacity with occupancy, ingress, egress and drops"
+    on_this_vehicle: UNCONFIGURED
+    debt: >-
+      the recorder's data storage is a real Buffer on this vehicle and it is not yet modelled ...
+      It needs a node in coupling.yaml and a producer in the comms domain, neither of which
+      exists yet.
+```
+
+**`debt:` as a key appears exactly once in the whole corpus.** So:
+
+| what a reader gets | before | after |
+|---|---|---|
+| `--debts` for the entry | *"ontology[2].on_this_vehicle: is UNCONFIGURED"* — no reason | the entry **and** the obligation |
+| the count | one obligation where there are two | both |
+| the sentence naming what would close it | a paragraph in a file no tool opens | a debt, fatal under `--strict` |
+
+That is the folder's own law, stated in `check_vehicle.py` twelve hundred lines up about the domain
+`open_debts` lists: *"A debt is a value that is needed and unset wherever it is written, and the whole
+point of the count is that it is fatal under `--strict`; a paragraph in a file that no tool opens is
+not a debt, it is a comment with better manners."* The comment then records that this asymmetry had
+been found **three** times. This is the fourth, in the same file as the third.
+
+### The fix
+
+Two halves, and the second is the one that stops the next invented key:
+
+- the obligation moves into `domains/consumables/components.yaml#open_debts` — the idiom the linter
+  counts, `--debts` prints, and `--strict` fails on. The domain had **no** `open_debts` list at all
+  before this round, which is part of how the sentence ended up somewhere else;
+- `check_ontology` reads the block. It is a **closed key set** — `behaviour`, `model`,
+  `on_this_vehicle`, `provenance` — plus the three statements every entry owes, one behaviour named
+  once, a `check_basis` provenance, and the `Stock` behaviour `apollo_diode.md:836-847` is about.
+
+**Adding `debt` to the key set instead would have been the wrong fix**, and the refusal says why: an
+obligation belongs in `open_debts`, "where the linter counts it, `--debts` prints it and `--strict`
+fails on it; a field in a block nothing reads is a paragraph rather than a debt". A second name for
+an obligation is the failure `channels.yaml` opens by describing — *"the corpus's worst structural
+failure is that eight documents name the same object eight ways"*.
+
+### What is still unread
+
+`domains/propulsion/components.yaml#thrust_curve` is the other block no tool names: three operating
+segments with `coefficients: UNCONFIGURED` twice and a `null` for the band the engine is not designed
+to run in. **Its owed values are counted** — `--debts` reports all three — so it is the lesser
+instance: the *shape* claim ("monotone within each operating segment; zero outside the operating
+band") has no reader, but nothing about it is invisible. Giving it one is the next round's work
+rather than this one's, and it is recorded here with the measurement rather than left to be
+rediscovered.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **289** — an obligation that was always there, counted |
+| keys named `debt` in the corpus | 1 | **0** |
+| whole blocks named by no tool | 2 | **1** (`thrust_curve`, whose debts are counted) |
+| tests in `tests/test_vehicle_config.py` | 210 | **211** |
 
 ## The invariants, and which of them are enforced
 

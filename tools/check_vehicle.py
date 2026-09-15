@@ -8886,6 +8886,75 @@ COMPONENT_STRUCTURAL = {
 }
 
 
+# The keys of an ontology entry, and the block is read for exactly this reason: a key outside this
+# set is a field nobody declared, in a block nobody read, and one of them was an obligation.
+ONTOLOGY_KEYS = {"behaviour", "model", "on_this_vehicle", "provenance"}
+
+
+def check_ontology(documents: dict[str, Any], report: Report) -> None:
+    """The resource taxonomy, which is the most-read block in the corpus that no tool had read.
+
+    `domains/consumables/components.yaml#ontology` is seven behaviours the corpus's catalog names —
+    Stock, Rate/capacity, Buffer, Inventory, Entitlement, Margin, Opportunity — each with the model
+    it means and a sentence saying **where it is modelled on this vehicle**. It is the block a
+    reader reaches for to answer "what kind of resource is this", and its own entries cite the rule
+    that every behaviour is either owned by a domain, deliberately not modelled, or owed.
+
+    Nothing read it. The consequence was not the seven sentences, which are true; it was the one
+    **key nobody had declared**. The Buffer entry — the recorder's data storage, which
+    `apollo_diode.md:898-903` makes operational rather than incidental, because behind the Moon
+    telemetry is stored and replayed — carried its obligation in a field named `debt`. That key
+    appears exactly once in the corpus. `--debts` reported the entry as *"is UNCONFIGURED"* with no
+    reason, the count held one obligation where there are two, and the sentence naming what would
+    close it — a node in `coupling.yaml`, a producer in the comms domain — was a paragraph in a file
+    no tool opens. **Which is what the comment twelve hundred lines up calls "a comment with better
+    manners", found for the fourth time and in the same file as the third.**
+
+    So the block is read, and the reading is the closed key set rather than the prose: a key the
+    ontology does not declare is refused, and the refusal says where an obligation belongs —
+    `open_debts`, which the linter counts, prints in `--debts`, and fails on under `--strict`.
+    Adding `debt` to the set instead would have been a second name for the thing the corpus's
+    vocabulary file exists to keep single.
+    """
+    for name, document in sorted(documents.items()):
+        if not name.endswith("components.yaml"):
+            continue
+        ontology = (document or {}).get("ontology")
+        if ontology is None:
+            continue
+        where = f"{name}:ontology"
+        if not isinstance(ontology, list) or not ontology:
+            report.refuse(where, f"is {ontology!r}; the taxonomy is the list of behaviours")
+            continue
+        seen: set[str] = set()
+        for index, entry in enumerate(ontology):
+            if not isinstance(entry, dict):
+                report.refuse(f"{where}[{index}]", f"is {entry!r}, not a mapping")
+                continue
+            ewhere = f"{where}[{index}] {entry.get('behaviour')}"
+            for key in sorted(set(entry) - ONTOLOGY_KEYS):
+                report.refuse(
+                    f"{ewhere}.{key}",
+                    f"is {key!r}, which the ontology does not declare. An obligation is written in "
+                    "this file's `open_debts`, where the linter counts it, `--debts` prints it and "
+                    "`--strict` fails on it; a field in a block nothing reads is a paragraph "
+                    "rather than a debt, which is how this one went unreported until it was found",
+                )
+            for field in ("behaviour", "model", "on_this_vehicle"):
+                if not entry.get(field):
+                    report.refuse(f"{ewhere}.{field}", "is absent, and every entry states it")
+            behaviour = str(entry.get("behaviour"))
+            if behaviour in seen:
+                report.refuse(ewhere, f"names {behaviour!r} twice; a taxonomy has one of each")
+            seen.add(behaviour)
+            provenance = entry.get("provenance") or {}
+            check_basis(f"{ewhere}.provenance", provenance.get("basis"), provenance, report)
+        if "Stock" not in seen:
+            # `apollo_diode.md:836-847` is the rule the whole block exists to carry, and it is
+            # about the stocks. A taxonomy that has lost them is a taxonomy about something else.
+            report.refuse(where, "declares no `Stock` behaviour, which is what apollo's catalog is about")
+
+
 def check_component_identity(documents: dict[str, Any], report: Report) -> None:
     """One box, two domains, and nothing saying whether the two entries are one object.
 
@@ -12246,6 +12315,7 @@ def main(argv: list[str] | None = None) -> int:
     check_domain_reads(documents, report)
     check_perception_model(documents, report)
     check_component_identity(documents, report)
+    check_ontology(documents, report)
     check_consumers(documents, report)
     check_argument_vocabularies(documents, report, channels)
     check_spacecraft_vocabulary(documents, report)
