@@ -188,7 +188,7 @@ Two counts, and the difference is deliberate. The **269** is every obligation th
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency). The **200** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **202** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -5917,6 +5917,58 @@ nominal posture does not define, the nominal posture itself renamed, the nominal
 the class names select nothing, the unbroken corpus composing at 269, the declared pool scheduling
 exactly what the constants did, the seed's label naming the pool, and a pool naming an unknown class
 placing nothing while the linter says so.
+
+## The command surface, declared in two halves and joined by nothing
+
+A state says a verb writes it — `moved_by: command:<verb>`, eleven declarations across six domains.
+The graph says where the executive's signal arrives — the `E-CMD-*` family, nine edges from
+`command_executive` into the nodes those states live on, each `kind: discrete` with a one-signal
+sensitivity. **The two halves were compared to nothing**, and the join found `power`'s
+`bus_tie_closed`: it declares `command:set_bus_tie` and no edge landed on `bus_tie` from the
+executive at all. A fleet could command the tie, and the command had no path into the graph.
+
+The check is one rule with one exemption: a state moved by a `command:` verb must live on a node the
+executive reaches, unless it lives on the **`internal` sentinel** — which is not a coupling node, so
+no edge can land on it, and the thirteen states there are advanced with their domain. That exemption
+is not a convenience; the plant's own build-order docstring states it in its own words: *"No edge can
+reach the sentinel — it is not a node — so its driver is domain code."*
+
+### The other half of the same gap was already a debt, and the diff found it
+
+Adding the tie edge was one line. The pump was the interesting one, and the round did not have to
+find it: `coupling.yaml`'s node check was already reporting it —
+
+> `coupling.yaml:node coolant_flow: declares a state_order over ['coolant_flow_kg_s',
+> 'pump_1_speed_rpm'] and no inbound edge advances 'pump_1_speed_rpm'.`
+
+— which is the debt this folder has carried since the thermal domain landed, in the words of a
+different check. `E-CMD-PUMP` closes it, and the closing is **paid for rather than free**: the edge's
+sensitivity is `UNCONFIGURED`, because `set_coolant_pump` carries on/off and the speed a commanded-on
+pump runs at is published nowhere. The debt count is unchanged at 269 for exactly that reason: one
+debt was closed and one opened, which the round verified by diffing the two lists rather than by
+trusting the total.
+
+The pump keeps its own class in `--build-order` — still owing an edge — and that is now the truth:
+the path exists and the number does not.
+
+### Three things the round got wrong first, and what each taught
+
+| the mistake | what it was |
+|---|---|
+| `E-CMD-PUMP` without `advances` | an edge with no `advances` counts as an input for **every** state on its node, and `advance()` refuses a state when *any* of its inputs is unusable — so an unconfigured command edge beside `coolant_flow_kg_s` took that state out of the ready class. `advances: pump_1_speed_rpm` scopes it to the state it drives, which is what the field is for |
+| "the schedule will place the tie after the executive" | it does not, and `command_executive` is not a scheduled node at all (no state advances it — the diode feeds it). The derived order is the same 57 nodes with or without the edge, which the round checked by diffing the order rather than by reasoning about it. What the edge fixes is the declaration, and the comment on it says so |
+| a fixture that renamed the wrong edge | `to: bus_tie` appears twice — the bus's own tie edge and the command one — and the first match was `E-BUSB-TIE`. The verifier's case was aimed at the command edge by its id instead |
+
+**269 stayed 269**, and **184 became 185 vehicle tests.** Plant: 15 ready / 26 value / **11 edge** /
+82 rule is unchanged, because both states the round touched still owe something — and the plant's
+unset scalars went 200 to **202**, which is the two halves of the figure the pump's edge owes.
+`--strict` exits 2.
+
+Verified by breaking nine copies in `.scratch/r23/`: the tie edge removed, re-pointed, re-sourced
+away from the executive and de-declared as discrete; a commanded state moved to a node nothing
+reaches; the pump's driver edge removed (which brings the node-level debt back); the pump's
+`advances` dropped, which the plant's own build order reports as a sibling losing its readiness; the
+unbroken corpus composing at 269; and both states still owing what they owe.
 
 ## The invariants, and which of them are enforced
 

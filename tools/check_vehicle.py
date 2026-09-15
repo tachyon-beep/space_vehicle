@@ -2444,6 +2444,56 @@ def check_seeding_pools(mission: dict[str, Any], root: Path, report: Report) -> 
                 )
 
 
+def check_command_reach(
+    root: Path, coupling: dict[str, Any], report: Report
+) -> None:
+    """A state a command moves must be reachable by the executive's own edge.
+
+    `moved_by: command:<verb>` is the state's side of the command surface: it says a verb writes
+    this state. The graph's side is the `E-CMD-*` family — nine edges from `command_executive` into
+    the nodes those states live on, each `kind: discrete` with a sensitivity of one signal unit —
+    and the two sides were joined by nothing. `bus_tie_closed` declares `command:set_bus_tie` and
+    **no edge reached `bus_tie` at all**, so the state a fleet commands was a state the tick order
+    had no reason to place after the executive and the plant had no path into.
+
+    The exemption is the `internal` sentinel, and it is a property of the graph rather than a
+    convenience: `coupling.yaml#nodes` does not declare it, so no edge can land on it, and the
+    thirteen states there are advanced with their domain. The plant's own build-order docstring
+    says the same thing in its own words — *"No edge can reach the sentinel — it is not a node — so
+    its driver is domain code."*
+    """
+    edges = [e for e in coupling.get("edges") or [] if isinstance(e, dict)]
+    commanded = {
+        str(e.get("to"))
+        for e in edges
+        if str(e.get("from")) == "command_executive" and e.get("kind") == "discrete"
+    }
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if not isinstance(state, dict):
+                continue
+            verbs = [
+                str(m).split(":", 1)[1]
+                for m in state.get("moved_by") or []
+                if str(m).startswith("command:")
+            ]
+            if not verbs:
+                continue
+            node = str(state.get("node"))
+            if node == "internal":
+                continue
+            if node not in commanded:
+                report.refuse(
+                    f"domains/{path.parent.name}/components.yaml:state {state.get('id')}",
+                    f"is moved by {verbs} and lives on {node!r}, which no `E-CMD-*` edge reaches. "
+                    "The command surface is declared in two halves — this state says a verb writes "
+                    "it, and the graph says where the executive's signal arrives — and a node with "
+                    "the first and the second missing is a command with no path into the graph: "
+                    f"the domain has no signal to read. The nodes it reaches are {sorted(commanded)}",
+                )
+
+
 def check_chain_faults(
     coupling: dict[str, Any],
     mission: dict[str, Any],
@@ -10650,6 +10700,7 @@ def main(argv: list[str] | None = None) -> int:
     check_conventions(vehicle or {}, registry, documents, report)
     check_chain_faults(coupling or {}, mission or {}, root, registry, report)
     check_seeding_pools(mission or {}, root, report)
+    check_command_reach(root, coupling or {}, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)

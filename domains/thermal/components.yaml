@@ -36,8 +36,12 @@ domain: thermal
 # rather than a rewrite (plant.md §10).
 natural_rate_hz: 1
 
+# `command_executive` is the last entry and it arrived with `E-CMD-PUMP`: the pump is commanded
+# rather than driven by a voltage, and until the edge existed this domain's pump states had no path
+# from the executive. `check_domain_reads` is what forced the declaration — the edge is the graph's
+# half and this list is the domain's, and the two are held equal.
 reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_thrust,
-        structure_config, water_cooling]
+        structure_config, water_cooling, command_executive]
 writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
          cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm, cabin_eq_csm,
          cabin_eq_lm, environment_heat, service_bay_heat, descent_bay_heat,
@@ -250,6 +254,11 @@ state:
     node: coolant_flow
     unit: rpm
     tau_s: 8
+    # `moved_by` on a lag, which the field's check only *requires* of discrete states: this one's
+    # driver is external — a verb — and saying so is what lets `check_command_reach` hold the edge
+    # that carries it. It is optional here and load-bearing where it is written.
+    moved_by:
+      - "command:set_coolant_pump"
     provenance:
       basis: chosen
       reason: "as coolant_flow_kg_s; the pump has its own speed state because a blocked loop and a slowing pump produce the same flow with different speeds, and that difference is the diagnosis"

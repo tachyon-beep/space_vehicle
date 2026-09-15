@@ -1744,6 +1744,17 @@ edges:
     to: load_shed_state
     kind: discrete
     sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+  # The tie was the one commanded node the executive could not reach, and `check_command_reach` is
+  # what found it: `power`'s `bus_tie_closed` declares `moved_by: command:set_bus_tie`, and no edge
+  # landed on `bus_tie` from the executive at all. What this edge does *not* do is reorder anything:
+  # `command_executive` is not in the derived schedule (no state advances it — the diode feeds it),
+  # so the schedule is the same 57 nodes with or without it. What it fixes is the declaration, and
+  # the schedule is unchanged.
+  - id: E-CMD-TIE
+    from: command_executive
+    to: bus_tie
+    kind: discrete
+    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
   - id: E-CMD-ATM
     from: command_executive
     to: cabin_regulator
@@ -1770,6 +1781,24 @@ edges:
     kind: discrete
     sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
     note: "guidance mode and state-vector load; not a fast-loop authority (gnc_diode.md:17)"}
+  # The pump's driver, which the debt said no edge carried. It is a *signal* edge like the rest of
+  # the family, and its sensitivity is owed rather than one: `set_coolant_pump` carries on/off, and
+  # what the lag relaxes toward when the command is on is the pump's speed — a figure no source
+  # publishes, so the edge declares the conversion unset rather than inventing a rated speed. The
+  # plant's build order still classes `pump_1_speed_rpm` as owing an edge for exactly that reason,
+  # which is now the truth: the path exists and the number does not.
+  - id: E-CMD-PUMP
+    from: command_executive
+    to: coolant_flow
+    kind: discrete
+    # `advances` names the one state this drives, and that is not decoration: an edge with no
+    # `advances` counts as an input for *every* state on its node, and `advance()` refuses a state
+    # when any of its inputs is unusable — so an unconfigured edge landing beside
+    # `coolant_flow_kg_s` would have taken that state out of `--build-order`'s ready class, which
+    # has a perfectly good driver of its own. The first version of this edge did exactly that.
+    advances: pump_1_speed_rpm
+    sensitivity: {value: UNCONFIGURED, unit: "rpm per command", basis: UNCONFIGURED, at: nominal,
+    note: "a pump commanded on runs at its rated speed and a commanded-off one coasts to zero; the rated speed is published nowhere in the corpus reached, and the channel's own 0-12,000 rpm is a `range_kind: band` — an acceptable operating region rather than a rating. `pump_1_speed_rpm` is a lag with `tau_s: 8`, so the figure this edge owes is the target it relaxes toward"}
 
   # --- structure and crew: discrete, irreversible, and the only unanticipated sensor ---
   - id: E-CMD-STRUCT
