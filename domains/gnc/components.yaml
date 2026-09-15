@@ -271,6 +271,9 @@ state:
     node: nav_state
     method: algebraic
     unit: "m, m/s, dimensionless"
+    moved_by:
+      - "command:load_state_vector"
+      - "command:select_nav_source"
     provenance:
       basis: apollo
       ref: "apollo_diode.md:119-122"

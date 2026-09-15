@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 271 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 272 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -132,8 +132,37 @@ class Edge:
 
     @property
     def usable(self) -> bool:
-        """An edge is usable when it carries a value the plant could apply."""
+        """An edge is usable when it carries a value the plant could apply.
+
+        **This is the integrator's question and not the readiness figure's**, and conflating the two
+        is what the second property below exists to undo. The integrator multiplies the value by a
+        driver, so a table is not usable to it; a reader asking whether the sensitivity has been
+        *declared* has a different question with a different answer.
+        """
         return (self.sensitivity or {}).get("value") not in (None, "UNCONFIGURED")
+
+    @property
+    def declared(self) -> bool:
+        """Whether the edge's sensitivity resolves — the question `--readiness` means to ask.
+
+        The corpus has two complete forms. A scalar `value` is a sensitivity; a `regimes` table is
+        the answer the linter *requires* of a discrete edge out of physical equipment — *"a mode
+        selection is a table rather than a sensitivity, and a scalar here would be a proportional
+        law the vehicle does not have"* — and of a banded supply edge like `E-BUS-COMM`, which has a
+        response per rung of the shed ladder and no derivative at all.
+
+        `--readiness` counted only the scalar form, so **every regime edge read as undeclared: eight
+        of them**, for the whole life of the projection, including the three bus edges the flagship
+        thermal cycle turns on. The figure said the vehicle owed a number where the vehicle had
+        correctly declared a table, which is the failure this folder is organised against arriving
+        inside the tool that reports on it. `E-CMD-BUS`'s retarget made the ninth, and that is what
+        surfaced it: the same graph, one edge moved from the scalar form to the table form, and the
+        headline moved with it for no reason in the vehicle at all.
+        """
+        sensitivity = self.sensitivity or {}
+        if sensitivity.get("value") not in (None, "UNCONFIGURED"):
+            return True
+        return bool(sensitivity.get("regimes"))
 
 
 @dataclass
@@ -239,7 +268,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 271 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 272 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -809,8 +838,19 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         raise Unconfigured(
             where, f"is a {state.method} with no incoming edge, so nothing drives it"
         )
+    # **The edge's threshold is the integrator's, and this asked it of every state.** A `regimes`
+    # table is the complete answer the linter *requires* of a discrete edge out of physical
+    # equipment — "a mode selection is a table rather than a sensitivity" — and it is what the three
+    # bus supply edges carry. It cannot be multiplied by, so `usable` is the right question for
+    # `lag` and `stock`, which is all this function integrates. Asking it of everything else made
+    # the plant refuse an `algebraic` state with "edge E-BUS-INST carries no sensitivity value"
+    # before it ever reached the refusal that is actually true — that the state's rule is domain
+    # code — and the two buckets the build order promises cannot disagree then disagreed for four
+    # states: `instrumentation_power`, `bus_a_v`, `bus_tie_closed` and `load_shed_class`. The
+    # coupling is *declared* in each of them; what is missing is the code.
+    integrated = state.method in {"lag", "stock"}
     for edge in incoming:
-        if not edge.usable:
+        if not (edge.usable if integrated else edge.declared):
             raise Unconfigured(
                 f"coupling.yaml:edge {edge.id}",
                 f"drives {state.id} and carries no sensitivity value, so the plant cannot apply it",
@@ -1157,7 +1197,17 @@ def build_order(world: World) -> dict[str, list[State]]:
                 if state.method == "algebraic" and not siblings and not declares_own_inputs:
                     blocking_edge.append(state)
                     continue
-            if any(not e.usable for e in incoming):
+            # The bucket asks whether the *coupling is declared*, and the corpus has two complete
+            # forms. This asked `usable`, which is the integrator's narrower question — can I
+            # multiply by it — so a `discrete` edge carrying the `regimes` table the linter
+            # *requires* of it ("a mode selection is a table rather than a sensitivity") read as a
+            # missing coupling. `load_shed_class` is the case, and it moved buckets when its edge
+            # was retargeted from the scalar form to the table form: the vehicle had not lost a
+            # coupling, the edge had changed shape. Only the two methods `advance()` integrates need
+            # a value it can apply; everything else on a node is domain code and needs the coupling
+            # to be *stated*.
+            integrated = state.method in {"lag", "stock"}
+            if any(not (e.usable if integrated else e.declared) for e in incoming):
                 blocking_edge.append(state)
                 continue
             # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
@@ -1179,7 +1229,7 @@ def readiness(world: World) -> None:
     """What is ready, what is not, and what the schedule reaches first."""
     ready = [s for s in world.states if not s.owed]
     blocked = [s for s in world.states if s.owed]
-    usable = [e for e in world.edges if e.usable]
+    usable = [e for e in world.edges if e.declared]
     print(
         f"world: {len(world.states)} states over {len(world.schedule)} nodes, {len(world.edges)} edges"
     )

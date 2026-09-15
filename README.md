@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 271 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 272 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 271 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 272 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **271** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **272** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -1563,10 +1563,11 @@ document.
 ## The plant's stock integrator had never run, and was wrong three ways
 
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
-`lag` and `stock` — and refuses the rest as domain code. That is 44 of the vehicle's 124 states, and
-the split is worth stating plainly: **25 `algebraic`, 43 `discrete`, 7 `dynamics` and 1 `delay` are
-rules the configuration deliberately does not carry**, so 82 of the 134 states need code before the plant can
-walk a whole tick.
+`lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
+this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
+`delay` are rules the configuration deliberately does not carry**, and with the states on the
+`internal` sentinel counted among them, so 85 of the 134 states need code before the plant can walk a
+whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
 first `algebraic` state, so the stock integrator had never executed.** Written, reviewed, and never
@@ -1757,8 +1758,8 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 
     15   11 %  ready now — the two classes the reference plant can advance
     26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
-    11    8 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+     8    6 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    85   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -6084,6 +6085,99 @@ again, a floor with no `floor_resource`, a `floor_resource` the registry does no
 `floor_resource` on an entry with no floor, `prop_main` floored in kg (which fires three times, once
 per threshold), a floor that is not a number, the two orphan floors restored to the state the round
 found them in, the eclss twin losing its link, and the unbroken corpus composing at 271.
+
+## The command surface, joined in one direction only
+
+`moved_by: command:<verb>` is the state's half of the command surface and `E-CMD-*` is the graph's:
+a family of edges leaving `command_executive`, each `kind: discrete`, each with the same sensitivity
+— *"the coupling is the signal itself; one unit in, one unit out."* Round 23 wrote the rule in one
+direction: a state that declares a command must live on a node the family reaches. **Nothing walked
+the edges**, and an edge in this family asserts that a command *sets a state on the node it lands
+on*.
+
+Eleven edges, and **six landed where no state declares a command mover.** Four of those states
+declared nothing at all about what moves them:
+
+| edge | node | what the node's states said moves them |
+|---|---|---|
+| `E-CMD-EXEC` | `instrumentation` | `avionics.instrumentation_power` — nothing |
+| `E-CMD-LINK` | `link` | `comms.link_snr`, `comms.tx_power` — nothing |
+| `E-CMD-GNC` | `nav_state` | `gnc.nav_solution` — nothing |
+| `E-CMD-RCS` | `rcs_valves` | `rcs.thruster_valve` — `logic:` only |
+| `E-CMD-STRUCT` | `structure_config` | four states — `event:` only |
+| `E-CMD-BUS` | `load_shed_state` | `power.load_shed_class` — `logic:`, and the bus drives it |
+
+That is the concrete shape of *"command effects are unimplemented"*. `set_instrumentation_mode`,
+`set_power_amplifier`, `select_antenna`, `point_hga`, `load_state_vector` and `select_nav_source` are
+registered, gated, phased, interlocked, documented in `HELP.md`, reached by an edge — and had
+**nowhere to land**, because the state each one changes was silent about being changed. The five
+declarations that close it are not new numbers; each is the verb's own help read back:
+
+- `instrumentation_power` ← `set_instrumentation_mode`, which "changes the vehicle's power draw".
+- `tx_power` ← `set_power_amplifier`, "a 36 W step on the bus and a 4x RF gain".
+- `link_snr` ← `select_antenna` ("the members are 26.7 dB and 2 dB apart") and `point_hga`.
+- `nav_solution` ← `load_state_vector`, "this changes what the vehicle believes", and
+  `select_nav_source`.
+- `thruster_valve` ← `set_rcs_quad` ("enable or inhibit a whole string") and
+  `isolate_rcs_manifold`; `pyro_fired` ← `execute_event`.
+
+**And one of the six was not a missing declaration but a false edge.** `E-CMD-BUS` claimed a command
+path to the shed ladder, and no command sets a tier: `load_shed_class`'s own reason is *"the
+undervoltage ladder's own position, which the bus thresholds drive"*. The exception it was leaning on
+is written in `coupling.yaml` itself, three hundred lines above it — a `discrete` edge out of
+physical equipment must declare `regimes`, *"and the command paths are the exception"*, because a
+command arriving one for one is genuinely a unity gain. `E-CMD-BUS` never had to declare a table
+because its source was a service node. Retargeted to `bus_a` as **`E-BUS-SHED`**, it declares one,
+with the four rungs named by `domains/power/profiles.yaml`'s own threshold ids rather than restated —
+the construction `E-BUS-RCS` already uses, so a change to the ladder moves the edge with it.
+
+Writing that table found the ladder's own gap, and it is a debt rather than a guess:
+`load_shed_class` can take `none`, `P3`, `P2`, `P1` and `P0`, the four thresholds select `none`,
+`P3`, `P2` and `P0` — and **seven loads are class P1 and no voltage ever sheds them as a tier**.
+Whether the missing thing is a fifth threshold or an enum value is a decision about the vehicle.
+
+The surface is symmetric now: **ten edges into ten nodes, ten nodes with a declared writer, nothing
+on either side.** The join is held by `check_command_reach`, in both directions, and by
+`test_every_command_edge_lands_where_a_state_says_a_command_writes`.
+
+### The readiness figure was answering the integrator's question
+
+Retargeting that one edge dropped `--readiness` from "58 of 79 edges carrying a sensitivity" to 57,
+for no reason in the vehicle at all — the edge had not lost its sensitivity, it had changed *form*.
+`Edge.usable` asks whether the plant can multiply by the sensitivity, which is right for the stock
+integrator and wrong for the headline: **the corpus has two complete forms**, a scalar `value` and a
+`regimes` table, and the linter *requires* the second of a discrete edge out of physical equipment.
+The counter understood only the first, so **every regime edge read as undeclared — eight of them**,
+including the three bus edges the flagship thermal cycle turns on. The figure said the vehicle owed a
+number where it had correctly declared a table.
+
+`Edge.declared` is the second question and the headline now asks it: **65 of 79**, and
+`test_the_plant_counts_a_regime_table_as_a_declared_sensitivity` holds both properties apart,
+including asserting that a table stays *unusable* — a mode selection applied as a gain is the bug the
+separation exists to prevent.
+
+**The same conflation was in the worklist.** `build_order`'s "owes an edge — a coupling with no
+sensitivity" bucket asked `any(not e.usable ...)` of every state on a node, so a regime edge counted
+as a missing coupling. Retargeting the ladder edge moved `load_shed_class` from *owes a rule* to
+*owes an edge* for exactly that reason, and looking at why showed **three states that had been
+mislabelled all along**: `avionics.instrumentation_power`, `power.bus_tie_closed` and
+`rcs.thruster_valve` each have every inbound coupling declared — a table for the bus, a scalar for the
+command — and each was being sent to an implementer to build a coupling that already existed. Only
+the two methods `advance()` integrates need a value it can multiply; everything else needs the
+coupling to be *stated*. **11 owes an edge became 8, and 82 owes a rule became 85**, and the
+`bus_a_v`, `link_snr`, `tx_power` and `compute_margin` cases stay in the edge bucket where they
+belong, because `E-BAT-BUS` and `E-PLATE-*` are genuinely `UNCONFIGURED`.
+
+**271 became 272** — the ladder's missing rung, which is an obligation and not a value — and the pins
+moved together. **188 became 190 vehicle tests.** Plant: 134 states over 57 nodes, 79 edges, 108 of
+134 fully configured, 26 with a debt, **65 of 79 edges declared**, 202 unset scalars, and the build
+order **15 ready / 26 value / 8 edge / 85 rule**. `--strict` exits 2. The node schedule is unchanged
+at 57.
+
+Verified by breaking nine copies in `.scratch/r27/`: each of the five nodes losing the mover that
+backs it, `link` losing both at once (which is one refusal, because the rule is about the node), the
+ladder edge put back on the executive, a commanded state's edge deleted, the coolant pump's edge
+retargeted to a node nothing commands, and the unbroken corpus composing at 272.
 
 ## The invariants, and which of them are enforced
 

@@ -1739,11 +1739,51 @@ edges:
     kind: discrete
     sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal,
     note: "commands are revalidated at the moment of effect (diode-contract.md:145-148)"}
-  - id: E-CMD-BUS
-    from: command_executive
+  # The shed ladder, and it was **not** a command path — which is what its old id claimed.
+  #
+  # It was `E-CMD-BUS`, `from: command_executive`, with the family's unity-gain sensitivity, and it
+  # was the one edge in the family no state backed: `check_command_reach`'s forward half asks which
+  # state on a commanded node declares a command mover, and `power.load_shed_class` declares
+  # `logic:the undervoltage ladder's own position, which the bus thresholds drive`. The ladder is a
+  # threshold response to bus voltage, so this edge was claiming, in the graph's own words, that "the
+  # coupling is the signal itself" from an executive that sets no tier.
+  #
+  # The exception it was leaning on is written three hundred lines up in this file: a `discrete`
+  # edge out of physical equipment has to declare `regimes` because a mode selection is a table
+  # rather than a derivative, *and the command paths are the exception*. `bus_a -> rcs_valves` is the
+  # same shape as this one and declares its table; `E-CMD-BUS` never had to, because its source was
+  # a service node. Retargeted, it declares one too, and the four rungs below are
+  # `domains/power/profiles.yaml`'s own thresholds **reused by id rather than restated**, so a change
+  # to the ladder moves this edge with it — the same construction `E-BUS-RCS` uses.
+  - id: E-BUS-SHED
+    from: bus_a
     to: load_shed_state
     kind: discrete
-    sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "the coupling is the signal itself; one unit in, one unit out", at: nominal}
+    sensitivity:
+      unit: shed tier
+      basis: derived
+      at: nominal
+      relation: >-
+        a table, not a gain: the ladder's position is which rung the bus voltage has crossed, and
+        the rungs are the four `bus_a_*` thresholds in `domains/power/profiles.yaml`. `load_shed_class`
+        is the state that carries the position, so the destination is the ladder itself rather than a
+        load — the loads are shed by the class, which is what makes the position worth publishing
+      note: >-
+        this edge exists so the schedule places the ladder after the bus it watches. It was
+        `E-CMD-BUS` and no command writes the class
+      regimes:
+        - when: nominal
+          response: "`none` — the bus is inside its band and nothing is shed"
+        - when: bus_a_undervoltage
+          response: "still `none`. apollo's own event tier (`apollo_diode.md:73`) sheds nothing; it is the band where things start dropping out, not a rung"
+        - when: bus_a_shed_p3
+          response: "`P3` — the first rung, and the loads in it are the ones the vehicle can fly without"
+        - when: bus_a_shed_p2
+          response: "`P2` — instruments and the RCS heaters. The class the vehicle is in is the *deepest* rung it has crossed, not the one it crossed last"
+        - when: bus_a_survival
+          response: "`P0` — everything but the survival set is shed. **The ladder has no rung that selects `P1`**: seven loads are class P1 and the four thresholds go P3, P2, P0, so the enum names a tier no rung produces. Recorded in `open_debts` rather than guessed at, because whether the missing thing is a threshold or an enum value is a decision about the vehicle"
+        - when: otherwise
+          response: "no bus. The ladder has no voltage to respond to and the class holds its last position"
   # The tie was the one commanded node the executive could not reach, and `check_command_reach` is
   # what found it: `power`'s `bus_tie_closed` declares `moved_by: command:set_bus_tie`, and no edge
   # landed on `bus_tie` from the executive at all. What this edge does *not* do is reorder anything:
@@ -2325,6 +2365,8 @@ failure_chains:
 # the wanting edge for each UNCONFIGURED above; this list is the human-readable version.
 # --------------------------------------------------------------------------------------
 open_debts:
+
+  - "The ladder's missing rung. `power.load_shed_class` can take `none`, `P3`, `P2`, `P1` and `P0`, and the four `bus_a_*` thresholds in `domains/power/profiles.yaml` select `none`, `P3`, `P2` and `P0` — so seven P1 loads are declared in `domains/power/components.yaml#loads` and no voltage ever sheds them as a tier of their own. `E-BUS-SHED`'s own table says so where the rungs are written. What is owed is one of two things and which is a decision about the vehicle rather than a value: a fifth threshold between `bus_a_shed_p2` at 24.5 V and `bus_a_survival` at 23.5 V, or a class enum that names the four rungs the ladder actually has. Until then a P1 load is shed at `bus_a_survival` with the P0 set, or not at all."
 
   # Round 50 added `advances` and `drains` and made the stock classifier dimensional; round 51
   # asked what would actually fix the ratio edges rather than how to describe them better. The

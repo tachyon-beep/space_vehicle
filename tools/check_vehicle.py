@@ -2498,6 +2498,25 @@ def check_command_reach(
     thirteen states there are advanced with their domain. The plant's own build-order docstring
     says the same thing in its own words — *"No edge can reach the sentinel — it is not a node — so
     its driver is domain code."*
+
+    **And the join was fixed in one direction only.** The rule above walks the states that declare
+    a command; nothing walked the edges. `E-CMD-*`'s own sensitivity says what the edge means —
+    *"the coupling is the signal itself; one unit in, one unit out"* — so an edge in the family
+    asserts that a command **sets a state on the node it lands on**, and that assertion had no
+    reader. Six of the eleven landed on a node where no state declares a command mover, and four of
+    those states declared nothing at all about what moves them: `avionics.instrumentation_power`,
+    `comms.link_snr`, `comms.tx_power` and `gnc.nav_solution`. Each is the whole of what its verb
+    changes and each was silent, which is the concrete shape of "the command's effect is
+    unimplemented": `set_instrumentation_mode` is registered, gated, phased, interlocked, documented,
+    and had nowhere to land.
+
+    The forward rule is about the *command* arrival specifically, and the exception is the graph's
+    own: a node also reached by a physics edge holds states that edge drives, so `coolant_flow` is
+    satisfied by `pump_1_speed_rpm` alone even though `coolant_flow_kg_s` sits beside it with no
+    mover — that state is computed from the one the command sets, and demanding a mover of it would
+    be this check inventing a driver the graph already supplies. What is not permitted is a node the
+    executive reaches and no command writes. The one edge that turned out to be a false claim rather
+    than a missing declaration was `E-CMD-BUS`, and the ladder's own `logic:` reason is what said so.
     """
     edges = [e for e in coupling.get("edges") or [] if isinstance(e, dict)]
     commanded = {
@@ -2505,6 +2524,7 @@ def check_command_reach(
         for e in edges
         if str(e.get("from")) == "command_executive" and e.get("kind") == "discrete"
     }
+    written: dict[str, list[str]] = {}
     for path in sorted((root / "domains").glob("*/components.yaml")):
         components = load(path, Report()) or {}
         for state in components.get("state") or []:
@@ -2518,6 +2538,9 @@ def check_command_reach(
             if not verbs:
                 continue
             node = str(state.get("node"))
+            written.setdefault(node, []).append(
+                f"domains/{path.parent.name}/components.yaml:state {state.get('id')}"
+            )
             if node == "internal":
                 continue
             if node not in commanded:
@@ -2529,6 +2552,28 @@ def check_command_reach(
                     "the first and the second missing is a command with no path into the graph: "
                     f"the domain has no signal to read. The nodes it reaches are {sorted(commanded)}",
                 )
+    # The other direction. An edge whose node holds no commanded state is the executive's signal
+    # arriving where nothing is commanded, and the fix is one of two things the linter cannot choose
+    # between: a state that was never told which verb writes it, or an edge that claimed a command
+    # path it does not have. Both are refusals, because both are declarations that are false as
+    # written — the difference is which file the author edits.
+    for node in sorted(commanded - set(written)):
+        holders = sorted(
+            f"domains/{path.parent.name}.{state.get('id')}"
+            for path in (root / "domains").glob("*/components.yaml")
+            for state in (load(path, Report()) or {}).get("state") or []
+            if isinstance(state, dict) and str(state.get("node")) == node
+        )
+        report.refuse(
+            f"coupling.yaml:edge to {node}",
+            "leaves `command_executive` and lands where no state declares a command mover "
+            f"({holders or 'and the node holds no state at all'}). The edge's own sensitivity says "
+            "what it means — the signal itself, one unit in and one unit out — so it asserts that a "
+            "command sets a state here, and nothing on the node agrees. Either a state's `moved_by` "
+            "is missing the verb that writes it, or this is not a command path and the edge belongs "
+            "to whatever else drives the node. Every node a command writes declares one, and these "
+            f"are they: {sorted(written)}",
+        )
 
 
 def check_reserve_floors(

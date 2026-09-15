@@ -153,6 +153,8 @@ state:
     unit: "map[thruster_id,bool]"
     moved_by:
       - "logic:the allocator commands each valve from the requested wrench"
+      - "command:set_rcs_quad"
+      - "command:isolate_rcs_manifold"
     dwell:
       min_on_s: UNCONFIGURED
       min_off_s: UNCONFIGURED

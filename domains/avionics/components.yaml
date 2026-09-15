@@ -325,6 +325,8 @@ state:
     node: instrumentation
     method: algebraic
     unit: W
+    moved_by:
+      - "command:set_instrumentation_mode"
     provenance:
       basis: apollo
       ref: "apollo_diode.md:182"

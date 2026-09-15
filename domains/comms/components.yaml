@@ -210,6 +210,9 @@ state:
     node: link
     method: algebraic
     unit: dB
+    moved_by:
+      - "command:select_antenna"
+      - "command:point_hga"
     provenance:
       basis: apollo
       ref: "apollo_diode.md:164"
@@ -226,6 +229,8 @@ state:
     node: link
     method: algebraic
     unit: W
+    moved_by:
+      - "command:set_power_amplifier"
     provenance:
       basis: apollo
       ref: "apollo_diode.md:168, :157"

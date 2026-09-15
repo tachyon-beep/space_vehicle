@@ -131,6 +131,7 @@ state:
     unit: "map[device_id,bool]"
     moved_by:
       - "event:pyro_fire"
+      - "command:execute_event"
     one_way: true
     requires_arm: true
     provenance:
