@@ -7031,6 +7031,100 @@ statement of the rule's reach is that it catches a drifted *agreement* rather th
 | linters' checks | — | one more: the fifth intersection join |
 | states, nodes, edges, build-order buckets | 134 / 57 / 79, 15-33-7-79 | unchanged |
 
+## The crew's error model summed to one only by counting the error its own note forbids
+
+`display_contract.wrongness` is the vehicle's statement of how a crew report can be *wrong* — the one
+sensor that "can be wrong without being broken", which is `simulator-design.md`:385-386's whole reason
+for treating three people as an instrument. It declares four kinds with a weight each:
+
+| kind | weight | what the model said about it |
+|---|---|---|
+| `misheard` | 0.4 | a number transposed or a decimal shifted |
+| `misattributed` | 0.3 | the right observation attached to the wrong source |
+| `forgot` | 0.2 | an observation made and not mentioned until asked, or not at all |
+| `wrong_module` | 0.1 | "a *perception-bound violation* and must be impossible by construction" |
+
+**No tool read any of it, and the arithmetic did not survive being read.** `0.4 + 0.3 + 0.2 + 0.1` is
+`0.9999999999999999` in binary floating point, and the only reason it is anywhere near one is the
+`0.1` attached to `wrong_module` — the kind the same note says this vehicle cannot produce. **The
+three kinds that can fire summed to 0.9.** So the model was not a distribution over anything: a
+sampler either drew the forbidden mode one time in ten, which is the leak the note exists to forbid,
+or it drew the other three and left a tenth of the mass unallocated. Which of those the corpus meant
+was written nowhere, because nothing had ever read the numbers — the field is the vehicle's
+specification for the GM, so it needs no *consumer*, but a specification nobody validates is a
+paragraph, and this one was also wrong.
+
+**The citation was wrong too, and it is the one claim here that can be settled outright.** The
+`source` read:
+
+> `crew_diode.md`'s four failure modes for the crew instrument — forgot, misheard, misattributed,
+> wrong module — with weights chosen so that a fleet meets the common ones first.
+
+None of those four names appears anywhere in `crew_diode.md`. They are in
+`integration/simulator-design.md`:362-371, in the crew-as-instrument table whose "Failure mode" row
+reads *"forgot, misheard, misattributed, wrong module"* against the instrument's *"noise, bias,
+saturation, dropout"* — and the paragraph under that table is where the crew's `human_channels` come
+from. **The corpus's other four citations of that document all carry line numbers; this one named a
+different document and no line at all.**
+
+### The fix
+
+One declared distribution over the modes this vehicle can produce:
+
+- `misheard` 0.4445, `misattributed` 0.3333, `forgot` 0.2222 — the corpus's own 0.4/0.3/0.2, which is
+  4:3:2, renormalised to the three that can fire and given to four places, with the largest taking
+  the rounding so the three make **exactly** `1.0` rather than `0.9999`.
+- `wrong_module` keeps its place among the kinds, because it is the source's fourth mode and a
+  reader needs to see it named, and loses its weight: it carries `seedable: false`.
+- The note now says which half of the model is chosen (the weights — the source lists the modes and
+  says nothing about frequency) and shows the arithmetic.
+- The `source` names `simulator-design.md`:362-371, and the record of the mis-citation moved into a
+  `note`, so the citation field names one document and the history sits beside it.
+
+### The refusal
+
+`check_perception_model`, with three clauses and one declared tolerance:
+
+- **every kind says whether this vehicle can produce it**, because a reader cannot tell a mode that
+  fires from one the design makes unreachable, and the two need opposite things from a sampler;
+- **the seedable weights sum to one**, within `1e-3` — a tenth of a percent, which accepts a rounded
+  `0.9999` and refuses `0.9`, `0.99` and `1.2`;
+- **a kind declared unseedable carries no weight**, and a kind is named once, and a `seeded` model
+  has at least one seedable kind.
+
+**The tolerance is a stated constant because the first version derived it and got it wrong**, and
+that mistake is worth recording: it counted decimal places with `repr()`, which gives the shortest
+round-trip form — so `0.4` counted as one place and the allowance came out at **0.3**, ten times the
+gap it was written to catch. The broken copy summed to `0.9` and passed. How many places a figure was
+*written* at is not recoverable from the float it parsed into, which is why the constant is declared
+rather than computed.
+
+### What the round found and did not fix
+
+The same block has three more declarations read by nothing, and they are the next rounds' work rather
+than this one's:
+
+| declaration | what it says | read by |
+|---|---|---|
+| `decision_outputs.values` | `[NONE, ADVISORY_ONLY, CREW_ACTION_REQUIRED, REQUEST_SAFE_ACTION]` | nothing — and it is the same four-value vocabulary as the `unit` string of the `cw.decision_output_[alert]` channel in `channels.yaml`, declared a second time under a second name |
+| `cannot_see` (×7 stations) | the channels a station cannot see | nothing — and it is **identical, station by station, to `channels.yaml#crew_positions[].not_perceivable`**, which the panel join does not use either; that join holds what a panel *shows* to `perceivable` and never asks the negative half |
+| `human_channels` (×7 stations) | the observations no instrument has — "a bang, a hiss, a smell" | nothing, and it is `simulator-design.md`:369-371's coverage row written out per station |
+
+The `linter`'s own comment about this block says it is *"two hundred and three lines"*; the part any
+tool reads is the panel half — `shows`, `displayed_precision`, `units`. That the model half was
+unread is the round's finding; that three more declarations in it are unread is the round's evidence
+that the block was written as a *description* and has only ever been checked as a display list.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — the round touched no `UNCONFIGURED` scalar |
+| `UNCONFIGURED` scalars | 214 | unchanged |
+| `wrongness` kinds | 4 weighted, summing to 1 only with the forbidden one | 4 declared, 3 seedable, weights summing to exactly 1 |
+| readers of `wrongness` | 0 | 1 — `check_perception_model` |
+| tests in `tests/test_vehicle_config.py` | 205 | **206** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

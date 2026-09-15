@@ -373,27 +373,46 @@ display_contract:
   wrongness:
     model: "seeded perturbation of the perceivable subset, applied before the GM composes"
     kinds:
-      - {id: misheard, weight: 0.4,
-         mechanism: "a number transposed or a decimal shifted: 850 becomes 580",
-         provenance_note: "the most common error a person makes reading a gauge aloud"}
-      - {id: misattributed, weight: 0.3,
-         mechanism: "the right observation attached to the wrong source: frost reported on the wrong panel"}
-      - {id: forgot, weight: 0.2,
-         mechanism: "an observation that was made and not mentioned until asked, or not at all"}
-      - {id: wrong_module, weight: 0.1,
-         mechanism: "a report that belongs to another position's instruments, which is a *perception-bound violation* and must be impossible by construction"}
+      - id: misheard
+        seedable: true
+        weight: 0.4445
+        mechanism: "a number transposed or a decimal shifted: 850 becomes 580"
+        provenance_note: "the most common error a person makes reading a gauge aloud"
+      - id: misattributed
+        seedable: true
+        weight: 0.3333
+        mechanism: "the right observation attached to the wrong source: frost reported on the wrong panel"
+      - id: forgot
+        seedable: true
+        weight: 0.2222
+        mechanism: "an observation that was made and not mentioned until asked, or not at all"
+      - id: wrong_module
+        seedable: false
+        mechanism: "a report that belongs to another position's instruments, which is a *perception-bound violation* and must be impossible by construction"
     seeded: true
     note: >-
-      `wrong_module` is listed to be excluded: it is the failure mode the display contract exists
-      to make impossible, and a perturbation model that produced it would be a leak rather than
-      an error. The other three are perturbations of values the position can actually see.
+      The four modes are the source's, and **the weights are chosen**. `wrong_module` carries no
+      weight because this vehicle cannot produce it — the perceivable subset is computed before the
+      GM composes, so a report about an instrument the position does not have is unreachable, and a
+      share of a distribution spent on an unreachable outcome is a share nothing can ever draw.
+      Until this round it carried 0.1, and that 0.1 was what made the four sum to one: the three
+      modes that *can* fire summed to 0.9, so the model as declared was not a distribution over
+      anything. The three are 4:3:2 — the corpus's own 0.4/0.3/0.2, renormalised — given here as
+      4/9, 3/9 and 2/9 to four places, with the largest taking the rounding so that the three make
+      exactly 1.0 rather than 0.9999.
     provenance:
       basis: historical
       source: >-
-        crew_diode.md's four failure modes for the crew instrument — forgot, misheard,
-        misattributed, wrong module — with weights chosen so that a fleet meets the common ones
-        first. "Wrong module" cannot be produced by construction, which is the whole point of
-        computing the subset before composing.
+        simulator-design.md:362-371 — the crew-as-instrument table, whose "Failure mode" row reads
+        "forgot, misheard, misattributed, wrong module" against the instrument's "noise, bias,
+        saturation, dropout", and the paragraph under it that makes the crew the only sensor able
+        to report an unanticipated observation
+      note: >-
+        This cited `crew_diode.md` until this round, which carries none of the four names: the
+        citation named the wrong document, and no tool could have noticed, because whether a source
+        says a thing is not a fact a linter can look up. The weights are in neither document — the
+        design lists the four modes and says nothing about how often each occurs — which is why they
+        are `chosen` rather than taken
 
   # --------------------------------------------------------------------------------------
   # Decision outputs. Adopted at simulator-design.md:556, and the file's claim that the design

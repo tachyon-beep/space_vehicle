@@ -11365,6 +11365,117 @@ def check_mission(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) 
         )
 
 
+def check_perception_model(documents: dict[str, Any], report: Report) -> None:
+    """The crew's error model is a distribution, or it is a description of one.
+
+    `display_contract.wrongness` is the vehicle's statement of how a crew report can be *wrong* —
+    the mode the whole crew-as-an-instrument design turns on, since a person who says "it's cold in
+    here" when the coldplate is fine is the one sensor that can be wrong without being broken. It
+    declares four kinds, a weight each, and a note saying one of the four cannot happen here.
+
+    **No tool read any of it, and the arithmetic did not survive being read.** 0.4 + 0.3 + 0.2 + 0.1
+    is 0.9999999999999999 in binary floating point — and the only reason it is anywhere near one is
+    the 0.1 attached to `wrong_module`, the kind the note says this vehicle cannot produce. The
+    three kinds that *can* fire summed to 0.9, so the model as declared was not a distribution over
+    anything: either a sampler drew the forbidden mode one time in ten, which is the leak the note
+    forbids, or it drew the other three and left a tenth of the mass unallocated.
+
+    Three rules, and the first is the one the arithmetic needed:
+
+      - every kind says whether this vehicle can produce it, and **the seedable weights sum to one**,
+        to within one unit in the last place they are declared at — the corpus writes them to four,
+        so a rounded set is allowed to land on 0.9999 but not on 0.9;
+      - a kind declared unseedable **carries no weight**, because a share of the distribution spent
+        on an outcome nothing can draw is a share subtracted from the outcomes that can;
+      - a kind is named once, and a `seeded` model has at least one seedable kind, so a model that
+        perturbs nothing is not a model.
+
+    The tolerance is a *declared* constant rather than one derived from the figures, and the first
+    version of this check got that wrong in a way worth recording: it counted the decimal places of
+    each weight with `repr()`, which gives the shortest round-trip form, so `0.4` counted as one
+    place and the allowance came out at 0.3 — ten times the error it was meant to catch, and the
+    broken 0.4/0.3/0.2 summed to 0.9 and passed. The number of places a figure was *written* at is
+    not recoverable from the float it parsed into.
+    """
+    # The corpus writes probabilities to four places, so a set of rounded weights can miss one by
+    # up to a unit in the last place each. A tenth of a percent accepts 0.9999 and refuses 0.9,
+    # 0.99 and 1.1 — which is the whole question this rule asks.
+    tolerance = 1e-3
+    for name, document in sorted(documents.items()):
+        if not name.endswith("components.yaml"):
+            continue
+        wrongness = ((document or {}).get("display_contract") or {}).get("wrongness")
+        if not isinstance(wrongness, dict):
+            continue
+        where = f"{name}:display_contract.wrongness"
+        kinds = wrongness.get("kinds")
+        if not isinstance(kinds, list) or not kinds:
+            report.refuse(
+                f"{where}.kinds",
+                f"is {kinds!r}. The model is the list of ways a report can be wrong, and a model "
+                "with no kinds perturbs nothing",
+            )
+            continue
+
+        seedable_total = 0.0
+        seedable_count = 0
+        seen: set[str] = set()
+        for index, kind in enumerate(kinds):
+            if not isinstance(kind, dict):
+                report.refuse(f"{where}.kinds[{index}]", f"is {kind!r}, not a mapping")
+                continue
+            kid = str(kind.get("id"))
+            kw = f"{where}.kinds[{index}] {kid}"
+            if not kind.get("id"):
+                report.refuse(kw, "declares no id, so nothing can refer to this kind")
+            elif kid in seen:
+                report.refuse(kw, f"names {kid!r} twice, so one kind is described by two entries")
+            seen.add(kid)
+            seedable = kind.get("seedable")
+            weight = kind.get("weight")
+            if not isinstance(seedable, bool):
+                report.refuse(
+                    f"{kw}.seedable",
+                    f"is {seedable!r}. A kind must say whether this vehicle can produce it: "
+                    "without that the reader cannot tell a mode that fires from one the design "
+                    "makes unreachable, and the two need opposite things from a sampler",
+                )
+                continue
+            if not seedable:
+                if weight is not None:
+                    report.refuse(
+                        f"{kw}.weight",
+                        f"is {weight!r} on a kind this model declares it cannot produce. Its share "
+                        "is subtracted from the kinds that can fire, so the declared weights stop "
+                        "being a distribution over anything",
+                    )
+                continue
+            seedable_count += 1
+            if not isinstance(weight, (int, float)) or float(weight) <= 0:
+                report.refuse(
+                    f"{kw}.weight",
+                    f"is {weight!r} on a seedable kind. A kind this vehicle can produce with no "
+                    "share of the distribution is a mode that can never be drawn",
+                )
+                continue
+            seedable_total += float(weight)
+
+        if not seedable_count:
+            report.refuse(
+                f"{where}.kinds",
+                "declares no seedable kind, so a `seeded` model would perturb nothing",
+            )
+            continue
+        if abs(seedable_total - 1.0) > tolerance:
+            report.refuse(
+                f"{where}.kinds",
+                f"have seedable weights summing to {seedable_total:g}, not one. The kinds this "
+                "vehicle can produce are the distribution a sampler draws from, so a set that "
+                "sums to less than one leaves part of the mass unallocated and a set that sums to "
+                "more makes the weights a ranking rather than a probability",
+            )
+
+
 def check_crew_bindings(
     mission: dict[str, Any],
     vehicle: dict[str, Any],
@@ -11935,6 +12046,7 @@ def main(argv: list[str] | None = None) -> int:
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_domain_reads(documents, report)
+    check_perception_model(documents, report)
     check_component_identity(documents, report)
     check_consumers(documents, report)
     check_argument_vocabularies(documents, report)
