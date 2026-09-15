@@ -82,12 +82,16 @@ estimator:
   error_vector: [delta_position, delta_velocity, delta_theta, accel_bias, gyro_bias]
   dimension: 15
   covariance_update: "Joseph form: P+ = (I - K H) P- (I - K H)^T + K R K^T"
-  covariance_units_per_block:
+  # The blocks' units, as a *copy* of the convention: `vehicle.yaml#conventions.covariance_units`
+  # declares them and `check_conventions` resolves the citation and compares. The names are the
+  # error vector's above, and `nav_covariance`'s `unit` is these five in that vector's order.
+  covariance_units:
     delta_position: m^2
     delta_velocity: "(m/s)^2"
     delta_theta: rad^2
     accel_bias: "(m/s^2)^2"
     gyro_bias: "(rad/s)^2"
+  covariance_units_source: "vehicle.yaml:conventions.covariance_units.blocks"
   innovation_test: "normalized innovation squared, nu' S^-1 nu, against a warn and a trip threshold with a k-of-m history"
   provenance:
     basis: historical

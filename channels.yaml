@@ -2400,6 +2400,11 @@ mission:
     precision: 0.001
     rate_hz: 1
     priority: P2
+    # The one channel the `mission_time` convention is about: monotonic, and it cannot jump
+    # backward. The citation is what says where that rule is declared — the plant's MET is an
+    # integer tick count from the epoch, so monotonicity is a property of the counter rather than a
+    # check on the values, and saying so is the declaration's job rather than a reader's guess.
+    mission_time_source: "vehicle.yaml:conventions.mission_time"
     provenance:
       basis: apollo
       ref: "apollo_diode.md:605"

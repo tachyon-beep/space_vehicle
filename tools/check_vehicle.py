@@ -2924,6 +2924,7 @@ def check_conventions(
     # missed: rename `conventions.quaternion_order` and every site's `quaternion_order_source`
     # becomes a citation of a name that no longer exists — and the key-walk cannot see them, because
     # it looks for fields named like a convention the block still declares.
+    cited_paths: set[str] = set()
     for filename in sorted(documents):
         if filename == "vehicle.yaml":
             continue
@@ -2934,6 +2935,7 @@ def check_conventions(
                 text = str(holder[key])
                 if not text.startswith("vehicle.yaml:conventions."):
                     continue
+                cited_paths.add(text.split(":", 1)[1])
                 site = f"{filename}:{path}.{key}" if path else f"{filename}:{key}"
                 dotted = text.split(":", 1)[1]
                 resolved = resolve_dotted(vehicle, dotted)
@@ -2946,13 +2948,66 @@ def check_conventions(
                     )
                     continue
                 stated = holder.get(key[: -len("_source")])
-                if stated is not None and str(stated) != str(resolved):
+                same = (
+                    stated == resolved
+                    if isinstance(stated, dict) and isinstance(resolved, dict)
+                    else str(stated) == str(resolved)
+                )
+                if stated is not None and not same:
                     report.refuse(
                         f"{site}",
                         f"states {stated!r} and cites {text!r}, which declares {resolved!r}. One of "
                         "the two is the declaration and the other is a copy of it, and nothing but "
                         "this check keeps them the same value",
                     )
+
+    # 2d. Every convention has a reader. This is the round's own thesis applied to the block it
+    # read: a convention declared once and cited nowhere is exactly what all six of these were, and
+    # a rule that only checks the sites that exist cannot tell "no site drifted" from "no site".
+    # `units` is exempt because it is held the other way — against the registry, below — and the
+    # other four are the ones a fleet reads through a note today.
+    for key in sorted(conventions):
+        if key in {"provenance", "units", "units_exceptions", "note"}:
+            continue
+        prefix = f"conventions.{key}"
+        if any(path == prefix or path.startswith(f"{prefix}.") for path in cited_paths):
+            continue
+        report.refuse(
+            f"{where}.{key}",
+            "is declared and nothing in the corpus cites it. The block says the conventions are "
+            "\"declared once, here\" and that `domains/gnc/` binds to them, and a convention with no "
+            "citing site is a sentence: whatever states it is prose, and prose cannot be checked",
+        )
+
+    # 2c. A matrix unit is the error vector's blocks, in the error vector's order. The covariance
+    # is declared three times in this corpus — as the convention's blocks, as the estimator's copy
+    # of them, and as `nav_covariance`'s own `unit` — and the third is the one a reader of the state
+    # sees. It was `matrix[m^2, (m/s)^2, rad^2, (m/s^2)^2, (rad/s)^2]`, which happened to be right
+    # and was compared to nothing: reorder `error_vector`, or rename a block, and the matrix string
+    # goes on describing a filter that no longer exists.
+    covariance = conventions.get("covariance_units")
+    blocks = covariance.get("blocks") if isinstance(covariance, dict) else None
+    estimator = (documents.get("domains/gnc/components.yaml") or {}).get("estimator") or {}
+    error_vector = [str(b) for b in estimator.get("error_vector") or []]
+    if isinstance(blocks, dict) and error_vector:
+        expected = [str(blocks.get(block, f"<no unit for {block}>")) for block in error_vector]
+        for filename in sorted(documents):
+            for path, holder in _walk_mappings(documents[filename]):
+                for key, value in sorted(holder.items()):
+                    text = str(value)
+                    if not text.startswith("matrix[") or not text.endswith("]"):
+                        continue
+                    listed = [part.strip() for part in text[len("matrix[") : -1].split(",")]
+                    site = f"{filename}:{path}.{key}" if path else f"{filename}:{key}"
+                    if listed != expected:
+                        report.refuse(
+                            f"{site}",
+                            f"is {text!r}, and the covariance's blocks in `error_vector`'s order "
+                            f"are {expected} ({error_vector}, declared in "
+                            "`vehicle.yaml:conventions.covariance_units.blocks`). The matrix unit is "
+                            "the third copy of the error vector, and a reader of this state cannot "
+                            "tell that it has stopped describing the filter",
+                        )
 
     # 2. Every site that states a convention names where it came from.
     # `units` is deliberately not in this walk, and the reason is the fifth overloaded key this
@@ -2983,7 +3038,11 @@ def check_conventions(
                     )
                     continue
                 text = str(source)
-                if text != authority:
+                # The declaration itself, or a path *under* it: `covariance_units` is structured —
+                # a statement plus a block mapping — and the estimator states the mapping rather
+                # than the whole thing, so it cites `...covariance_units.blocks`. Anything else is
+                # a second authority, which is the failure the "declared once" claim forbids.
+                if text != authority and not text.startswith(f"{authority}."):
                     report.refuse(
                         f"{site}_source",
                         f"is {text!r}. A convention has one declaration, `{authority}`, and a "
@@ -2995,21 +3054,18 @@ def check_conventions(
                 # name that no longer exists, and a citation of a missing key reads exactly like a
                 # citation of the right one — the failure `initial_source` and `derives_from` both
                 # needed this same rule for.
-                if resolve_dotted(vehicle, f"conventions.{key}") is None:
+                # Resolution and comparison are the citation walk's business, one pass up: it
+                # visits every `_source` field in the corpus, so a second comparison here reports
+                # one drift twice — which this folder has removed from its debt counting and does
+                # not want back in its refusals. What this loop owns is the *absence* of a citation
+                # and a citation of something that is not this declaration.
+                if resolve_dotted(vehicle, text.split(":", 1)[1]) is None:
                     report.refuse(
                         f"{site}_source",
-                        f"is {text!r}, and `vehicle.yaml` has no `conventions.{key}` to resolve it "
-                        "against. A citation of a declaration that has been renamed reads exactly "
-                        "like a citation of one that works",
-                    )
-                    continue
-                resolved = conventions.get(key)
-                if resolved is not None and str(holder[key]) != str(resolved):
-                    report.refuse(
-                        f"{site}",
-                        f"declares {holder[key]!r} and `{authority}` declares {resolved!r}. One of "
-                        "the two is the declaration and the other is a copy of it, and nothing but "
-                        "this check keeps them the same value",
+                        f"is {text!r}, and `vehicle.yaml` has no "
+                        f"`{text.split(':', 1)[1]}` to resolve it against. A citation of a "
+                        "declaration that has been renamed reads exactly like a citation of one "
+                        "that works",
                     )
 
     # 3. The units claim, against the registry it governs.
@@ -4356,12 +4412,12 @@ def check_domain(
     if isinstance(estimator, dict):
         ewhere = f"{where}:estimator"
         vector = [str(v) for v in estimator.get("error_vector") or []]
-        units = estimator.get("covariance_units_per_block") or {}
+        units = estimator.get("covariance_units") or {}
         if not vector:
             report.refuse(ewhere, "declares no error vector, so the filter estimates nothing")
         elif set(map(str, units)) != set(vector):
             report.refuse(
-                f"{ewhere}.covariance_units_per_block",
+                f"{ewhere}.covariance_units",
                 f"names {sorted(map(str, units))} and the error vector is {sorted(vector)}. The "
                 "covariance is block-diagonal over the error state, so a block with no unit is a "
                 "variance nobody can size and a unit with no block is a dimension the filter does "
@@ -6848,10 +6904,16 @@ def load_documents(
     # `max_explainable_acceleration_g` that no file declares, because `load_documents` had put it
     # there. A function that edits its arguments is a function whose *call order* silently matters,
     # and nothing said so until the order changed.
+    # `channels.yaml` is a document like any other, and it was not one: the map held only the
+    # statistic computed *from* it, so a declaration written on a channel row was invisible to every
+    # path idiom. This round found that by writing one — the `mission_time` citation on
+    # `mission.met_s` — and watching the citation walk report nothing, which is the failure mode
+    # this folder keeps finding in the corpus arriving in the tool that exists to find it.
     documents = {
         "vehicle.yaml": dict(vehicle or {}),
         "coupling.yaml": dict(coupling or {}),
         "mission.yaml": dict(mission or {}),
+        "channels.yaml": dict(channels or {}),
     }
     domains = root / "domains"
     if domains.is_dir():

@@ -40,6 +40,10 @@ points:
     # wants it, and this is the copy `check_conventions` holds against `vehicle.yaml#conventions`.
     quaternion_order: "[w,x,y,z]"
     quaternion_order_source: "vehicle.yaml:conventions.quaternion_order"
+    # The other half of the attitude convention, cited rather than restated: the note below says
+    # "rotating BODY into the reference frame", and this is the declaration that says what that
+    # phrase means.
+    quaternion_direction_source: "vehicle.yaml:conventions.quaternion_direction"
     note: >-
       apollo's channel, and the component order is `[w,x,y,z]` with the rotation direction
       `attitude_ref_from_body` (`vehicle.yaml#conventions`, from `gnc_diode.md:405-406`). Apollo
@@ -52,6 +56,9 @@ points:
     from: body_rate
     layer: measurement
     derivation: "the estimated body rates, resolved in BODY"
+    # The convention's second sentence is "unless a channel says otherwise", and this channel is the
+    # one that does: it names BODY, so the citation is the declaration it is departing from.
+    angular_velocity_source: "vehicle.yaml:conventions.angular_velocity"
     note: >-
       apollo's channel with apollo's 0.001 deg/s precision, and the resolution frame is declared
       for the same reason the quaternion order is: a rate with no frame is not a vector. It is

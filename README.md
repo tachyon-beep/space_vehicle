@@ -5719,6 +5719,76 @@ the order with no citation, a citation of another convention, the cited declarat
 the case the first version of the walk could not see), the unbroken corpus composing at 268, the help
 text rendering the declared order, and a drifted copy both refused and visible in the help.
 
+## The other four conventions, and the matrix unit that was a third copy
+
+The previous round wired two of the block's six conventions — the quaternion order and the unit
+system — and named the four it left: `quaternion_direction`, `angular_velocity`, `covariance_units`
+and `mission_time`. Each has a site that states it, and each site now cites the declaration:
+
+| convention | the site that states it |
+|---|---|
+| `quaternion_direction` | `domains/gnc/points.yaml`'s `attitude_q` — "rotating BODY into the reference frame" |
+| `angular_velocity` | the same file's `body_rate_xyz_deg_s` — the channel that says "resolved in BODY" |
+| `covariance_units` | `domains/gnc/components.yaml#estimator`'s block units |
+| `mission_time` | `channels.yaml`'s `mission.met_s` — the one channel the monotonicity rule is about |
+
+A citation with no value beside it is allowed and is the honest form where the site is *departing*
+from the convention rather than repeating it: the rate convention says "resolved in the vehicle's
+BODY frame **unless a channel says otherwise**", and `body_rate_xyz_deg_s` is the channel that says
+otherwise, so it cites the rule it is a case of.
+
+**And a convention with no citing site at all is now refused**, which is the round's own thesis
+applied to the block it read: *a convention declared once and cited nowhere is a sentence.* A rule
+that checks only the sites that exist cannot tell "no site drifted" from "no site".
+
+### The covariance was declared three times, and the third was the state's own unit
+
+`covariance_units` is the one with substance. The corpus states it as the convention's blocks, as the
+estimator's copy of them, and as `nav_covariance`'s `unit`:
+
+```yaml
+    unit: "matrix[m^2, (m/s)^2, rad^2, (m/s^2)^2, (rad/s)^2]"
+```
+
+That string is the error vector's five blocks in the error vector's order, and it was compared to
+nothing — reorder `error_vector`, rename a block, change a unit in the convention, and the state's
+own unit goes on describing a filter that no longer exists. The check re-derives it: the blocks come
+from the convention, the order from `error_vector`, and the two must produce exactly that string. The
+three copies are now one declaration, one citation and one derivation.
+
+The convention itself had to change shape to be citable at all: prose ("per block, not one generic
+unit: position m^2, …") became a mapping, because a citation needs something to resolve *to*. The
+estimator's field was renamed from `covariance_units_per_block` to `covariance_units` in the same
+pass, so that `<key>` and `<key>_source` pair by name — the pairing rule the check uses everywhere
+else, rather than a special case for one field.
+
+### And a declaration on a channel row was invisible
+
+Writing the `mission_time` citation found the round's tool defect, in the tool rather than the
+corpus: **`load_documents` never loaded `channels.yaml`.** Its map held only
+`slowest_publish_period_ms`, the statistic computed *from* that file, so a declaration written on a
+channel row was invisible to every path idiom — `derives_from`, `initial_source`, a `derivation` and
+now a citation. The citation walk reported nothing, which reads exactly like a citation that is
+correct. `channels.yaml` is a document like any other now, and the fixture that keeps it that way
+asserts the one thing nothing else would: that a path into it resolves at all.
+
+**268 stayed 268.** The last of the six conventions now has a reader, and the next signal in this
+area is the matrix itself: `nav_covariance` is a `dynamics` state on the `internal` sentinel whose
+propagation is domain code, so what the corpus can say about it is what it has said — which blocks,
+in which units, in which order.
+
+**181 became 182 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking fifteen copies in `.scratch/r20/`: the estimator's units drifting, a reordered
+error vector, a renamed block, a changed block unit, a matrix unit that lost a block, a citation of a
+path under the convention that does not exist, a citation of a different convention, each of the
+three remaining citations orphaned by renaming what it cites, the last citation of a convention
+deleted (which is the case the "every convention has a reader" rule exists for), one drifted block
+producing exactly one refusal, the unbroken corpus composing at 268, every convention but the unit
+system showing a citing site, and `channels.yaml` readable as a document.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

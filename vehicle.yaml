@@ -117,7 +117,24 @@ conventions:
   quaternion_order: "[w,x,y,z]"
   quaternion_direction: "attitude_ref_from_body — rotates a coordinate vector from BODY into the named reference frame"
   angular_velocity: "the frame rotating relative to the frame it is measured against, resolved in the vehicle's BODY frame unless a channel says otherwise"
-  covariance_units: "per block, not one generic unit: position m^2, velocity (m/s)^2, attitude rad^2, accelerometer bias (m/s^2)^2, gyro bias (rad/s)^2"
+  # Per block, not one generic unit — and written as blocks rather than as a sentence, because the
+  # domain has to be able to *cite* it: `domains/gnc/components.yaml#estimator` declares the same
+  # five units for its error vector, and `nav_covariance`'s own `unit` is the five of them in the
+  # error vector's order. Three copies, none of them joined until `check_conventions` read this one.
+  # The block names are the error vector's, so the order of `error_vector` is what fixes the order
+  # of the matrix's blocks.
+  covariance_units:
+    per_block: true
+    blocks:
+      delta_position: m^2
+      delta_velocity: "(m/s)^2"
+      delta_theta: rad^2
+      accel_bias: "(m/s^2)^2"
+      gyro_bias: "(rad/s)^2"
+    note: >-
+      the five units are the error vector's, one per 3-vector, and they are why the covariance
+      cannot be published as one quantity: a 15x15 matrix whose diagonal is in five different units
+      is a matrix, not a number, and `gnc.nav_position_sigma_m` is one diagonal of it
   mission_time: "monotonic, and it cannot jump backward"
   provenance:
     basis: historical
