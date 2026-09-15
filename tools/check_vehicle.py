@@ -4045,19 +4045,44 @@ def check_domain(
     for state in (docs.get("components.yaml") or {}).get("state") or []:
         if not isinstance(state, dict):
             continue
-        # A state that declares the operating point it is sized at, in whatever unit its subject
-        # takes: `nominal_kg_s` for the ECLSS flows, `total_w` for the thermal ones. Both are
-        # re-derived against their own `computation`, and a new one is added here rather than given
-        # a re-derivation of its own so that "a derived value states its arithmetic" stays one rule.
-        for field in ("nominal_kg_s", "total_w"):
-            if state.get(field) is None:
-                continue
-            rederive(
-                f"domains/{name}/components.yaml:state {state.get('id')}",
-                state.get(field),
-                (state.get("provenance") or {}).get("computation"),
-                report,
-            )
+        # **A state's `computation` re-derives the field it says it derives.**
+        #
+        # This loop used to name the fields: `for field in ("nominal_kg_s", "total_w")`. The
+        # comment beside it said the point was that "a derived value states its arithmetic" stays
+        # *one rule* — and a list of two field names is not a rule, it is a list. A third name
+        # appeared and the list did not: `power.fc_h2_draw_kg_s` declares
+        # `computation: "1 / 8"` on `ratio_of_o2_draw`, and its arithmetic could be changed to
+        # `1 + 1` with the vehicle composing. A fourth name, `total_k`, was covered by a second
+        # hand-written call in the thermal check, and `total_w` was covered by a third — the same
+        # rule applied three times, which is why one wrong computation was refused *twice*.
+        #
+        # `provenance.computes` names the field, so the association is a declaration rather than a
+        # guess, and the three sites become this one. A `computation` with nothing to compute is
+        # refused, because an arithmetic that derives nothing is prose wearing an operator.
+        provenance = state.get("provenance") or {}
+        computation = provenance.get("computation")
+        if computation is not None:
+            swhere = f"domains/{name}/components.yaml:state {state.get('id')}"
+            subject = provenance.get("computes")
+            if not subject:
+                report.refuse(
+                    f"{swhere}.provenance.computes",
+                    f"is absent and the state declares `computation: {computation!r}`. A "
+                    "computation has to say which field it produces: naming the fields in the "
+                    "linter instead is a list that is right until somebody adds a fourth name, "
+                    "which is what `ratio_of_o2_draw` and `total_k` each found out",
+                )
+            elif not isinstance(state.get(str(subject)), (int, float)):
+                report.refuse(
+                    f"{swhere}.provenance.computes",
+                    f"names {subject!r}, which this state does not declare as a number, so the "
+                    "computation has nothing to be checked against",
+                )
+            else:
+                # The field is in the `where` because the rule now knows it: a refusal that says
+                # "this state's computation is wrong" makes a reader find the subject, and there
+                # may be four numeric fields on the state.
+                rederive(f"{swhere}.{subject}", state.get(str(subject)), computation, report)
 
     for component in components.get("components") or []:
         cid = component.get("id", "?")
@@ -10769,12 +10794,10 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
                 f"sum to {declared} W. The cabin would relax toward a heat rate its equipment does "
                 "not produce",
             )
-        rederive(
-            f"domains/thermal/components.yaml:state {state['id']}",
-            state.get("total_w"),
-            (state.get("provenance") or {}).get("computation"),
-            report,
-        )
+        # The `computation` is re-derived by `check_domain`'s one loop, which reads
+        # `provenance.computes`; this check owns the *loads against the total*, which is a
+        # different comparison. Calling `rederive` here as well refused one wrong computation
+        # twice.
 
     for vehicle, total in sorted(by_vehicle.items()):
         expected = sum(
@@ -11009,12 +11032,7 @@ def check_cabin_equilibrium(root: Path, vehicle: dict[str, Any], report: Report)
                 f"declares {declared_k!r} K and the supply plus Q/G is {computed_k:.2f} K. The "
                 "cabin would relax toward an equilibrium its own declarations do not produce",
             )
-        rederive(
-            f"domains/thermal/components.yaml:state {eq_state.get('id')}",
-            declared_k,
-            (eq_state.get("provenance") or {}).get("computation"),
-            report,
-        )
+        # And the `total_k` computation is re-derived by the same one loop.
         bands = zone.get("limit_c") or [None, None]
         low, high = (bands + [None, None])[:2]
         if isinstance(low, (int, float)) and equilibrium_c < low:

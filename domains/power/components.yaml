@@ -120,6 +120,7 @@ state:
     ratio_of_o2_draw: 0.125
     provenance:
       basis: derived
+      computes: ratio_of_o2_draw
       computation: "1 / 8"
       relation: >-
         the cell consumes eight kilograms of oxygen for every kilogram of hydrogen — the 8:1 mass

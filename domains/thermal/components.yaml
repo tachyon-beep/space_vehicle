@@ -62,6 +62,7 @@ state:
     total_w: 733
     provenance:
       basis: derived
+      computes: total_w
       computation: "60 + 85 + 80 + 100 + 36 + 72 + 300"
       relation: >-
         the sum of the `demand_w` of the seven loads `heat_inputs.csm_cabin` assigns to this zone:
@@ -81,6 +82,7 @@ state:
     total_w: 827
     provenance:
       basis: derived
+      computes: total_w
       computation: "62 + 85 + 80 + 40 + 20 + 90 + 150 + 100 + 200"
       relation: >-
         as the CSM's, over the nine loads `heat_inputs.lm_cabin` assigns: cabin fan 62, suit fan 85,
@@ -95,6 +97,7 @@ state:
     total_k: 286.21
     provenance:
       basis: derived
+      computes: total_k
       computation: "7.2 + 273.15 + 733 / 125"
       relation: >-
         the equilibrium the cabin relaxes toward: the loop's mixed supply plus the rise the
@@ -114,6 +117,7 @@ state:
     total_k: 286.97
     provenance:
       basis: derived
+      computes: total_k
       computation: "7.2 + 273.15 + 827 / 125"
       relation: >-
         as the CSM's, over the LM cabin's larger heat load: 827 W over the same 125 W/K conductance is
@@ -126,6 +130,7 @@ state:
     total_w: 2477.0
     provenance:
       basis: derived
+      computes: total_w
       computation: "1361 * 0.2 * 9.1"
       relation: >-
         the absorbed solar load at a bad attitude: 1361 W/m2 of flux, 0.2 absorptivity on a
@@ -145,6 +150,7 @@ state:
     total_w: 630.0
     provenance:
       basis: derived
+      computes: total_w
       computation: "250 + 250 + 80 + 50"
       relation: >-
         the sum of the `demand_w` of the four loads `heat_inputs.csm_service_bay` assigns: coolant
@@ -157,6 +163,7 @@ state:
     total_w: 180.0
     provenance:
       basis: derived
+      computes: total_w
       computation: "120 + 60"
       relation: "the landing radar at 120 W and the descent stage's RCS heaters at 60, which is all `heat_inputs.lm_descent_bay` assigns"
   - id: zone_csm_cabin_t

@@ -7362,6 +7362,76 @@ decision about the registry's shape, and it is now a decision with a size attach
 | templated channels whose instances are declared | 0 of 25 | 0 of 25 — measured, not changed |
 | tests in `tests/test_vehicle_config.py` | 208 | **209** |
 
+## The loop that re-derives a value's arithmetic named two field names, and the third was unchecked
+
+`check_vehicle.py` re-derives a state's declared arithmetic on every run: a state that says
+`computation: "1 / 8"` and a value must agree, and `rederive()` refuses when they do not. The loop
+that decided *which* fields to check named them:
+
+```python
+        for field in ("nominal_kg_s", "total_w"):
+            if state.get(field) is None:
+                continue
+            rederive(..., state.get(field), (state.get("provenance") or {}).get("computation"), ...)
+```
+
+and the comment beside it said the point was that *"a derived value states its arithmetic" stays one
+rule*. **A list of two field names is not a rule, it is a list** — and it is the defect this folder
+has removed from four joins, arriving inside the mechanism that exists to remove it.
+
+Two more names had appeared and the list had not:
+
+| field | covered by |
+|---|---|
+| `total_w` | this loop **and** `check_thermal_heat_inputs` — the same rule applied twice |
+| `nominal_kg_s` | this loop |
+| `total_k` | a third hand-written `rederive` call, in the cabin-equilibrium check |
+| **`ratio_of_o2_draw`** | **nothing** |
+
+So `power.fc_h2_draw_kg_s` — `computation: "1 / 8"`, the cell reaction's 8:1 mass ratio — could be
+changed to `computation: "1 + 1"` with `ratio_of_o2_draw` still 0.125, and **the vehicle composed at
+288 debts, with the arithmetic and the value disagreeing in silence.** And because `total_w` was
+checked twice, one wrong computation was refused **twice**: the corpus reported one broken
+computation as two refusals, which is the inflation round 74 removed from `assert`/`clear` arriving
+from the opposite direction.
+
+### The fix
+
+`provenance.computes` names the field the computation produces, so the association between an
+arithmetic and its subject is a declaration rather than a guess in the linter:
+
+```yaml
+    provenance:
+      basis: derived
+      computes: ratio_of_o2_draw
+      computation: "1 / 8"
+```
+
+The three hand-written sites collapse to the one loop, which now walks every state whose provenance
+declares a computation, resolves `computes`, and re-derives *that* field. **Twelve computations
+across four field names, one rule.** The refusal carries the field —
+`state fc_h2_draw_kg_s.ratio_of_o2_draw` — because the rule knows it now, and a state may carry four
+numeric fields.
+
+Two new refusals, both about the mechanism rather than the arithmetic:
+
+- a state declaring a `computation` with **no** `computes` is refused, because an arithmetic that
+  derives nothing is prose wearing an operator — and the message says why a list in the linter is
+  not the answer: *"naming the fields in the linter instead is a list that is right until somebody
+  adds a fourth name, which is what `ratio_of_o2_draw` and `total_k` each found out"*;
+- a `computes` naming a field the state does not carry **as a number** is refused, because the
+  comparison would have nothing to compare.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — a coverage hole closed, not a value answered |
+| computations re-derived | 11 of 12 | **12 of 12** |
+| places the rule was written | 3 | 1 |
+| refusals for one wrong `total_w` | 2 | 1 |
+| tests in `tests/test_vehicle_config.py` | 209 | **210** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

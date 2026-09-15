@@ -198,6 +198,7 @@ state:
     nominal_kg_s: 3.798611e-05
     provenance:
       basis: derived
+      computes: nominal_kg_s
       computation: "(0.023 + 3 * 0.91 / 24) / 3600"
       relation: >-
         the regulator replaces what the cabin loses, and both terms are published: the cabin leak at
@@ -218,6 +219,7 @@ state:
     nominal_kg_s: 2.736470e-05
     provenance:
       basis: derived
+      computes: nominal_kg_s
       computation: "(0.0226796 + 2 * 0.91 / 24) / 3600"
       relation: >-
         as the CSM's, over the LM's own figures: `vehicle.yaml#consumables.leak.lm_kg_per_h` =
@@ -256,6 +258,7 @@ state:
     nominal_kg_s: 3.159722e-05
     provenance:
       basis: derived
+      computes: nominal_kg_s
       computation: "3 * 0.91 / 86400"
       relation: >-
         the CSM element's removal rate: its remaining man-hour capacity converted through the
@@ -274,6 +277,7 @@ state:
     nominal_kg_s: 2.106481e-05
     provenance:
       basis: derived
+      computes: nominal_kg_s
       computation: "2 * 0.91 / 86400"
       relation: >-
         as the CSM's, at the cartridge: the LM's own remaining capacity, its own cabin's CO2 and the
