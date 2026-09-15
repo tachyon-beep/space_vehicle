@@ -2295,6 +2295,110 @@ def check_coupling(
                 )
 
 
+def check_chain_faults(
+    coupling: dict[str, Any],
+    mission: dict[str, Any],
+    root: Path,
+    registry: dict[str, dict[str, Any]],
+    report: Report,
+) -> None:
+    """The fifteen failure chains, against the faults that can actually produce them.
+
+    `coupling.yaml#failure_chains` is the experiment's story list: each chain gives a `primary`,
+    a `secondary` and a `third_order` cause, and the channels a fleet would see. The first two are
+    **prose** — "RCS thruster stuck on", "feed-pressure sensor stuck high" — and the clues are
+    channel ids that the coupling check already holds to the registry. What was missing is the
+    middle: `tools/faults.py` says it in as many words —
+
+        "Primary" is read as the fault itself rather than its chain, because the chains are not
+        linked to faults by anything but prose (see `open_debts`).
+
+    — and there was no such entry in any `open_debts` list, so the one artefact that could have
+    closed the gap pointed at a debt nobody had written. The chains now declare `realised_by`, a
+    list of fault ids, the way a channel's event declares the threshold that realises it.
+
+    Three rules, and the second is what makes the link a claim rather than a label:
+
+      - every named fault is declared by some domain's `fault_policy.yaml`, so a rename is a
+        refusal rather than a chain that quietly realises nothing;
+      - **every named fault perturbs at least one of the chain's own clues.** A fault that cannot
+        move a single channel the chain says a fleet would see is not the cause of that chain, and
+        the two sides of the join were both already declared — `perturbs` on the fault,
+        `first_published_clue` and `observable_clues` on the chain — with nothing between them;
+      - the chain's `scenario_use` names a declared `scenario_postures` id, because the scenario is
+        what tells an operator which experiment the story belongs to and fifteen chains pointing at
+        a scenario that has been renamed read exactly like fifteen that work.
+    """
+    chains = [c for c in coupling.get("failure_chains") or [] if isinstance(c, dict)]
+    if not chains:
+        return
+    faults: dict[str, list[str]] = {}
+    domains = root / "domains"
+    if domains.is_dir():
+        for path in sorted(domains.glob("*/fault_policy.yaml")):
+            policy = load(path, Report()) or {}
+            for fault in policy.get("faults") or []:
+                if isinstance(fault, dict) and fault.get("id"):
+                    faults[str(fault["id"])] = [str(p) for p in fault.get("perturbs") or []]
+    scenarios = {
+        str(p.get("id")) for p in mission.get("scenarios") or [] if isinstance(p, dict)
+    } | {str(p.get("id")) for p in mission.get("scenario_postures") or [] if isinstance(p, dict)}
+
+    for chain in chains:
+        cid = str(chain.get("id"))
+        where = f"coupling.yaml:chain {cid}"
+        clues = {str(chain.get("first_published_clue"))} | {
+            str(c) for c in chain.get("observable_clues") or []
+        }
+        clues.discard("None")
+        realised = chain.get("realised_by")
+        if not realised:
+            report.refuse(
+                f"{where}.realised_by",
+                "is not declared, so this chain names its cause in prose and nothing can say which "
+                "fault produces it. `tools/faults.py` reads \"primary\" as the fault rather than as "
+                "the chain precisely because of this gap, and records it as a debt it never names",
+            )
+        else:
+            for fid in realised:
+                name = str(fid)
+                if name not in faults:
+                    report.refuse(
+                        f"{where}.realised_by",
+                        f"names {name!r}, which no domain's `fault_policy.yaml` declares. The faults "
+                        "are " + ", ".join(sorted(faults)[:6]) + ", ...",
+                    )
+                    continue
+                # Templates included, because a fault may perturb `thermal.zone_[id]_t_c` while the
+                # chain names the zone it is about.
+                touched = {
+                    clue
+                    for clue in clues
+                    for perturbed in faults[name]
+                    if perturbed == clue
+                    or ("[" in perturbed and perturbed.split("[")[0] == clue.split("[")[0])
+                }
+                if not touched:
+                    report.refuse(
+                        f"{where}.realised_by",
+                        f"names {name!r}, which perturbs none of this chain's clues "
+                        f"({sorted(clues)}). A fault that cannot move a channel the chain says a "
+                        "fleet would see is not the cause of that chain",
+                    )
+        scenario = chain.get("scenario_use")
+        if scenario is None:
+            report.debt(
+                f"{where}.scenario_use",
+                "is not declared, so the chain is not assigned to an experiment",
+            )
+        elif str(scenario) not in scenarios:
+            report.refuse(
+                f"{where}.scenario_use",
+                f"names {scenario!r}, which `mission.yaml#scenario_postures` does not declare. The "
+                f"scenarios are {sorted(scenarios)}",
+            )
+
+
 def check_crew(
     channels: dict[str, Any], registry: dict[str, dict[str, Any]], report: Report
 ) -> None:
@@ -10395,6 +10499,7 @@ def main(argv: list[str] | None = None) -> int:
     # After the documents, because a convention is held against the declarations that state it and
     # against the registry it governs — and the registry is one of them.
     check_conventions(vehicle or {}, registry, documents, report)
+    check_chain_faults(coupling or {}, mission or {}, root, registry, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)

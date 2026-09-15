@@ -263,9 +263,14 @@ def guaranteed_seed(
 
     **Two readings are being made here and both are stated so they can be argued with.** "Major"
     is read as the *critical class*, which is the only severity the corpus declares. "Primary" is
-    read as the fault itself rather than its chain, because the chains are not linked to faults by
-    anything but prose (see `open_debts`). "Latent sensor defect" is read as `kind: instrument`,
-    which is the corpus's own name for a measurement that is wrong while the system is fine.
+    read as the fault itself rather than its chain — and the chains *are* linked to faults now:
+    `coupling.yaml#failure_chains[].realised_by` names them and `check_chain_faults` holds each one
+    to perturbing a clue of the chain it realises. What is still a reading rather than a
+    declaration is **which chain the seed produces**: the pool is the class, so a `crisis` run
+    seeds a critical fault and not the crisis a chain names, and the corpus records that in
+    `mission.yaml#open_debts` rather than pretending the two are the same. "Latent sensor defect"
+    is read as `kind: instrument`, which is the corpus's own name for a measurement that is wrong
+    while the system is fine.
     """
     if posture.id == "nominal":
         return None

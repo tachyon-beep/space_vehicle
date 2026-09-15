@@ -2110,6 +2110,10 @@ failure_chains:
     observable_clues: [power.bus_a_current_a, power.dc_bus_a_v, eclss.o2_supply_pressure_psi, comm.rx_frame_loss_pct]
     history: "Apollo 13; apollo_diode.md:345"
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [CNS-01-o2-tank-leak, CNS-05-quantity-sensor-bias]
   - id: F-02-coolant-pump-stall
     apollo: "330"
     primary: "coolant pump stalls"
@@ -2118,6 +2122,10 @@ failure_chains:
     first_published_clue: thermal.primary_flow_l_min
     observable_clues: [thermal.pump_1_state, thermal.primary_flow_l_min, thermal.avionics_plate_c, thermal.comm_amp_c, thermal.coolant_return_c]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [TCS-01-pump-stall, TCS-02-pump-bearing-degradation]
   - id: F-03-hga-weak-bus
     apollo: "331"
     primary: "high-gain amplifier switched on during weak-bus condition"
@@ -2126,6 +2134,10 @@ failure_chains:
     first_published_clue: power.bus_a_current_a
     observable_clues: [power.bus_a_current_a, power.dc_bus_a_v, thermal.pump_1_state, thermal.primary_flow_l_min]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [COM-02-amplifier-failure, COM-07-amplifier-overheat]
     note: "the amplifier is the trigger that exposes a latent problem, never the root fault"
   - id: F-04-rcs-stuck-on
     apollo: "332"
@@ -2135,6 +2147,10 @@ failure_chains:
     first_published_clue: gnc.body_rate_xyz_deg_s
     observable_clues: ["rcs.thruster_[n]_valve", "rcs.thruster_[n]_pressure_switch", structure.accel_xyz_g, gnc.body_rate_xyz_deg_s, comm.snr_db]
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [RCS-01-stuck-on]
   - id: F-05-rcs-pressure-switch
     apollo: "333"
     primary: "RCS pressure switch failure"
@@ -2143,6 +2159,10 @@ failure_chains:
     first_published_clue: "rcs.thruster_[n]_pressure_switch"
     observable_clues: ["rcs.thruster_[n]_pressure_switch", structure.accel_xyz_g, rcs.propellant_remaining_pct]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [RCS-03-pressure-switch-failure]
     note: "a single discrepant switch must not condemn a thruster; corroboration before condemnation (rcs_diode.md:944)"
   - id: F-06-cabin-leak
     apollo: "334"
@@ -2152,6 +2172,10 @@ failure_chains:
     first_published_clue: eclss.cabin_pressure_psia
     observable_clues: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s, eclss.o2_supply_pressure_psi, res.o2_remaining_kg]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [ECL-01-cabin-leak, STR-01-hatch-seal-leak]
   - id: F-07-absorber-saturation
     apollo: "335"
     primary: "LiOH/absorber saturation"
@@ -2160,6 +2184,10 @@ failure_chains:
     first_published_clue: eclss.co2_pp_mmhg
     observable_clues: [eclss.co2_pp_mmhg, eclss.absorber_capacity_pct, cw.active_lights]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [CNS-08-absorber-breakthrough, ECL-04-absorber-blower-failure]
   - id: F-08-feed-sensor-stuck
     apollo: "336"
     primary: "feed-pressure sensor stuck high"
@@ -2168,6 +2196,10 @@ failure_chains:
     first_published_clue: prop.chamber_pressure_pct
     observable_clues: [prop.chamber_pressure_pct, structure.accel_xyz_g, prop.feed_pressure_pct, prop.accumulated_dv_m_s]
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [PRP-01-feed-sensor-stuck-high]
     note: "the sensor disagrees with chamber pressure and acceleration, which is the only way to see it"
   - id: F-09-frozen-line
     apollo: "337"
@@ -2178,6 +2210,10 @@ failure_chains:
     observable_clues: [prop.pressurant_pressure_psi, thermal.coolant_supply_c, structure.relief_valve_state]
     history: "Apollo 11 trapped line; apollo_diode.md:347. The transducer tops out at 300 psia while the true pressure is 700-800: publish 300.0 + SATURATED, never the truth (apollo_diode.md:215)."
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [PRP-08-line-freeze, TCS-07-line-freeze]
   - id: F-10-imu-degradation
     apollo: "338"
     primary: "IMU/reference degradation"
@@ -2186,6 +2222,10 @@ failure_chains:
     first_published_clue: gnc.nav_position_sigma_m
     observable_clues: [gnc.nav_position_sigma_m, gnc.nav_velocity_sigma_m_s, gnc.imu_alignment_error_deg, gnc.radar_range_rate_m_s]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [GNC-01-imu-drift]
   - id: F-11-antenna-gimbal
     apollo: "339"
     primary: "antenna/gimbal fault"
@@ -2194,6 +2234,10 @@ failure_chains:
     first_published_clue: comm.hga_pointing_error_deg
     observable_clues: [comm.hga_pointing_error_deg, comm.snr_db, comm.rx_frame_loss_pct]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [COM-01-antenna-gimbal]
   - id: F-12-bus-tie-fault
     apollo: "340"
     primary: "bus tie closed into a fault"
@@ -2202,6 +2246,10 @@ failure_chains:
     first_published_clue: power.bus_a_current_a
     observable_clues: [power.bus_tie_state, power.bus_a_current_a, power.dc_bus_a_v, power.dc_bus_b_v]
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [PWR-05-bus-tie-stuck-closed, PWR-06-bus-tie-stuck-open]
   - id: F-13-radiator-isolation
     apollo: "341"
     primary: "radiator isolation / poor attitude"
@@ -2210,6 +2258,10 @@ failure_chains:
     first_published_clue: thermal.radiator_rejection_w
     observable_clues: [thermal.radiator_rejection_w, thermal.avionics_plate_c, power.battery_temp_c]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [TCS-03-radiator-isolation]
     note: "the chain that makes C-BAT-THERMAL visible"
   - id: F-14-instrumentation-power
     apollo: "342"
@@ -2219,6 +2271,10 @@ failure_chains:
     first_published_clue: avionics.instrumentation_power_w
     observable_clues: [avionics.instrumentation_power_w, avionics.telemetry_frame_sync, avionics.oldest_sample_age_ms, avionics.redundancy_disagreement]
     scenario_use: degraded
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [AVI-01-instrumentation-power, PWR-09-instrumentation-bus-loss]
     note: "the failure that attacks the experiment rather than the mission; the publisher must show age and dropout, never a frozen value that reads as fresh"
   - id: F-15-premature-staging
     apollo: "343"
@@ -2228,6 +2284,10 @@ failure_chains:
     first_published_clue: structure.stage_state
     observable_clues: [structure.stage_state, "structure.pyro_continuity_[n]", power.dc_bus_a_v]
     scenario_use: crisis
+    # The faults that can start this chain. `tools/faults.py` read "primary" as the fault rather than as
+    # the chain because the two were joined by nothing but prose; this is the link, and it is held:
+    # every fault named here perturbs at least one of the clues below (`check_chain_faults`).
+    realised_by: [STR-04-pyro-premature]
     irreversible: true
     note: "the only chain no command can undo, and so the one that must be arm/commit protected"
 

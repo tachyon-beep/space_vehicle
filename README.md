@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 268 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 269 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 268 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 269 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **268** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **269** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -5788,6 +5788,65 @@ three remaining citations orphaned by renaming what it cites, the last citation 
 deleted (which is the case the "every convention has a reader" rule exists for), one drifted block
 producing exactly one refusal, the unbroken corpus composing at 268, every convention but the unit
 system showing a citing site, and `channels.yaml` readable as a document.
+
+## The fifteen stories and the faults that produce them
+
+`coupling.yaml#failure_chains` is the experiment's story list. Each chain gives a `primary`,
+a `secondary` and a `third_order` cause — in **prose**, "RCS thruster stuck on", "feed-pressure
+sensor stuck high" — and the channels a fleet would see, as ids that the coupling check already
+holds to the registry.
+
+The middle was missing, and the tool that needed it said so in its own docstring:
+
+> "Primary" is read as the fault itself rather than its chain, **because the chains are not linked
+> to faults by anything but prose (see `open_debts`)**.
+
+**And no `open_debts` list in the corpus recorded it.** The one artefact that could have closed the
+gap pointed at a debt nobody had written — which is this folder's oldest finding arriving at a
+citation, and the reason the round began by checking the reference rather than trusting it.
+
+Every chain now declares `realised_by`, a list of fault ids, the way a channel's event declares the
+threshold that realises it:
+
+```yaml
+    realised_by: [PRP-08-line-freeze, TCS-07-line-freeze]
+```
+
+Three rules hold it, and the second is what makes the link a claim rather than a label:
+
+| rule | why |
+|---|---|
+| every named fault is declared by some domain's `fault_policy.yaml` | a rename is a refusal rather than a chain that quietly realises nothing |
+| **every named fault perturbs at least one of the chain's own clues** | both sides of this join were declared all along — `perturbs` on the fault, `first_published_clue` and `observable_clues` on the chain — with nothing between them. A fault that cannot move a channel the chain says a fleet would see is not the cause of that chain |
+| the chain's `scenario_use` names a declared `scenario_postures` id | fifteen chains pointing at a renamed scenario read exactly like fifteen that work — and that vocabulary join is what the unread-field sweep found first |
+
+The realisation lists are **derived rather than invented**: every one was checked against that second
+rule before it was written, and the check re-checks it on every run. Where a chain has two causes
+(`F-06-cabin-leak` is `ECL-01` on the cabin volume or `STR-01` at the hatch seal; `F-09-frozen-line`
+is the propellant line or the coolant one) both are named.
+
+### What the link does not fix, which is now the debt
+
+`tools/faults.py` draws the crisis posture's *"one guaranteed major primary"* from the **critical
+class**, so the fault placed is a random critical fault and the chain that results is whichever one
+that fault belongs to. The chains are linked to faults now; **the seed is still drawn from a class
+rather than from a chain**, and nineteen fault ids sit in no class at all and are scheduled
+stochastically rather than seeded. The docstring no longer points at a debt that does not exist — it
+points at the one this round wrote, in `mission.yaml#open_debts`: what would close it is a declared
+pool in the posture itself, and a decision about whether a scenario names the chain it is about.
+Both are decisions about the experiment rather than about the vehicle, which is why they are recorded
+rather than made.
+
+**268 became 269**, and the pins moved together. **182 became 183 vehicle tests.** Plant unchanged:
+134 states over 57 nodes, 108 of 134 fully configured, 26 with a debt, 57 of 77 edges carrying a
+sensitivity, 200 unset scalars. `--strict` exits 2.
+
+Verified by breaking eleven copies in `.scratch/r21/`: a chain naming a fault no policy declares, a
+chain realised by a fault that moves none of its clues, a realisation list emptied, a fault's
+`perturbs` list replaced so it no longer touches its chain, a chain's clues moved off its fault, the
+scenario vocabulary renamed in both directions, every chain losing its scenario (owed rather than
+refused), the unbroken corpus composing at 269, every chain's faults touching its clues on the real
+corpus, and the seeding residue present as a debt with the tool pointing at it.
 
 ## The invariants, and which of them are enforced
 
