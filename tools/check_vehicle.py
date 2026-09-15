@@ -5050,19 +5050,33 @@ def check_domain(
                 report.refuse(
                     where_np, "is withheld with no `why`, so nobody can review the choice"
                 )
-            # **Exact keys, not `ChannelIndex`.** The index compiles `[id]` to `.+?`, which is
-            # unbounded, so `thermal.zone_[id]_true_t_c` resolves against the registry's
-            # `thermal.zone_[id]_t_c` — the wildcard absorbs `1_true` and the literal `_t_c` then
-            # matches. That is a false *positive* here and a false *negative* everywhere the index
-            # answers "is this a registered channel": `power.lcl_1_old_state` resolves to
-            # `power.lcl_[n]_state`'s row. A withheld truth has to be named exactly, so this uses
-            # the registry's own keys and the weakness is recorded rather than depended on.
-            if text in index.rows:
+            # **A name that is itself a template is compared exactly; a concrete name resolves.**
+            #
+            # This used exact keys for both, to avoid one false positive, and the price was the
+            # leak the check exists to catch. The index compiles `[id]` to `.+?`, which is
+            # unbounded, so `thermal.zone_[id]_true_t_c` — a *sibling family*, the hidden truth
+            # beside the published `thermal.zone_[id]_t_c` — resolves against the published
+            # template. That is a false positive, and comparing exact keys avoids it. But
+            # `res.recon_o2_kg` is not a registry key either: the registry declares
+            # `res.recon_[resource]_kg`, and a domain that withholds one *instance* of a published
+            # family named a truth that is on the wire and nothing said so. The fixture is silent
+            # on the old rule and refused by this one.
+            #
+            # The two cases are different questions and now get different instruments. A withheld
+            # *template* is a declaration of a family, and a family one placeholder away from a
+            # published one is a second family rather than a collision — so it is compared to the
+            # registry's own keys. A withheld *instance* is a name, and a name is on the wire if
+            # any registered entry answers for it, templates included; the wildcard is not a
+            # weakness here, it is the resolution `row()` exists to perform.
+            answering = index.row(text) if not TEMPLATE.search(text) else None
+            registered = text in index.rows or answering is not None
+            if registered:
                 report.refuse(
                     where_np,
-                    "is declared withheld and is a registered channel. A hidden truth that is "
-                    "registered is truth on the wire: this is the §7 boundary, and the declaration "
-                    "that says so is the one nothing was reading",
+                    "is declared withheld and is a registered channel"
+                    + (f" — `{answering.get('id')}` answers for it" if answering else "")
+                    + ". A hidden truth that is registered is truth on the wire: this is the §7 "
+                    "boundary, and the declaration that says so is the one nothing was reading",
                 )
     if withheld or descriptive:
         report.note(

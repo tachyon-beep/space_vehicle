@@ -7282,6 +7282,86 @@ written in the form the rule can read.
 | `apogee_km` | 502526 (a truncation) | **502526.81** (the rounding) |
 | tests in `tests/test_vehicle_config.py` | 207 | **208** |
 
+## The §7 check compared exact keys, and a published truth hid behind its own template
+
+`points.yaml#not_published` is where the vehicle says by name which truths it withholds, and the
+rule that gives the section teeth is: **a withheld truth that is also a registered channel is truth
+on the wire.** That is the §7 boundary, and the check for it compared the withheld name to the
+registry's own keys.
+
+The registry declares **templates**. `res.recon_[resource]_kg` is a key; `res.recon_o2_kg` is not —
+it is an *instance* of one, published by `domains/consumables/points.yaml` and carried on the wire.
+So a domain could declare that instance withheld and nothing said a word:
+
+```yaml
+not_published:
+  - channel: res.recon_o2_kg
+    why: ...
+```
+
+composed, and the linter reported 288 debts. **A truth on the wire, declared hidden, and the one
+check whose whole purpose is to refuse exactly that was silent** — because it asked whether the name
+was a registry key instead of whether the registry answered for it.
+
+### Why it compared exact keys, and why that could not stay
+
+It was not an oversight. The index compiles `[id]` to `.+?`, which is unbounded, so
+`thermal.zone_[id]_true_t_c` — the hidden truth this corpus really does withhold, one placeholder
+away from the published `thermal.zone_[id]_t_c` — **resolves against the published template**. That
+is a false positive, and the comment beside the check said so, and said the weakness was "recorded
+rather than depended on". The corpus wrote the same paragraph a second time in `channels.yaml`'s own
+debt list and a third time in `ChannelIndex`'s docstring.
+
+**So the two directions of one asymmetry were both live**: the check that must resolve refused to
+(the leak, silent), and every other check that must be exact used the wildcard (a phantom
+registered). Fixing the leak by resolving everything would have refused the vehicle as it stands,
+because the sibling template is a correct declaration.
+
+### The fix: a template is a family, a name is a name
+
+The two cases are different questions and now get different instruments:
+
+- **a withheld name that is itself a template** (`[...]` in it) is a *declaration of a family*, and
+  a family one placeholder away from a published one is a second family rather than a collision —
+  so it is compared to the registry's own keys, exactly as before;
+- **a withheld name that is concrete** is a name, and a name is on the wire if **any** registered
+  entry answers for it, templates included. The wildcard is not a weakness in this case; it is the
+  resolution `ChannelIndex.row()` exists to perform.
+
+The refusal now names the entry that answered — *"declared withheld and is a registered channel —
+`res.recon_[resource]_kg` answers for it"* — which is what makes the reasoning reviewable rather
+than a bare refusal.
+
+**The rule errs toward refusing, and that is the right direction for this boundary.** A concrete
+name that is not an instance of anything still resolves through the wildcard, so withholding
+`res.recon_unobtainium_kg` is refused as though it were published. The corpus has no such entry, and
+a domain that withholds a name it cannot have is making a claim about the vehicle either way.
+
+### What the round did not close, and why it is a decision rather than a patch
+
+The phantom direction is untouched and the round's verifier asserts that it still composes: a
+threshold watching `thermal.zone_1_true_t_c` — a zone that does not exist — is accepted, because the
+wildcard answers for it. Closing that needs each registry entry to name the values its placeholders
+take, which is what all three copies of the record say.
+
+**What this round adds to that decision is the measurement it rests on.** There are **25 templated
+channels**, and the corpus names almost no concrete instances of any of them: with the channel-valued
+fields harvested (`channel`, `point`, `perturbs`, `from`, `inputs`, `not_published`), the only
+template with instances in use is `res.recon_[resource]_kg`, with four. Everything else is consumed
+*as a template* — a threshold watches `thermal.zone_[id]_t_c`, not a zone. So the instantiations
+cannot be recovered from use; they would be **25 fresh enumerations**, and several are vocabularies
+nothing else declares (what are the alert ids? the event names?). That is why the record calls it a
+decision about the registry's shape, and it is now a decision with a size attached.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — the rule reads the corpus, it does not add to it |
+| directions of this asymmetry still open | 2 | **1** |
+| templated channels whose instances are declared | 0 of 25 | 0 of 25 — measured, not changed |
+| tests in `tests/test_vehicle_config.py` | 208 | **209** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
