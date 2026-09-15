@@ -4262,6 +4262,124 @@ def check_domain(
                 "declares no interlocks; write `interlocks: none` deliberately if there are none",
             )
         # --------------------------------------------------------------------------------------
+        # **Two forms, and the check read one.** `interlocks` is a list of threshold names or the
+        # sentinel `none`, and every rule about it was written `if isinstance(interlocks, list)` —
+        # so the sentinel was skipped, and so was *anything else written as a string*. A verb
+        # declaring its real guards as `"pressurant_low, feed_pressure_low"` composed with the
+        # guards silently gone, and so did `"nothing to see here"`; both are in `.scratch/r29/`.
+        # The rule's own message names the sentinel `none` while the corpus wrote
+        # `none - reviewed` in **twenty-three of the fifty-eight verbs**, which is what a field
+        # nothing validates accumulates: a sentence fragment in a value position, and no way to
+        # tell a deliberate "there are none" from a typo.
+        #
+        # The sentinel is `none` and it is exact. A string that means "no interlocks" and says it
+        # in its own words is a second name for one value, and the reviewed-ness it recorded
+        # belongs in `provenance` like every other basis in this corpus.
+        # --------------------------------------------------------------------------------------
+        interlocks = verb.get("interlocks")
+        if isinstance(interlocks, str):
+            if interlocks.strip() != "none":
+                report.refuse(
+                    f"{vwhere}.interlocks",
+                    f"is the string {interlocks!r}. A string is not a guard list: the executive "
+                    "reads a list of threshold names, so a string here is read by nothing and the "
+                    "verb's guards are whatever the reader assumes. The only string this field "
+                    "takes is `none`, exactly, and a note about why there are none belongs in "
+                    "`provenance`",
+                )
+        elif not isinstance(interlocks, list):
+            report.refuse(
+                f"{vwhere}.interlocks",
+                f"is {interlocks!r}; write a list of threshold names, or `none`",
+            )
+        # --------------------------------------------------------------------------------------
+        # **A guard is per-verb and a verb's arguments are not**, so a guard that applies to one
+        # value of an argument could not be declared at all — and two verbs state one anyway.
+        #
+        # `propulsion.arm_engine` declares `pressurant_low`, `feed_pressure_low` and
+        # `prop_cutoff_guard_5` for the whole verb, and its help says *"`safe` is always available
+        # and never refused"*. The `not_implemented` entry that merged apollo's `arm_engine` and
+        # `safe_engine` says the same: the asymmetry "is preserved in the single verb's semantics
+        # instead — arming is refused when the feed or pressurant guards fail, and safing is always
+        # available and never refused". It was not preserved. The merged verb refuses `safe` exactly
+        # when the feed is failing, which is the one moment safing matters; refusing to de-energise
+        # an engine because its feed is low is backwards, and the declaration could not say so.
+        #
+        # `rcs.set_rcs_quad` is the mirror image from the same cause. Its help says a group whose
+        # thrusters have latched conclusions "cannot be re-enabled until those are cleared", and
+        # its provenance records that the asymmetry "survives from the spec ... in `help`" — while
+        # the verb declares `interlocks: none`. `HELP.md` is the whole of what a fleet is told
+        # before it calls a verb, so that entry promises a refusal nothing produces.
+        #
+        # `interlocks_when` is the condition: these guards are evaluated only when this argument
+        # holds one of these values. It is refused where it would say nothing — on `none`, on a
+        # non-enum argument, on a value the argument cannot take, or on every value the argument
+        # *can* take, which is what declaring the guards unconditionally already says. `why` is
+        # required because a condition is a claim about the vehicle, the same discipline
+        # `independent` gets for a node's state order.
+        # --------------------------------------------------------------------------------------
+        condition = verb.get("interlocks_when")
+        if condition is not None:
+            cwhere2 = f"{vwhere}.interlocks_when"
+            if not isinstance(condition, dict) or not condition:
+                report.refuse(
+                    cwhere2,
+                    f"is {condition!r}, not a mapping. A condition is `argument`, `values` and "
+                    "`why`, because which values a guard applies to is not readable off the list",
+                )
+            elif not isinstance(interlocks, list) or not interlocks:
+                report.refuse(
+                    cwhere2,
+                    f"conditions guards the verb does not declare: `interlocks` is "
+                    f"{interlocks!r}. A conditional guard list with no guards in it reads as a "
+                    "guard and evaluates as none",
+                )
+            else:
+                schema = verb.get("argument_schema") or {}
+                argument = str(condition.get("argument"))
+                spec = schema.get(argument)
+                if not isinstance(spec, dict) or spec.get("type") != "enum":
+                    report.refuse(
+                        f"{cwhere2}.argument",
+                        f"names {argument!r}, which is not an enum argument of this verb (it has "
+                        f"{sorted(schema)}). A guard that depends on an argument depends on one of "
+                        "its values, and a free-form argument has none to name",
+                    )
+                else:
+                    allowed = [str(v) for v in spec.get("values") or []]
+                    values = condition.get("values")
+                    if not isinstance(values, list) or not values:
+                        report.refuse(
+                            f"{cwhere2}.values",
+                            f"is {values!r}, which names no value. A condition that holds for no "
+                            "value of its argument is a guard that is never evaluated",
+                        )
+                    else:
+                        named = [str(v) for v in values]
+                        unknown = [v for v in named if v not in allowed]
+                        if unknown:
+                            report.refuse(
+                                f"{cwhere2}.values",
+                                f"names {unknown}, which {argument!r} cannot take; it takes "
+                                f"{allowed}",
+                            )
+                        elif set(named) == set(allowed):
+                            report.refuse(
+                                f"{cwhere2}.values",
+                                f"names every value {argument!r} takes. A guard that applies "
+                                "whatever the argument is has no condition — declare it in "
+                                "`interlocks` alone, because a condition that is always true is a "
+                                "conditional guard list a reader has to evaluate to discover is "
+                                "unconditional",
+                            )
+                if not str(condition.get("why") or "").strip():
+                    report.refuse(
+                        f"{cwhere2}.why",
+                        "is empty. A conditional guard says the vehicle refuses a command for one "
+                        "value of an argument and permits it for another, which is a claim about "
+                        "the vehicle rather than a formatting detail",
+                    )
+        # --------------------------------------------------------------------------------------
         # Five fields on the fifty-eight verbs that nothing validated, found by mutating each one
         # in turn and watching which mutations composed. Every one of them is *read* by something,
         # which is what makes them worth checking: `execution_class` decides whether a command may

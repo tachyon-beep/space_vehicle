@@ -6256,6 +6256,69 @@ nobody can reproduce is a name two things can share, and the collision is invisi
 `fixture_dir(tmp_path, prefix)` is a counter now — no buckets, no salt — and the nine call sites use
 it. Three runs of the full suite under `-n 8` are green.
 
+## The guard a verb could not say it had
+
+`interlocks` has two forms — a list of threshold names, or the sentinel that means there are none —
+and **every rule about it was written `if isinstance(interlocks, list)`**. The list form is resolved
+against the domain's thresholds and a ghost name is refused. The other form was skipped, and so was
+*anything else written as a string*. Two broken copies in `.scratch/r29/` are the evidence:
+
+| `arm_engine.interlocks` | what the linter said |
+|---|---|
+| `[pressurant_low, feed_pressure_low, prop_cutoff_guard_5]` | composes — three guards |
+| `"pressurant_low, feed_pressure_low, prop_cutoff_guard_5"` | **composes** — three guards, read by nothing |
+| `"nothing to see here"` | **composes** |
+
+The rule's own message named the sentinel `none`, and the corpus wrote **`none - reviewed` in
+twenty-three of the fifty-eight verbs** — which is what a field nothing validates accumulates: a
+sentence fragment in a value position, and no way to tell a deliberate "there are none" from a typo.
+The sentinel is `none` and it is exact; what the old spelling recorded belongs in `provenance` like
+every other basis here.
+
+### And the same field could not express the case two verbs needed
+
+A guard is per-verb, and a verb's arguments are not. `propulsion.arm_engine` declares three guards
+for the whole verb while its own help says *"`safe` is always available and never refused"* — and the
+`not_implemented` entry that merged apollo's `arm_engine` and `safe_engine` into one binary argument
+says the asymmetry "is preserved in the single verb's semantics instead — arming is refused when the
+feed or pressurant guards fail, and safing is always available and never refused." **It was not
+preserved.** The merged verb refused `safe` exactly when the feed was failing, which is the one
+moment safing matters, and refusing to de-energise an engine because its feed is low is backwards.
+
+`rcs.set_rcs_quad` is the mirror image from the same cause. Its help said a group whose thrusters
+have latched health conclusions "cannot be re-enabled until those are cleared through
+`reset_latched_fault`", and its provenance recorded that the asymmetry "survives from the spec …
+in `help`" — while the verb declared `interlocks: none`. `HELP.md` is the whole of what a fleet is
+told before it calls a verb, so that entry promised a refusal nothing produces, and the fleet that
+trusted it would wait for a precondition the vehicle never checks.
+
+`interlocks_when` is the condition: `argument`, `values`, and a `why`, because a conditional guard is
+a claim about the vehicle rather than a formatting detail. `arm_engine` now says its three guards
+apply only when `state` is `armed`, and `generate_help.py` renders it — *"Interlocks: `pressurant_low`,
+`feed_pressure_low`, `prop_cutoff_guard_5` — only when `state` is `armed`"* — so the fleet reads the
+same condition the executive will evaluate.
+
+For `set_rcs_quad` the fix went the other way, and deliberately: the declaration is the decision. The
+file argues at length that the vehicle shows the authority cost rather than preventing the decision,
+"A vehicle that refused would be running the experiment's conclusion for it" — so the *prose* moved to
+match the declaration, and now says enabling a latched group is **permitted rather than refused** and
+that the fleet which re-enables owns the consequence.
+
+The condition is refused wherever it would say nothing: on `none`, on an argument that is not an
+enum, on a value the argument cannot take, on **every** value it can take (which is what declaring
+the guards unconditionally already says), and without a reason.
+
+**272 stayed 272.** **191 became 193 vehicle tests.** Plant unchanged: 134 states over 57 nodes,
+79 edges, 108 of 134 fully configured, 26 with a debt, 65 of 79 edges declared, 202 unset scalars,
+15 ready / 26 value / 8 edge / 85 rule. `--strict` exits 2.
+
+Verified by breaking fourteen copies in `.scratch/r29/`: the three real guards written as a string,
+a string that says nothing, the sentinel reworded, an integer, a condition on guards the verb does
+not declare, an argument that is not an enum, a value the argument cannot take, every value it can
+take, an empty `why`, an empty `values`, a condition that is not a mapping, the condition removed
+(which composes, and is the defect this round found), the sentinel itself as a positive control, and
+the unbroken corpus composing at 272.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

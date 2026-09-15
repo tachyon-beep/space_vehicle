@@ -252,7 +252,19 @@ def generate(root: Path) -> str:
                 add("")
             interlocks = verb.get("interlocks")
             if isinstance(interlocks, list) and interlocks:
-                add("Interlocks: " + ", ".join(f"`{i}`" for i in interlocks))
+                # A guard that applies to one value of an argument and not another is the
+                # difference between a command being refused and being allowed, so it belongs
+                # where the fleet reads it rather than only in the linter's model. `arm_engine`
+                # is the case: three guards on `state: armed`, and none of them on `safe`.
+                condition = verb.get("interlocks_when")
+                if isinstance(condition, dict) and condition.get("values"):
+                    when = ", ".join(f"`{v}`" for v in condition["values"])
+                    add(
+                        f"Interlocks: {', '.join(f'`{i}`' for i in interlocks)} — only when "
+                        f"`{condition.get('argument')}` is {when}"
+                    )
+                else:
+                    add("Interlocks: " + ", ".join(f"`{i}`" for i in interlocks))
                 add("")
             allowed = verb.get("allowed_phases") or []
             if allowed:

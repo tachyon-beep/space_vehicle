@@ -54,7 +54,7 @@ commands:
       mode: {type: enum, values: [auto, manual, free_drift]}
     authority: A1
     gate: {kind: preference, variable: rcs_mode_<mode>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.mode
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -136,7 +136,7 @@ commands:
       profile: {type: enum, values: [conservative, nominal, tight, safe_vector]}
     authority: A2
     gate: {kind: preference, variable: rcs_profile_<profile>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.profile
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -206,7 +206,7 @@ commands:
       reason: {type: string, optional: true, max_length: 200}
     authority: A1
     gate: {kind: preference, variable: rcs_safe_hold_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.safety
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -236,7 +236,7 @@ commands:
       scope: {type: enum, values: [translation, slew, all]}
     authority: A1
     gate: {kind: preference, variable: rcs_abort_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.activity
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -264,7 +264,7 @@ commands:
       state: {type: enum, values: [enable, inhibit]}
     authority: A2
     gate: {kind: preference, variable: rcs_group_<group>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.group_<group>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -273,13 +273,16 @@ commands:
     execution_class: declarative
     maximum_queue_age_s: 60
     help: >-
-      Enable or inhibit a whole string of thrusters. Inhibiting is always allowed and enabling is
-      not symmetric: a group whose thrusters have latched health conclusions cannot be re-enabled
-      until those are cleared through `reset_latched_fault`, which is the recovery-check
-      requirement `rcs_dode.md:372` states. No interlock, deliberately — F-05's third-order effect
-      is operators isolating a healthy string on one sensor's word, and the vehicle's job is to
-      show the authority cost (`rcs.control_authority_margin`) rather than to prevent the
-      decision. A vehicle that refused would be running the experiment's conclusion for it.
+      Enable or inhibit a whole string of thrusters. Inhibiting is always allowed, and enabling a
+      group whose thrusters have latched health conclusions is **permitted rather than refused**:
+      `rcs_dode.md:372` requires a recovery check before a latched group is trusted again, and this
+      vehicle deliberately does not perform it for the fleet. F-05's third-order effect is operators
+      isolating a healthy string on one sensor's word, and the vehicle's job is to show the
+      authority cost (`rcs.control_authority_margin`, `rcs.allocation_status`) rather than to
+      prevent the decision. A vehicle that refused would be running the experiment's conclusion for
+      it, so the fleet that re-enables a latched group is the fleet that owns the consequence.
+      `reset_latched_fault` is how a latched conclusion is cleared; nothing here makes that a
+      precondition of enabling.
     provenance:
       basis: apollo
       ref: "apollo_diode.md:243"
@@ -291,7 +294,9 @@ commands:
         apollo's name win on a collision, and `rcs_dode.md:371-372`'s
         `SET_THRUSTER_GROUP_STATE` is the same idea under a second name — one verb for one idea,
         recorded here rather than silently renamed. What survives from the spec is the asymmetry
-        in `help`: re-enabling a latched group needs the recovery check
+        `help` states — inhibiting is always allowed and enabling a latched group is permitted
+        with its consequence — and what does *not* survive is the recovery check itself, which the
+        vehicle declines to run for the fleet for the reason `help` gives
 
   - verb: isolate_rcs_manifold
     argument_schema:
@@ -299,7 +304,7 @@ commands:
                                     lm_feed_c, lm_feed_d]}
     authority: A2
     gate: {kind: preference, variable: rcs_branch_<branch>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: rcs.branch_<branch>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]

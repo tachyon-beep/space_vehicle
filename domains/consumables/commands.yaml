@@ -55,7 +55,7 @@ commands:
       note: {type: string, optional: true, max_length: 200}
     authority: A1
     gate: {kind: preference, variable: reserve_floor_<resource>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: res.<resource>.policy
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -88,7 +88,7 @@ commands:
                                     absorber_capacity_lm, all]}
     authority: A0
     gate: {kind: preference, variable: recon_request_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: res.<resource>.recon
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]

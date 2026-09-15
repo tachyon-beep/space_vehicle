@@ -45,7 +45,7 @@ commands:
     gate:
       kind: preference
       variable: ask_crew_enable
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: crew.attention.<crew_id>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -79,7 +79,7 @@ commands:
     gate:
       kind: preference
       variable: ack_alarm_enable
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: crew.alerts
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -148,7 +148,7 @@ commands:
     gate:
       kind: preference
       variable: display_<position>_enable
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: crew.display.<position>
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]

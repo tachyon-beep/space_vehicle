@@ -38,7 +38,7 @@ commands:
       mode: {type: enum, values: [coast, burn, landing, rendezvous, alignment, free_drift]}
     authority: A1
     gate: {kind: preference, variable: guidance_mode_<mode>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: gnc.guidance
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -71,7 +71,7 @@ commands:
       timeout_s: {type: number, optional: true, minimum: 0}
     authority: A2
     gate: {kind: preference, variable: imu_align_<source>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: gnc.imu_alignment
     allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast]
@@ -107,7 +107,7 @@ commands:
       source: {type: enum, values: [ground_tracking, onboard_solution, crew_sighting]}
     authority: A2
     gate: {kind: preference, variable: state_vector_load_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: gnc.nav_solution
     allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast]
@@ -176,7 +176,7 @@ commands:
       acquire_altitude_m: {type: number, optional: true, minimum: 0}
     authority: A1
     gate: {kind: preference, variable: radar_<state>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: gnc.radar
     allowed_phases: [lunar_orbit, descent, surface, ascent_rendezvous]
     irreversible: false

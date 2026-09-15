@@ -34,7 +34,7 @@ commands:
       mode: {type: enum, values: [idle, run, standby]}
     authority: A1
     gate: {kind: preference, variable: computer_mode_<mode>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: avionics.computer_mode
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -64,7 +64,7 @@ commands:
       preserve_memory: {type: boolean, optional: true}
     authority: A2
     gate: {kind: preference, variable: computer_reset_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: avionics.computer_reset
     allowed_phases: [translunar_coast, lunar_orbit, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast]
@@ -125,7 +125,7 @@ commands:
                note: "instrument classes to include; bounded by the profile's ceiling"}
     authority: A1
     gate: {kind: preference, variable: instrumentation_profile_<profile>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: avionics.instrumentation_profile
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]

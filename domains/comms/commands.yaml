@@ -38,7 +38,7 @@ commands:
       mode: {type: enum, values: [sband_high, sband_low, vhf, none]}
     authority: A1
     gate: {kind: preference, variable: comm_mode_<mode>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: comms.mode
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -70,7 +70,7 @@ commands:
       antenna: {type: enum, values: [high_gain, omni_a, omni_b, sband_steerable], names: vehicle_entry}
     authority: A1
     gate: {kind: preference, variable: antenna_<antenna>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: comms.antenna
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -102,7 +102,7 @@ commands:
       slew_rate_deg_s: {type: number, optional: true, minimum: 0}
     authority: A1
     gate: {kind: preference, variable: hga_point_<target>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: comms.hga_pointing
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]
@@ -172,7 +172,7 @@ commands:
       duration_s: {type: number, optional: true, minimum: 0, maximum: 3600}
     authority: A1
     gate: {kind: preference, variable: telemetry_profile_<profile>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: comms.telemetry_profile
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast, entry]

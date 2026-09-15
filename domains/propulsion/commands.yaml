@@ -27,6 +27,17 @@ commands:
     authority: A2
     gate: {kind: preference, variable: engine_<engine>_arm_enable}
     interlocks: [pressurant_low, feed_pressure_low, prop_cutoff_guard_5]
+    interlocks_when:
+      argument: state
+      values: [armed]
+      why: >-
+        the three guards are about *arming*, and safing is not refused by any of them. `apollo_diode.md:241`
+        lists arm and safe as two verbs and this vehicle merged them into one binary argument, so the
+        asymmetry the merge was made to preserve has to be sayable here or it is lost: an armed engine
+        on a failing feed is the hazard F-01 is about, and a *safe* command is how a crew ends that
+        hazard. Declaring the three guards for the whole verb refused `safe` exactly when the feed was
+        failing — the one moment it matters — and refusing to de-energise an engine because its feed is
+        low is backwards
     conflict_domain: prop.<engine>.arm
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast]
@@ -102,7 +113,7 @@ commands:
       engine: {type: enum, values: [sps, dps, aps]}
     authority: A2
     gate: {kind: preference, variable: burn_stop_<engine>_enable}
-    interlocks: none - reviewed
+    interlocks: none
     conflict_domain: prop.<engine>.run
     allowed_phases: [translunar_coast, lunar_orbit, descent, surface, ascent_rendezvous,
                      lunar_orbit_docked, transearth_coast]
