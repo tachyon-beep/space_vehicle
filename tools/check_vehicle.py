@@ -1854,6 +1854,20 @@ def check_coupling(
 
     for name, node in node_of.items():
         where = f"coupling.yaml:node {name}"
+        # `internal` is the sentinel, not a node, and `plant.py` advances its states in a second
+        # pass after the schedule. That pass exists because the schedule does not contain the
+        # sentinel — so declaring it here would put those states in *both* passes and advance each
+        # of them twice per tick, once on the sentinel's within-domain order and once on the node's.
+        # Nothing refused this until the second pass existed to be doubled; the fix that gave the
+        # sentinel states a tick is what makes the mistake available.
+        if name == "internal":
+            report.refuse(
+                where,
+                "is the `internal` sentinel declared as a coupling node. `plant.py` walks the "
+                "schedule and then advances the sentinel's states in a second pass, so a state on "
+                "`internal` would advance twice per tick. The sentinel is what a state declares "
+                "when no node advances it, and it cannot also be a node",
+            )
         if node.get("domain") not in DOMAINS | NON_DOMAIN_NODE_DOMAINS:
             report.refuse(where, f"domain {node.get('domain')!r} is not canonical")
         if node.get("kind") not in NODE_KINDS:

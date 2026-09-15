@@ -1566,8 +1566,9 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 79 of the 134 states need code before the plant can walk a
-whole tick.
+`internal` sentinel counted among them, so 79 of the 134 states need code. (This said *before the
+plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
+of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
 first `algebraic` state, so the stock integrator had never executed.** Written, reviewed, and never
@@ -3344,9 +3345,11 @@ why they do not look like the same quantity.
 
 ## The state the plant stops at has nothing to compute from
 
-`--readiness` ends with the same sentence every time: the plant stops at the first thing it cannot
-compute, and that thing is `bus_b_v`. The worklist called it a **code** debt — an `algebraic` state,
-so domain code — and an implementer sent to write its rule would find **nothing to read**.
+`--readiness` used to end with the same sentence every time: the plant stops at the first thing it
+cannot compute, and that thing is `bus_b_v`. (The stop is gone — a tick now carries on and records
+every gap, and this section's finding is one of the forty-four it names. See *The tick stopped at its
+first debt* below.) The worklist called it a **code** debt — an `algebraic` state, so domain code —
+and an implementer sent to write its rule would find **nothing to read**.
 
 `bus_b` has **no inbound edge anywhere in `coupling.yaml`**. Every electrical edge terminates on
 `bus_a`, and the tie runs `bus_b -> bus_tie -> bus_a` — so bus B is declared as a *source* for bus A
@@ -3842,9 +3845,10 @@ What it says:
 The twelve blocked states are named and ordered, and their debts are the vehicle's real physics
 gaps rather than bookkeeping: the gyro bias's time constant, the battery's thermal τ, the
 pressurant's lag, RCS's `t_min_on` and its deadband bands, the feed tank's volume, the thrust rise
-and tailoff. **The first tick stops at `E-LM-ATM-ABSORB`** — the LM's LiOH path, which is the leg
+and tailoff. **The first tick stopped at `E-LM-ATM-ABSORB`** — the LM's LiOH path, which is the leg
 Apollo 13's crew improvised an adapter for, and which is unconfigured because the LM's absorber is
-a different cartridge from the CSM's.
+a different cartridge from the CSM's. (It no longer stops anywhere; the tick carries on and this edge
+is one of the nine edge debts it names. See *The tick stopped at its first debt* below.)
 
 Two things about the tool are deliberate. It **imports the linter** rather than re-deriving the
 schedule, because two implementations of one order is how two runs of the same seed come to
@@ -6776,6 +6780,155 @@ unit and a unit with no magnitude, a unit from nowhere, an owed unit with no not
 no host, a host the fault does not perturb, a host in the wrong unit, and a sentence where the number
 goes — plus a corpus assertion that the key set is exactly the ten, that the fifteen numeric
 magnitudes each name a host, and that the twelve owed ones each carry a note.
+
+## The tick stopped at its first debt, and the fifty-five states on the sentinel were advanced by nothing
+
+Two defects held each other up, and the second was invisible because of the first.
+
+**`step()` raised out of §9's step 4.** The contract is a loop with no `break` in it —
+
+```python
+    for node in SCHEDULE:                        # total order over *nodes*, deterministic
+        for producer in node.producers:          # the states that advance this node
+            staged.update(producer.advance(state, accepted, horizon,
+                                           rng.stream(producer.domain.name)))
+```
+
+— and the sentence under it is *"writes are staged, then committed"*. A producer that cannot produce
+stages nothing and the previous value stands; the tick reaches everything after it. The plant raised
+`Unconfigured` out of the loop instead, and the first state in the frozen order,
+`thermal.cabin_heat_csm_w`, is an `algebraic` state whose rule is domain code. **So no tick ever
+completed. Not one state was staged, ever**, and `--readiness` reported that as *"the plant stops at
+the first thing it cannot compute"* — a sentence about a tick that had computed nothing, printed as
+though the thing it named were the vehicle's first problem.
+
+**And the sentinel was not behind that stop; it was unreachable by construction.** `internal` is not
+a node in `coupling.yaml#nodes`, so no entry in `world.schedule` carries those states, so the loop
+could not see one of them however far it got. **Fifty-five of the vehicle's 134 states** — every mode,
+latch and accumulator the command surface writes — were advanced by nothing at all: 11 in `avionics`,
+11 in `rcs`, 7 in `comms`, 6 each in `gnc`, `propulsion` and `structure`, 3 in `power`, 2 each in
+`crew` and `thermal`, one in `eclss`. Meanwhile `components.yaml#internal_order` **declared the order
+to advance them in**: the linter requires it of every domain with more than one state there, refuses
+a list that names a state that is not there, refuses `independent` without a reason, and reports nine
+domains owing one. It had **no reader that advanced anything**. That is this folder's recurring
+finding — *a declaration no tool reads has already drifted* — arriving inside the two tools that
+report on it, and the loop that should have read it was the one that stopped early.
+
+Three other things were wrong in the same place, and each had kept the others quiet:
+
+| what it said | where | what was true |
+|---|---|---|
+| "`--readiness` ends with the same sentence every time: the plant stops at the first thing it cannot compute" | the tool, and *The state the plant stops at has nothing to compute from* here | the sentence was about a tick that had advanced nothing, and the state it named was not the vehicle's first debt but its first *state* |
+| the first tick was a second, hand-written copy of step 4 | `readiness()` | it asked `advance()` against an **empty** state, so every stock answered with its missing `initial`; and it passed `values` rather than `{**values, **staged}`, so it was not Gauss-Seidel and a back-edge and a forward edge were indistinguishable to it |
+| "the schedule stops at the first `algebraic` state" | three test docstrings | true when written, and it was the reason a stock integrator bug survived: a test that explains why a code path is unreachable is a test that has stopped looking for a way to reach it |
+
+### The fix, and the two figures it separates
+
+`step()` now stages and carries on. Each state it cannot advance appends a `Gap` — the state, the
+place, the reason, and the node it could not read — and the tick reaches the end of the order. The
+scheduled nodes and the sentinel now run **the same** `_advance_into`, so there is one implementation
+of step 4 rather than one and a copy, and `sentinel_states()` orders the sentinel by
+`internal_order` where a domain declares one and by the frozen lexicographic tiebreak where none
+does. Where it uses the alphabet it **returns the domain names so the report can say so**, because a
+silent alphabetical decision is what the `state_order` rule exists to prevent on a node and the
+sentinel has no edges to second-guess it. Nine domains, which is exactly the linter's nine debts: the
+two tools now answer one question with one number.
+
+The first tick of the live vehicle, run rather than described:
+
+```
+First tick, in §9's order — 79 states over 57 nodes, then the 55 on the `internal` sentinel:
+    1 of 134 states advanced, 133 could not
+  of the 133, 44 are the debt and 89 are states that read one
+```
+
+**One state advances, and it is `crew.crew_workload`** — a `lag` on a scheduled node whose driver
+`E-CREW-WATER` supplies. It is the one state that produces a value, and it does not *move* one: the
+node declares no initial amount, so `advance()`'s lag branch takes `current` from the driver and
+stages 14.0, which is the potable water level read as the driver. The tick adds a key rather than
+changing a number — worth saying plainly, because "1 of 134 states advanced" sounds like one state
+changed when it is really one state that now exists. Everything else either needs domain code or
+reads something that does. The `44` and the `89` are the point of the second line: of the 133 gaps,
+**44 are a missing declaration and 89 are the shadow those cast.** A list of 133 things to fix is not
+a worklist; a list of 44 is, and it is a different 44 from the one a reader would guess.
+
+That split was wrong twice before it was right, and both ways are worth recording because the graph
+is the obvious place to compute it:
+
+| rule | roots | why it is wrong |
+|---|---|---|
+| follow each edge from its `from` to its `to` | 14 | wrong in **both** directions: three of the fourteen are cascades, and thirty-three of the forty-four roots are called cascades. `E-H2-DRAW` runs `h2_csm -> fc_h2_draw`, so following the arrow says `h2_csm_kg` feeds the fuel cell — but a **discharge is driven by its target**, so `h2_csm_kg` *reads* `fc_h2_draw` and the debt is `fc_h2_draw_kg_s`. And a state whose *rule* is missing is its own debt however dark its inputs are, so "an edge joins it to a gap" is not "a gap caused it" |
+| follow it whichever way it points | 2 | the two ends of an edge have a read relation in exactly one direction, so treating it as bidirectional made every joined pair feed each other and erased 42 of the 44 |
+| ask `advance()` what it could not read | **44** | — |
+
+Which end of an edge drives the flux depends on the edge's basis, and `advance()` is the only thing
+that knows: it is what computes `driver_node`. So the relation is not derived from the graph at all.
+`Unconfigured` now carries `needs` — the node whose value was missing — set at the two refusals that
+know it, and a gap is a root unless another gap's state owns the node it needed. **A refusal is also
+a report**, and this is the round that stopped re-deriving what it says.
+
+### What the round got wrong on the way
+
+- **`exc.args[1]` is an `IndexError`.** `Unconfigured.__init__` calls
+  `super().__init__(f"{where}: {what}")`, so `args` is a one-tuple and the second element does not
+  exist. The tick died of the reporting rather than of the debt, on the first gap it tried to record.
+- **The report contradicted itself for one revision.** The header read *"57 nodes then the 55 states
+  on the sentinel"* and the line under it read `1 of 134`. Fifty-seven nodes carry seventy-nine
+  states, and the twenty-two that share a node were the difference. The test that asserts the two
+  figures add up is what found it, which is why it is written to add them up.
+- **"a algebraic state".** The article was hard-coded `a` and six of the seven method classes take
+  it, so the sentence read correctly for every state anyone had seen it printed for — until a tick
+  that carries on printed it forty-four times in one report.
+- **The probe that found this was itself the second copy.** The first measurement walked
+  `world.schedule` by hand and reported *"1 advance, 78 cannot"* — 79 states, because it could not
+  see the sentinel either. A hand-written copy of a loop does not just disagree with the loop; it
+  inherits the loop's blind spot and adds its own.
+- **`plant.py`'s own module docstring had drifted and its headline claim was false.** It promised
+  *"**the tick loop closes** — `step()` is `plant.md`'s seven steps, with step 4 walking the derived
+  order and each state's `advance()` raising rather than inventing"*, and "closes" described the shape
+  of the loop rather than the outcome of running it. It also carried live figures — *"107 of 119
+  states are fully configured, 12 are not, and 33 of 55 edge sensitivities are still unset"* — which
+  the tools now put at 101 of 134, 33, and 65 of 79. The figures are gone and the claim is corrected;
+  the docstring now says where the numbers live instead of restating them, because a figure in a
+  docstring has no reader and these had drifted by fifteen states and ten edges. That is the round's
+  own finding arriving in the file the round is about, one paragraph above the loop it describes.
+
+### The refusal
+
+`coupling.yaml:node internal` is now refused: *"is the `internal` sentinel declared as a coupling
+node. `plant.py` walks the schedule and then advances the sentinel's states in a second pass, so a
+state on `internal` would advance twice per tick."* That is the refusal the **fix** owes rather than
+the one the defect owed — the second pass is what makes the mistake available, and the first version
+of this change had no such rule because there was nothing to double.
+
+The defect's own refusal is not in the linter, and it is worth being explicit about why: the corpus
+was right. On a broken copy, moving a state to a plausible node that `coupling.yaml` does not declare
+is already refused — *"writes 'internal_bus', which coupling.yaml does not declare"* — so the
+sentinel is the *only* exemption from the tick order, it is a legitimate one, and no static check
+could have seen that the runner ignored it. What catches this class is a **run**: a test that walks
+the tick and asserts every state came out either advanced or gapped, which is the one property a
+report listing what it did find can never show.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states a first tick advances | 0 | 1 |
+| states the tick reaches | 79 | **134** |
+| the first-tick report | one line, "the first thing it cannot compute" | a header, two counts, **44 named debts**, and the nine domains the alphabet ordered |
+| readers of `internal_order` that *order* anything | 0 — the linter required and validated it, and nothing used it | 1, the plant's `sentinel_states()` |
+| `declared debts` | 289 | **289** — this round closed none and added none; it made nine already-reported ones *decidable* |
+| `internal_order` domains owed | 9 | 9 |
+| build-order buckets | 15 / 33 / 7 / 79 | unchanged |
+| `UNCONFIGURED` scalars | 215 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 201 | **204** |
+
+**The 15 ready states and the 1 that advances are different questions**, and a reader comparing them
+will otherwise think one is wrong. `--build-order` asks whether a state's *own* declaration is
+complete; the tick asks whether the whole graph got there. Fifteen states are ready in the first
+sense and one advances, because a state can be perfectly declared and still read a node whose
+producer could not compute. That is the same distinction as `usable` against `declared`, one layer
+up, and it now has two figures in one report rather than one figure doing both jobs.
 
 ## The invariants, and which of them are enforced
 

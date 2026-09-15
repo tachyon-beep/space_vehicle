@@ -22,19 +22,26 @@ much as the evidence behind it. The evidence here is mechanical:
   - **the schedule is derivable** — 39 nodes, from `coupling.yaml`'s edges minus its declared
     back-edges, with `check_vehicle.derive_schedule` doing the derivation so the plant and the
     linter cannot disagree about the order;
-  - **the states are instantiable** — 119 of them, each with a method, a unit and the parameters
-    its method owes, and the loader refuses a configuration where one is missing rather than
-    defaulting it;
+  - **the states are instantiable** — each with a method, a unit and the parameters its method
+    owes, and the loader refuses a configuration where one is missing rather than defaulting it;
   - **the frame is producible** — `emit_frame` builds apollo's envelope from
     `presentation.yaml#frame`, which is the only reason to believe that contract is a contract
     rather than a description;
-  - **the tick loop closes** — `step()` is `plant.md`'s seven steps, with step 4 walking the
-    derived order and each state's `advance()` raising rather than inventing.
+  - **the tick loop closes** — `step()` is `plant.md`'s seven steps, step 4 walks the derived order
+    to the end, and a state that cannot advance is *recorded* rather than fatal.
 
-What the run then says is the build order. Today it says: 107 of 119 states are fully
-configured, 12 are not, and 33 of 55 edge sensitivities are still unset — so the physics is
-missing in a *known* shape rather than an unknown one, and the first thing to supply is whichever
-the schedule reaches first.
+That last one was a claim this file made and did not honour. `step()` raised out of step 4 at the
+first state whose rule is domain code, so no tick ever completed and nothing was ever staged — and
+the states on the `internal` sentinel were not even in the order it walked. "Closes" described the
+shape of the loop rather than the outcome of running it, which is the failure mode this whole folder
+is about arriving in the sentence that says what the tool does.
+
+What the run then says is the build order, and `--readiness` is where the figures live: how many
+states are configured, how many owe something, how many edge sensitivities are unset, and — the
+figure this file exists to add — how many states a first tick can actually advance and which of the
+rest are debts rather than consequences. **They are not repeated here.** A figure written into this
+docstring has no reader, and these had already drifted: it said 119 states and "33 of 55 edge
+sensitivities" while the tools said 134 and 65 of 79.
 
 The method implementations are deliberately trivial and mostly raise. A `lag` needs a time
 constant and a driving value; a `stock` needs a quantum and a flow; a `discrete` needs a
@@ -77,10 +84,38 @@ OWED = {
 class Unconfigured(Exception):
     """A value the plant needs and does not have, named by the path that reaches it."""
 
-    def __init__(self, where: str, what: str) -> None:
+    def __init__(self, where: str, what: str, needs: str | None = None) -> None:
         super().__init__(f"{where}: {what}")
         self.where = where
         self.what = what
+        # The node whose value was missing, where the refusal knows it. A tick that carries on has
+        # to tell two different gaps apart: one whose *own* declaration is missing, and one that is
+        # only missing because the node it reads is. The second is a consequence, and a list of
+        # consequences is not a worklist. `None` means this refusal is about the state's own
+        # definition — its rule, its parameter, its initial amount — and not about an input.
+        self.needs = needs
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A state a tick reached and could not advance, and the debt that stopped it.
+
+    The tick records this instead of raising it. Raising meant the first gap ended the tick, so
+    every state after it in the frozen order went unadvanced and the order itself was never
+    exercised past that point — a plant stopped by its first debt cannot tell you how many debts it
+    has, and this one named a single state. A figure written here would have no reader; the live
+    counts are what `--readiness` prints.
+    """
+
+    state: State
+    where: str
+    owed: str
+    # The node this state could not read, when the reason is a missing input rather than a missing
+    # declaration. See `Unconfigured.needs`.
+    needs: str | None = None
+
+    def __str__(self) -> str:
+        return f"{self.where}: {self.owed}"
 
 
 def unset_paths(node: Any, trail: str = "") -> list[str]:
@@ -178,9 +213,58 @@ class World:
     verbs: dict[str, dict[str, Any]]
     plant_published: list[str] = field(default_factory=list)
     debts: int = 0
+    # domain -> `components.yaml#internal_order`: the list of that domain's states on the `internal`
+    # sentinel in the order they advance, or the string "independent". Absent means the domain owes
+    # the declaration, and this file says so out loud when it advances them anyway.
+    internal_order: dict[str, Any] = field(default_factory=dict)
 
     def states_on(self, node: str) -> list[State]:
         return [s for s in self.states if s.node == node]
+
+    def sentinel_states(self) -> tuple[list[State], list[str]]:
+        """The states on the `internal` sentinel, in the order a tick advances them, and the
+        domains whose order this file had to choose itself.
+
+        The sentinel is not a coupling node, so §9's `for node in SCHEDULE` does not reach it and
+        `advance()` never sees these states — every mode, latch and accumulator the command surface
+        writes. They are advanced after the whole schedule, which is the order
+        the *reporting* tools already used (`--build-order` and `--readiness` both put the sentinel
+        last) and the only order available: no edge can target the sentinel, so nothing inside a
+        tick reads one of these states and means this tick's value.
+
+        `internal_order` is the declaration that decides the order within a domain, and the linter
+        requires it of every domain with more than one state here. Where it is absent the frozen
+        lexicographic tiebreak decides, exactly as it does on a node — and this returns the domain
+        names so the caller can say so rather than let the alphabet pass for a decision.
+        """
+        by_domain: dict[str, list[State]] = {}
+        for state in self.states:
+            if state.node == "internal":
+                by_domain.setdefault(state.domain, []).append(state)
+        ordered: list[State] = []
+        alphabetised: list[str] = []
+        # Domains are sorted, not scheduled. §2 forbids a domain calling another and no edge can
+        # reach the sentinel, so the per-domain blocks cannot interact within a tick; the order
+        # between them only has to be frozen, and a name is frozen.
+        for domain in sorted(by_domain):
+            block = by_domain[domain]
+            declared = self.internal_order.get(domain)
+            if isinstance(declared, list):
+                position = {str(sid): i for i, sid in enumerate(declared)}
+                # The linter refuses an order naming a different set of states, so anything missing
+                # here is a state that arrived after the order was written.
+                block = sorted(block, key=lambda s: position.get(s.id, len(position)))
+            else:
+                block = sorted(block, key=lambda s: s.id)
+                # Only where the tiebreak actually decided something: a domain with one state on the
+                # sentinel has nothing to order, and reporting it would make this figure 10 where
+                # the linter's is 9 for the same question. The linter owes the declaration of every
+                # domain with *more than one* state here, and this file must not disagree with it
+                # about which those are.
+                if len(block) > 1:
+                    alphabetised.append(domain)
+            ordered.extend(block)
+        return ordered, alphabetised
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -199,8 +283,15 @@ def load_world(root: Path) -> World:
     presentation = load_yaml(root / "presentation.yaml")
 
     states: list[State] = []
+    internal_order: dict[str, Any] = {}
     for directory in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
         components = load_yaml(directory / "components.yaml")
+        # The sentinel states' within-domain order. The linter requires this declaration of every
+        # domain with more than one state on the sentinel and validates it against the states; the
+        # plant is the reader that makes it mean something, so it travels with the world.
+        domain_name = str(components.get("domain", directory.name))
+        if components.get("internal_order") is not None:
+            internal_order[domain_name] = components["internal_order"]
         for spec in components.get("state") or []:
             states.append(
                 State(
@@ -260,6 +351,7 @@ def load_world(root: Path) -> World:
         # empty map, the dimensional check silently did nothing, and the plant's judgement was
         # weaker than the linter's — which is the one thing sharing the function is meant to prevent.
         nodes={str(k): v for k, v in (coupling.get("nodes") or {}).items()},
+        internal_order=internal_order,
         channels=channels,
         frame_fields=[
             str((f or {}).get("name"))
@@ -790,6 +882,7 @@ def stock_flux(
         raise Unconfigured(
             where,
             f"drives {edge.target} and reads {source!r}, which nothing supplies this tick",
+            needs=source,
         )
     if not isinstance(driver, (int, float)):
         raise Unconfigured(
@@ -860,7 +953,11 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         tau = float(state.spec["tau_s"])
         driver = values.get(incoming[0].source)
         if driver is None:
-            raise Unconfigured(f"{where}", f"reads {incoming[0].source!r}, which nothing supplies")
+            raise Unconfigured(
+                f"{where}",
+                f"reads {incoming[0].source!r}, which nothing supplies",
+                needs=incoming[0].source,
+            )
         current = float(values.get(state.node) or driver)
         alpha = math.exp(-dt / tau)
         return {state.node: driver + (current - driver) * alpha}
@@ -967,7 +1064,11 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
 
     raise Unconfigured(
         where,
-        f"is a {state.method} state and its rule is not in the configuration. An `algebraic` "
+        # "a algebraic". The article was hard-coded and every method but one takes "a", so this read
+        # correctly for six classes out of seven — and it went unnoticed until the tick carried on
+        # and printed the sentence once per gapped state in one report.
+        f"is {'an' if state.method[:1] in 'aeiou' else 'a'} {state.method} state and its rule is "
+        "not in the configuration. An `algebraic` "
         "state's relation, a `discrete` state's transitions and a `dynamics` state's equations "
         "are domain code, and the configuration deliberately does not pretend to carry them",
     )
@@ -1022,12 +1123,31 @@ def initial_values(world: World) -> dict[str, Any]:
     return values
 
 
-def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
+def step(
+    world: World,
+    values: dict[str, Any],
+    dt: float,
+    gaps: list[Gap] | None = None,
+) -> dict[str, Any]:
     """`plant.md`'s seven-step tick, with the parts that need code named rather than faked.
 
     Steps 1, 2, 5, 6 and 7 are the window's and the executive's and are stubbed with their
     contracts written down. Step 3's event queue needs latched states, so it is a no-op until
     there are any. Step 4 is the one this file is really about: it walks the derived order.
+
+    **Step 4 does not stop.** §9's loop is `for node in SCHEDULE: for producer in node.producers:
+    staged.update(producer.advance(...))` — unconditional, and "writes are staged, then committed".
+    A producer that cannot produce stages nothing and the previous value stands; the tick still
+    reaches every state after it. This function used to raise out of the loop instead, so the first
+    unconfigured state ended the tick and the rest of the order has never advanced — a plant that
+    stops at its first debt is a plant whose frozen order has never been run.
+
+    Where a state cannot advance, the gap is appended to `gaps` and the tick carries on. Passing a
+    list is how `--readiness` reports them; passing nothing still runs the whole tick, because a gap
+    is a fact about the configuration and not a mode of operation.
+
+    The states on the `internal` sentinel advance last, in the order `sentinel_states()` derives —
+    see there for why the sentinel is last and why the order *between* domains does not matter.
     """
     # 1. Effects — everything external enters here and nowhere else.
     # 2. Revalidate at the moment of effect. Nothing is captured at schedule time.
@@ -1042,11 +1162,14 @@ def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
     staged: dict[str, Any] = {}
     for node in world.schedule:
         for state in world.states_on(node):
-            staged.update(advance(world, state, {**values, **staged}, horizon))
-    # The sentinel used to be dropped here, because one key shared by forty-eight states is a slot
-    # that means nothing. It is a key space now, so nothing is dropped — and no schedule entry
-    # carries it anyway: `internal` is not in `coupling.yaml#nodes`, so no state in the order has
-    # it as a node and nothing in this loop can stage it.
+            _advance_into(world, state, values, staged, horizon, gaps)
+    # The sentinel, after every node. It is not a coupling node, so the loop above cannot reach it
+    # and `coupling.yaml#nodes` does not carry it — which used to mean these states were advanced by
+    # nothing at all, while two comments here and in `check_vehicle.py` said they "are advanced with
+    # their domain". They are advanced here, in the order `internal_order` declares.
+    sentinel, _ = world.sentinel_states()
+    for state in sentinel:
+        _advance_into(world, state, values, staged, horizon, gaps)
     committed = {**values, **staged}
 
     # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
@@ -1054,6 +1177,33 @@ def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
     # 6. Instruments: T -> A. One-way, and the quality function cannot see the faults.
     # 7. Compare-point: a hash over canonically-encoded state, every tick.
     return committed
+
+
+def _advance_into(
+    world: World,
+    state: State,
+    values: dict[str, Any],
+    staged: dict[str, Any],
+    horizon: float,
+    gaps: list[Gap] | None,
+) -> None:
+    """One producer's contribution, staged, or the reason it has none.
+
+    Split out of `step` so the scheduled nodes and the sentinel states run *the same* code — the
+    two loops used to be one loop and a hand-written copy in `--readiness`, which is how the copy
+    came to read unstaged values and stop early without either problem being visible.
+    """
+    try:
+        staged.update(advance(world, state, {**values, **staged}, horizon))
+    except Unconfigured as exc:
+        if gaps is not None:
+            # `.where` and `.what`, not `args`: `Unconfigured.__init__` hands `Exception` the
+            # formatted message as *one* argument, so `args[1]` is an IndexError and the tick dies
+            # of the reporting rather than of the debt.
+            gaps.append(Gap(state=state, where=exc.where, owed=exc.what, needs=exc.needs))
+        # An `algebraic` state has no memory to stand on, so leaving its value alone leaves it at
+        # whatever `initial_values` seeded — `UNCONFIGURED`, or absent. That is the honest outcome:
+        # a tick that carried on must not invent the number it could not compute.
 
 
 class SkipComputed(Exception):
@@ -1487,6 +1637,58 @@ def build_order(world: World) -> dict[str, list[State]]:
     }
 
 
+def short(owed: str) -> str:
+    """A refusal's first sentence — enough to name a debt in a list of them."""
+    head, dot, _ = owed.partition(". ")
+    return f"{head}." if dot else owed
+
+
+def roots(world: World, gaps: list[Gap]) -> list[Gap]:
+    """The gaps whose *own* declaration is missing, in the order the tick reached them.
+
+    A debt that stops one state stops everything that reads it, and a list that does not tell the
+    two apart sends an implementer to every gap instead of to the work: `--readiness` prints both
+    figures and they are different questions.
+
+    The relation comes from the refusals rather than from the graph. `advance()` reports the node it
+    could not read as `Unconfigured.needs`, and *it* is the only thing that knows: which end of an
+    edge drives the flux depends on the edge's basis, so a discharge reads its **target** and a fill
+    its source. Reading the graph directly got this wrong in both directions — one-way along the
+    edge called cascades roots, and either-way along it collapsed almost every root into two.
+
+    The remaining relation is the Gauss-Seidel half: a state on a node whose earlier state is a gap
+    reads a value that was never staged.
+    """
+    sequence = [s for node in world.schedule for s in world.states_on(node)]
+    sequence += world.sentinel_states()[0]
+    position = {state.id: index for index, state in enumerate(sequence)}
+
+    node_of = {g.state.id: g.state.node for g in gaps}
+    # A node is dark this tick if a gap state owns it and it is not the state's own node: a stock
+    # integrating from its own level reads last tick's value, which `initial_values` supplied.
+    dark: set[str] = {node for node in node_of.values() if node != "internal"}
+    out: list[Gap] = []
+    for gap in gaps:
+        fed_by_a_gap = gap.needs is not None and gap.needs in dark and gap.needs != gap.state.node
+        # A sibling earlier on the same node that is also a gap never staged its value.
+        sibling = any(
+            other.state.node == gap.state.node
+            and other.state.node != "internal"
+            and other.state.id != gap.state.id
+            and position.get(other.state.id, -1) < position.get(gap.state.id, -1)
+            for other in gaps
+        )
+        sentinel_sibling = gap.state.node == "internal" and any(
+            other.state.node == "internal"
+            and other.state.id != gap.state.id
+            and position.get(other.state.id, -1) < position.get(gap.state.id, -1)
+            for other in gaps
+        )
+        if not (fed_by_a_gap or sibling or sentinel_sibling):
+            out.append(gap)
+    return out
+
+
 def readiness(world: World) -> None:
     """What is ready, what is not, and what the schedule reaches first."""
     ready = [s for s in world.states if not s.owed]
@@ -1518,16 +1720,56 @@ def readiness(world: World) -> None:
                 f"  {state.domain:12s} {state.id:26s} {state.method:9s} needs {', '.join(state.owed)}"
             )
         print()
-    print("First tick, in schedule order — the plant stops at the first thing it cannot compute:")
-    values: dict[str, Any] = {}
-    for node in world.schedule:
-        for state in world.states_on(node):
-            try:
-                advance(world, state, values, 1.0 / 50.0)
-            except Unconfigured as exc:
-                print(f"  {exc}")
-                return
-    print("  nothing raised, which would mean the configuration is complete")
+    # The first tick, run rather than described. This block used to be a second, hand-written copy
+    # of §9's step 4 which asked `advance()` against an *empty* state — so every stock answered with
+    # its missing `initial` and the first one ended the probe. It reported "the first thing it
+    # cannot compute" about a tick that had computed nothing, and the rest of the order was never
+    # reached by it either. `step()` is the only implementation of step 4 now.
+    #
+    # The seed is `initial_values`, because that is what a first tick is run against.
+    gaps: list[Gap] = []
+    step(world, initial_values(world), 1.0 / 50.0, gaps)
+    sentinel, alphabetised = world.sentinel_states()
+    scheduled = sum(1 for node in world.schedule for _ in world.states_on(node))
+    # `scheduled` states, not `len(world.schedule)` nodes: the first version of this line said "57
+    # nodes then the 55 states on the sentinel" and the tick below it reported 134, so the two
+    # figures in the same report disagreed by the twenty-two states that share a node. The test that
+    # asserts they add up is what caught it.
+    reached = scheduled + len(sentinel)
+    print(
+        f"First tick, in §9's order — {scheduled} states over {len(world.schedule)} nodes, then the "
+        f"{len(sentinel)} on the `internal` sentinel:"
+    )
+    print(f"  {reached - len(gaps):3d} of {reached} states advanced, {len(gaps)} could not")
+    on_sentinel = {s.id for s in sentinel}
+    own = roots(world, gaps)
+    print(
+        f"  of the {len(gaps)}, {len(own)} are the debt and {len(gaps) - len(own)} are states that "
+        "read one"
+    )
+    for gap in own:
+        # Where the debt *is*. Nine of these are an edge's missing sensitivity rather than the
+        # state's own definition — the state is only the thing that noticed — and naming the
+        # state's node for those sends the reader to the wrong file.
+        edge = gap.where.startswith("coupling.yaml:edge ")
+        where = (
+            gap.where.split(" ", 1)[1]
+            if edge
+            else ("internal" if gap.state.id in on_sentinel else gap.state.node)
+        )
+        kind = "edge" if edge else "node"
+        # The first sentence only. `advance()`'s refusals explain themselves at length on purpose,
+        # and that many of them at three hundred characters each is a wall rather than a worklist;
+        # the rest of the paragraph is one `advance()` call away.
+        print(f"  {gap.state.domain:12s} {gap.state.id:26s} {kind} {where:20s} {short(gap.owed)}")
+    if alphabetised:
+        # Not a fault: the linter already reports the missing declaration as a debt. It is said out
+        # loud here because this file is what turns the declaration into an order, and where there
+        # is none it uses the alphabet — which must not pass for a decision.
+        print(
+            f"\n  {len(alphabetised)} domain(s) put states on the sentinel with no `internal_order`, "
+            f"so the frozen lexicographic tiebreak ordered them: {', '.join(alphabetised)}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
