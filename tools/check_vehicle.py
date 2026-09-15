@@ -7072,6 +7072,189 @@ def check_antenna_patterns(root: Path, vehicle: dict[str, Any], report: Report) 
                 )
 
 
+def check_throttle_bands(root: Path, report: Report) -> None:
+    """An engine declared able to run in a band it declares it cannot run in.
+
+    `domains/propulsion/components.yaml#components.dps` carried both halves of the contradiction in
+    adjacent fields:
+
+    ```yaml
+        operating_band_pct: [10.5, 92.5]
+        non_operating_band_pct: [65, 92.5]
+    ```
+
+    The operating band **contains** the non-operating one. A fleet asking whether 75 % is
+    commandable got `yes` from the first field and `no` from the second, and **neither field was
+    read by any tool** — nor was `thrust_curve`, the block that states the truth as three segments
+    and was the last block in the corpus that no tool named.
+
+    The entry's own `source`, three lines below the two fields, is what settles it: *"the DPS
+    experience report: 9,710 lbf operating maximum and 1,050 lbf minimum, 10:1 range, with 65-92.5 %
+    a NON-OPERATING region."* The corpus quoted the sentence and contradicted it in the same
+    breath, which is this folder's recurring shape with the evidence sitting inside the declaration
+    that is wrong.
+
+    Three rules, and the second is the one that joins the curve to the bands rather than leaving
+    each to a reader:
+
+      - a band is a pair of numbers with its low end below its high end, the operating bands are
+        ordered and disjoint, and **no non-operating band may overlap an operating one**;
+      - the segments of `thrust_curve` tile the throttle scale — contiguous, in order, no gap and
+        no overlap — and each segment's declared `operating:` flag must agree with which band its
+        own interval falls in, so the curve and the bands cannot drift apart;
+      - a segment the engine does not run in declares `coefficients: null`, because there is no law
+        to owe; a segment it does run in declares a law or `UNCONFIGURED`, and **`null` there would
+        be a hole wearing the same spelling as an answer**.
+
+    The `operating:` flag is a declaration rather than an inference from the `model` prose for the
+    reason `names:` and `vehicle_keys` are: the prose says "non-operating" in one segment and
+    "operating maximum" in another, and a rule that pattern-matched those words would be reading
+    English rather than the corpus.
+    """
+    domain = load(root / "domains" / "propulsion" / "components.yaml", report) or {}
+    dp = "domains/propulsion/components.yaml"
+
+    def intervals(entry: dict[str, Any], key: str, where: str) -> list[tuple[float, float]]:
+        raw = entry.get(key)
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            report.refuse(f"{where}.{key}", f"is {raw!r}, not a list of intervals")
+            return []
+        out: list[tuple[float, float]] = []
+        for index, pair in enumerate(raw):
+            if (
+                not isinstance(pair, list)
+                or len(pair) != 2
+                or not all(isinstance(v, (int, float)) for v in pair)
+            ):
+                report.refuse(
+                    f"{where}.{key}[{index}]",
+                    f"is {pair!r}. A band is a list of two numbers; a bare pair of numbers is the "
+                    "shape that let an operating band contain a non-operating one",
+                )
+                continue
+            low, high = float(pair[0]), float(pair[1])
+            if low >= high:
+                report.refuse(f"{where}.{key}[{index}]", f"is [{low}, {high}], which is empty")
+                continue
+            out.append((low, high))
+        return out
+
+    for component in domain.get("components") or []:
+        if not isinstance(component, dict) or not component.get("id"):
+            continue
+        if "operating_band_pct" not in component and "non_operating_band_pct" not in component:
+            continue
+        cid = str(component["id"])
+        where = f"{dp}:component {cid}"
+        running = intervals(component, "operating_band_pct", where)
+        stopped = intervals(component, "non_operating_band_pct", where)
+        if not running:
+            report.refuse(
+                f"{where}.operating_band_pct",
+                "declares no operating band, so nothing says where this engine may be commanded",
+            )
+        for i in range(1, len(running)):
+            if running[i][0] < running[i - 1][1]:
+                report.refuse(
+                    f"{where}.operating_band_pct",
+                    f"declares {running[i - 1]} then {running[i]}, which overlap. Operating bands "
+                    "are read as a set of regions, so an overlap is one region written twice",
+                )
+        for low, high in stopped:
+            for run_low, run_high in running:
+                if low < run_high and run_low < high:
+                    report.refuse(
+                        f"{where}.non_operating_band_pct",
+                        f"declares [{low:g}, {high:g}] inside the operating band "
+                        f"[{run_low:g}, {run_high:g}]. This engine is declared able to run in a "
+                        "band it is declared unable to run in, and a fleet commanded inside it is "
+                        "flying a region the design excludes",
+                    )
+                    break
+
+    curve = domain.get("thrust_curve") or {}
+    segments = curve.get("segments") or []
+    if not segments:
+        report.debt(
+            f"{dp}:thrust_curve",
+            "declares no segments, so the throttle law has no shape to hold the bands against",
+        )
+        return
+    if "shape" not in curve:
+        report.refuse(f"{dp}:thrust_curve.shape", "is absent, and the shape is what the segments are")
+    previous: tuple[float, float] | None = None
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            report.refuse(f"{dp}:thrust_curve.segments[{index}]", f"is {segment!r}, not a mapping")
+            continue
+        swhere = f"{dp}:thrust_curve.segments[{index}]"
+        # A *band list* is a list of intervals (`operating_band_pct`); a segment's `band_pct` is one
+        # interval. The first version of this check ran the segment through the band-list parser and
+        # refused every segment in the corpus for being a pair of numbers.
+        raw_band = segment.get("band_pct")
+        if (
+            not isinstance(raw_band, list)
+            or len(raw_band) != 2
+            or not all(isinstance(v, (int, float)) for v in raw_band)
+        ):
+            report.refuse(
+                f"{swhere}.band_pct",
+                f"is {raw_band!r}. One segment covers one interval, written as two numbers",
+            )
+            continue
+        low, high = float(raw_band[0]), float(raw_band[1])
+        if low >= high:
+            report.refuse(f"{swhere}.band_pct", f"is [{low:g}, {high:g}], which is empty")
+            continue
+        if previous is not None and low != previous[1]:
+            report.refuse(
+                f"{swhere}.band_pct",
+                f"begins at {low:g} and the segment before it ends at {previous[1]:g}. The segments "
+                "tile the throttle scale, so a gap is a commanded throttle with no declared "
+                "behaviour and an overlap is two behaviours for one",
+            )
+        previous = (low, high)
+        operating = segment.get("operating")
+        if not isinstance(operating, bool):
+            report.refuse(
+                f"{swhere}.operating",
+                f"is {operating!r}. The curve has to say whether the engine runs in this band: "
+                "without it the shape is prose, and the bands above have nothing to be joined to",
+            )
+            continue
+        coefficients = segment.get("coefficients")
+        if operating and coefficients is None:
+            report.refuse(
+                f"{swhere}.coefficients",
+                "is null on a segment the engine runs in. A non-operating segment has no law to "
+                "owe and says so with null; here it is a hole wearing the same spelling as an "
+                "answer, and the burn model would find it at the worst moment",
+            )
+        if not operating and coefficients is not None:
+            report.refuse(
+                f"{swhere}.coefficients",
+                f"is {coefficients!r} on a segment the engine does not run in. There is no law to "
+                "state there, so a coefficient is a claim about combustion in a region the design "
+                "excludes",
+            )
+        # The join: which band does this segment's own interval fall in?
+        covered = any(o_low <= low and high <= o_high for o_low, o_high in running)
+        if operating and not covered:
+            report.refuse(
+                f"{swhere}.operating",
+                f"declares the engine running in [{low:g}, {high:g}], which no operating band "
+                "covers. The curve and the bands are two statements of one throttle range",
+            )
+        if not operating and covered:
+            report.refuse(
+                f"{swhere}.operating",
+                f"declares the engine stopped in [{low:g}, {high:g}], which the operating band "
+                "covers — the same contradiction as the fields above, one level down",
+            )
+
+
 def check_comms_bindings(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The link's hardware, declared twice, and the fourth join with nothing between the copies.
 
@@ -12315,6 +12498,7 @@ def main(argv: list[str] | None = None) -> int:
     check_domain_reads(documents, report)
     check_perception_model(documents, report)
     check_component_identity(documents, report)
+    check_throttle_bands(root, report)
     check_ontology(documents, report)
     check_consumers(documents, report)
     check_argument_vocabularies(documents, report, channels)

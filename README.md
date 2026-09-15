@@ -7504,6 +7504,78 @@ rediscovered.
 | whole blocks named by no tool | 2 | **1** (`thrust_curve`, whose debts are counted) |
 | tests in `tests/test_vehicle_config.py` | 210 | **211** |
 
+## An engine declared able to run in a band it declares it cannot run in
+
+`domains/propulsion/components.yaml#components.dps` carried both halves of the contradiction in
+adjacent fields:
+
+```yaml
+    operating_band_pct: [10.5, 92.5]
+    non_operating_band_pct: [65, 92.5]
+```
+
+The operating band **contains** the non-operating one. A fleet asking whether 75 % is commandable got
+`yes` from the first field and `no` from the second — and **neither field was read by any tool.**
+
+**The entry's own source, three lines below them, is what settles it:**
+
+> the DPS experience report: 9,710 lbf operating maximum and 1,050 lbf minimum, 10:1 range, **with
+> 65-92.5 % a NON-OPERATING region**
+
+The corpus quoted the sentence and contradicted it in the same breath. That is this folder's
+recurring shape — a declaration that disagrees with the evidence sitting inside it — with the
+evidence *in the entry that is wrong*.
+
+And `thrust_curve`, the block that states the truth as three segments, was the last block in the
+corpus that no tool named — recorded as such by the round before this one.
+
+### The fix
+
+`operating_band_pct` becomes the two intervals it is, and the dead band stays where it was:
+
+```yaml
+    operating_band_pct:
+      - [10.5, 65]
+      - [92.5, 100]
+    non_operating_band_pct:
+      - [65, 92.5]
+```
+
+and each `thrust_curve` segment declares `operating:` — so **the curve and the bands are held
+against each other** rather than each against a reader. That is what gives the block a reader, and
+`check_throttle_bands` is three rules:
+
+- a band is a pair of numbers with its low end below its high end, the operating bands are ordered
+  and disjoint, and **no non-operating band may overlap an operating one**;
+- the segments **tile the throttle scale** — contiguous, in order, no gap and no overlap — and each
+  segment's `operating:` flag must agree with which band its own interval falls in;
+- a segment the engine does not run in declares `coefficients: null`, because there is no law to
+  owe; a segment it does run in declares a law or `UNCONFIGURED`, and **`null` there is a hole
+  wearing the same spelling as an answer**.
+
+**The flag is a declaration rather than an inference from the `model` prose**, for the reason
+`names:` and `vehicle_keys` are: one segment's prose says "non-operating" and another's says
+"operating maximum", and a rule that pattern-matched those words would be reading English rather
+than the corpus.
+
+### What the round got wrong on the way
+
+The first version of the check parsed a segment's `band_pct` with the *band-list* parser — the one
+for `operating_band_pct`, which expects a list of intervals — and so refused **all three segments of
+the corpus** for being a pair of numbers. The two shapes differ (`[[10.5, 65], [92.5, 100]]` against
+`[10.5, 65]`) and the check now parses them separately, which is also why a bare pair in the *band*
+field is refused by name: **that shape is what let the contradiction be invisible.**
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **289** — the round corrected a claim and added no unset value |
+| whole blocks named by no tool | 1 | **0** — `thrust_curve` has a reader |
+| operating bands on the DPS | 1 interval, containing the dead band | **2**, and the dead band beside them |
+| curve segments declaring their operating state | 0 of 3 | **3 of 3** |
+| tests in `tests/test_vehicle_config.py` | 211 | **212** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

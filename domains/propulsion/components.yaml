@@ -83,6 +83,12 @@ state:
     provenance:
       basis: historical
       source: "the DPS experience report and NR: the descent engine is throttleable and its operating band has a non-operating region, so its state machine has a throttle state as well as a run state. The two-second minimum on time is chosen against the 10:1 throttle range: below it the engine is still in its start transient and no commanded throttle means anything"
+      note: >-
+        that sentence is the whole finding: this entry quoted a source saying
+        65-92.5 % is non-operating and then declared an operating band spanning
+        it. The bands are two intervals now, and each `thrust_curve` segment carries
+        an `operating:` flag so the curve and the bands can be held against each
+        other rather than against a reader
 
   - id: aps_state
     node: engine_main
@@ -201,8 +207,16 @@ components:
     thrust_min_n: 4671
     throttle_ratio: 10
     isp_s: 305
-    operating_band_pct: [10.5, 92.5]
-    non_operating_band_pct: [65, 92.5]
+    # Two operating intervals, not one. The DPS reaches 1,050 lbf at 10.5 % and its 9,710 lbf
+    # maximum at 92.5 %, and **65-92.5 % is a region it is not designed to run in** — the source
+    # below says so in those words. Until this round `operating_band_pct` was the single interval
+    # `[10.5, 92.5]`, which contains the non-operating one: a fleet asking whether 75 % is
+    # commandable got yes from this field and no from the next, and neither was read by a tool.
+    operating_band_pct:
+      - [10.5, 65]
+      - [92.5, 100]
+    non_operating_band_pct:
+      - [65, 92.5]
     vehicle_keys: [lm_dps]
     provenance:
       basis: historical
@@ -255,12 +269,15 @@ thrust_curve:
   shape: "piecewise; monotone within each operating segment; zero outside the operating band"
   segments:
     - band_pct: [10.5, 65]
+      operating: true
       model: "monotone, curvature unknown"
       coefficients: UNCONFIGURED
     - band_pct: [65, 92.5]
+      operating: false
       model: "non-operating: thrust is undefined because the engine is not designed to run here"
       coefficients: null
     - band_pct: [92.5, 100]
+      operating: true
       model: "operating maximum at 92.5 % of the throttle scale, above which the command saturates"
       coefficients: UNCONFIGURED
   provenance:
