@@ -1091,6 +1091,45 @@ def command_targets(world: World, verb: str) -> list[State]:
     ]
 
 
+def command_dwell(world: World, verb: str) -> list[tuple[State, float | None, float | None]]:
+    """The minimum-dwell guard on every state a command moves: `(state, min_on_s, min_off_s)`.
+
+    A commanded state declares a `dwell` and not a hysteresis band, because "a band answers 'has
+    the quantity crossed' and a command does not cross anything" (`check_domain`'s own rule). Until
+    this existed **no tool read one**: fifteen commanded states declared the guard and the effect
+    path, implemented in round 32, could re-command a mode inside its own dwell with nothing
+    noticing. `rcs.thruster_valve`'s two values are `UNCONFIGURED`, which is an obligation owed to
+    a field nothing consumed — the clearest possible statement that the field had no reader.
+
+    **The two values' meaning is stated here rather than in the corpus, and that is the second
+    half of the finding.** `dwell` declares `min_on_s` and `min_off_s` on thirty-three states and
+    nowhere says what they measure. `propulsion.sps_state`'s are 0.5 and 5, and its provenance
+    explains the five — "a five-second floor between burns is what keeps a fleet from spending its
+    restart budget in a minute" — which fixes the reading: **`min_on_s` is how long the state must
+    hold a value before it may change, and `min_off_s` is how long it must stay away from a value
+    before it may return to it.** Both are measured from the last change, and a state that has not
+    changed yet has no floor — the vehicle starts with its machine where the configuration put it.
+
+    `None` for either value means it is owed, and an owed guard cannot be enforced: the caller
+    reports it rather than treating it as zero, because a dwell of zero is exactly the chattering
+    the field exists to prevent.
+    """
+    rows: list[tuple[State, float | None, float | None]] = []
+    for state in command_targets(world, verb):
+        dwell = state.spec.get("dwell") or {}
+        if not dwell:
+            continue
+
+        def seconds(key: str, declared: dict[str, Any] = dwell) -> float | None:
+            # Bound rather than closed over: the loop rebinds `dwell`, and a closure reading the
+            # loop variable is a claim about when it runs rather than what it reads.
+            value = declared.get(key)
+            return None if value in (None, "UNCONFIGURED") else float(value)
+
+        rows.append((state, seconds("min_on_s"), seconds("min_off_s")))
+    return rows
+
+
 def command_effect(world: World, state: State, verb: str, arguments: dict[str, Any]) -> Any:
     """What one command makes one state, from `command_value`, or a named refusal.
 

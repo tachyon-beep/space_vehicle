@@ -51,6 +51,7 @@ from plant import (  # noqa: E402
     World,
     apply_command,
     capability_snapshot,
+    command_dwell,
     gate_instantiations,
     initial_values,
     load_world,
@@ -164,6 +165,16 @@ class Console:
         self.pending = root / "pending.json"
         self.variables: dict[str, Any] = {}
         self.ticks = 0
+        # When each commanded state last changed, and what it left.
+        #
+        # **The first version kept this in memory, and that made the guard fire never.** The
+        # console is a process per invocation, so a fleet's two commands arrive in two processes
+        # and the second found an empty clock — which is the same defect `pending.json` had before
+        # round 45: a record that does not survive the process boundary cannot be a guard across
+        # one, and every real command is across one. It is durable for the reason the counters and
+        # the deferral queue are, and it lives in the vehicle's own record rather than in
+        # `state.json`, which the contract says is never read back as input.
+        self.dwell: dict[str, dict[str, Any]] = {}
         self.seq = 0
         self.boot_id = f"{int(time.time()):032x}"[-32:]
         self.started = utc_now()
@@ -232,6 +243,12 @@ class Console:
             # what a counter that must survive a restart is.
             if isinstance(restored.get("arms"), dict):
                 self.arms = {str(k): str(v) for k, v in restored["arms"].items()}
+            # The dwell's clock, restored for the reason the counters are: a guard that forgets
+            # across a restart is a guard that never fires.
+            if isinstance(restored.get("dwell"), dict):
+                self.dwell = {
+                    str(k): v for k, v in restored["dwell"].items() if isinstance(v, dict)
+                }
             for key in ("ticks", "seq"):
                 value = restored.get(key)
                 if isinstance(value, int) and value >= 0:
@@ -328,6 +345,70 @@ class Console:
             # to refuse the template rather than this file's to guess.
             return [str(declared)]
 
+    def dwell_refusal(self, verb: str) -> str | None:
+        """The minimum-dwell guard, evaluated at the moment of effect like every other guard.
+
+        `plant.md` step 2 makes revalidation the executive's — "Nothing is captured at schedule
+        time" — and a dwell is a guard of exactly that kind: it says how long the *vehicle* has
+        held a mode, which only the vehicle knows. **Fifteen commanded states declare one and no
+        tool read it**, so a fleet could re-command `set_rcs_mode` every tick, or close and open
+        the bus tie inside its 0.2 s, and the record would show a machine that chattered while
+        every declaration said it could not.
+
+        `min_on_s` is how long the state must hold a value before it may change; `min_off_s` is
+        how long it must stay away from a value before it may return to it. Both are wall-clock
+        seconds since the last change, which is the same clock `maximum_queue_age_s` expires on —
+        and a state that has never changed has no floor, because the vehicle starts with its
+        machine where the configuration put it.
+        """
+        now = utc_now()
+        for state, min_on_s, min_off_s in command_dwell(self.world, verb):
+            last = self.dwell.get(state.id)
+            if last is None:
+                continue
+            if min_on_s is None or min_off_s is None:
+                return (
+                    f"refused: GUARD OWED. {verb!r} moves {state.id!r}, whose dwell is "
+                    "UNCONFIGURED — so the vehicle cannot say how long that mode must be held "
+                    "before it may be commanded again, and a command it cannot guard is a command "
+                    "it must not accept. `rcs.thruster_valve`'s two values are the pulse "
+                    "generator's `t_min_on` and `t_min_off` (`rcs_dode.md:801-804`), which no "
+                    "source reached publishes.\n"
+                )
+            held = (now - datetime.fromisoformat(str(last["changed_at"]))).total_seconds()
+            if held < min_on_s:
+                return (
+                    f"refused: DWELL. {verb!r} moves {state.id!r}, which was last changed "
+                    f"{held:.1f} s ago and must hold a value for {min_on_s:g} s before it may "
+                    "change. This is the guard that makes a commanded state machine a machine "
+                    "rather than a relay — `check_domain` refuses a hysteresis band on one for "
+                    "the same reason: a band answers 'has the quantity crossed', and a command "
+                    "does not cross anything.\n"
+                )
+            if last.get("was") is not None and min_off_s > 0:
+                away = (
+                    now - datetime.fromisoformat(str(last["was"]["left_at"]))
+                ).total_seconds()
+                if str(last["was"]["value"]) in self.value_of(state) and away < min_off_s:
+                    return (
+                        f"refused: DWELL. {verb!r} would return {state.id!r} to a value it left "
+                        f"{away:.1f} s ago, and it must stay away for {min_off_s:g} s before it "
+                        "may go back. `propulsion.sps_state`'s five seconds are the case this "
+                        "exists for: 'a five-second floor between burns is what keeps a fleet from "
+                        "spending its restart budget in a minute'.\n"
+                    )
+        return None
+
+    def value_of(self, state: Any) -> list[str]:
+        """The current value(s) of a state, as text, wherever the map keeps them."""
+        if state.node == "internal":
+            value = (self.values.get("internal") or {}).get(state.id)
+        else:
+            value = self.values.get(state.node)
+        if isinstance(value, dict):
+            return [str(v) for v in value.values()]
+        return [] if value is None else [str(value)]
+
     def apply(self, verb: str, arguments: dict[str, str]) -> str:
         """The effect, and the sentence that says what it was.
 
@@ -342,6 +423,9 @@ class Console:
         to hand a fleet is that sentence: a command accepted, acknowledged and silently ignored is
         the one outcome a fleet cannot tell from success.
         """
+        guard = self.dwell_refusal(verb)
+        if guard is not None:
+            return guard
         try:
             staged = apply_command(self.world, self.values, verb, arguments)
         except Unconfigured as exc:
@@ -362,6 +446,26 @@ class Console:
             elif self.values.get(node) != value:
                 changed.append(f"{node}={value}")
         self.values.update(staged)
+        # The dwell's clock, written only where a value actually moved — a command that set what
+        # was already set has changed nothing and must not restart the floor.
+        if changed:
+            for state, _, _ in command_dwell(self.world, verb):
+                previous = self.dwell.get(state.id, {}).get("value")
+                # **Text, not a `datetime`.** The first version stored the objects and the record
+                # is JSON, so `publish()` raised `TypeError: Object of type datetime is not JSON
+                # serializable` — *after* the effect had been applied and the result written, so
+                # the tick's whole record was lost and the run looked successful. Every timestamp
+                # in this file is an ISO string for the same reason `accepted_at` is: the record
+                # has to be readable by the next process, which is the process that enforces the
+                # guard.
+                stamp = utc_now().isoformat()
+                self.dwell[state.id] = {
+                    "changed_at": stamp,
+                    "value": self.value_of(state),
+                    "was": (
+                        {"value": previous, "left_at": stamp} if previous is not None else None
+                    ),
+                }
         if not changed:
             return (
                 f"succeeded: {verb!r} applied. No value changed: the states it moves already held "
@@ -667,6 +771,7 @@ class Console:
             {
                 "pending": self.deferred,
                 "arms": self.arms,
+                "dwell": self.dwell,
                 "ticks": self.ticks,
                 "seq": self.seq,
                 "boot_id": self.boot_id,

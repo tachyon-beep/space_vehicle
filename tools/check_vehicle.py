@@ -3873,6 +3873,40 @@ def check_domain(
             # comparator to band — what it needs is minimum on and off times, because a
             # machine that can be re-commanded every tick is a machine that chatters on
             # command instead of on noise.
+            # ------------------------------------------------------------------------------
+            # **The comment above draws the distinction and the code did not.** It says a
+            # commanded state machine "has no comparator to band — what it needs is minimum on and
+            # off times, because a machine that can be re-commanded every tick is a machine that
+            # chatters on command instead of on noise" — and then the three branches below accept
+            # `hysteresis`, `dwell` or `one_way` from any state at all. `bus_tie_closed` is
+            # commanded by `set_bus_tie` and composes with a hysteresis band in place of its dwell,
+            # which leaves the guard of a commanded mode a comparator band: `assert: 1.25` volts
+            # against a state whose values are `open`, `closed` and `tripped`.
+            #
+            # It matters more this round than it did last, because the effect is implemented now:
+            # fifteen commanded states declare a dwell, and **no tool read one** — so a command
+            # could re-command a mode inside its own dwell and nothing noticed. The guard is
+            # evaluated at the moment of effect, which is the executive's (plant.md step 2), and
+            # the executive had never heard of it.
+            #
+            # `one_way` is the exemption and it is the existing rule's own reasoning: a state that
+            # cannot be re-entered cannot chatter, so it needs neither band nor floor.
+            # `pyro_fired` is the one such state that a command moves.
+            # ------------------------------------------------------------------------------
+            commanded = [
+                str(m).split(":", 1)[1]
+                for m in state.get("moved_by") or []
+                if str(m).startswith("command:")
+            ]
+            if commanded and not state.get("one_way") and state.get("hysteresis"):
+                report.refuse(
+                    swhere,
+                    f"is moved by {commanded} and guards itself with a hysteresis band. The guard "
+                    "of a *commanded* machine is a minimum dwell, not a comparator band: a band "
+                    "answers 'has the quantity crossed', and a command does not cross anything — "
+                    "what stops a mode chattering on command is a floor between commands. Declare "
+                    "`dwell`, or `one_way` if the state cannot be re-entered",
+                )
             if state.get("hysteresis"):
                 hyst = state["hysteresis"]
                 for field in ("assert", "clear", "dwell_ms"):

@@ -6634,6 +6634,84 @@ halves disagreeing), a `selects` naming a state that does not exist, an owe with
 six effects declare one, that exactly one resolves, that its two halves agree, and that
 `gnc.nav_source` is not registered.
 
+## The guard on a commanded mode, which nothing read
+
+`check_domain` has a comment that states the distinction exactly:
+
+> A *commanded* state machine (an engine, a valve, a mode) has no comparator to band — what it needs
+> is minimum on and off times, because a machine that can be re-commanded every tick is a machine
+> that chatters on command instead of on noise.
+
+**And the code does not draw it.** The three branches below accept `hysteresis`, `dwell` or
+`one_way` from any state at all, so `bus_tie_closed` — moved by `set_bus_tie` — composes with a
+comparator band in place of its dwell, which leaves a commanded mode guarded by `assert: 1.25` volts
+against values of `open`, `closed` and `tripped`. A band answers *has the quantity crossed*, and a
+command does not cross anything.
+
+It matters more this round than it did last, because the effect now exists. **Thirty-three discrete
+states declare a `dwell`, fifteen of them commanded, and no tool read one.** A guard against
+chattering is evaluated at the moment of effect — `plant.md` step 2, "Nothing is captured at
+schedule time", which is the executive's — and the executive had never heard of it. A fleet could
+re-command `set_rcs_mode` every tick, or move the bus tie twice inside its 0.2 s, and every
+declaration said it could not. The tell was `rcs.thruster_valve`: its two dwell values are
+`UNCONFIGURED`, an obligation owed to a field nothing consumed.
+
+### The rule, and the reader
+
+The linter refuses a hysteresis band on a commanded state, with `one_way` as the exemption the
+existing rule already reasons about — `pyro_fired` is the one such state a command moves, and a state
+that cannot be re-entered cannot chatter.
+
+And the guard reaches the executive. `command_dwell` reports `(state, min_on_s, min_off_s)` for every
+state a verb moves, and the console refuses a command inside its dwell, by name:
+
+```
+accepted: 'select_antenna'. … refused: DWELL. 'select_antenna' moves 'antenna_selection', which was
+  last changed 1.5 s ago and must hold a value for 10 s before it may change.
+```
+
+**The two values' meaning had to be stated, because the corpus declares the fields and not what they
+measure** — on thirty-three states, and nowhere a sentence. `propulsion.sps_state`'s are 0.5 and 5,
+and its provenance explains the five: *"a five-second floor between burns is what keeps a fleet from
+spending its restart budget in a minute."* That fixes the reading, and it is written where it is
+implemented: **`min_on_s` is how long a state must hold a value before it may change, and `min_off_s`
+is how long it must stay away from a value before it may return to it.** An owed value makes the
+guard unenforceable, and the console refuses with `GUARD OWED` rather than reading it as zero — a
+dwell of zero is exactly the chattering the field exists to prevent.
+
+### What the round got wrong first: a guard that could never fire
+
+The first version kept the clock in memory, reasoning that "a dwell is a statement about *this* run's
+clock" and that a restart should not refuse the first commands after it came back. Both halves of that
+are wrong, and the second is backwards: **the console is a process per invocation**, so a fleet's two
+commands arrive in two processes and the second found an empty clock. The guard fired *never*, which
+is precisely the defect the round exists to fix. It is durable now, for the same reason the deferral
+queue and the tick counters are — a record that does not survive the process boundary cannot be a
+guard across one.
+
+And then it stored `datetime` objects in a JSON record, so `publish()` raised `TypeError: Object of
+type datetime is not JSON serializable` — **after** the effect had been applied and the result
+written, so the tick's whole record was lost and the run looked successful. Every timestamp in that
+file is an ISO string for the reason `accepted_at` is.
+
+### And a number that spelled two ways
+
+The test count reached 200 this round, which is where the count-in-words helper turned out to be
+wrong: it returned a bare `"hundred"` for a round hundred and its caller prefixed a hard-coded
+`"One "`, so **200 and 100 spelled the same**. The digit is spelled in the helper now and the caller
+prefixes nothing.
+
+**286 stayed 286** — the round added a reader rather than an obligation; `rcs.thruster_valve`'s owed
+dwell was already counted and now has something to be owed *to*. **199 became 200 vehicle tests.**
+Plant: 134 states over 57 nodes, 79 edges, 101 of 134 fully configured, 33 with a debt, 65 of 79
+edges declared, 212 unset scalars, build order 15 ready / 33 value / 7 edge / 79 rule. `--strict`
+exits 2, ruff clean, faults `NAME-KEYING HOLDS`.
+
+Verified by breaking three copies in `.scratch/r34/` — a commanded state guarded by a band, a
+commanded state guarded by a band in place of its dwell, and a one-way state as the positive control
+— plus the reader end to end through the console: a command applied, a second inside a 10 s dwell
+refused by name, and an owed guard refused with `GUARD OWED`.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
