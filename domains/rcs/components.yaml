@@ -158,6 +158,7 @@ state:
     command_value:
       - verb: set_rcs_quad
         argument: state
+        key: group
         maps:
           enable: true
           inhibit: false
@@ -167,6 +168,7 @@ state:
           the whole of what a two-valued command against a `bool` needs
       - verb: isolate_rcs_manifold
         argument: branch
+        key: branch
         constant: false
         why: >-
           closing a feed branch is a topology action rather than a valve command: `branch` selects
@@ -513,6 +515,7 @@ components:
 # What is still owed, in the domain's own words rather than the linter's.
 # --------------------------------------------------------------------------------------
 open_debts:
+  - "**A string is not a thruster.** `thruster_valve` is keyed by `thruster_id` and `set_rcs_quad` names a `group` — `sm_primary`, `sm_secondary`, `cm`, `lm` — so the key declaration says which argument selects the elements and the argument cannot name them. `rcs_string_sm_primary` and its siblings carry a `thrusters: 8` count and a `vehicle_keys` link; what none of them declares is *membership*, which is the same list the allocator needs for its wrench matrix. `isolate_rcs_manifold` is the other half: `branch` names a feed branch, and which thrusters a branch feeds is owed with the thruster geometry."
 
   - "The qualified minimum firing time for the 100 lbf thruster, and with it t_max_on and the duty cycle. Not in any source reached; bounded rather than defaulted (header), and RCS-11 is the failure mode of getting it wrong."
   - "Thrust rise and tailoff time constants. The asymmetry between them is what a total-impulse gauge misreads, and no source gives either."

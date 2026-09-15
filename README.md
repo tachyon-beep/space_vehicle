@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 277 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 281 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 277 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 281 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **277** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **281** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **30** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **33** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **206** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **207** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1757,8 +1757,8 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     15   11 %  ready now — the two classes the reference plant can advance
-    28   21 %  owes a value — the cheapest to close, and the debt count already tracks them
-     8    6 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    29   22 %  owes a value — the cheapest to close, and the debt count already tracks them
+     7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     83   62 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -6412,6 +6412,89 @@ argument that is not an enum argument, an empty `why`, neither `maps` nor `const
 `UNCONFIGURED` with no note, the display mode wired back to the switch panel, a state whose unit
 declares no vocabulary, the unbroken corpus composing at 277, and a corpus assertion that every
 `trigger:` verb resolves and that the two `constant` effects are the two keyed-boolean ones.
+
+## `values: [on, off]` is the list `[True, False]`
+
+Building the effect for `set_coolant_pump` meant reading its vocabulary, and its vocabulary was:
+`state: {type: enum, values: [on, off]}`, written unquoted. **YAML 1.1 counts `on`, `off`, `no` and
+`yes` as booleans**, so the registry had been publishing `True` and `False` as the two values a fleet
+may send, and every consequence was at the fleet-facing surface:
+
+| what the fleet reads | what it said |
+|---|---|
+| `HELP.md`'s schema line | ``- `state`: one of: True, False`` |
+| the same entry's prose | "Switch the power amplifier **on or off**" |
+| `state.json`'s `argument_schema` | `["values": [true, false]]`, which is what a machine builds a call from |
+| `set_o2_flow.flow` and `set_o2_source.flow` | `[False, "low", "nominal", "high"]` — `off` became a boolean **in the middle of a list** beside three strings |
+
+Eleven arguments across nine verbs declared a two-valued vocabulary that way. The trap had been met
+twice before it was understood, and this folder recorded it wrong both times. Round 30 found it in a
+mapping *target* — `safe: off` against an engine state whose vocabulary contains `off`, where
+`str(False)` is not `'off'` — and the fix was one pair of quote marks, which is exactly the kind of
+local repair that leaves the class of defect standing. This round met it in the pump's own `maps`
+keys, and the *crash* that followed is what showed the shape:
+
+```
+AttributeError: 'bool' object has no attribute 'endswith'
+```
+
+from `check_conventions`'s citation walk, which expected a string key. So the corpus's own tools were
+not robust to the trap they contained: the refusal that would have named it never printed, because a
+later walk raised first — the failure `test_an_unloadable_vehicle_refuses_instead_of_crashing` exists
+for, arriving through a door nobody had tried.
+
+### The two positions, and the one that is fine
+
+`check_boolean_words` refuses a boolean in either of the positions the corpus reads as *text*: a
+member of a `values` list, and a **mapping key**. It is deliberately not "no booleans", because a
+boolean *value* is legitimate and common — `enable: true` is a value a boolean state holds, and the
+verifier keeps a positive control that asserts so. And the refusal now runs **first**, before any
+walk that assumes the shape it is about to be handed, with `check_conventions`'s key walk guarded so
+a refusal is reported rather than lost.
+
+Eleven sites were quoted back to the words their own help already used — `on`, `off`, `off, low,
+nominal, high`, `on, off, standby` — so nothing was chosen, only restored. `HELP.md` now renders
+`one of: on, off`, and `one of: True, False` appears nowhere.
+
+### And the rule that reached past `discrete`
+
+The effect rule was scoped `if state.get("method") == "discrete"`, on the reasoning that a mode is
+what a command sets — **and that guard is the same line the whole `moved_by` block sat behind**. A
+mode is what a command sets, so the field was written for modes; but `moved_by` is a claim about any
+state, and round 27 had given four `algebraic` states a `command:` mover each so the node-level
+command rule would have something to stand on. Behind that guard, on those states, *nothing* was
+checked: not the kind of the mover, not that the verb resolves, not that it can express a value, and
+not what the value becomes. Five of the twenty-four command→state links were silent for one reason,
+and it was this line.
+
+The rule now walks every state with a command mover and asks for one of four forms — `maps`,
+`constant`, `computed`, or a bare `key` where the values are the state's own. Seventeen of the
+twenty-four declare one; the other seven are the identity, readable off both sides. The five that
+were silent are quantities, and the honest answer for each is that **a command changing an input its
+target's rule reads is not a command assigning the target**: `link_snr`, `tx_power`,
+`nav_solution` and `instrumentation_power` are `computed`, and `pump_1_speed_rpm` maps `off` to zero
+and owes `on`, which is the same rated speed `E-CMD-PUMP` already owes.
+
+Four keyed states also needed to say *which element* a command sets, and three of them cannot:
+`set_breaker` names `lcl` (a class of many breakers) against a state keyed by `breaker_id`,
+`set_rcs_quad` names a string against `thruster_id`, and `execute_event` names an event against
+`device_id`. Only `set_hatch_valve`'s `hatch` argument names a real hatch id. Those three are
+debts, recorded where they belong, and they are the last thing between this corpus and an
+implemented effect.
+
+**277 became 281** — the pump's owed rated speed, and the three key sets — and the pins moved
+together. **195 became 196 vehicle tests.** Plant: 134 states over 57 nodes, 79 edges, **105 of 134
+fully configured, 29 with a debt**, 65 of 79 edges declared, **207 unset scalars**, build order
+**15 ready / 29 value / 7 edge / 83 rule** — the pump's mapping is the state that moved, from "owes a
+rule" to "owes a value", because what blocks it is now named to a field rather than to the domain
+code that would drive it. `--strict` exits 2, ruff clean, faults `NAME-KEYING HOLDS`.
+
+Verified by breaking ten copies in `.scratch/r31/`: an argument vocabulary written as words, a word
+in the middle of a mixed list, a mapping key written as a word, a boolean *value* as a positive
+control, a quantity state with no effect declaration, a `computed` effect with no reason, two forms at
+once, a keyed state with no key, an entry that declares nothing at all, and the unbroken corpus
+composing at 281 — plus a corpus walk asserting zero booleans in text positions, 24 command→state
+links with 17 declared effects, and the seven that are the identity.
 
 ## The invariants, and which of them are enforced
 

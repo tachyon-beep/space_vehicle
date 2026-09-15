@@ -19,7 +19,7 @@ commands:
     argument_schema:
       loop: {type: enum, values: [loop_primary, loop_secondary, loop_lm]}
       pump: {type: enum, values: [pump_1, pump_2, pump_lm]}
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
     authority: A2
     gate: {kind: preference, variable: pump_<pump>_enable}
     interlocks: [pump_no_flow, coolant_supply_high]
@@ -89,7 +89,7 @@ commands:
   - verb: set_evaporator_feed
     argument_schema:
       vehicle: {type: enum, values: [csm, lm]}
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
     authority: A2
     gate: {kind: preference, variable: evaporator_<vehicle>_enable}
     interlocks: [coolant_supply_high, res.cooling_water_reserve]

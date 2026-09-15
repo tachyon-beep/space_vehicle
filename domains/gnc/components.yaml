@@ -274,6 +274,24 @@ state:
     moved_by:
       - "command:load_state_vector"
       - "command:select_nav_source"
+    command_value:
+      - verb: load_state_vector
+        argument: frame
+        computed: >-
+          the filter's estimate is produced from the sensor suite, and this command *resets* it:
+          "this changes what the vehicle believes and never where it is". The value is the estimate,
+          not the argument
+        why: >-
+          one of two commands that move the navigation solution, and the only one that assigns it a
+          starting value rather than weighting its sources
+      - verb: select_nav_source
+        argument: source
+        computed: >-
+          as `load_state_vector`: this chooses what the filter navigates from and the estimate
+          follows. `weight` is the second half of the same statement
+        why: >-
+          the state a command assigns here is the *source*, which is published as `gnc.nav_source`
+          rather than held as a state of its own — recorded in this domain's `open_debts`
     provenance:
       basis: apollo
       ref: "apollo_diode.md:119-122"

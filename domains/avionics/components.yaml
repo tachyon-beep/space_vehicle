@@ -327,6 +327,17 @@ state:
     unit: W
     moved_by:
       - "command:set_instrumentation_mode"
+    command_value:
+      - verb: set_instrumentation_mode
+        argument: profile
+        computed: >-
+          the profile selects instrument classes and the power follows from what is in them:
+          `avionics.instrumentation_power_w` is algebraic, and its rule sums the selected loads.
+          `groups` narrows the profile and can never widen it, so the two arguments compose rather
+          than either one carrying a value
+        why: >-
+          a command that changes an input its target's rule reads is not a command that assigns the
+          target, and this is one of the five links where that is the case
     provenance:
       basis: apollo
       ref: "apollo_diode.md:182"

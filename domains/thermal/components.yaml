@@ -259,6 +259,21 @@ state:
     # that carries it. It is optional here and load-bearing where it is written.
     moved_by:
       - "command:set_coolant_pump"
+    command_value:
+      - verb: set_coolant_pump
+        argument: state
+        maps:
+          "on": UNCONFIGURED
+          "off": 0
+        why: >-
+          a commanded-off pump coasts to zero, so `off` is the only value the corpus can supply.
+          `on` relaxes toward the pump's rated speed, which is published nowhere: the channel's own
+          0-12,000 rpm is a `range_kind: band` — an acceptable operating region rather than a rating
+          — and `coupling.yaml`'s `E-CMD-PUMP` owes the same figure
+        note: >-
+          the rated speed is one scalar, and it closes this mapping, that edge and
+          `pump_1_speed_rpm`'s own driver. What it would take is a pump curve or a rated rpm for the
+          CSM's coolant pump, which no source in the corpus reached gives
     provenance:
       basis: chosen
       reason: "as coolant_flow_kg_s; the pump has its own speed state because a blocked loop and a slowing pump produce the same flow with different speeds, and that difference is the diagnosis"

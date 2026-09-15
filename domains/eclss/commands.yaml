@@ -27,7 +27,7 @@ commands:
         values: [csm, lm]
       flow:
         type: enum
-        values: [off, low, nominal, high]
+        values: ["off", "low", "nominal", "high"]
     authority: A2
     gate:
       kind: preference
@@ -147,7 +147,7 @@ commands:
         values: [csm, lm]
       state:
         type: enum
-        values: [on, off]
+        values: ["on", "off"]
     authority: A2
     gate:
       kind: preference

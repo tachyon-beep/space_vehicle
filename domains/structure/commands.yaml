@@ -206,7 +206,7 @@ commands:
         values: [lm_descent, lm_ascent, csm_service]
       state:
         type: enum
-        values: [on, off]
+        values: ["on", "off"]
     authority: A2
     gate:
       kind: preference

@@ -213,6 +213,26 @@ state:
     moved_by:
       - "command:select_antenna"
       - "command:point_hga"
+    command_value:
+      - verb: select_antenna
+        argument: antenna
+        computed: >-
+          the link budget closes in one tick from the selected antenna's gain, its pointing loss,
+          the range and the receiver's threshold — `comms.link_snr` is algebraic for exactly that
+          reason, and its own note says three edges meet here. This command changes which antenna
+          the budget is evaluated for; it does not carry a dB
+        why: >-
+          the state this command *assigns* is `comms.antenna_selection`, a `command:` mover of the
+          same verb carrying the identity mapping. `link` is the node where the consequences meet,
+          which is why both states are on it
+      - verb: point_hga
+        argument: target
+        computed: >-
+          as `select_antenna`: pointing loss is a term in the same budget, and the gimbal's target
+          changes it rather than setting the signal-to-noise ratio
+        why: >-
+          `point_hga` is authority A1 and declarative; what it changes is where the high-gain
+          antenna looks, and the SNR follows
     provenance:
       basis: apollo
       ref: "apollo_diode.md:164"
@@ -231,6 +251,18 @@ state:
     unit: W
     moved_by:
       - "command:set_power_amplifier"
+    command_value:
+      - verb: set_power_amplifier
+        argument: state
+        computed: >-
+          the draw is the selected transmitter's `dc_w`, and *which* transmitter is a second
+          argument of the same verb — `vehicle.yaml#comms.transmitters` carries 36 W for
+          `sband_transceiver` and 72 W for `sband_power_amplifier`, and the verb's own help calls it
+          "a 36 W step on the bus and a 4x RF gain". A table over two arguments is not a mapping
+          over one, which is why this is `computed` rather than `maps`
+        why: >-
+          `tx_power` is also where the flagship thermal cycle closes: a hot amplifier draws more
+          current for the same output, and that returns to the bus as extra load
     provenance:
       basis: apollo
       ref: "apollo_diode.md:168, :157"

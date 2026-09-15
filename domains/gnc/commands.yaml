@@ -171,7 +171,7 @@ commands:
 
   - verb: set_radar
     argument_schema:
-      state: {type: enum, values: [on, off, standby]}
+      state: {type: enum, values: ["on", "off", "standby"]}
       mode: {type: enum, values: [altitude, range_rate, both], optional: true}
       acquire_altitude_m: {type: number, optional: true, minimum: 0}
     authority: A1

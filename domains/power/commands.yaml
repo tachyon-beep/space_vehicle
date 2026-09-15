@@ -27,7 +27,7 @@ commands:
                                   battery_lm_descent_3, battery_lm_descent_4,
                                   battery_lm_ascent_1, battery_lm_ascent_2],
                names: component}
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
     authority: A2
     gate: {kind: preference, variable: source_<source>_enable}
     interlocks: [bus_a_undervoltage, load_margin_negative]
@@ -74,7 +74,7 @@ commands:
                                    battery_lm_descent_1, battery_lm_descent_2,
                                    battery_lm_descent_3, battery_lm_descent_4,
                                    battery_lm_ascent_1, battery_lm_ascent_2]}
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
     authority: A2
     gate: {kind: preference, variable: contactor_<battery>_enable}
     interlocks: [load_margin_negative]
@@ -125,7 +125,7 @@ commands:
           lm_rcs_heaters,
           lm_lighting,
         ]
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
       priority: {type: enum, values: [P0, P1, P2, P3], optional: true}
     authority: A2
     gate: {kind: preference, variable: load_<load>_enable}

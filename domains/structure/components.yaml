@@ -142,6 +142,7 @@ state:
           set and the value is the same `true` for every device. That is why this is a `constant`
           with an `argument` rather than a `maps` — the argument is the key, and the value is the
           verb. The other mover, `event:pyro_fire`, is the executive raising the same value
+        key: event
     one_way: true
     requires_arm: true
     provenance:
@@ -166,6 +167,15 @@ state:
     unit: "map[hatch_id,enum[closed,latched,open]]"
     moved_by:
       - "command:set_hatch_valve"
+    command_value:
+      - verb: set_hatch_valve
+        argument: state
+        key: hatch
+        why: >-
+          the values are the identity — `closed`, `latched` and `open` are this state's own — so
+          what this entry declares is *which* hatch, and that is the only thing either side leaves
+          open. `hatch` offers `hatch_crew_csm` and `hatch_crew_lm`, which are the ids the unit's
+          `hatch_id` names, and the two agree
     dwell:
       min_on_s: 2
       min_off_s: 2
@@ -376,6 +386,7 @@ one_way_events:
       ref: "apollo_diode.md:343"
 
 open_debts:
+  - "**An event is not a device.** `pyro_fired` is keyed by `device_id` and `execute_event` names an `event` — `lm_undocking`, `descent_stage_separation`, `lm_ascent_jettison`, `pyro_fire`. `one_way_events` declares what each event changes (`from_configuration`, `to_configuration`, `consequence`) and no device, so the command is declared against a key the argument cannot produce. What is owed is the pyro device list and which events fire which — the same list `structure.pyro_continuity_[n]` is published over."
   - "The latch count, the pyro device count, the tunnel volume and the relief valve's crack pressure are all unpublished and declared unset above. Four numbers, and each of them is the difference between a chain that can be modelled and one that can only be described."
   - "The pressure vessel's proof and burst pressures are unset, and deliberately: apollo_diode.md:753 puts finite-element structural mechanics out of scope, so a vessel failure model is not wanted — but the *differential limit* that a relief valve protects is, and it is owed."
   - "Micrometeoroid and debris damage is not modelled. It is the one structural hazard that is genuinely stochastic on a lunar mission, and it belongs in the scenario layer rather than in the domain."

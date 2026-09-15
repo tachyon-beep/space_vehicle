@@ -110,7 +110,7 @@ commands:
     argument_schema:
       vehicle: {type: enum, values: [csm, lm]}
       source: {type: enum, values: [primary, surge, isolated]}
-      flow: {type: enum, values: [off, low, nominal, high]}
+      flow: {type: enum, values: ["off", "low", "nominal", "high"]}
     authority: A2
     gate: {kind: preference, variable: o2_<vehicle>_<source>_enable}
     interlocks: [eclss.cabin_pressure_caution, o2_reserve_10]

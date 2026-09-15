@@ -3514,8 +3514,14 @@ def check_conventions(
         if filename == "vehicle.yaml":
             continue
         for path, holder in _walk_mappings(documents[filename]):
-            for key in sorted(holder):
-                if not key.endswith("_source"):
+            for key in sorted(holder, key=str):
+                # **A key is not always a string.** YAML 1.1 reads `on`, `off`, `no` and `yes` as
+                # booleans, so a corpus with a mapping key written that way reaches this walk with a
+                # `bool` — and `key.endswith` is an `AttributeError` that loses the whole report,
+                # which is the same failure `test_an_unloadable_vehicle_refuses_instead_of_crashing`
+                # exists for. `check_boolean_words` refuses the key; this walk has to survive it
+                # long enough to be told.
+                if not str(key).endswith("_source"):
                     continue
                 text = str(holder[key])
                 if not text.startswith("vehicle.yaml:conventions."):
@@ -5306,19 +5312,35 @@ def check_domain(
     events_here = {
         str(e.get("id")) for e in components.get("one_way_events") or [] if isinstance(e, dict)
     }
+    # --------------------------------------------------------------------------------------
+    # **The guard here said `method != "discrete": continue`, and three rounds of declarations
+    # landed behind it.** A mode is what a command sets, so the field was written for modes — but
+    # `moved_by` is a claim about *any* state, and round 27 gave four `algebraic` states
+    # (`instrumentation_power`, `link_snr`, `tx_power`, `nav_solution`) a `command:` mover each so
+    # that the node-level command rule would have something to stand on, and round 30's
+    # `command_value` gap rule inherited the same scope. So on those states **nothing** was checked:
+    # not the kind of the mover, not that the verb resolves, not that it can express a value, and
+    # not what the value becomes. Five of the twenty-four command→state links were silent for one
+    # reason, and it was this line.
+    #
+    # The one thing that is genuinely discrete-only is the *debt* for silence: a mode that does not
+    # say what changes it is an omission, while an `algebraic` state whose rule is domain code may
+    # have no command mover at all and be complete.
+    # --------------------------------------------------------------------------------------
     for state in components.get("state") or []:
-        if not isinstance(state, dict) or state.get("method") != "discrete":
+        if not isinstance(state, dict):
             continue
         sid = str(state.get("id"))
         mwhere = f"{where}:state {sid}.moved_by"
         movers = state.get("moved_by")
         if movers is None:
-            report.debt(
-                mwhere,
-                "is unset. A discrete state declares its vocabulary and its guard and not what "
-                "changes it, so nothing in the definition says whether a verb writes it, an event "
-                "does, or the vehicle computes it",
-            )
+            if state.get("method") == "discrete":
+                report.debt(
+                    mwhere,
+                    "is unset. A discrete state declares its vocabulary and its guard and not what "
+                    "changes it, so nothing in the definition says whether a verb writes it, an event "
+                    "does, or the vehicle computes it",
+                )
             continue
         if movers == "UNCONFIGURED":
             if not state.get("moved_by_note"):
@@ -5563,13 +5585,54 @@ def check_domain(
                     )
                 constant = entry.get("constant")
                 becomes = entry.get("maps")
-                if constant is None and not isinstance(becomes, dict):
+                computed = entry.get("computed")
+                forms = [f for f in ("maps", "constant", "computed") if entry.get(f) is not None]
+                # **An entry may declare nothing but a key.** An effect whose values are the
+                # identity and whose state is keyed needs to say which element is set and nothing
+                # else — `set_hatch_valve`'s `closed`/`latched`/`open` are `hatch_state`'s own
+                # values, and the hatch the command is about is not derivable from either side.
+                if not forms and entry.get("key") is None:
                     report.refuse(
                         f"{cwhere2}",
-                        "declares neither `maps` nor `constant`. Use `maps` where the argument "
-                        "carries the value and `constant` where it selects *which* element is set "
-                        "and the value is the same one every time",
+                        "declares none of `maps`, `constant`, `computed` or `key`. A command's "
+                        "effect on a state is a mapping from an argument's values, the same value "
+                        "every time, a change to an input the state's rule reads, or — where the "
+                        "values are the state's own — which element of a keyed state is set",
                     )
+                elif len(forms) > 1:
+                    report.refuse(
+                        f"{cwhere2}",
+                        f"declares {forms}. An effect is one of the three forms, and two of them "
+                        "is a reader having to decide which one applies",
+                    )
+                if computed is not None and not str(computed).strip():
+                    report.refuse(
+                        f"{cwhere2}.computed",
+                        "is empty. `computed` claims the state's value follows from its own rule "
+                        "rather than from this command, so it carries the reason the way `logic` "
+                        "carries one",
+                    )
+                # A keyed state needs to be told *which* element the command sets, and the argument
+                # that names it is not derivable: `set_hatch_valve` names `hatch_crew_csm` while the
+                # unit says `hatch_id`, and `set_breaker` names `lcl`, which is a class of many.
+                keyed = "map[" in str(state.get("unit") or "")
+                key_arg = entry.get("key")
+                if keyed and not key_arg and computed is None:
+                    report.refuse(
+                        f"{cwhere2}.key",
+                        f"declares no `key`, and {sid} is a keyed state "
+                        f"(`unit: {state.get('unit')!r}`): the command sets one element of it, and "
+                        "which one is an argument of the verb rather than something this state can "
+                        "read off its own unit",
+                    )
+                if key_arg is not None:
+                    key_spec = (spec2.get("argument_schema") or {}).get(str(key_arg))
+                    if not isinstance(key_spec, dict) or key_spec.get("type") != "enum":
+                        report.refuse(
+                            f"{cwhere2}.key",
+                            f"names {key_arg!r}, which is not an enum argument of {verb_name!r} "
+                            f"(it has {sorted(spec2.get('argument_schema') or {})})",
+                        )
                 if constant is not None and not isinstance(entry.get("argument"), str):
                     report.refuse(
                         f"{cwhere2}.constant",
@@ -5640,10 +5703,19 @@ def check_domain(
         # And the gap the declaration exists for: a `command:` mover whose carrying argument offers
         # values this state cannot hold. Refused rather than skipped, because the alternative is a
         # command that a fleet may issue and whose effect is nothing.
-        if state.get("method") == "discrete":
+        # **Every state a command writes, not only the discrete ones.** The rule was scoped to
+        # `discrete`, on the reasoning that a mode is what a command sets — and five of the
+        # twenty-four command→state links are to states that are `algebraic` or `lag`: `link_snr`,
+        # `tx_power`, `nav_solution`, `instrumentation_power` and `pump_1_speed_rpm`. They are
+        # quantities, the same question is unanswered for them, and the answer is not a vocabulary
+        # match — which is why the scope has to be the whole surface and the *forms* have to carry
+        # the difference.
+        if command_movers:
             for verb_name, spec2 in sorted(command_movers.items()):
                 entry = maps_by_verb.get(verb_name)
-                if entry is not None and entry.get("constant") is not None:
+                if entry is not None and (
+                    entry.get("constant") is not None or entry.get("computed") is not None
+                ):
                     continue
                 arg_values: set[str] = set()
                 if entry is not None and isinstance(entry.get("maps"), dict):
@@ -5694,6 +5766,18 @@ def check_domain(
                         continue
                     carried = {str(v) for v in reaching[0][1].get("values") or []}
                     arg_values = carried
+                if "map[" in str(state.get("unit") or "") and (
+                    entry is None or entry.get("key") is None
+                ):
+                    report.refuse(
+                        f"{where}:state {sid}.command_value",
+                        f"declares no `key` for {verb_name!r}, and {sid} is a keyed state "
+                        f"(`unit: {state.get('unit')!r}`). The values it can hold are "
+                        f"{sorted(values) or 'declared by no vocabulary'}, and which element the "
+                        "command sets is an argument of the verb rather than something readable "
+                        "off the state",
+                    )
+                    continue
                 gap = sorted(carried - values) if values else sorted(arg_values)
                 declared = {str(k) for k in (entry.get("maps") or {})} if entry else set()
                 undeclared = [v for v in gap if v not in declared]
@@ -9366,6 +9450,62 @@ def check_spacecraft_vocabulary(documents: dict[str, Any], report: Report) -> No
             )
 
 
+def check_boolean_words(documents: dict[str, Any], report: Report) -> None:
+    """A word YAML read as a value.
+
+    **YAML 1.1 counts `on`, `off`, `no` and `yes` as booleans**, so a vocabulary written
+    `values: [on, off]` is the list `[True, False]` by the time anything reads it. Nine verbs on
+    this vehicle declared a two-valued argument that way, and the consequences were all at the
+    fleet-facing surface:
+
+      * `state.json`'s capability snapshot publishes the schema so that "a machine can build a
+        call", and it published `true` and `false` as the values a fleet may send.
+      * `HELP.md` — the whole of what a fleet is told before it calls a verb — rendered
+        ``- `state`: one of: True, False`` while the same entry's prose said "Switch the power
+        amplifier on or off".
+      * `set_o2_flow` and `set_o2_source` were worse: their `flow` vocabulary is
+        `off, low, nominal, high`, and `off` became `False` **in the middle of a list** beside three
+        strings — a vocabulary of one boolean and three words, which is what a fleet would have had
+        to send.
+
+    The trap was found twice before it was understood. Round 30 met it in a *mapping target* —
+    `safe: off` against an engine state whose vocabulary contains `off`, where `str(False)` is not
+    `'off'` — and fixed that one line. This round met it again in the pump's own `maps`, and the
+    crash that followed (`'bool' object has no attribute 'endswith'`, from a convention walk that
+    expected a string key) is what showed it is a property of the *format* rather than of a line.
+
+    Two positions, and both are vocabularies the corpus reads as text and renders to the fleet: a
+    member of a `values` list, and a mapping key. A boolean *value* is fine and common —
+    `enable: true` is a value a boolean state can hold — so this is deliberately not "no booleans".
+    """
+    def walk(node: Any, path: str, rel: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, bool):
+                    report.refuse(
+                        f"{rel}:{path}",
+                        f"has {key!r} as a key. YAML 1.1 reads `on`, `off`, `no` and `yes` as "
+                        "booleans, so a key written that way is not the word it looks like — and a "
+                        "key is a name the corpus compares and prints as text. Quote it",
+                    )
+                walk(value, f"{path}.{key}" if path else str(key), rel)
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                leaf = path.split(".")[-1]
+                if leaf == "values" and isinstance(value, bool):
+                    report.refuse(
+                        f"{rel}:{path}[{index}]",
+                        f"is {value!r} in a `values` list, so the vocabulary this argument "
+                        "publishes to the fleet is a boolean rather than the word that was "
+                        "written. YAML 1.1 reads `on`, `off`, `no` and `yes` as booleans: quote "
+                        "the value",
+                    )
+                walk(value, f"{path}[{index}]", rel)
+
+    for rel, document in sorted(documents.items()):
+        walk(document, "", rel)
+
+
 def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> None:
     """An argument a fleet can send names something the vehicle has.
 
@@ -11394,6 +11534,9 @@ def main(argv: list[str] | None = None) -> int:
     # Built here rather than below, because `check_initial_sources` resolves a stock's initial
     # against any document now and this is the one place they are all loaded.
     documents = load_documents(root, vehicle, coupling, mission, channels)
+    # First, because a boolean key is a key no walk below can read: this reports it by name
+    # before anything assumes the shape it is about to be handed.
+    check_boolean_words(documents, report)
     # After the documents, because a convention is held against the declarations that state it and
     # against the registry it governs — and the registry is one of them.
     check_conventions(vehicle or {}, registry, documents, report)

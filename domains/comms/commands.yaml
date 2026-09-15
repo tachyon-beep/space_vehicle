@@ -131,7 +131,7 @@ commands:
 
   - verb: set_power_amplifier
     argument_schema:
-      state: {type: enum, values: [on, off]}
+      state: {type: enum, values: ["on", "off"]}
       transmitter: {type: enum, values: [sband_power_amplifier, lm_sband], optional: true}
     authority: A2
     gate: {kind: preference, variable: power_amplifier_<transmitter>_enable}
