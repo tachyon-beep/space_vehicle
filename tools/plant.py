@@ -994,20 +994,31 @@ def initial_values(world: World) -> dict[str, Any]:
 
     A stock the configuration has not given a value is left out rather than guessed, and the plant
     refuses by name when a tick reaches it — which is the behaviour the check beside this wants.
+
+    **`internal` is a key space rather than a key.** The sentinel is not a node, and forty-eight
+    states live on it — so `values["internal"]` as a single slot would let every one of them
+    overwrite the next, which is why this function and `step()` both used to drop it. Dropping it
+    was the workaround, and it cost the command surface a third of its effects: eight of the
+    twenty-four command→state links are to states on the sentinel (`computer_mode`, `breaker_panel`,
+    `rcs.mode`, `hatch_state` and four more), so `apply_command` had nowhere to put what those
+    commands change and returned an empty map that was indistinguishable from a verb that writes
+    nothing. The sentinel holds a *map* keyed by state id, which is what "not one node" means.
     """
     values: dict[str, Any] = {}
     for state in world.states:
         if state.method != "stock":
             continue
-        # `internal` is excluded for the reason `step` excludes it: the sentinel is one key shared
-        # by every state that lives on it, so seeding it would let twenty-five accumulators
-        # overwrite each other into a single value that means nothing. A state advanced with its
-        # domain keeps its own storage in the domain, which is what the sentinel says.
-        if state.node == "internal":
-            continue
         initial = (state.spec or {}).get("initial")
-        if isinstance(initial, (int, float)):
+        if not isinstance(initial, (int, float)):
+            continue
+        if state.node == "internal":
+            values.setdefault("internal", {})[state.id] = float(initial)
+        else:
             values[state.node] = float(initial)
+    # The key exists even when nothing seeds it, so a reader can tell the sentinel is there and
+    # empty rather than absent — the same distinction `state.json`'s gate map draws for a closed
+    # gate and an unnamed one.
+    values.setdefault("internal", {})
     return values
 
 
@@ -1032,13 +1043,200 @@ def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
     for node in world.schedule:
         for state in world.states_on(node):
             staged.update(advance(world, state, {**values, **staged}, horizon))
-    committed = {**values, **{k: v for k, v in staged.items() if k != "internal"}}
+    # The sentinel used to be dropped here, because one key shared by forty-eight states is a slot
+    # that means nothing. It is a key space now, so nothing is dropped — and no schedule entry
+    # carries it anyway: `internal` is not in `coupling.yaml#nodes`, so no state in the order has
+    # it as a node and nothing in this loop can stage it.
+    committed = {**values, **staged}
 
     # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
     #    accumulator of every `conserve` edge, which exists once the stocks do.
     # 6. Instruments: T -> A. One-way, and the quality function cannot see the faults.
     # 7. Compare-point: a hash over canonically-encoded state, every tick.
     return committed
+
+
+def prune(value: Any, width: int = 40) -> str:
+    """A value, short enough to print beside another one."""
+    text = repr(value)
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def command_targets(world: World, verb: str) -> list[State]:
+    """Every state that declares this verb as a `command:` mover.
+
+    The declaration is the state's, not the verb's: `moved_by: command:<verb>` is the half that
+    says a command writes this state, and the corpus was joined to the graph for exactly this
+    reason in rounds 23, 27 and 28. What was missing until round 30 was the other half — which
+    argument carries the value and what each of its values becomes — and round 31 found that the
+    rule enforcing it had never run on a state that is not a mode.
+    """
+    return [
+        state
+        for state in world.states
+        if f"command:{verb}" in [str(m) for m in (state.spec.get("moved_by") or [])]
+    ]
+
+
+def command_effect(world: World, state: State, verb: str, arguments: dict[str, Any]) -> Any:
+    """What one command makes one state, from `command_value`, or a named refusal.
+
+    Four forms, and the order matters because they are checked in the order the corpus can answer
+    them. A `computed` effect is refused rather than guessed: the state's value follows from its
+    own rule, and the plant's contract is that a rule is code and never configuration. A `constant`
+    is the value, and `maps` looks the carrying argument's value up. With no entry at all the effect
+    is the identity — the carrying argument is the unique enum argument whose values intersect the
+    state's, which is derivable from the two declarations and is why seven of the twenty-four links
+    need nothing written down.
+    """
+    where = f"domains/{state.domain}/components.yaml:state {state.id}"
+    schema = (
+        next((v for v in [world.verbs.get(verb)] if v), {}) or {}
+    ).get("argument_schema") or {}
+    entry = next(
+        (
+            e
+            for e in (state.spec.get("command_value") or [])
+            if isinstance(e, dict) and str(e.get("verb")) == verb
+        ),
+        None,
+    )
+    values = set()
+    for match in re.findall(r"enum\[([^\]]*)\]", str(state.spec.get("unit") or "")):
+        values.update(v.strip() for v in match.split(","))
+
+    def carried() -> str:
+        """The value of the argument that carries this state's value."""
+        if entry is not None:
+            argument = str(entry.get("argument"))
+        else:
+            reaching = [
+                name
+                for name, spec in schema.items()
+                if isinstance(spec, dict)
+                and spec.get("type") == "enum"
+                and values & {str(v) for v in spec.get("values") or []}
+            ]
+            if len(reaching) != 1:
+                raise Unconfigured(
+                    f"{where}.command_value",
+                    f"is moved by {verb!r} and {len(reaching)} of its arguments can carry a value "
+                    f"this state holds ({reaching}), so which one is not readable off either side",
+                )
+            argument = reaching[0]
+        if argument not in arguments:
+            raise Unconfigured(
+                f"{where}.command_value",
+                f"needs {verb!r}'s {argument!r} argument, which the call did not supply",
+            )
+        return str(arguments[argument])
+
+    if entry is not None and entry.get("computed") is not None:
+        raise Unconfigured(
+            f"{where}.command_value",
+            f"is `computed`: {entry['computed']}",
+        )
+    if entry is not None and entry.get("constant") is not None:
+        return entry["constant"]
+    source = carried()
+    if entry is not None and isinstance(entry.get("maps"), dict):
+        if source not in {str(k) for k in entry["maps"]}:
+            return source if source in values else _refuse_unmapped(where, verb, source, values)
+        target = entry["maps"][source]
+        if target == "UNCONFIGURED":
+            raise Unconfigured(
+                f"{where}.command_value.maps.{source}",
+                f"is owed: {entry.get('note', '')}",
+            )
+        return target
+    if values and source not in values:
+        raise Unconfigured(
+            f"{where}.command_value",
+            f"is moved by {verb!r}, which can be called with {source!r}, and this state cannot hold "
+            f"it; it holds {sorted(values)}",
+        )
+    return source
+
+
+def _refuse_unmapped(where: str, verb: str, source: str, values: set[str]) -> Any:
+    raise Unconfigured(
+        f"{where}.command_value",
+        f"has no mapping for {verb!r}'s value {source!r}, and this state cannot hold it; it holds "
+        f"{sorted(values)}",
+    )
+
+
+def apply_command(
+    world: World, values: dict[str, Any], verb: str, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """`plant.md` step 1: the effect of one command, applied to the value map.
+
+    Until this existed the plant could *describe* a command — `capability_snapshot` reports whether
+    one is available, and `command_value` says what each of its values becomes — and could not
+    perform one. `console.py` said so in as many words in every success it wrote: "this reference
+    implementation resolves, refuses and settles; it does not simulate the effect."
+
+    Two things this is not. It is **not the admission check**: the phase gate, the gate variable and
+    the interlocks are the executive's, evaluated at the moment of effect, and a plant that
+    re-implemented them would be a second source of truth for the one rule §9 check 9 is about.
+    And it is **not a tick**: it writes the states a command moves and returns what it wrote, so the
+    caller can see the delta. The nodes it touches are the nodes those states live on, in the
+    plant's own key space, which is what makes the result something `step()` can go on integrating.
+
+    A verb that moves no state is not an error. Thirty-seven of the fifty-eight are reads, events
+    and configuration, and the honest answer for one of those is that the vehicle's value map is
+    unchanged — which is worth returning rather than raising, because a fleet that cannot tell
+    "nothing happened" from "the plant does not know" has lost the cheaper of the two answers.
+    """
+    if verb not in world.verbs:
+        raise Unconfigured(f"plant.py:verb {verb}", "is not registered by any domain")
+    staged: dict[str, Any] = {}
+    for state in command_targets(world, verb):
+        value = command_effect(world, state, verb, arguments)
+        entry = next(
+            (
+                e
+                for e in (state.spec.get("command_value") or [])
+                if isinstance(e, dict) and str(e.get("verb")) == verb
+            ),
+            None,
+        )
+        key_argument = (entry or {}).get("key")
+        # Three destinations, and the sentinel is one of them rather than an exemption. A scalar
+        # state on a node is `values[node]`; a keyed state on a node is a map of its elements; and a
+        # state on the sentinel is an entry in `values["internal"]` under its own id. The first
+        # version of this skipped the sentinel, on the reading that a state advanced with its domain
+        # is stored by the domain — which is true of what *advances* it and false of where the plant
+        # keeps it, and the difference was eight commands whose effect vanished.
+        #
+        # **And the sentinel's two namespaces are nested rather than shared**, which the first
+        # version got wrong in a way only a keyed sentinel state shows: `hatch_state` is a map of
+        # hatches, so writing `hatch_crew_lm` beside the sentinel's state ids put a hatch id in the
+        # same namespace as `computer_mode` and lost the state's own name. A keyed state's elements
+        # live under the state's id, on the sentinel and on a node alike.
+        if key_argument:
+            if str(key_argument) not in arguments:
+                raise Unconfigured(
+                    f"domains/{state.domain}/components.yaml:state {state.id}.command_value.key",
+                    f"names {key_argument!r} and the call did not supply it",
+                )
+            if state.node == "internal":
+                sentinel = dict(staged.get("internal") or values.get("internal") or {})
+                elements = dict(sentinel.get(state.id) or {})
+                elements[str(arguments[key_argument])] = value
+                sentinel[state.id] = elements
+                staged["internal"] = sentinel
+            else:
+                elements = dict(staged.get(state.node) or values.get(state.node) or {})
+                elements[str(arguments[key_argument])] = value
+                staged[state.node] = elements
+        elif state.node == "internal":
+            sentinel = dict(staged.get("internal") or values.get("internal") or {})
+            sentinel[state.id] = value
+            staged["internal"] = sentinel
+        else:
+            staged[state.node] = value
+    return staged
 
 
 def report_build_order(world: World) -> None:
@@ -1291,6 +1489,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--phase", default="translunar_coast", help="the mission phase to report")
     parser.add_argument(
+        "--apply",
+        nargs="+",
+        metavar="VERB ARG=VALUE",
+        help="apply one command to the value map and print what it changed: "
+        "`--apply set_bus_tie tie=csm_tie_ab state=closed`",
+    )
+    parser.add_argument(
         "--blackout",
         action="store_true",
         help="the mission's second clock: blackouts and contact per phase, for a vehicle in orbit",
@@ -1324,6 +1529,52 @@ def main(argv: list[str] | None = None) -> int:
     except Unconfigured as exc:
         sys.stderr.write(f"the configuration cannot be loaded: {exc}\n")
         return 3
+
+    if args.apply:
+        verb, *pairs = args.apply
+        arguments: dict[str, Any] = {}
+        for pair in pairs:
+            name, _, text = pair.partition("=")
+            if not _:
+                sys.stderr.write(f"{pair!r} is not an `argument=value` pair\n")
+                return 4
+            arguments[name] = text
+        values = initial_values(world)
+        try:
+            staged = apply_command(world, values, verb, arguments)
+        except Unconfigured as exc:
+            sys.stderr.write(f"the plant cannot apply {verb!r}: {exc}\n")
+            return 3
+        # **The delta, not the map.** A staged value for the sentinel is a copy of the whole
+        # sentinel map, so printing it whole listed every accumulator the command had not touched
+        # and read as seven changes where there was one. What a caller wants is what moved.
+        changed: list[tuple[str, Any, Any]] = []
+        for node, value in sorted(staged.items()):
+            if node == "internal":
+                for sid in sorted(value):
+                    was = (values.get("internal") or {}).get(sid, "<unset>")
+                    if was != value[sid]:
+                        changed.append((f"internal:{sid}", was, value[sid]))
+            elif values.get(node) != value:
+                changed.append((node, values.get(node, "<unset>"), value))
+        print(f"{verb} {arguments} -> {len(changed)} value(s) changed")
+        if not changed:
+            targets = command_targets(world, verb)
+            if targets:
+                print(
+                    "  none: the command was applied and every state it moves already held that "
+                    f"value ({', '.join(s.id for s in targets)})"
+                )
+            else:
+                print(
+                    "  nothing: this verb writes no state. Thirty-seven of the fifty-eight are "
+                    "reads, events and configuration, and an unchanged value map is the honest "
+                    "answer for one of them — which is a different answer from a plant that does "
+                    "not know."
+                )
+        for where, was, now in changed:
+            print(f"  {where:34} {prune(was)} -> {prune(now)}")
+        return 0
 
     if args.frame:
         frame = emit_frame(

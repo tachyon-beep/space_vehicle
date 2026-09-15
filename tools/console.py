@@ -49,6 +49,7 @@ from generate_help import generate as generate_help  # noqa: E402
 from plant import (  # noqa: E402
     Unconfigured,
     World,
+    apply_command,
     capability_snapshot,
     gate_instantiations,
     initial_values,
@@ -327,6 +328,48 @@ class Console:
             # to refuse the template rather than this file's to guess.
             return [str(declared)]
 
+    def apply(self, verb: str, arguments: dict[str, str]) -> str:
+        """The effect, and the sentence that says what it was.
+
+        **This reference implementation used to stop here**, and said so in every result it wrote:
+        *"it does not simulate the effect."* What it lacked until round 30 was the declaration —
+        which argument carries the value and what each of its values becomes — and what it lacked
+        until round 32 was a place to put a state that lives on the `internal` sentinel, where
+        eight of the twenty-four command→state links land.
+
+        An effect the corpus has not answered is **refused rather than skipped**. `apply_command`
+        raises `Unconfigured` naming the field and saying what would close it, and the honest thing
+        to hand a fleet is that sentence: a command accepted, acknowledged and silently ignored is
+        the one outcome a fleet cannot tell from success.
+        """
+        try:
+            staged = apply_command(self.world, self.values, verb, arguments)
+        except Unconfigured as exc:
+            return (
+                f"refused: NOT IMPLEMENTED. {verb!r} is a valid command and the vehicle cannot "
+                f"apply it yet: {exc}. The declaration is complete and the value is not — the "
+                "corpus says which state this command moves and what each of its argument's values "
+                "becomes, and what it does not yet say is what one of those values *is*.\n"
+            )
+        changed: list[str] = []
+        for node, value in sorted(staged.items()):
+            if node == "internal":
+                for state_id in sorted(value):
+                    if (self.values.get("internal") or {}).get(state_id) != value[state_id]:
+                        # Qualified, because the sentinel is not a node and a bare state id
+                        # would be indistinguishable from a node of the same name.
+                        changed.append(f"internal:{state_id}={value[state_id]}")
+            elif self.values.get(node) != value:
+                changed.append(f"{node}={value}")
+        self.values.update(staged)
+        if not changed:
+            return (
+                f"succeeded: {verb!r} applied. No value changed: the states it moves already held "
+                "what it sets, which is what `idempotent: true` means, or it moves none — "
+                "thirty-seven of the fifty-eight verbs are reads, events and configuration.\n"
+            )
+        return f"succeeded: {verb!r} applied. Changed: {', '.join(changed)}.\n"
+
     def resolve(self, command: str) -> str:
         """The result body for one command. Availability is the registries', not a decision here.
 
@@ -455,8 +498,7 @@ class Console:
         return (
             f"accepted: {verb!r}. Authority {spec.get('authority')}, phase {self.phase}, gate "
             f"{row['gate_variables'][0]!r} open, {len(spec.get('interlocks') or [])} interlock(s) "
-            "clear. This reference implementation resolves and refuses; it does not simulate the "
-            "effect.\n"
+            f"clear. {self.apply(verb, arguments)}"
         )
 
     # -- the cycle --------------------------------------------------------------------------
@@ -537,13 +579,12 @@ class Console:
             written.append(
                 self.write_result(
                     command,
-                    f"succeeded: {verb!r} settled at tick {self.ticks}, "
+                    f"settled: {verb!r} at tick {self.ticks}, "
                     f"{age:.1f} s after acceptance, re-checked against the phase, its gate and its "
                     "interlocks at the moment of effect rather than at the moment it was "
                     "scheduled. Interlocks: "
                     f"{'none declared' if not spec.get('interlocks') else str(spec.get('interlocks'))}. "
-                    "This reference implementation resolves, refuses and settles; it does not "
-                    "simulate the effect.\n",
+                    f"{self.apply(verb, self.parse_arguments(command))}",
                 )
             )
         self.deferred = still_waiting

@@ -6496,6 +6496,73 @@ once, a keyed state with no key, an entry that declares nothing at all, and the 
 composing at 281 — plus a corpus walk asserting zero booleans in text positions, 24 command→state
 links with 17 declared effects, and the seven that are the identity.
 
+## The effect, implemented — and the sentinel a third of it landed on
+
+`plant.md` step 1 is *"Effects — everything external enters here and nowhere else."* Nothing
+implemented it. The plant could **describe** a command — `capability_snapshot` reports whether one is
+available, `command_value` says what each of its values becomes — and could not perform one, and
+`console.py` said so in every success it wrote: *"this reference implementation resolves, refuses and
+settles; it does not simulate the effect."*
+
+Writing `apply_command` needed the declaration (rounds 27–31) and one thing more, which is what this
+round found. **Eight of the twenty-four command→state links land on the `internal` sentinel**:
+
+| onto the sentinel | into the value map |
+|---|---|
+| `computer_mode`, `breaker_panel`, `comm_mode`, `mode`, `hatch_state`, `relief_valve_state`, `telemetry_rate`, `antenna_selection` | the three engine states, `bus_tie_closed`, `cabin_regulator_position`, `guidance_mode`, `thruster_valve`, `pyro_fired`, `pump_1_speed_rpm` and the four computed quantities |
+
+`internal` is not a node, and **forty-eight states live on it** — so `values["internal"]` as a single
+slot would let every one of them overwrite the next. `initial_values()` and `step()` both *dropped*
+the key, which was the workaround, and it cost the command surface a third of its effects:
+`set_rcs_mode`, `set_computer_mode`, `set_breaker`, `set_hatch_valve` and four more were accepted,
+acknowledged, and changed nothing at all — **the one outcome a fleet cannot tell from success.**
+
+`internal` is a **key space** now, keyed by state id, and the six accumulators that declare
+`initial: 0` are seeded into it rather than dropped. Two namespaces are nested rather than shared:
+`hatch_state` is a map of hatches, and the first version of the write put `hatch_crew_lm` in the same
+dict as `computer_mode` and lost the state's own name — caught by the test that asserts the shape,
+not by reading the code.
+
+### What it does, and what it refuses
+
+**Thirteen of the twenty-one verbs that write a state apply; eight are owed, and each refuses with a
+sentence naming the field.** That is the plant's contract arrived at from the command side: a value
+the configuration does not have is a debt with a message, and the message is what a fleet needs.
+
+```
+$ python3 tools/plant.py --apply set_bus_tie tie=csm_tie_ab state=closed
+set_bus_tie {'tie': 'csm_tie_ab', 'state': 'closed'} -> 1 value(s) changed
+  bus_tie                            '<unset>' -> 'closed'
+
+$ python3 tools/plant.py --apply set_coolant_pump loop=loop_primary pump=pump_1 state=on
+the plant cannot apply 'set_coolant_pump': domains/thermal/components.yaml:state
+  pump_1_speed_rpm.command_value.maps.on: is owed: the rated speed is one scalar, and it closes
+  this mapping, that edge and `pump_1_speed_rpm`'s own driver.
+```
+
+And the console applies it, which is the payoff: a command's result now carries the delta it caused.
+
+```
+accepted: 'set_rcs_mode'. Authority A1, phase translunar_coast, gate 'rcs_mode_auto_enable' open,
+  4 interlock(s) clear. succeeded: 'set_rcs_mode' applied. Changed: internal:mode=manual.
+```
+
+The console's version of an unanswerable effect is `refused: NOT IMPLEMENTED` — a **third** outcome
+beside success and the admission refusals, and deliberately not a success. It is the one case where
+the vehicle is telling the fleet something about *itself* rather than about the command, and a fleet
+that could not see it would learn to distrust its own commands instead.
+
+**281 stayed 281** — nothing was owed here; the round made fourteen declarations performable and left
+the remaining eight saying exactly what they are owed. **196 became 198 vehicle tests.** Plant: 134
+states over 57 nodes, 79 edges, 105 of 134 fully configured, 29 with a debt, 65 of 79 edges declared,
+207 unset scalars, build order 15 ready / 29 value / 7 edge / 83 rule. `--strict` exits 2, ruff
+clean, faults `NAME-KEYING HOLDS`.
+
+Verified by applying every verb through the API — thirteen applied, eight refused by name, none
+silent — and by running the console end to end: a node write, a sentinel write, a `computed` refusal,
+an owed-map refusal, and a verb that writes no state, which is a different sentence from a plant that
+does not know.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
