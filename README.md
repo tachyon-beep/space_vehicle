@@ -5970,6 +5970,51 @@ reaches; the pump's driver edge removed (which brings the node-level debt back);
 `advances` dropped, which the plant's own build order reports as a sibling losing its readiness; the
 unbroken corpus composing at 269; and both states still owing what they owe.
 
+## The ladder was declared twice, and only the durations were held
+
+`mission.yaml` fixes the timeline as eight `duration_h` values and as eight `starts_at_h` values. The
+totals are checked three ways — the phases against `phase_total_check.sums_to_h`, against
+`met_epoch_provenance.total_duration_h`, and the tick count against its own arithmetic — and the
+absolute starts were checked **none**. Two edits composed that should not, and both were run against
+copies before the check existed:
+
+| the edit | what it does |
+|---|---|
+| `surface`'s start from 100.0 to 110.0, touching no duration | every total still holds, and the mission now has a phase that begins ten hours after it is declared to |
+| descent 2.5 → 3.5 **with** surface 21.5 → 20.5 | the compensating pair: the ladder still sums to exactly 192.0, every figure derived from it is intact, and every phase boundary after descent has moved |
+
+The check re-derives the starts as the cumulative sum of the durations, one phase at a time, which is
+the rule the trajectory's osculating elements and the tick count are already held by. A phase whose
+start is *missing* is a debt rather than a refusal, because the fix is to say when it begins: *"the
+mission has a duration and no clock: a fleet can be told which phase it is in and not how far into
+it."*
+
+### And the fleet can now read the window
+
+The declaration was in the corpus and the fleet reads `HELP.md`, so the generator now renders each
+phase with its window, from the values the linter holds:
+
+```
+4. `surface` — lunar surface, LM alone, EVA (MET 100-121.5 h)
+```
+
+`mission.met_s` is published, so the subtraction a fleet actually wants — how far into the phase, and
+how long is left — is now one that can be done from what the fleet can see. That is the same move the
+quaternion order needed: a declaration the vehicle holds, rendered where the fleet reads it.
+
+**269 stayed 269** — nothing was owed here; the durations, the starts and the totals were all
+declared, and what was missing was a reader.
+
+**185 became 186 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 202 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking eight copies in `.scratch/r24/`: a phase's start moved with no duration changed,
+the first phase not starting at zero, the last phase's start drifting, one duration moved with every
+later start left alone, the compensating pair (which the totals do not notice), a phase with no start
+at all, the unbroken corpus composing at 269, and the help window following the declaration when the
+declaration moves.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

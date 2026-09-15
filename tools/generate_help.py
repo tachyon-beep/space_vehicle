@@ -125,7 +125,19 @@ def describe_argument(name: str, spec: dict[str, Any]) -> str:
 
 def generate(root: Path) -> str:
     mission = load(root / "mission.yaml")
-    phases = [(p.get("id"), p.get("name")) for p in mission.get("phases") or []]
+    # The phase's *window* travels with it. `mission.met_s` is published and the ladder is
+    # declared, but the declaration is in the corpus and this file is where a fleet reads the
+    # mission: without the window, "which phase is it and how far into it am I" needs a number the
+    # fleet cannot see. The starts are the cumulative durations, which the linter re-derives.
+    phases = [
+        (
+            p.get("id"),
+            p.get("name"),
+            p.get("starts_at_h"),
+            p.get("duration_h"),
+        )
+        for p in mission.get("phases") or []
+    ]
 
     lines: list[str] = []
     add = lines.append
@@ -189,11 +201,17 @@ def generate(root: Path) -> str:
     add("")
     add(
         "The phase ids below are the vocabulary a refusal names and the vocabulary the entries "
-        "use. The mission runs them in this order."
+        "use. The mission runs them in this order, and each carries its window in mission elapsed "
+        "time — `mission.met_s` is published, so a fleet can tell how far into a phase it is and "
+        "how long is left."
     )
     add("")
-    for index, (pid, name) in enumerate(phases, start=1):
-        add(f"{index}. `{pid}` — {name}")
+    for index, (pid, name, start, duration) in enumerate(phases, start=1):
+        if isinstance(start, (int, float)) and isinstance(duration, (int, float)):
+            window = f"MET {start:g}-{start + duration:g} h"
+        else:
+            window = "window undeclared"
+        add(f"{index}. `{pid}` — {name} ({window})")
     add("")
 
     for domain in domain_order:

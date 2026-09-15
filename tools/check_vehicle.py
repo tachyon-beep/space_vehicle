@@ -622,6 +622,43 @@ def check_met_clock(doc: dict[str, Any], report: Report) -> None:
     linter evaluates rather than in a sentence.
     """
     phases = doc.get("phases") or []
+
+    # --------------------------------------------------------------------------------------
+    # **The absolute half of the ladder, which nothing held.** The totals below are checked three
+    # ways and the eight `starts_at_h` fields were checked none: move `surface`'s start from 100.0
+    # to 110.0 and the corpus composes, and so does a compensating pair of duration edits (descent
+    # 2.5 -> 3.5 with surface 21.5 -> 20.5), which leaves the total at 192.0 and every figure
+    # derived from it intact. Both were run against copies before this check existed.
+    #
+    # The ladder is what a fleet plans against — "PDI at MET 97.5 h", "the final 7.5 hours of the
+    # lunar-orbit phase" — and it is *re-derived* here rather than tabulated, the same rule the
+    # trajectory's osculating elements and the tick count are held by.
+    # --------------------------------------------------------------------------------------
+    elapsed = 0.0
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        duration = phase.get("duration_h")
+        start = phase.get("starts_at_h")
+        pw = f"mission.yaml:phase {phase.get('id')}"
+        if not isinstance(duration, (int, float)) or isinstance(duration, bool):
+            continue
+        if not isinstance(start, (int, float)) or isinstance(start, bool):
+            report.debt(
+                f"{pw}.starts_at_h",
+                f"is {start!r}. The ladder gives every phase an absolute start and this one has "
+                "none, so the mission has a duration and no clock: a fleet can be told which phase "
+                "it is in and not how far into it",
+            )
+        elif abs(float(start) - elapsed) > 1e-9:
+            report.refuse(
+                f"{pw}.starts_at_h",
+                f"is {start!r} and the durations before it sum to {elapsed:g} h. The ladder is "
+                "declared twice — as durations and as absolute starts — and the second is the "
+                "cumulative sum of the first. A compensating pair of duration edits leaves the "
+                "total intact and moves every phase after them",
+            )
+        elapsed += float(duration)
     if not phases:
         return
     durations = [p.get("duration_h") for p in phases]
