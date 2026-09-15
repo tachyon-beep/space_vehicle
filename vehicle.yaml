@@ -81,7 +81,39 @@ spacecraft:
 # MET may not.
 # --------------------------------------------------------------------------------------
 conventions:
-  units: SI
+  # `units: SI` was the only one of the six that a reader could hold the corpus to, and it was
+  # **false**: the registry publishes `psia`, `mmHg`, `ft3/min`, `degC` and seven more, deliberately,
+  # because `channels.yaml`'s header says the apollo rows are the catalogue "verbatim — identifiers,
+  # units, ranges, precisions and rates included". The claim is now the claim the corpus can keep,
+  # and the exceptions are part of it rather than an escape from it: `check_conventions` refuses a
+  # channel unit that is neither SI, dimensionless nor declared here — and refuses an entry here
+  # that no channel uses, or that is SI already.
+  units: >-
+    SI, except for the units a channel's own source publishes and the registry keeps verbatim.
+    Every conversion the corpus performs is written where it is used — 0.45359237 kg per lb,
+    6,894.757293168361 Pa per psi, 2.45e6 J per kg of water, 3,600 J per Wh — rather than
+    presupposed by the channel's unit, because the fleet reads what the source published
+  units_exceptions:
+    psi: "apollo publishes tank and cabin pressures in pounds per square inch; this is the gauge or differential reading, and the absolute one is `psia`"
+    psia: "as `psi`, absolute: the cabin's 5 psia is the figure every atmosphere computation in this corpus is anchored to (`atmosphere_model.check`, and the two cabin oxygen initials that derive from it)"
+    mmHg: "partial pressures are published in millimetres of mercury, which is the medical convention and the unit the ppO2 thresholds and their alarms are written in"
+    degC: "every temperature channel is published in degrees Celsius, from the same sources that give the cabin's 295 K nominal — the two meet in `atmosphere_model` and in the thermal zones, and the conversion is the +273.15 on the initial's own derivation"
+    deg: "angles: apollo publishes degrees, and the pointing errors, deadbands and alignment budgets are all written in them"
+    deg/s: "angular rates, as `deg`: the SI alternative is rad/s and it appears nowhere in the corpus except in `covariance_units` below"
+    ft3/min: "the suit loop's flow is published in cubic feet per minute and no source states it any other way"
+    L/min: "the coolant loops' flows are published in litres per minute; the loop relations convert to kg/s with the fluid density declared beside them"
+    Wh: "battery energy is published in watt-hours and the load budget states it that way; `battery_charge_j` converts once, with `initial_factor: 3600`"
+    rpm: "pump speed is published in revolutions per minute and no source gives rad/s"
+    g: >-
+      standard gravity, not grams — and the symbol collides, which is why it is declared rather
+      than assumed: `structure.accel_xyz_g` is an acceleration in g, while `g/s` on the two
+      mass-flow channels is grams per second. The map that decides dimensions knows only one of
+      the two senses
+  # The order is `[w,x,y,z]` and this is the one declaration of it: a site that states an order
+  # names this path in `quaternion_order_source`, and `check_conventions` resolves it and compares.
+  # `domains/rcs/commands.yaml`'s quaternion argument and `domains/gnc/points.yaml`'s `attitude_q`
+  # are the two sites, and the generated `HELP.md` renders the order beside the argument so that a
+  # fleet is told the same thing the vehicle believes.
   quaternion_order: "[w,x,y,z]"
   quaternion_direction: "attitude_ref_from_body — rotates a coordinate vector from BODY into the named reference frame"
   angular_velocity: "the frame rotating relative to the frame it is measured against, resolved in the vehicle's BODY frame unless a channel says otherwise"

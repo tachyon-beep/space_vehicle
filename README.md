@@ -5607,8 +5607,8 @@ three places: `domains/gnc/components.yaml`'s header repeats `[w,x,y,z]`, `domai
 `"unit quaternion, w-first"` without citing anything. **The word `quaternion` appears zero times in
 the linter**, so the component order — which the comment itself calls "the single most consequential
 line in the document", because two agents can disagree about it while both being right about the
-physics — is a convention nothing holds. That is the next round's finding, recorded here with its
-evidence rather than left to be rediscovered.
+physics — was a convention nothing held. That was this round's work: the section below is what came
+of it.
 
 **179 became 180 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
 configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
@@ -5619,6 +5619,105 @@ invented for one verb, a frame renamed in the registry, each of the two state-ve
 references renamed, a frame removed from the registry, a state vector with no frame (owed rather
 than refused), the unbroken corpus composing at 268, and the generated help text naming one frame
 vocabulary and no other.
+
+## The conventions block, and the claim in it that was false
+
+`vehicle.yaml#conventions` is the block the previous round ended on. Its own comment quotes the rule
+it exists for — *"no vector is valid without a declared frame"* — and then goes further:
+
+> it fixes four conventions that a vehicle can get silently wrong, because every one of them is a
+> *convention* rather than a quantity. Two agents can disagree about a quaternion's component order
+> while both being right about the physics, and nothing downstream would report the disagreement:
+> the attitude would simply be wrong, in a way that looks like a control problem.
+
+It says they are *"declared once, here"* and that `domains/gnc/` *"is what enforces them"*. The
+enforcement was three pieces of prose — a header comment repeating `[w,x,y,z]`, a point's note citing
+the block, and an argument's note saying `"unit quaternion, w-first"` — and **the word `quaternion`
+appeared zero times in the linter.** The order a fleet must send was, in the only file a fleet reads,
+a phrase inside a note.
+
+Two of the six conventions are holdable, and the check found that one of them was not just unheld but
+wrong.
+
+### The order is now a field, and the help renders it
+
+```yaml
+        quaternion:
+          type: array
+          items: number
+          length: 4
+          note: "unit quaternion"
+          quaternion_order: "[w,x,y,z]"
+          quaternion_order_source: "vehicle.yaml:conventions.quaternion_order"
+```
+
+That is `initial_source`'s idiom for a string instead of a number: a copy, plus a path that must
+resolve and agree. The declaration must be a bracketed ordering of `w`, `x`, `y`, `z` — each exactly
+once — and the two sites that state it (`domains/rcs/commands.yaml`'s argument and
+`domains/gnc/points.yaml`'s `attitude_q` point) both cite it. The generated `HELP.md` now reads:
+
+```
+- `quaternion`: 4 x number, order [w,x,y,z] — unit quaternion
+```
+
+which it renders from the field the linter holds, not from the sentence that used to carry it.
+
+**The citation walk is what makes a rename visible**, and it took two versions to get right. The
+first walked the *declared* keys — for each convention the block declares, find the sites that state
+it — and that is blind to exactly the failure a rename produces: rename
+`conventions.quaternion_order` and the sites' `quaternion_order_source` fields still name a key that
+no longer exists, while the key-walk finds nothing to look at because it is looking for the *old*
+name. The walk now goes the other way, over every field ending in `_source` whose value names this
+block, resolves the path, and refuses when it does not — *a citation of a declaration that has been
+renamed reads exactly like a citation of one that works.*
+
+### `units: SI` was false, and it was false by design
+
+The other holdable convention is the unit system, and it said one word: `SI`. The registry publishes
+**thirty channels in units that are not SI** — `psia`, `psi`, `mmHg`, `ft3/min`, `degC`, `deg`,
+`deg/s`, `L/min`, `Wh`, `rpm` and `g` — and it publishes them deliberately, because `channels.yaml`'s
+header says the apollo rows are that catalogue *"verbatim — identifiers, units, ranges, precisions and
+rates included"*. A convention that cannot be checked is not a convention, so the claim now carries
+what it needs:
+
+```yaml
+  units: >-
+    SI, except for the units a channel's own source publishes and the registry keeps verbatim.
+    Every conversion the corpus performs is written where it is used — 0.45359237 kg per lb,
+    6,894.757293168361 Pa per psi, 2.45e6 J per kg of water, 3,600 J per Wh — rather than
+    presupposed by the channel's unit, because the fleet reads what the source published
+  units_exceptions:
+    psi: ..., psia: ..., mmHg: ..., degC: ..., deg: ..., deg/s: ...,
+    ft3/min: ..., L/min: ..., Wh: ..., rpm: ..., g: ...
+```
+
+Three rules keep the list honest, and they are the derivation idiom's two directions plus one of its
+own: **every channel unit is SI, dimensionless or declared**; **every declared exception is used by
+some channel** (so the list cannot grow to cover the rule); and **no SI unit may be declared an
+exception**. An undeclared unit is a refusal rather than a debt here — a channel is a fleet-facing
+number, and a number whose unit the convention does not cover is a conversion nobody has done.
+
+The eleventh entry is the interesting one, because it resolves a collision the dimensional map still
+carries: `g` is *standard gravity* on `structure.accel_xyz_g` and *grams* on the two mass-flow
+channels whose unit is `g/s`, and `DIMENSION` knows only the second sense. Declaring it makes the
+collision visible where a reader can act on it, which is the most a declaration can do.
+
+**268 stayed 268**, and the four conventions still held by nothing — `quaternion_direction`,
+`angular_velocity`, `covariance_units`, `mission_time` — are the same shape as this round's two and
+are the next ones: each has a site that could cite it (`gnc`'s points state the rate resolution, the
+covariance blocks state the per-block units, and `mission.met_s`'s monotonicity is a claim about a
+published channel).
+
+**180 became 181 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully
+configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars. `--strict`
+exits 2.
+
+Verified by breaking fourteen copies in `.scratch/r19/`: the exception list removed, an SI unit and
+an unused unit declared as exceptions, a channel given a unit the convention does not cover, an order
+with three components and one with a repeat, each copy drifting from the declaration, a site stating
+the order with no citation, a citation of another convention, the cited declaration renamed (which is
+the case the first version of the walk could not see), the unbroken corpus composing at 268, the help
+text rendering the declared order, and a drifted copy both refused and visible in the help.
 
 ## The invariants, and which of them are enforced
 

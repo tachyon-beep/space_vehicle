@@ -36,6 +36,10 @@ points:
     from: nav_solution
     layer: estimate
     derivation: "the estimated attitude, as a unit quaternion rotating BODY into the reference frame"
+    # The order as a *field* rather than as a sentence: the note below states it the way a reader
+    # wants it, and this is the copy `check_conventions` holds against `vehicle.yaml#conventions`.
+    quaternion_order: "[w,x,y,z]"
+    quaternion_order_source: "vehicle.yaml:conventions.quaternion_order"
     note: >-
       apollo's channel, and the component order is `[w,x,y,z]` with the rotation direction
       `attitude_ref_from_body` (`vehicle.yaml#conventions`, from `gnc_diode.md:405-406`). Apollo

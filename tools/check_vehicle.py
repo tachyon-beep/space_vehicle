@@ -354,6 +354,43 @@ DIMENSION = {
     "code": "discrete",
 }
 
+# The SI units this vehicle's channels actually use, and the shapes that are not units at all. The
+# list is partial for the reason `DIMENSION` is: what a check needs is not a unit system but the
+# subset a corpus uses, and anything outside both sets is not refused — it must be *declared*, in
+# `vehicle.yaml#conventions.units_exceptions`. That is the difference between this and a whitelist:
+# a whitelist is a list somebody has to remember to extend, and an exception list is a declaration
+# whose every entry the check refuses once it stops being used.
+SI_UNITS = {
+    "kg",
+    "g/s",
+    "m",
+    "km",
+    "m/s",
+    "s",
+    "ms",
+    "us",
+    "A",
+    "V",
+    "W",
+    "N*s",
+    "Pa",
+    "bit/s",
+}
+# Dimensionless quantities and discrete codomains. `%` is 0.01 and `dB` is a ratio, so both are SI
+# in the sense that matters — no conversion is owed; the rest are not quantities at all.
+DIMENSIONLESS_UNITS = {
+    "%",
+    "% nominal",
+    "dB",
+    "normalized",
+    "dimensionless",
+    "count",
+    "count/s",
+    "bool",
+    "code",
+}
+DISCRETE_UNIT_PREFIXES = ("enum[", "list[", "map[")
+
 # Names the vehicle must never publish. D-04 declines the claims lifecycle because a published
 # reservation is a deconfliction primitive, and `design.md` §8 refuses to supply one: ten agents
 # flying one vehicle have to invent deconfliction, and a vehicle that hands them a reservation
@@ -2804,6 +2841,214 @@ def check_profile_immutability(
                         "that reasons about the spacecraft must not also be able to rewrite the "
                         "limits by which its reasoning is constrained",
                     )
+
+
+def _walk_mappings(node: Any, trail: str = "") -> list[tuple[str, dict[str, Any]]]:
+    """Every mapping in a loaded document, with the path that reaches it.
+
+    The same trail `walk_unset` builds, for the same reason: a refusal has to name where the
+    declaration lives, and a convention stated three levels down in a list of points is otherwise
+    reported as "somewhere in this file".
+    """
+    found: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(node, dict):
+        found.append((trail, node))
+        for key, value in node.items():
+            found.extend(_walk_mappings(value, f"{trail}.{key}" if trail else str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_walk_mappings(value, f"{trail}[{index}]"))
+    return found
+
+
+def check_conventions(
+    vehicle: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    documents: dict[str, Any],
+    report: Report,
+) -> None:
+    """The conventions block, which four of the corpus's own comments say is the important one.
+
+    `vehicle.yaml#conventions` exists because `gnc_diode.md`:382-409 fixes four things that are
+    *conventions* rather than quantities, and the block's comment states the stakes: two agents can
+    disagree about a quaternion's component order while both being right about the physics, "and
+    nothing downstream would report the disagreement: the attitude would simply be wrong, in a way
+    that looks like a control problem." It says they are "declared once, here", and it says
+    `domains/gnc/` "is what enforces them".
+
+    **Nothing read any of it.** The word `quaternion` appeared zero times in this file; the order
+    was restated in a header comment, in a point's note and in an argument's note, and the units
+    convention was contradicted by the registry it governs. So the block gets its first reader, and
+    the rules are the two shapes a convention can have:
+
+      - **a value another declaration states**: a site declaring a convention names the authority in
+        a `<convention>_source` field, the path must resolve, and the two must agree. That is
+        `initial_source`'s idiom applied to a string rather than a number, and it is what turns
+        "w-first" from a note into a claim.
+      - **a claim the corpus can be held to**: `units: SI` is the first, and it was **false** — the
+        registry publishes `psia`, `mmHg`, `ft3/min`, `degC` and six more, deliberately, because
+        apollo's catalogue is kept verbatim. A convention that cannot be checked is not a
+        convention, so the units claim now carries the exceptions it needs, and three rules keep
+        them honest: every channel unit is SI, dimensionless or declared; every declared exception
+        is used by some channel; and no SI unit may be declared an exception.
+    """
+    conventions = vehicle.get("conventions") or {}
+    where = "vehicle.yaml:conventions"
+    if not conventions:
+        report.debt(
+            where,
+            "is absent, so the vehicle states no quaternion order, no rotation direction and no "
+            "unit system — the conventions `gnc_diode.md`:382-409 supplies are the ones a vehicle "
+            "gets silently wrong",
+        )
+        return
+
+    # 1. The quaternion order is a component order or it is not an order.
+    order = conventions.get("quaternion_order")
+    if order is None:
+        report.debt(f"{where}.quaternion_order", "is not declared")
+    else:
+        text = str(order).strip()
+        inner = text[1:-1] if text.startswith("[") and text.endswith("]") else None
+        parts = [p.strip() for p in inner.split(",")] if inner is not None else []
+        if sorted(parts) != ["w", "x", "y", "z"]:
+            report.refuse(
+                f"{where}.quaternion_order",
+                f"is {order!r}, which is not a bracketed ordering of the four components. A "
+                "quaternion's component order is a convention two agents can disagree about while "
+                "both being right about the physics, and it has to name all four exactly once",
+            )
+
+    # 2a. Every citation of the block resolves, whatever it is called. This pass walks the
+    # *citations* rather than the declared keys, which is what catches the case the first version
+    # missed: rename `conventions.quaternion_order` and every site's `quaternion_order_source`
+    # becomes a citation of a name that no longer exists — and the key-walk cannot see them, because
+    # it looks for fields named like a convention the block still declares.
+    for filename in sorted(documents):
+        if filename == "vehicle.yaml":
+            continue
+        for path, holder in _walk_mappings(documents[filename]):
+            for key in sorted(holder):
+                if not key.endswith("_source"):
+                    continue
+                text = str(holder[key])
+                if not text.startswith("vehicle.yaml:conventions."):
+                    continue
+                site = f"{filename}:{path}.{key}" if path else f"{filename}:{key}"
+                dotted = text.split(":", 1)[1]
+                resolved = resolve_dotted(vehicle, dotted)
+                if resolved is None:
+                    report.refuse(
+                        f"{site}",
+                        f"is {text!r}, and `vehicle.yaml` has no `{dotted}` to resolve it against. "
+                        "A citation of a declaration that has been renamed reads exactly like a "
+                        "citation of one that works",
+                    )
+                    continue
+                stated = holder.get(key[: -len("_source")])
+                if stated is not None and str(stated) != str(resolved):
+                    report.refuse(
+                        f"{site}",
+                        f"states {stated!r} and cites {text!r}, which declares {resolved!r}. One of "
+                        "the two is the declaration and the other is a copy of it, and nothing but "
+                        "this check keeps them the same value",
+                    )
+
+    # 2. Every site that states a convention names where it came from.
+    # `units` is deliberately not in this walk, and the reason is the fifth overloaded key this
+    # corpus has produced: on a display readout, `units` is the unit *that panel shows* — thirty of
+    # them, held against the channel registry by the display-contract rule — and only in this block
+    # is it the unit *system*. The first version of this loop read all thirty as restatements of the
+    # convention and refused them, which is what a rule keyed on a word rather than on a meaning
+    # does. The system is held against the registry instead, a few lines down.
+    for key in sorted(conventions):
+        if key in {"provenance", "units", "units_exceptions"}:
+            continue
+        authority = f"vehicle.yaml:conventions.{key}"
+        for filename in sorted(documents):
+            if filename == "vehicle.yaml":
+                continue
+            for path, holder in _walk_mappings(documents[filename]):
+                if key not in holder:
+                    continue
+                site = f"{filename}:{path}.{key}" if path else f"{filename}:{key}"
+                source = holder.get(f"{key}_source")
+                if source is None:
+                    report.refuse(
+                        f"{site}",
+                        f"states a convention and names no `{key}_source`. The conventions are "
+                        f"declared once, in `{authority}`, and a second statement of one with "
+                        "nothing resolving it is how two agents come to disagree about a "
+                        "convention — the failure the block exists to make impossible",
+                    )
+                    continue
+                text = str(source)
+                if text != authority:
+                    report.refuse(
+                        f"{site}_source",
+                        f"is {text!r}. A convention has one declaration, `{authority}`, and a "
+                        "citation of anything else is a second authority",
+                    )
+                    continue
+                # The path has to *resolve*, not merely read like the authority. Renaming
+                # `conventions.quaternion_order` leaves every citation in the corpus pointing at a
+                # name that no longer exists, and a citation of a missing key reads exactly like a
+                # citation of the right one — the failure `initial_source` and `derives_from` both
+                # needed this same rule for.
+                if resolve_dotted(vehicle, f"conventions.{key}") is None:
+                    report.refuse(
+                        f"{site}_source",
+                        f"is {text!r}, and `vehicle.yaml` has no `conventions.{key}` to resolve it "
+                        "against. A citation of a declaration that has been renamed reads exactly "
+                        "like a citation of one that works",
+                    )
+                    continue
+                resolved = conventions.get(key)
+                if resolved is not None and str(holder[key]) != str(resolved):
+                    report.refuse(
+                        f"{site}",
+                        f"declares {holder[key]!r} and `{authority}` declares {resolved!r}. One of "
+                        "the two is the declaration and the other is a copy of it, and nothing but "
+                        "this check keeps them the same value",
+                    )
+
+    # 3. The units claim, against the registry it governs.
+    exceptions = conventions.get("units_exceptions")
+    if not isinstance(exceptions, dict) or not exceptions:
+        report.debt(
+            f"{where}.units_exceptions",
+            "is not declared. The units convention is a claim about 148 channels, and the registry "
+            "keeps apollo's catalogue verbatim — so the exceptions are part of the convention "
+            "rather than an escape from it",
+        )
+        return
+    used = {str(row.get("unit")) for row in registry.values() if row.get("unit")}
+    for unit in sorted(used):
+        if unit in SI_UNITS or unit in DIMENSIONLESS_UNITS:
+            continue
+        if unit.startswith(DISCRETE_UNIT_PREFIXES):
+            continue
+        if unit not in exceptions:
+            report.refuse(
+                f"{where}.units_exceptions",
+                f"does not declare {unit!r}, which the registry publishes. The convention says SI; "
+                f"a unit that is neither SI nor dimensionless is either an exception the convention "
+                f"names or a channel nobody has converted",
+            )
+    for unit in sorted(exceptions):
+        if unit in SI_UNITS or unit in DIMENSIONLESS_UNITS or unit.startswith(DISCRETE_UNIT_PREFIXES):
+            report.refuse(
+                f"{where}.units_exceptions.{unit}",
+                f"declares {unit!r} as an exception to the SI convention, and it is an SI unit or "
+                "not a quantity at all: an exception list that grows to cover the rule is a rule "
+                "nobody is keeping",
+            )
+        elif unit not in used:
+            report.refuse(
+                f"{where}.units_exceptions.{unit}",
+                f"declares {unit!r} as an exception and no channel publishes it, so nothing reads "
+                "the entry. The units the registry uses are " + ", ".join(sorted(used)),
+            )
 
 
 def check_range_kinds(registry: dict[str, dict[str, Any]], report: Report) -> None:
@@ -10085,6 +10330,9 @@ def main(argv: list[str] | None = None) -> int:
     # Built here rather than below, because `check_initial_sources` resolves a stock's initial
     # against any document now and this is the one place they are all loaded.
     documents = load_documents(root, vehicle, coupling, mission, channels)
+    # After the documents, because a convention is held against the declarations that state it and
+    # against the registry it governs — and the registry is one of them.
+    check_conventions(vehicle or {}, registry, documents, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)

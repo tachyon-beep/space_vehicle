@@ -91,6 +91,12 @@ def describe_argument(name: str, spec: dict[str, Any]) -> str:
         items = spec.get("items", "?")
         length = spec.get("length")
         body = f"{length} x {items}" if length else f"list of {items}"
+        # An array whose component order is a convention says so here, from the field the linter
+        # holds against `vehicle.yaml#conventions`. Before this, the order reached a fleet only as
+        # the words "w-first" inside an argument's prose note, and this file is the only place a
+        # fleet reads the command surface.
+        if spec.get("quaternion_order"):
+            body += f", order {spec['quaternion_order']}"
     elif kind == "number":
         low, high = spec.get("minimum"), spec.get("maximum")
         if low is not None and high is not None:

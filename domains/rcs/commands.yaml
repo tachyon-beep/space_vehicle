@@ -89,7 +89,17 @@ commands:
       # frame registry by `check_argument_vocabularies`, which infers the vocabulary from the
       # argument's name the way it infers `pump` from pumps.
       frame: {type: enum, values: [BODY, LVLH, EARTH_J2000, MOON_J2000]}
-      quaternion: {type: array, items: number, length: 4, note: "unit quaternion, w-first"}
+      # The order is `vehicle.yaml#conventions`' and this entry is a *copy* of it, held by
+      # `check_conventions`: the note used to say "unit quaternion, w-first", which is a fleet-facing
+      # claim with nothing resolving it, and the generated help now renders the declared order
+      # beside the argument instead.
+      quaternion:
+        type: array
+        items: number
+        length: 4
+        note: "unit quaternion"
+        quaternion_order: "[w,x,y,z]"
+        quaternion_order_source: "vehicle.yaml:conventions.quaternion_order"
       rate_limit_deg_s: {type: number, optional: true, minimum: 0}
       tolerance_profile: {type: enum, values: [tight, nominal, loose], optional: true}
       safe_vector: {type: enum, optional: true,
