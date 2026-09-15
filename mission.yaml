@@ -814,12 +814,22 @@ objectives:
 # --------------------------------------------------------------------------------------
 scenario_postures:
 
+  # `seeds` is what the posture *places* rather than what it scales. `guaranteed` is scheduled
+  # once per run; `optional` is offered and included only when the caller asks, because apollo
+  # defines that clause as a GM decision rather than a probability draw. A fault is in a pool if
+  # its `kind` is one of `kinds` **or** its hazard equals the class named in `hazards` — and the
+  # two class names are defined here, by this posture's own two baselines, so the classes *are*
+  # the published rates rather than a second copy of them inside a tool. `nominal` places
+  # nothing, which is what its `seeded_faults` says.
   - id: nominal
     gm_disposition: default
     critical_hazard_per_h: 2.0e-5
     noncritical_hazard_per_h: 2.0e-4
     failure_on_demand_p: 1.0e-4
     seeded_faults: none
+    seeds:
+      guaranteed: {}
+      optional: {}
     provenance:
       basis: apollo
       ref: "apollo_diode.md:370-374"
@@ -830,6 +840,10 @@ scenario_postures:
     noncritical_hazard_per_h: 1.0e-3
     failure_on_demand_p: 5.0e-4
     seeded_faults: "one latent or noncritical primary"
+    seeds:
+      guaranteed:
+        hazards: [noncritical]
+        kinds: [latent_then_acute]
     provenance:
       basis: apollo
       ref: "apollo_diode.md:372"
@@ -839,6 +853,11 @@ scenario_postures:
     noncritical_hazard_per_h: 2.0e-3
     failure_on_demand_p: 2.0e-3
     seeded_faults: "one guaranteed major primary plus an optional latent sensor defect"
+    seeds:
+      guaranteed:
+        hazards: [critical]
+      optional:
+        kinds: [instrument]
     provenance:
       basis: apollo
       ref: "apollo_diode.md:374"
@@ -1044,7 +1063,7 @@ landing_site:
       crew would move into is the half that can always be talked to.
 open_debts:
 
-  - "**The chains are linked to faults now, and the *seed* is still drawn from a class rather than from a chain.** Round 21 gave every `coupling.yaml#failure_chains` entry a `realised_by` list, so the experiment's fifteen stories and its 128 faults are joined by something a tool reads — and `check_chain_faults` holds each named fault to perturbing a clue of the chain it realises. What that does not fix is which story a run tells: `guaranteed_seed` draws the crisis posture's \"one guaranteed major primary\" from the critical class, so the fault placed is a *random* critical fault and the chain that results is whichever one that fault belongs to. A great many fault ids also sit in no class at all — the nineteen between the two published rates — and those are scheduled stochastically rather than seeded. What would close it is a declaration of the pool in the posture itself (which classes, which kinds) and, with it, the choice of whether a scenario names the chain it is about; both are decisions about the experiment rather than about the vehicle, which is why they are here."
+  - "**The pools are declared now; what is still undecided is whether a scenario names the chain it is about.** Each posture's `seeds` says what it places — `degraded` a fault whose kind is `latent_then_acute` or whose hazard is the noncritical baseline, `crisis` a critical-class fault plus an optional instrument defect — and the two class names are defined by the *nominal* posture's own baselines rather than by a constant in a tool. `tools/faults.py` reads the declaration (through `check_vehicle.in_seeding_pool`, so the scheduler and the check cannot disagree), and `check_seeding_pools` holds four things: the selector names only `kinds` and `hazards`, every kind and class is one the corpus declares, a posture that promises a seed declares a pool, and every pool matches at least one fault. What no declaration says is *which story a run tells*: the pool is a set of faults, the guaranteed seed is drawn from it, and the chain that results is whichever one that fault realises — so a `crisis` run is a crisis, and not necessarily the crisis a chain names. Closing that means deciding whether a scenario carries a chain id, which is a decision about the experiment rather than about the vehicle, and it is left here rather than made."
 
   - "**`hazardous_actions_permitted` is held, and the verbs it constrains are not joined to it.** Ten postures declare whether a fleet may act from them, exactly one (`execute`) says yes, and until this round no tool read the field — the other five fields of the block were validated and this one, which is the permission the whole execution machine exists to grant, was compared to nothing. What is held now is the safety property `mission_diode.md`:1727 puts in the startup verification list (*no hazardous verb is enabled in ABORTED*), that the terminal postures permit nothing, that the machine permits action somewhere, and the vehicle-side half of TV-E: every transition *into* a posture that permits hazardous actions must re-read `mission.abort_latched`, which `prepare -> execute` does. What is still unjoined is the other half of the sentence: the vehicle declares eleven irreversible verbs and two armed one-way events, and *nothing says which verbs the permission is about*. `irreversible: true` is the nearest thing to that vocabulary and it is a different claim — it is about whether an effect can be undone, not about whether it may be attempted from `recovery` while the crew are working a fault. Until a verb carries the hazardous flag, `hazardous_actions_permitted` is a property of the executive's gate rather than of the vehicle's command surface, and the gate is the far side's to build."
 

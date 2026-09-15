@@ -5848,6 +5848,76 @@ scenario vocabulary renamed in both directions, every chain losing its scenario 
 refused), the unbroken corpus composing at 269, every chain's faults touching its clues on the real
 corpus, and the seeding residue present as a debt with the tool pointing at it.
 
+## What each posture seeds, which was three hard-coded filters
+
+`mission.yaml#scenario_postures[].seeded_faults` is prose — *"none"*, *"one latent or noncritical
+primary"*, *"one guaranteed major primary plus an optional latent sensor defect"* — and
+`tools/faults.py` read it as three filters beside two copied rates:
+
+```python
+CRITICAL_HAZARD = 2.0e-5
+NONCRITICAL_HAZARD = 2.0e-4
+...
+    if posture.id == "crisis":
+        pool = [f for f in faults if f.hazard == CRITICAL_HAZARD]
+    else:
+        pool = [f for f in faults if f.kind == "latent_then_acute" or f.hazard == NONCRITICAL_HAZARD]
+...
+    if posture.id != "crisis":            # optional_sensor_defect
+        return None
+    pool = [f for f in faults if f.kind == "instrument"]
+```
+
+That is a *reading* of the prose, taken in the tool, with the rates copied into the file — and the
+two rates are `mission.yaml`'s own nominal baselines, declared one file away. The postures declare
+their pools now:
+
+```yaml
+  - id: crisis
+    seeds:
+      guaranteed:
+        hazards: [critical]        # the class names, defined by the NOMINAL posture's two baselines
+      optional:
+        kinds: [instrument]
+```
+
+Four rules hold them: the selector names only `kinds` and `hazards` (a misspelled key is a selector
+that silently means nothing); every kind is one a policy declares and every class is one the nominal
+posture defines; a posture that promises a seed declares a pool to place it from; and **every pool
+matches at least one declared fault** — a selector that matches nothing can never place the seed the
+posture says it will, which is the derivation idiom's "every binding is used" applied to a pool.
+
+### The rule lives in the linter, because the tool graph has a bottom
+
+`in_seeding_pool` is in `check_vehicle.py` rather than in `faults.py`, and that placement is forced:
+`plant` imports the linter, and `faults` imports `plant`, so a rule written in the scheduler **could
+not be held by the check that is supposed to hold it**. The scheduler imports the function and
+evaluates the declaration with it, which is the same arrangement `plant.py` already has for the tick
+order.
+
+The refactor is **behaviour-preserving, and the round proved it rather than asserting it**: HEAD's
+copy of `faults.py` and the new one were run against all four schedules — nominal, degraded, crisis,
+and crisis with the optional sensor defect — and the events are identical, field for field, once the
+`guaranteed` label is set aside. That label is the one thing that changed, and deliberately: it used
+to be a phrase written in the tool and now names the declared pool
+(`guaranteed seed: hazards critical`).
+
+**The debt was rewritten to its residue.** The pools were half of it; what remains is the decision it
+named second — *whether a scenario carries a chain id*. The guaranteed seed is drawn from the pool,
+so a `crisis` run is a crisis and not necessarily the chain a `crisis` chain names. That is a
+decision about the experiment rather than about the vehicle, and it stays recorded rather than made.
+
+**269 stayed 269**, and **183 became 184 vehicle tests.** Plant unchanged: 134 states over 57 nodes,
+108 of 134 fully configured, 26 with a debt, 57 of 77 edges carrying a sensitivity, 200 unset scalars.
+`--strict` exits 2.
+
+Verified by breaking eleven copies in `.scratch/r22/`: the crisis pool losing its guaranteed selector,
+the whole `seeds` block removed, a selector nobody reads, a kind no policy declares, a class the
+nominal posture does not define, the nominal posture itself renamed, the nominal baselines moved so
+the class names select nothing, the unbroken corpus composing at 269, the declared pool scheduling
+exactly what the constants did, the seed's label naming the pool, and a pool naming an unknown class
+placing nothing while the linter says so.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

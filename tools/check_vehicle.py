@@ -2295,6 +2295,155 @@ def check_coupling(
                 )
 
 
+def in_seeding_pool(
+    kind: str, hazard: float | None, pool: dict[str, Any], baselines: dict[str, float]
+) -> bool:
+    """Whether a fault is in a posture's declared seeding pool — the one implementation.
+
+    A fault is in a pool if its `kind` is one of `kinds` **or** its hazard equals the rate of a
+    class named in `hazards`. The class names are `critical` and `noncritical`, and they are not
+    defined here: `baselines` carries the nominal posture's own two rates, which
+    `mission.yaml#scenario_postures.nominal` declares and `apollo_diode.md:365` supplies. That is
+    the whole of the class rule — 39 of the 58 stochastic faults sit exactly on a baseline and are
+    of that class, and the other 19 sit between them and are of no class at all.
+
+    It lives in the linter because the linter is the bottom of the tool graph: `plant` imports this
+    file, and `faults` imports `plant`, so a rule written in `faults` could not be held by the
+    check that is supposed to hold it. `tools/faults.py` imports this function rather than
+    re-expressing the reading, which is what it did before this round.
+    """
+    if kind in {str(k) for k in pool.get("kinds") or []}:
+        return True
+    if hazard is None:
+        return False
+    for name in {str(h) for h in pool.get("hazards") or []}:
+        if name in baselines and hazard == baselines[name]:
+            return True
+    return False
+
+
+def check_seeding_pools(mission: dict[str, Any], root: Path, report: Report) -> None:
+    """What each scenario posture *places*, held against the faults it would place.
+
+    `scenario_postures[].seeded_faults` is prose — "none", "one latent or noncritical primary",
+    "one guaranteed major primary plus an optional latent sensor defect" — and until this round the
+    readings of it lived in `tools/faults.py` as three hard-coded filters beside two copied rates:
+    `f.hazard == 2.0e-5` for the crisis guarantee, `kind == "latent_then_acute" or hazard == 2.0e-4`
+    for degraded's, and `kind == "instrument"` for the optional defect. The postures declare their
+    pools now, and this holds four things about them.
+
+      - the selector names only `kinds` and `hazards`: a misspelled key is a selector that silently
+        means nothing, which is how a pool comes to place a fault nobody chose;
+      - every `kinds` entry is a fault kind the corpus declares, and every `hazards` entry is one of
+        the two class names the nominal posture defines by its own baselines;
+      - a posture whose `seeded_faults` promises something declares a non-empty pool, because a
+        promise with no selector is a promise nothing can keep;
+      - **the pool matches at least one declared fault.** A selector that matches nothing can never
+        place a seed while the posture says it will — the "every binding is used" rule the
+        derivation idiom applies to inputs, applied to a pool.
+    """
+    postures = [p for p in mission.get("scenario_postures") or [] if isinstance(p, dict)]
+    if not postures:
+        return
+    nominal = next((p for p in postures if str(p.get("id")) == "nominal"), None)
+    if nominal is None:
+        report.refuse(
+            "mission.yaml:scenario_postures",
+            "declares no `nominal` posture, so the two hazard classes the others select by have no "
+            "declaration to be defined against",
+        )
+        return
+    baselines = {
+        "critical": float(nominal.get("critical_hazard_per_h") or 0.0),
+        "noncritical": float(nominal.get("noncritical_hazard_per_h") or 0.0),
+    }
+    kinds = {
+        str(k)
+        for p in root.glob("domains/*/fault_policy.yaml")
+        for f in (load(p, Report()) or {}).get("faults") or []
+        if isinstance(f, dict)
+        for k in [f.get("kind")]
+        if k
+    }
+    faults = [
+        (str(f.get("kind")), f.get("seeding") or {})
+        for p in sorted(root.glob("domains/*/fault_policy.yaml"))
+        for f in (load(p, Report()) or {}).get("faults") or []
+        if isinstance(f, dict)
+    ]
+    for posture in postures:
+        where = f"mission.yaml:scenario_postures.{posture.get('id')}"
+        seeds = posture.get("seeds")
+        promised = str(posture.get("seeded_faults") or "").strip().lower()
+        if not isinstance(seeds, dict):
+            if promised and promised != "none":
+                report.refuse(
+                    f"{where}.seeds",
+                    f"is not declared, and this posture promises {posture.get('seeded_faults')!r}. A "
+                    "promise with no pool is a promise nothing can place",
+                )
+            continue
+        for which in ("guaranteed", "optional"):
+            pool = seeds.get(which)
+            if pool is None or pool == {}:
+                # A posture that promises a seed and declares no pool for it is a promise nothing
+                # can place. `optional` is genuinely optional — it is a clause in one posture's
+                # prose — and `guaranteed` is the half every non-nominal posture promises.
+                if which == "guaranteed" and promised and promised != "none":
+                    report.refuse(
+                        f"{where}.seeds.guaranteed",
+                        f"is not declared, and this posture promises "
+                        f"{posture.get('seeded_faults')!r}. A promise with no pool is a promise "
+                        "nothing can place",
+                    )
+                continue
+            if not isinstance(pool, dict):
+                report.refuse(f"{where}.seeds.{which}", f"is {pool!r}, not a mapping of selectors")
+                continue
+            unknown = sorted(set(pool) - {"kinds", "hazards"})
+            if unknown:
+                report.refuse(
+                    f"{where}.seeds.{which}",
+                    f"selects by {unknown}, and the only selectors are `kinds` and `hazards`. A "
+                    "selector nobody reads is a pool that means something other than it says",
+                )
+                continue
+            for kind in pool.get("kinds") or []:
+                if str(kind) not in kinds:
+                    report.refuse(
+                        f"{where}.seeds.{which}.kinds",
+                        f"names {kind!r}, which is not a fault kind any policy declares. The kinds "
+                        f"are {sorted(kinds)}",
+                    )
+            for name in pool.get("hazards") or []:
+                if str(name) not in baselines:
+                    report.refuse(
+                        f"{where}.seeds.{which}.hazards",
+                        f"names {name!r}, and the classes are {sorted(baselines)} — defined by the "
+                        "nominal posture's own two baselines",
+                    )
+            if not pool:
+                continue
+            matched = [
+                (kind, seeding)
+                for kind, seeding in faults
+                if in_seeding_pool(
+                    kind,
+                    float(seeding["hazard"])
+                    if isinstance(seeding.get("hazard"), (int, float))
+                    else None,
+                    pool,
+                    baselines,
+                )
+            ]
+            if not matched:
+                report.refuse(
+                    f"{where}.seeds.{which}",
+                    f"selects {pool} and matches none of the {len(faults)} declared faults, so this "
+                    "pool can never place the seed the posture promises",
+                )
+
+
 def check_chain_faults(
     coupling: dict[str, Any],
     mission: dict[str, Any],
@@ -10500,6 +10649,7 @@ def main(argv: list[str] | None = None) -> int:
     # against the registry it governs — and the registry is one of them.
     check_conventions(vehicle or {}, registry, documents, report)
     check_chain_faults(coupling or {}, mission or {}, root, registry, report)
+    check_seeding_pools(mission or {}, root, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)

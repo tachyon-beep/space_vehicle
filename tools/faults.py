@@ -36,13 +36,14 @@ import json
 import math
 import random
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_vehicle import in_seeding_pool  # noqa: E402  (the linter is the bottom of the graph)
 from plant import Unconfigured  # noqa: E402  (a sibling tool, not a package)
 
 # The mission's own duration, from `mission.yaml`'s phase ladder: eight phases summing to exactly
@@ -98,6 +99,16 @@ def load_faults(root: Path) -> list[Fault]:
     return faults
 
 
+def describe_pool(pool: dict[str, Any]) -> str:
+    """A pool's selectors, as a label for the schedule: what was placed, and by what rule."""
+    parts = []
+    if pool.get("kinds"):
+        parts.append("kinds " + "/".join(str(k) for k in pool["kinds"]))
+    if pool.get("hazards"):
+        parts.append("hazards " + "/".join(str(h) for h in pool["hazards"]))
+    return " or ".join(parts) if parts else "nothing"
+
+
 def stream(master_seed: int, fault: Fault, purpose: str = "seeding") -> random.Random:
     """The fault's own generator, derived by name rather than by position.
 
@@ -146,6 +157,12 @@ class Posture:
     failure_on_demand_p: float
     seeded_faults: str
     gm_disposition: str = ""
+    # What this posture *places*, as `mission.yaml` declares it: a selector over fault kinds and
+    # hazard classes. The classes are named, not spelled as rates — `critical` means "hazard equal
+    # to the nominal posture's critical baseline", and that baseline is a declaration rather than a
+    # constant in this file.
+    guaranteed_pool: dict[str, Any] = field(default_factory=dict)
+    optional_pool: dict[str, Any] = field(default_factory=dict)
 
     def hazard_factor(self, nominal: Posture) -> float:
         """The multiplier the posture applies to every spontaneous hazard rate.
@@ -186,7 +203,10 @@ def load_postures(root: Path) -> dict[str, Posture]:
     mission = yaml.safe_load((root / "mission.yaml").read_text()) or {}
     postures: dict[str, Posture] = {}
     for row in mission.get("scenario_postures") or []:
+        seeds = row.get("seeds") or {}
         postures[str(row.get("id"))] = Posture(
+            guaranteed_pool=dict(seeds.get("guaranteed") or {}),
+            optional_pool=dict(seeds.get("optional") or {}),
             id=str(row.get("id")),
             critical_hazard_per_h=float(row.get("critical_hazard_per_h", 0.0)),
             noncritical_hazard_per_h=float(row.get("noncritical_hazard_per_h", 0.0)),
@@ -242,15 +262,13 @@ def schedule(
     return events, armed
 
 
-# The declared baselines, from `apollo_diode.md:365`: critical 2e-5/h and noncritical 2e-4/h.
-# A fault sitting exactly on one of them is *of* that class, which is the only class declaration
-# the corpus makes — 39 of the 58 stochastic faults, the other 19 sitting between them.
-CRITICAL_HAZARD = 2.0e-5
-NONCRITICAL_HAZARD = 2.0e-4
-
-
 def guaranteed_seed(
-    faults: list[Fault], posture: Posture, master_seed: int, hours: float
+    faults: list[Fault],
+    posture: Posture,
+    master_seed: int,
+    hours: float,
+    *,
+    nominal: Posture | None = None,
 ) -> dict[str, Any] | None:
     """The fault a posture promises will happen, placed rather than sampled.
 
@@ -272,19 +290,19 @@ def guaranteed_seed(
     is read as `kind: instrument`, which is the corpus's own name for a measurement that is wrong
     while the system is fine.
     """
-    if posture.id == "nominal":
+    if nominal is None or not posture.guaranteed_pool:
         return None
     rng = random.Random(
         int.from_bytes(hashlib.sha256(f"{master_seed}:guaranteed".encode()).digest()[:8], "big")
     )
-    if posture.id == "crisis":
-        pool = [f for f in faults if f.hazard == CRITICAL_HAZARD]
-        label = "guaranteed major primary (critical class)"
-    else:
-        pool = [
-            f for f in faults if f.kind == "latent_then_acute" or f.hazard == NONCRITICAL_HAZARD
-        ]
-        label = "guaranteed latent or noncritical primary"
+    baselines = {
+        "critical": nominal.critical_hazard_per_h,
+        "noncritical": nominal.noncritical_hazard_per_h,
+    }
+    pool = [
+        f for f in faults if in_seeding_pool(f.kind, f.hazard, posture.guaranteed_pool, baselines)
+    ]
+    label = f"guaranteed seed: {describe_pool(posture.guaranteed_pool)}"
     if not pool:
         return None
     chosen = pool[rng.randrange(len(pool))]
@@ -306,6 +324,7 @@ def optional_sensor_defect(
     master_seed: int,
     hours: float,
     *,
+    nominal: Posture | None = None,
     include: bool = False,
 ) -> dict[str, Any] | None:
     """The crisis posture's "optional latent sensor defect" — offered, and included only on request.
@@ -321,9 +340,15 @@ def optional_sensor_defect(
     mission number would be inventing a number. So the scheduler offers it, names the pool, and
     includes one only when a caller asks.
     """
-    if posture.id != "crisis":
+    if nominal is None or not posture.optional_pool:
         return None
-    pool = [f for f in faults if f.kind == "instrument"]
+    baselines = {
+        "critical": nominal.critical_hazard_per_h,
+        "noncritical": nominal.noncritical_hazard_per_h,
+    }
+    pool = [
+        f for f in faults if in_seeding_pool(f.kind, f.hazard, posture.optional_pool, baselines)
+    ]
     if not include:
         return None
     rng = random.Random(
@@ -340,7 +365,7 @@ def optional_sensor_defect(
         "kind": chosen.kind,
         "response": chosen.response.get("kind"),
         "perturbs": chosen.perturbs,
-        "guaranteed": "optional latent sensor defect (crisis posture)",
+        "guaranteed": f"optional seed: {describe_pool(posture.optional_pool)}",
     }
 
 
@@ -445,9 +470,14 @@ def main(argv: list[str] | None = None) -> int:
         extras = [
             found
             for found in (
-                guaranteed_seed(faults, posture, args.seed, args.hours),
+                guaranteed_seed(faults, posture, args.seed, args.hours, nominal=nominal),
                 optional_sensor_defect(
-                    faults, posture, args.seed, args.hours, include=args.sensor_defect
+                    faults,
+                    posture,
+                    args.seed,
+                    args.hours,
+                    nominal=nominal,
+                    include=args.sensor_defect,
                 ),
             )
             if found
