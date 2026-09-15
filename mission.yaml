@@ -933,7 +933,12 @@ initial_state:
     inclination_deg: 32.521
     radius_at_cutoff_km: 6563.2
     speed_at_cutoff_m_s: 10949.8
-    apogee_km: 502526
+    # 502,526.81172 — the correct rounding of a(1+e), and written to two places rather than
+    # as a whole number because `significant_figures` reads precision off a float's repr and
+    # cannot tell a written integer from one with a trailing `.0`: as `502526` it acquired a
+    # phantom seventh digit, which put the relation's own value (502,526.8) out of reach of
+    # the element it produces. See the round that corrected this in README.md.
+    apogee_km: 502526.81
     transfer_period_h: 355.02
     arrival_at_moon_h: 73.0
     determination:

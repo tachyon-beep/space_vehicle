@@ -7211,6 +7211,77 @@ refusal invented for it here.
 | the docstring's own count of unchecked arguments | 4 | 0 — and it was 7 |
 | tests in `tests/test_vehicle_config.py` | 206 | **207** |
 
+## The trajectory check computed four elements and compared three
+
+`check_vehicle.py` re-derives the translunar trajectory on every run. It reads six of
+`mission.yaml#initial_state.osculating_elements` and holds four of them to the arithmetic that
+produces them: `eccentricity` against `1 - r_p/a`, `speed_at_cutoff_m_s` against vis-viva,
+`semi_major_axis_km` against Kepler's equation solved by bisection, and `arrival_at_moon_h` against
+the phase ladder. **Four more elements are produced by that same arithmetic and were read by nothing
+at all**: `radius_at_cutoff_km`, `apogee_km`, `transfer_period_h` and `inclination_deg`.
+
+So the note the tool printed on every run said:
+
+```
+re-derived: a = 254,545 km, e = 0.974216, apogee 502,527 km, cutoff 10949.8 m/s, arriving at 73 h
+```
+
+and the file it was reporting on declared `apogee_km: 502526`. `a(1+e)` is **502,526.81172**; every
+other element in that block is a rounding of its own relation, and this one was a **truncation**, one
+kilometre low. **A number a tool computes and prints, without comparing it to the declaration it was
+computed to check, is a declaration that has already drifted** — the folder's oldest finding arriving
+in the one direction it had not been looked for. Not a declaration no tool reads: a declaration a
+tool computes *and then prints*, beside a wrong one, every run, for as long as both existed.
+
+### The fix, and the precision rule that could not express it
+
+Four comparisons, all through `agrees_with_derivation` — the corpus's own rule, so each element is
+held at the precision it is written to rather than to a tolerance invented for this check:
+
+| element | declared | relation | verdict |
+|---|---|---|---|
+| `radius_at_cutoff_km` | 6,563.2 | `6378.137 + (183.7 + 186.5)/2` = 6,563.237 | the correct rounding |
+| `transfer_period_h` | 355.02 | `2π√(a³/μ)` = 355.0221 | the correct rounding |
+| `apogee_km` | **502526** | `a(1+e)` = 502,526.81172 | **a truncation** |
+| `inclination_deg` | 32.521 | the parking orbit's 32.521 | equal — and this one is an equality, not a derivation, because `determination.inclination` says the element *is* the parking orbit's plane |
+
+The apogee becomes `502526.81`, and **why it is written to two places rather than as a whole number
+is the interesting half**. `significant_figures` reads precision off a float's `repr`, and
+`repr(502526.0)` is `'502526.0'` — so a six-figure quantity counts as *seven*. At seven figures the
+relation's own value must round to 502,526.8, which means **neither the truncated 502526 nor the
+correctly rounded 502527 satisfies `a(1+e)`**: the element written without a decimal point was the
+one the corpus's precision rule could not express.
+
+**The obvious fix is wrong, and the corpus disproves it.** Dropping the trailing `.0` makes `502526`
+count as six digits and both values work — and it also makes `structure`'s `below: 2.0000`, which is
+five digits written, count as *one*, because a float cannot tell `2.0` from `2.0000`. There is no
+rule that reads precision off the parsed value and is right at both ends; the honest statement of
+that is now in `significant_figures`' docstring rather than in a tolerance, and the element is
+written in the form the rule can read.
+
+### What the round got wrong on the way
+
+- **The first version reported absence as well as disagreement.** An `UNCONFIGURED` element is
+  already a debt with its own path from the pass that walks every unset scalar, so the new rule's
+  "is unset, and it is Kepler's third law" was a second sentence about the same missing value: the
+  fixture took the count from 288 to **290** for one missing figure. That is the inflation round 74
+  removed from `assert`/`clear` and the `derives_from` rule removed across files, arriving at a third
+  door. The rule now owns disagreement and leaves absence to the walk.
+- **An anchor matched two spaces of a four-space indent.** The apogee's comment block went in at the
+  wrong depth, `mission.yaml` stopped parsing, and the linter reported **0 mission phases** and 76
+  refusals — a configuration error that looked like a vehicle with nothing in it. `old = "  apogee_km:
+  502526"` matched the tail of `"    apogee_km: 502526"`, which is the trap AGENTS.md records for
+  inserting next to a block scalar, arriving through indentation instead.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — no value added or removed |
+| elements the trajectory check compares | 4 of 8 | **8 of 8** |
+| `apogee_km` | 502526 (a truncation) | **502526.81** (the rounding) |
+| tests in `tests/test_vehicle_config.py` | 207 | **208** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

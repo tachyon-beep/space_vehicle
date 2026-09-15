@@ -561,6 +561,22 @@ def significant_figures(value: float) -> int:
     writes `1.0` means two digits. Counting what is written is the same reading of precision the
     beamwidth tolerance uses — half a unit in the last place — and it errs toward refusing, which
     is the direction a check is allowed to be wrong in.
+
+    **And for a whole number the repr invents a digit, which this function cannot avoid.** A float
+    does not carry what was written: `float(502526)` and `float(502526.0)` are the same object, so
+    `repr` answers `'502526.0'` for both and a six-figure apogee is read as *seven*. The obvious fix
+    — drop a trailing `.0` — is wrong, and the corpus disproves it: `structure` declares
+    `below: 2.0000`, five digits written, and `repr` cannot tell it from `2.0`. Any rule that reads
+    precision off the parsed value is guessing at one end or the other, and the honest statement of
+    that is here rather than in a tolerance.
+
+    The consequence is not theoretical. It is why `mission.yaml`'s transfer apogee is written
+    `502526.81` rather than as a whole number: at seven figures the relation's own value
+    (502,526.81172) must round to 502526.8, so *neither* the truncated 502526 nor the correctly
+    rounded 502527 agreed with `a(1+e)` — the element written without a decimal point was the one
+    this rule could not express. The 39 `computation` values that are whole numbers are likewise
+    held one place finer than their arithmetic states, which errs toward refusing and is the
+    direction the paragraph above says a check may be wrong in.
     """
     text = repr(float(value))
     mantissa = text.split("e")[0].split("E")[0]
@@ -7892,9 +7908,71 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
                     f"declares a = {a:,.0f} km but Kepler's equation puts the Moon's mean "
                     f"distance at {ladder_h:g} h from a = {a_solved:,.0f} km",
                 )
+    # 6. **The four elements this check computed and never compared.** Rules 1 to 5 hold the
+    # elements the derivation *reads*; three more are produced by the same arithmetic and were
+    # read by nothing, so the note below printed one of them beside a declaration that disagreed
+    # with it. `apogee_km` read 502,526 while `a(1+e)` is 502,526.81 — a truncation where every
+    # other element in the block is a rounding — and the line the tool printed every run said
+    # "apogee 502,527 km". A number a tool computes and prints, without comparing it to the
+    # declaration it was computed to check, is a declaration that has already drifted.
+    #
+    # The comparison is `agrees_with_derivation`, the corpus's own rule, so each element is held
+    # at the precision it is written to rather than to a tolerance invented here: `radius_at_cutoff_km`
+    # is 6,563.2 against a computed 6,563.237 and `transfer_period_h` is 355.02 against 355.0221,
+    # and both are the correct rounding of the relation. That is also why the apogee is written to
+    # two places rather than as a whole number — see `significant_figures`, which cannot read the
+    # precision of a float that has no fractional part.
+    for field, derived, relation in (
+        (
+            "radius_at_cutoff_km",
+            r_p,
+            f"the parking orbit's mean radius plus the Earth's: {radius_earth} + "
+            f"({float(perigee)} + {float(apogee)}) / 2",
+        ),
+        ("apogee_km", apogee_r, "a(1 + e)"),
+        (
+            "transfer_period_h",
+            2.0 * math.pi * math.sqrt(a**3 / mu) / 3600.0,
+            "Kepler's third law, 2*pi*sqrt(a^3/mu)",
+        ),
+    ):
+        declared = elements.get(field)
+        # **Absence is the walk's, disagreement is this rule's.** An `UNCONFIGURED` element is
+        # already a debt with its own path from the pass that walks every unset scalar, so a second
+        # sentence here about the same missing value is the inflation round 74 removed from
+        # `assert`/`clear` arriving at a third door — the first version of this rule reported it and
+        # took the count from 288 to 290 for one missing figure.
+        if not isinstance(declared, (int, float)):
+            continue
+        if not agrees_with_derivation(float(declared), derived):
+            report.refuse(
+                f"{where}.{field}",
+                f"declares {declared!r} and {relation} gives {derived:.6g}. Every other element "
+                "here is a rounding of its own arithmetic; a declared element that is not the "
+                "rounding of the relation is a figure from somewhere else",
+            )
+    # The inclination is not arithmetic — an impulsive burn at cutoff does not change the plane,
+    # which the block's own `determination.inclination` states — so it is an equality with the
+    # parking orbit rather than a derivation, and it was read by nothing either.
+    orbit_inclination = orbit.get("inclination_deg")
+    element_inclination = elements.get("inclination_deg")
+    if isinstance(orbit_inclination, (int, float)) and isinstance(element_inclination, (int, float)):
+        if abs(float(orbit_inclination) - float(element_inclination)) > 1e-9:
+            report.refuse(
+                f"{where}.inclination_deg",
+                f"declares {element_inclination!r} and the parking orbit it is adopted from "
+                f"declares {orbit_inclination!r}. `determination.inclination` says this element is "
+                "the parking orbit's, unchanged: an impulsive burn at cutoff does not change the "
+                "plane, so a disagreement is a transfer to a different orbit",
+            )
+    else:
+        report.debt(
+            f"{where}.inclination_deg",
+            "cannot be checked against the parking orbit's, which is unset",
+        )
     report.note(
         where,
-        f"re-derived: a = {a:,.0f} km, e = {e:.6f}, apogee {apogee_r:,.0f} km, cutoff "
+        f"re-derived: a = {a:,.0f} km, e = {e:.6f}, apogee {apogee_r:,.2f} km, cutoff "
         f"{speed:g} m/s, arriving at {arrival_h:g} h",
     )
 
