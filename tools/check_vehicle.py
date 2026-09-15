@@ -2531,6 +2531,202 @@ def check_command_reach(
                 )
 
 
+def check_reserve_floors(
+    root: Path, registry: dict[str, dict[str, Any]], report: Report
+) -> None:
+    """The reserve floor, declared twice: a level in a profile and a resource in a command.
+
+    `domains/consumables/profiles.yaml` declares fifteen thresholds with a `reserve_floor`, and
+    `set_reserve_policy` is the only verb that acts on one — its gate is
+    `reserve_floor_<resource>_enable` and its numeric argument is the level. **`reserve_floor` was
+    read by no tool in this folder**, which is this corpus's oldest finding arriving on the
+    largest surface it has yet reached: the fifteen floors are the whole of the vehicle's reserve
+    policy, the gate variables above them are what a fleet opens and closes, and nothing joined the
+    two halves.
+
+    What the join found, and it is two different faults rather than one:
+
+    * **The unit was named in the argument and varies by resource.** The command declared
+      `floor_kg`; eight of the fifteen floors are on a percent channel — `prop_main` and
+      `prop_rcs` on Apollo's 20/10/5 % propellant gauges, `absorber_capacity_csm` and
+      `absorber_capacity_lm` on the absorbers' percent-of-rating counters, `battery` on the power
+      domain's state of charge. So the same verb asked for a floor in a unit four of its resources
+      are not measured in, and a fleet calling `floor_kg: 20` for `prop_main` could not tell 20 kg
+      (a tenth of a percent of the 18,508 kg load) from 20 % of it (3,702 kg). The unit is a
+      property of the channel the floor is a level on, so it is declared once per resource on the
+      registry entry and this check holds it against the channel's own `unit`.
+    * **The two lists had already drifted in both directions.** Two resources the command offered
+      — `o2_lm` and `pressurant_he` — had no floor at all, so `reserve_floor_o2_lm_enable` and
+      `reserve_floor_pressurant_he_enable` were gate variables over a level that does not exist.
+      And two floors named no resource: the battery's and the hydrogen tank's, because the command
+      had never listed them. A resource with no floor is a **debt**, owed with the channel it
+      would be a level on; a floor naming a resource the command does not declare is a **refusal**,
+      because a level nobody can set is a claim that is false rather than a value that is absent.
+
+    The link is `floor_resource` and it is declared rather than inferred, for the reason
+    `vehicle_keys` and the propulsion engines' link are: the id cannot be derived from the
+    threshold's — `h2_reserve_20` is the `h2_csm` resource, `cooling_water_reserve` is
+    `water_cooling`, and `battery_reserve_30` is floored on another domain's gauge entirely. A
+    rule guessed from the string is the hand-written list this folder has twice paid for.
+    """
+    command_path = root / "domains" / "consumables" / "commands.yaml"
+    command = None
+    for verb in (load(command_path, report) or {}).get("commands") or []:
+        if isinstance(verb, dict) and verb.get("verb") == "set_reserve_policy":
+            command = verb
+    cwhere = "domains/consumables/commands.yaml:set_reserve_policy"
+    if command is None:
+        report.debt(
+            "domains/consumables/commands.yaml",
+            "declares no `set_reserve_policy`, so the fifteen `reserve_floor`s in the domains' "
+            "profiles name a resource registry that is not there and the gate variables above "
+            "them have nothing to expand against",
+        )
+        return
+
+    schema = command.get("argument_schema") or {}
+    spec = schema.get("resource")
+    if not isinstance(spec, dict) or spec.get("type") != "enum" or not spec.get("values"):
+        report.refuse(
+            f"{cwhere}.argument_schema.resource",
+            "is not an enum with values, so there is no resource registry for a floor to name",
+        )
+        return
+    resources = [str(v) for v in spec["values"]]
+    units = spec.get("floor_units")
+    if not isinstance(units, dict) or not units:
+        report.refuse(
+            f"{cwhere}.argument_schema.resource.floor_units",
+            "declares no units. A floor is a level on a channel, and the channel decides whether "
+            "that level is kg or percent — so the unit belongs on the registry entry, and without "
+            "it the numeric argument has to name one unit for resources measured in several",
+        )
+        return
+    # Both directions. A resource with no unit cannot be floored in anything, and a unit naming no
+    # resource is a leftover from a registry that shrank.
+    for resource in resources:
+        if str(resource) not in {str(k) for k in units}:
+            report.refuse(
+                f"{cwhere}.argument_schema.resource.floor_units",
+                f"declares no unit for {resource!r}. Every resource is floored in the unit of a "
+                f"channel, and the registry offers {resources}",
+            )
+    for key in units:
+        if str(key) not in resources:
+            report.refuse(
+                f"{cwhere}.argument_schema.resource.floor_units",
+                f"declares a unit for {key!r}, which is not one of the resources the argument "
+                f"accepts: {resources}",
+            )
+
+    # The numeric argument is the floor, and it is found rather than named so that renaming it
+    # cannot quietly remove it from this check. A name carrying a unit is a claim about every
+    # resource's unit, so it may only carry one they all share.
+    numeric = [
+        (str(name), value)
+        for name, value in schema.items()
+        if isinstance(value, dict) and value.get("type") == "number"
+    ]
+    if len(numeric) != 1:
+        report.refuse(
+            f"{cwhere}.argument_schema",
+            f"declares {len(numeric)} numeric arguments ({[n for n, _ in numeric]}), so which one "
+            "is the floor is not stated. `set_reserve_policy` sets one number against one resource",
+        )
+        return
+    level_name, _ = numeric[0]
+    declared_units = {str(u) for u in units.values()}
+    if len(declared_units) > 1:
+        tail = level_name.rsplit("_", 1)[-1]
+        if tail in SI_UNITS | DIMENSIONLESS_UNITS:
+            report.refuse(
+                f"{cwhere}.argument_schema.{level_name}",
+                f"is named for the unit {tail!r}, and the resources it applies to are not all in it: "
+                f"they are {sorted(declared_units)}. A fleet calling this verb could not tell a "
+                "floor of 20 kg from a floor of 20 %, and on main propellant those differ by three "
+                "orders of magnitude. Name the argument for the quantity rather than for one of "
+                "its units, and let `floor_units` say which",
+            )
+
+    # The thresholds. Every floor is a level on a channel, and the channel's `unit` is what the
+    # registry entry has to agree with.
+    index = ChannelIndex(registry)
+    naming: dict[str, list[str]] = {}
+    for path in sorted((root / "domains").glob("*/profiles.yaml")):
+        domain = path.parent.name
+        doc = load(path, Report()) or {}
+        for threshold in doc.get("thresholds") or []:
+            if not isinstance(threshold, dict) or "reserve_floor" not in threshold:
+                continue
+            tid = str(threshold.get("id"))
+            twhere = f"domains/{domain}/profiles.yaml:{tid}"
+            resource = threshold.get("floor_resource")
+            if resource is None:
+                report.refuse(
+                    twhere,
+                    "declares a `reserve_floor` and no `floor_resource`. The floor is the level "
+                    "`set_reserve_policy` sets through `reserve_floor_<resource>_enable`, so a "
+                    "floor that names no resource is a level no verb can reach — and the resource "
+                    f"cannot be read off the id. The registry offers {resources}",
+                )
+                continue
+            resource = str(resource)
+            if resource not in resources:
+                report.refuse(
+                    f"{twhere}.floor_resource",
+                    f"names resource {resource!r}, which the registry does not declare: "
+                    f"{resources}. A floor against a resource no verb offers is a level nothing "
+                    "can set and nothing can raise",
+                )
+                continue
+            naming.setdefault(resource, []).append(twhere)
+            point = str(threshold.get("point"))
+            row = index.row(point)
+            if row is None:
+                # The channel registry has already refused an unknown point; saying so twice
+                # would bury the first report.
+                continue
+            channel_unit = str(row.get("unit"))
+            resource_unit = str(units.get(resource))
+            if channel_unit != resource_unit:
+                report.refuse(
+                    f"{twhere}.reserve_floor",
+                    f"floors {point!r}, which is in {channel_unit!r}, while "
+                    f"`set_reserve_policy` declares {resource!r} to be floored in "
+                    f"{resource_unit!r}. A floor is a level on a channel, so the two are one "
+                    "declaration in two files and the unit is the half that makes the number mean "
+                    "anything: the fleet sets a quantity through this verb and the threshold "
+                    "compares it against the gauge",
+                )
+            if not isinstance(threshold.get("reserve_floor"), (int, float)):
+                report.refuse(
+                    f"{twhere}.reserve_floor",
+                    f"is {threshold.get('reserve_floor')!r}, which is not a number",
+                )
+        for threshold in doc.get("thresholds") or []:
+            if (
+                isinstance(threshold, dict)
+                and "floor_resource" in threshold
+                and "reserve_floor" not in threshold
+            ):
+                report.refuse(
+                    f"domains/{domain}/profiles.yaml:{threshold.get('id')}.floor_resource",
+                    "names a resource for a floor that the entry does not declare, so the link "
+                    "points at nothing",
+                )
+
+    for resource in resources:
+        if resource not in naming:
+            report.debt(
+                f"{cwhere}.argument_schema.resource.values",
+                f"offers {resource!r} with no floor anywhere in the domains' profiles, so "
+                f"`reserve_floor_{resource}_enable` is a gate variable over a level that does not "
+                "exist. The floor is owed with a channel to be a level on and a load to be a "
+                "fraction of — and the floor's unit, "
+                f"{str(units.get(resource))!r}, is on this entry already",
+            )
+
+
 def check_chain_faults(
     coupling: dict[str, Any],
     mission: dict[str, Any],
@@ -10738,6 +10934,7 @@ def main(argv: list[str] | None = None) -> int:
     check_chain_faults(coupling or {}, mission or {}, root, registry, report)
     check_seeding_pools(mission or {}, root, report)
     check_command_reach(root, coupling or {}, report)
+    check_reserve_floors(root, registry, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)
         check_electrical_bindings(root, vehicle, report)

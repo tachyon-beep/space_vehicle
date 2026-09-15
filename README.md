@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 269 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 271 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 269 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 271 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **269** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **271** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -666,7 +666,7 @@ to a more honest endpoint can disconnect the node it left.** A node that is a so
 a node that is a source *by accident* is not, and nothing in the definition distinguished them
 until the edge count made it visible.
 
-## The gate variable map: 58 templates, 226 names, and nobody could publish it
+## The gate variable map: 58 templates, 228 names, and nobody could publish it
 
 `state.json`'s capability snapshot was a declared deliverable that nothing emitted.
 `presentation.yaml#mirror.capability_snapshot` gave the fields and the derivation and said the
@@ -678,7 +678,7 @@ the specification had assumed rather than checked, and all three are now refusal
 placeholder filled by the i-th enum argument — and it publishes `power_amplifier_True_enable`,
 because `set_power_amplifier` declares `state` (a boolean) before `transmitter`. Name binding also
 makes the template self-documenting: `<transmitter>` says which argument it varies over, and a
-reader who has to count is reading a convention nothing states. The map is **226 published names**
+reader who has to count is reading a convention nothing states. The map is **228 published names**
 where the registries declare 58 variables, which is precisely what
 `mirror.variables_are_templated` predicted and the reason §9's check 5 cares: a refusal that named
 `reserve_floor_<resource>_enable` would be a name a fleet cannot act on.
@@ -704,7 +704,7 @@ name a closed gate.
 
 What a reference plant can honestly put in `variables` is also worth stating, because it is the
 place the temptation to default is strongest: there is no plant code here, so **no gate variable has
-a value**, and all 226 are declared and unset. Emitting `true` would be the defaulting this folder
+a value**, and all 228 are declared and unset. Emitting `true` would be the defaulting this folder
 exists to refuse; emitting nothing would lose the names. So the names are published, `--closed-gate`
 carries whatever live state a caller has, and a verb whose gate is in neither set reports
 `gate: <name>` rather than claiming to be open. `budget`, `queue_depth` and `published_at` are
@@ -6014,6 +6014,76 @@ the first phase not starting at zero, the last phase's start drifting, one durat
 later start left alone, the compensating pair (which the totals do not notice), a phase with no start
 at all, the unbroken corpus composing at 269, and the help window following the declaration when the
 declaration moves.
+
+## The reserve floor: fifteen levels, eleven resources, and a unit that was named for one of them
+
+The instrument's step 4 asks what a joining check *does not* compare, and this round it asked it of
+the largest surface left in the corpus: `reserve_floor`. It is declared fifteen times — thirteen
+thresholds in `domains/consumables/profiles.yaml` and the absorbors' two twins in
+`domains/eclss/` — and **it was read by no tool in this folder.**
+
+That matters more here than it would elsewhere, because the floor is not a note. It is the level the
+whole reserve-policy surface denotes: `set_reserve_policy`'s gate is
+`reserve_floor_<resource>_enable`, its numeric argument is the level, and the eleven resources in its
+enum expand to eleven published gate variables — 226 became 228 — that a fleet opens and closes. Two
+halves of one declaration, in two files, joined by nothing.
+
+The join found two faults rather than one, and the first is the one that would have hurt.
+
+**The unit was in the argument's name and it varies by resource.** The command declared `floor_kg`.
+Eight of the fifteen floors are on a **percent** channel — `prop_main` and `prop_rcs` on Apollo's
+20/10/5 % propellant gauges (`apollo_diode.md:140, :151`), `absorber_capacity_csm` and
+`absorber_capacity_lm` on the absorbers' percent-of-rating counters, `battery` on the power domain's
+state of charge — and five are on a **kg** channel: the oxygen, hydrogen, potable-water and
+cooling-water tanks. So the verb asked four of its resources for a number in a unit they are not
+measured in, and a fleet calling `floor_kg: 20` for `prop_main` had no way to tell 20 kg from 20 %.
+On main propellant those differ by three orders of magnitude: 20 kg is a tenth of a percent of the
+18,508 kg the service module carries, and 20 % of it is 3,702 kg. A fleet that meant the second and
+was given the first would spend the whole reserve and never see a threshold move.
+
+The unit is a property of the *channel the floor is a level on*, so it is declared once per resource
+on the registry entry — `floor_units`, a block beside the enum — and `check_reserve_floors` holds
+each floor against the `unit` of the channel its own threshold monitors. The argument is now `floor`,
+named for the quantity rather than for one of its units, and the check refuses a name carrying a unit
+the resources are not all in. That is a rule about the *shape* of the declaration rather than about
+this verb: an argument whose unit is decided by another argument's value must not be named for one of
+those units.
+
+**And the two lists had already drifted in both directions.**
+
+- Two resources the command offered — `o2_lm` and `pressurant_he` — had **no floor at all**, so
+  `reserve_floor_o2_lm_enable` and `reserve_floor_pressurant_he_enable` were gate variables over a
+  level that does not exist. These are debts, not refusals: a floor is owed with a channel to be a
+  level on and a load to be a fraction of, and neither has one. The LM's 24.1 kg of oxygen
+  (`vehicle.yaml#consumables.lm.o2_kg`) is published on no `res.*` channel, and the helium charge's
+  own initial is `UNCONFIGURED` — you cannot floor a fraction of a load nobody has stated. The two
+  debts name exactly that, which is why the count moved 269 to 271.
+- Two floors named **no resource**: `battery_reserve_30`, floored on `power.battery_soc_pct`, and
+  `h2_reserve_20`, floored on `res.h2_remaining_kg`, because the command had never listed `battery`
+  or `h2_csm`. Adding them is a declaration rather than a figure — both are real resources with real
+  channels and both already had a level — and it is what took the enum from nine to eleven.
+
+The link is `floor_resource`, and it is **declared rather than inferred** for the reason
+`vehicle_keys` and the propulsion engines' link are: the id cannot be read off the threshold's.
+`h2_reserve_20` is the `h2_csm` resource and not `h2`; `cooling_water_reserve` is `water_cooling`;
+`battery_reserve_30` is floored on another domain's percent gauge rather than on the
+`res.battery_energy_wh` ledger channel that is the battery's actual stock. A rule guessed from the
+string is the hand-written list this folder has twice paid for, and the two eclss twins name the same
+resource as their consumables counterparts — which is the reverse direction working: a resource
+floor, declared twice on purpose and joined once.
+
+**269 became 271**, both of them the two resources with no floor, and the pins moved together. **186
+became 188 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 108 of 134 fully configured,
+26 with a debt, 58 of 79 edges carrying a sensitivity, 202 unset scalars. `--strict` exits 2. The
+gate variable map moved with the enum: **226 became 228**, and the two new names are exactly
+`reserve_floor_h2_csm_enable` and `reserve_floor_battery_enable`.
+
+Verified by breaking twelve copies in `.scratch/r26/`: the `floor_units` block deleted, one resource
+left without a unit, a unit for a resource the enum dropped, the argument named for the kg unit
+again, a floor with no `floor_resource`, a `floor_resource` the registry does not offer, a
+`floor_resource` on an entry with no floor, `prop_main` floored in kg (which fires three times, once
+per threshold), a floor that is not a number, the two orphan floors restored to the state the round
+found them in, the eclss twin losing its link, and the unbroken corpus composing at 271.
 
 ## The invariants, and which of them are enforced
 

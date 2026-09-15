@@ -22,6 +22,18 @@
 # and it is enforced by the executive rather than published. `apollo_diode.md:55` is explicit
 # that consumables reserve policies "should remain agent-created" — so the floors below are the
 # service's defaults, and `set_reserve_policy` lets an agent tighten its own.
+#
+# ## The floor is a level on a channel, and the channel decides its unit
+#
+# Every floor below declares `floor_resource`, which names its entry in `set_reserve_policy`'s
+# resource registry — the way a component declares `vehicle_keys` and a fault declares the
+# component it happens to. The link cannot be inferred from the id: `h2_reserve_20` is the `h2_csm`
+# resource, `cooling_water_reserve` is `water_cooling`, and `battery_reserve_30` is floored on the
+# power domain's state-of-charge gauge rather than on the `res.battery_energy_wh` ledger channel.
+# The resource's unit is declared once, on the registry entry, and `check_reserve_floors` holds it
+# against the unit of the channel the threshold monitors. Eight of these fifteen floors are
+# therefore in percent and five in kg, and which is which is a property of the channel rather than
+# of the resource: a tank is floored in kg, a gauge in percent.
 
 domain: consumables
 profiles:
@@ -46,6 +58,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 20
+    floor_resource: prop_main
     provenance:
       basis: apollo
       ref: "apollo_diode.md:140"
@@ -60,6 +73,7 @@ thresholds:
     latched: true
     severity: WARNING
     reserve_floor: 10
+    floor_resource: prop_main
     provenance:
       basis: apollo
       ref: "apollo_diode.md:140"
@@ -73,6 +87,7 @@ thresholds:
     latched: true
     severity: EMERGENCY
     reserve_floor: 5
+    floor_resource: prop_main
     provenance:
       basis: apollo
       ref: "apollo_diode.md:140"
@@ -89,6 +104,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 25
+    floor_resource: prop_rcs
     provenance:
       basis: apollo
       ref: "apollo_diode.md:151"
@@ -102,6 +118,7 @@ thresholds:
     latched: true
     severity: EMERGENCY
     reserve_floor: 10
+    floor_resource: prop_rcs
     provenance:
       basis: apollo
       ref: "apollo_diode.md:151"
@@ -118,6 +135,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 55.8
+    floor_resource: o2_csm
     point_units: "kg: 20 % of the 279 kg CSM load"
     provenance:
       basis: derived
@@ -133,6 +151,7 @@ thresholds:
     latched: true
     severity: EMERGENCY
     reserve_floor: 27.9
+    floor_resource: o2_csm
     point_units: "kg: 10 % of the CSM load"
     provenance:
       basis: derived
@@ -147,6 +166,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 2.8
+    floor_resource: water_potable
     point_units: "kg: 20 % of the 14 kg potable load, which is small because the fuel cells produce 143 kg more"
     provenance:
       basis: derived
@@ -161,6 +181,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 2.6
+    floor_resource: water_cooling
     point_units: "kg: 20 % of the 13 kg CSM cooling-water load"
     provenance:
       basis: derived
@@ -183,6 +204,7 @@ thresholds:
     latched: true
     severity: WARNING
     reserve_floor: 20
+    floor_resource: absorber_capacity_csm
     provenance:
       basis: apollo
       ref: "apollo_diode.md:93"
@@ -197,6 +219,7 @@ thresholds:
     latched: true
     severity: WARNING
     reserve_floor: 20
+    floor_resource: absorber_capacity_lm
     provenance:
       basis: derived
       relation: "apollo's <20 % absorber floor, at the LM's 41 man-hour cartridge. The floor is a fraction of a rating, so the same 20 is a different quantity in each cabin: 14.4 man-hours for the CSM's element and 8.2 for the LM's, which is four hours of two-crew time rather than four hours of three-crew time"
@@ -215,6 +238,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 30
+    floor_resource: battery
     provenance:
       basis: apollo
       ref: "apollo_diode.md:77"
@@ -258,6 +282,7 @@ thresholds:
     latched: true
     severity: CAUTION
     reserve_floor: 4.9
+    floor_resource: h2_csm
     point_units: "kg: 20 % of the 24.5 kg CSM hydrogen load"
     provenance:
       basis: derived

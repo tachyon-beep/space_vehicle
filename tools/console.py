@@ -208,7 +208,7 @@ class Console:
         # has the console and not yet the mirror is a vehicle that appears to publish nothing.
         # That is not hypothetical: this method used to create the console first and publish on
         # its first cycle, and a probe attaching in the gap reported "HELP.md and state.json named
-        # none" for a vehicle that was about to name 226 gates. Publishing first and announcing
+        # none" for a vehicle that was about to name 228 gates. Publishing first and announcing
         # second costs one cycle of latency at boot and removes the gap entirely.
         # **The queue is loaded, not restarted.** `pending.json` is "the vehicle's own deferral
         # queue" and this file wrote it every cycle and read it never — so a deferral could not

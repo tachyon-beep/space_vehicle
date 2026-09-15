@@ -27,10 +27,31 @@ domain: consumables
 commands:
   - verb: set_reserve_policy
     argument_schema:
-      resource: {type: enum, values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main,
-                                    prop_rcs, pressurant_he, absorber_capacity_csm,
-                                    absorber_capacity_lm]}
-      floor_kg: {type: number, minimum: 0}
+      resource:
+        type: enum
+        values: [o2_csm, o2_lm, water_potable, water_cooling, prop_main, prop_rcs,
+                 pressurant_he, absorber_capacity_csm, absorber_capacity_lm, h2_csm,
+                 battery]
+        # The floor is a level **on a channel**, and the channel decides the unit: the tanks are
+        # floored in kg and the four level gauges in percent. So the unit is declared once per
+        # resource here rather than named in the argument, which is what `floor_kg` did and what
+        # made four of the nine resources unsettable in their own unit. `check_reserve_floors`
+        # holds each entry against the unit of the channel the floor's threshold monitors, so this
+        # block and `reserve_floor` in `profiles.yaml` are two halves of one declaration rather
+        # than two lists that have to be kept in step.
+        floor_units:
+          o2_csm: kg
+          o2_lm: kg
+          water_potable: kg
+          water_cooling: kg
+          prop_main: "%"
+          prop_rcs: "%"
+          pressurant_he: kg
+          absorber_capacity_csm: "%"
+          absorber_capacity_lm: "%"
+          h2_csm: kg
+          battery: "%"
+      floor: {type: number, minimum: 0}
       note: {type: string, optional: true, max_length: 200}
     authority: A1
     gate: {kind: preference, variable: reserve_floor_<resource>_enable}
@@ -48,7 +69,13 @@ commands:
       the caller more conservative. `apollo_diode.md:55` says reserve policies should remain
       agent-created, and this is the narrowest reading of that: a floor is a commitment about
       the caller's own future spending, not a claim on a quantity, and no other agent can see
-      it or be bound by it.
+      it or be bound by it. **`floor` is in the resource's own unit, which the vehicle declares
+      per resource and which this help therefore states rather than assumes: kg for `o2_csm`,
+      `o2_lm`, `water_potable`, `water_cooling`, `pressurant_he` and `h2_csm`, and percent for
+      `prop_main`, `prop_rcs`, `absorber_capacity_csm`, `absorber_capacity_lm` and `battery`.
+      A floor on a tank is a quantity and a floor on a gauge is a fraction of full scale, and
+      the two are not interchangeable: 20 kg of main propellant is a tenth of a percent of the
+      18,508 kg the service module carries, and 20 percent of it is 3,702 kg.**
     provenance:
       basis: apollo
       ref: "apollo_diode.md:55"
