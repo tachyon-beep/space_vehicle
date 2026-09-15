@@ -67,7 +67,7 @@ commands:
   - verb: request_imu_alignment
     argument_schema:
       source: {type: enum, values: [star, sun, moon_horizon, stored]}
-      target: {type: enum, values: [EARTH_J2000, MOON_J2000, LVLH]}
+      target: {type: enum, values: [EARTH_J2000, MOON_J2000, LVLH], names: frame}
       timeout_s: {type: number, optional: true, minimum: 0}
     authority: A2
     gate: {kind: preference, variable: imu_align_<source>_enable}

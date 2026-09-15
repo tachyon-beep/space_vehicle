@@ -113,7 +113,7 @@ commands:
 
   - verb: set_heater
     argument_schema:
-      bank: {type: enum, values: [heater_bank_csm, heater_bank_lm]}
+      bank: {type: enum, values: [heater_bank_csm, heater_bank_lm], names: component}
       zone: {type: enum, values: [csm_cabin, csm_avionics_bay, csm_service_bay, lm_cabin,
                                 lm_descent_bay]}
       duty: {type: integer, range: [0, 100], unit: "%"}

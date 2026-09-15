@@ -9875,7 +9875,9 @@ def check_boolean_words(documents: dict[str, Any], report: Report) -> None:
         walk(document, "", rel)
 
 
-def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> None:
+def check_argument_vocabularies(
+    documents: dict[str, Any], report: Report, channels: dict[str, Any] | None = None
+) -> None:
     """An argument a fleet can send names something the vehicle has.
 
     `pump_1`, `pump_2` and `pump_lm` are components of the thermal domain, and `set_coolant_pump`
@@ -9902,17 +9904,51 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
     argument may declare `names: vehicle_entry`, and the test is then that every value is an id
     `vehicle.yaml` declares — which `sband_steerable` is.
 
-    What the rule does *not* reach is an argument whose name matches no class and which declares
-    nothing: `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker` and
-    `set_bus_tie.tie` name components in their domains and are unchecked, because nothing about the
-    word `bank` says it means a `heater`. Declaring `names: component` on them is what fixes that,
-    and it is the same declaration the rule uses when the name does match.
+    **The trigger is the argument's name, and that is the whole defect.** `frame` names a frame,
+    `pump` names pumps — so the join reaches the arguments whose names happen to say what they name,
+    and is silent on every other one. This docstring used to name four arguments it left unchecked
+    for exactly that reason: `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker`
+    and `set_bus_tie.tie` "name components in their domains, because nothing about the word `bank`
+    says it means a `heater`". Declaring `names: component` on them is what fixes that, and it is the
+    same declaration the rule uses when the name does match — but the paragraph was the only thing
+    that knew, and four rounds of readers did not.
+
+    Measuring it rather than describing it found **seven**, not four. The four above, plus two
+    crew-station arguments and one frame argument that nothing had noticed:
+
+      - `ask_crew.position` and `set_display_mode.position` offer crew stations, which
+        `channels.yaml#crew_positions` declares — and the second offers a *subset*, five of the
+        seven, because a tunnel and a suit have no panel to set the mode of. A subset is right and
+        an equality test would be wrong, so `crew_station` joins `frame` as a vocabulary the rule
+        checks by membership;
+      - `request_imu_alignment.target` offers three of `vehicle.yaml#frames`' five, and it sits in
+        the same domain as `load_state_vector.frame`, which *is* checked. The same vocabulary, held
+        to the same authority in one verb and free in the next, because one argument is called
+        `frame` and the other is called `target` — which is the mis-citation the `frame` rule was
+        written for (`rcs`'s two verbs offering `inertial_earth` beside `EARTH_J2000`), arriving
+        again one argument name over.
+
+    So the rule gains a fourth vocabulary and a way to find the next one: an argument that declares
+    nothing, whose name matches no class in its domain, and whose values are **all** drawn from a
+    vocabulary the vehicle declares, is reported as a **debt**. It is not refused, because a debt is
+    the honest instrument for a declaration that is needed and absent — and the report is silent on
+    the corpus the moment the seven are declared, which is what makes it a rule rather than a
+    paragraph.
     """
     vehicle_ids: set[str] = set()
     frame_ids = {
         str(frame.get("id"))
         for frame in (documents.get("vehicle.yaml") or {}).get("frames") or []
         if isinstance(frame, dict) and frame.get("id")
+    }
+    # The crew stations, from the registry rather than from the domain that offers them — the same
+    # authority `mission.yaml`'s `stations` map is held to, and the vocabulary `crew.location_[id]`
+    # publishes. `channels.yaml` is passed in rather than looked up in `documents` because it is a
+    # registry rather than a document with a filename in that map.
+    station_ids = {
+        str(position.get("id"))
+        for position in (channels or {}).get("crew_positions") or []
+        if isinstance(position, dict) and position.get("id")
     }
 
     def collect(node: Any) -> None:
@@ -9981,10 +10017,35 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
                 if not declared and argument == "frame":
                     declared = "frame"
                 named_class = argument if argument in classes else ""
+                values = [str(v) for v in spec.get("values") or []]
                 if not declared and not named_class:
+                    # **An argument that names a declared vocabulary and does not say so.** This is
+                    # the rule that finds the next one rather than waiting for a reader: the join
+                    # above is triggered by the argument's *name*, so it reaches `frame` and `pump`
+                    # and is silent on `target` and `bank`. The test is the one every other join in
+                    # this folder uses — the values against the vocabulary — and it reports rather
+                    # than refuses, because an argument whose values happen to look like a
+                    # vocabulary is a question to answer and not a fault to repair.
+                    offered = {str(v) for v in values}
+                    domain_components = set().union(*classes.values()) if classes else set()
+                    for vocabulary, known in (
+                        ("frame", frame_ids),
+                        ("crew_station", station_ids),
+                        ("component", domain_components),
+                    ):
+                        if known and offered and offered <= known:
+                            report.debt(
+                                f"domains/{domain}/commands.yaml:{verb.get('verb')}.{argument}",
+                                f"offers {sorted(offered)}, every one of which is a declared "
+                                f"`{vocabulary}` — and the argument declares no `names:`, so the "
+                                "join that holds an argument to what it names cannot see it. That "
+                                "join is triggered by the argument's *name*, and this one does not "
+                                f"say what it names: declare `names: {vocabulary}`, or say why "
+                                "these values are not that vocabulary",
+                            )
+                            break
                     continue
                 where = f"domains/{domain}/commands.yaml:{verb.get('verb')}.{argument}"
-                values = [str(v) for v in spec.get("values") or []]
                 if declared == "frame":
                     # The frames a command may name, held to `vehicle.yaml#frames` — the same
                     # authority `mission.yaml`'s state vector names and `gnc`'s own `frame`
@@ -10003,6 +10064,33 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
                                 "vocabulary for the same frame is a second vehicle",
                             )
                     continue
+                if declared == "crew_station":
+                    # A *subset* is the right test here and equality would be wrong: a station is
+                    # offered only where the command means something. `set_display_mode` names five
+                    # of the seven, because a tunnel and a suit have no panel to set the mode of.
+                    #
+                    # With no registry there is no vocabulary to test against, and the first version
+                    # of this branch refused *every* value in that case — a caller that omitted the
+                    # registry got twelve refusals about a rule that had not run, which is the
+                    # failure this folder keeps finding wearing the opposite sign. The absent
+                    # authority is the debt; the membership test is what it is owed for.
+                    if not station_ids:
+                        report.debt(
+                            f"{where}",
+                            "declares `names: crew_station` and no `channels.yaml#crew_positions` "
+                            "reached this check, so there is no vocabulary to hold it to",
+                        )
+                        continue
+                    for value in values:
+                        if value not in station_ids:
+                            report.refuse(
+                                f"{where}",
+                                f"names the crew station {value!r}, which "
+                                f"`channels.yaml#crew_positions` does not declare; it declares "
+                                f"{sorted(station_ids)}. A station nobody can occupy is a place a "
+                                "fleet can ask a question from and no answer can come back",
+                            )
+                    continue
                 if declared == "vehicle_entry":
                     for value in values:
                         if value not in vehicle_ids:
@@ -10017,7 +10105,7 @@ def check_argument_vocabularies(documents: dict[str, Any], report: Report) -> No
                     report.refuse(
                         f"{where}",
                         f"declares `names: {declared!r}`, and the only vocabularies this rule knows "
-                        "are `component` and `vehicle_entry`",
+                        "are `component`, `vehicle_entry`, `frame` and `crew_station`",
                     )
                     continue
                 # `names: component` widens the test to every class in the domain, which is what
@@ -12049,7 +12137,7 @@ def main(argv: list[str] | None = None) -> int:
     check_perception_model(documents, report)
     check_component_identity(documents, report)
     check_consumers(documents, report)
-    check_argument_vocabularies(documents, report)
+    check_argument_vocabularies(documents, report, channels)
     check_spacecraft_vocabulary(documents, report)
     check_presentation_references(
         root, presentation or {}, coupling or {}, mission or {}, report, channels

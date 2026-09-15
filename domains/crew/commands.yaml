@@ -38,6 +38,7 @@ commands:
         type: enum
         values: [csm_commander, csm_navigator, csm_lower_equipment_bay, lm_commander,
                  lm_pilot, tunnel, surface_eva]
+        names: crew_station
       question:
         type: string
         max_length: 300
@@ -141,6 +142,7 @@ commands:
       position:
         type: enum
         values: [csm_commander, csm_navigator, csm_lower_equipment_bay, lm_commander, lm_pilot]
+        names: crew_station
       mode:
         type: enum
         values: [nominal, caution_review, procedure, trend]

@@ -46,7 +46,7 @@ commands:
 
   - verb: set_bus_tie
     argument_schema:
-      tie: {type: enum, values: [csm_tie_ab]}
+      tie: {type: enum, values: [csm_tie_ab], names: component}
       state: {type: enum, values: [open, closed, auto]}
     authority: A2
     gate: {kind: preference, variable: tie_auto_enable}
@@ -73,7 +73,8 @@ commands:
       battery: {type: enum, values: [battery_csm_1, battery_csm_2, battery_csm_3,
                                    battery_lm_descent_1, battery_lm_descent_2,
                                    battery_lm_descent_3, battery_lm_descent_4,
-                                   battery_lm_ascent_1, battery_lm_ascent_2]}
+                                   battery_lm_ascent_1, battery_lm_ascent_2],
+               names: component}
       state: {type: enum, values: ["on", "off"]}
     authority: A2
     gate: {kind: preference, variable: contactor_<battery>_enable}
@@ -153,7 +154,7 @@ commands:
       # per-channel (`power.lcl_[n]_state`) rather than per-component — so this refuses a
       # specific LCL and the gate is per component class. A per-channel breaker argument
       # would need per-channel entries in components.yaml rather than a longer list here.
-      breaker: {type: enum, values: [csm_tie_ab, lcl]}
+      breaker: {type: enum, values: [csm_tie_ab, lcl], names: component}
       state: {type: enum, values: [in, out, reset]}
     authority: A2
     gate: {kind: preference, variable: breaker_<breaker>_enable}

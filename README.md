@@ -7125,6 +7125,92 @@ that the block was written as a *description* and has only ever been checked as 
 | readers of `wrongness` | 0 | 1 — `check_perception_model` |
 | tests in `tests/test_vehicle_config.py` | 205 | **206** |
 
+## The join that holds an argument to what it names is triggered by the argument's name
+
+`check_argument_vocabularies` binds an enum argument's values to the objects it names. The trigger is
+the argument's own name — an argument called `frame` names a frame, one called `pump` names pumps —
+so the join reaches every argument whose name happens to say what it names, and is silent on every
+other one. **Its own docstring said so**, and named four it left unchecked:
+
+> What the rule does *not* reach is an argument whose name matches no class and which declares
+> nothing: `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker` and
+> `set_bus_tie.tie` name components in their domains and are unchecked, because nothing about the
+> word `bank` says it means a `heater`. Declaring `names: component` on them is what fixes that.
+
+That paragraph was the only thing that knew. It was correct, it was four rounds old, and no reader
+acted on it — which is this folder's oldest finding arriving in the one place it had not yet been
+looked for: **prose in a tool's own docstring, describing a gap in that tool.**
+
+**Measuring it instead of describing it found seven, not four.** Three were in no list anywhere:
+
+| argument | what it offers | why nothing saw it |
+|---|---|---|
+| `ask_crew.position` | all seven crew stations | the name `position` matches no component class |
+| `set_display_mode.position` | **five** of the seven | the same name, and the subset is deliberate — a tunnel and a suit have no panel to set the mode of |
+| `request_imu_alignment.target` | three of `vehicle.yaml#frames`' five | the name is `target` |
+
+The third is the sharpest, because the same vocabulary is already held to the same authority one verb
+away: `load_state_vector.frame` **is** checked, and `request_imu_alignment.target` is not, purely
+because one argument is called `frame` and the other is called `target`. That is precisely the
+mis-citation the `frame` rule was written for — `rcs`'s two verbs offering `inertial_earth` beside
+`EARTH_J2000`, *"a second vocabulary for the same frame is a second vehicle"* — arriving again one
+argument name over.
+
+### The fix
+
+Seven declarations, and nothing invented: four are the docstring's own prescription (`names:
+component`) and three name vocabularies the vehicle already declares.
+
+- `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker`, `set_bus_tie.tie` →
+  `names: component`.
+- `ask_crew.position`, `set_display_mode.position` → `names: crew_station`, a fourth vocabulary whose
+  authority is `channels.yaml#crew_positions[].id`. It joins `frame` as a vocabulary rather than an
+  object, which is why the closed set is now four and not two.
+- `request_imu_alignment.target` → `names: frame`.
+
+**The test is membership and not equality**, and the distinction is load-bearing here rather than
+theoretical: `set_display_mode` offers five of the seven stations *on purpose*, because a tunnel and
+a suit have no panel, and an equality rule would refuse a correct declaration. So does
+`request_imu_alignment.target`, which offers three of the five frames — you do not align to `BODY`.
+A station the registry does not declare is refused on either argument; a declared station the verb
+chooses not to offer is not.
+
+### The debt, which is the half that finds the next one
+
+Holding the seven is a list; finding the eighth is a rule. So an argument that declares no `names:`,
+whose name matches no class in its domain, and whose values are **all** drawn from a vocabulary the
+vehicle declares is now reported as a **debt** — naming the vocabulary and saying what to declare.
+
+A debt rather than a refusal, because an argument whose values happen to look like a vocabulary is a
+question to answer rather than a fault to repair — and the report is silent on the corpus the moment
+the seven are declared, which is what makes it a rule rather than a paragraph.
+
+**And the debt is also the argument for why the declaration is the fix rather than the inference.**
+An argument's values stop looking like a vocabulary the moment one of them is outside it, so an
+inferred rule goes quiet exactly when the argument becomes wrong. The test holds that too: with
+`names: frame` dropped *and* `EARTH_FIXED` added, the corpus composes and nothing is said, because
+the argument no longer looks like anything. Only the declaration makes the check able to fire.
+
+### What the round found and did not fix
+
+`set_display_mode(position=tunnel)` composes, and a tunnel has no panel. The rule that would refuse it
+needs to know which stations have displays, which is a fact about
+`domains/crew/components.yaml#display_contract` — so it needs a declared link from the verb to the
+display contract, the way `names:` links an argument to a vocabulary. The five-value list is the
+corpus's curation today and nothing holds it there; that is the next round's work rather than a
+refusal invented for it here.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — seven declarations and no value: a vocabulary name is not a scalar |
+| `UNCONFIGURED` scalars | 214 | unchanged |
+| arguments declaring `names:` | 2 | **9** |
+| vocabularies `names:` can resolve | 3 (`component`, `vehicle_entry`, `frame`) | 4, with `crew_station` |
+| the docstring's own count of unchecked arguments | 4 | 0 — and it was 7 |
+| tests in `tests/test_vehicle_config.py` | 206 | **207** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
