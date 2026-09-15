@@ -8748,6 +8748,80 @@ def check_domain_reads(documents: dict[str, Any], report: Report) -> None:
         )
 
 
+# The keys of a component that are never a claim two views of one box both make: identity, the
+# declared link, and the prose. `class` and `kind` are deliberately **not** here, and that is the
+# difference between this set and the four `*_STRUCTURAL` sets above it — those exclude `class`
+# because the vehicle-level file has no class to compare, while two domains describing one box are
+# each saying what it *is*, and that is exactly the claim that had drifted.
+COMPONENT_STRUCTURAL = {
+    "vehicle_keys",
+    "provenance",
+    "note",
+    "notes",
+    "why",
+    "reason",
+    "source",
+    "ref",
+    "relation",
+    "basis",
+    "unit",
+    "inputs",
+}
+
+
+def check_component_identity(documents: dict[str, Any], report: Report) -> None:
+    """One box, two domains, and nothing saying whether the two entries are one object.
+
+    `domains/*/components.yaml#components` is each domain's own view of what it is made of, so two
+    domains listing the same id is either one object described twice or two objects sharing a name.
+    Until this round nothing distinguished them, and the corpus had exactly one instance of the
+    first kind — `imu`, which `avionics` declared as `class: inertial_reference` with
+    `alignment_error_deg` and `gnc` as `class: inertial_platform` with `drift_deg_per_h` and
+    `alignment_budget_deg`.
+
+    **Three things were wrong at once and each hid the others.** The two copies gave one box two
+    class names, and no check reads `class` against a vocabulary, so neither name could be wrong.
+    They split the instrument's unknowns three ways, so the vehicle counted one IMU's missing
+    figures as three and reported them under two different domains. And the avionics figure was
+    read by nothing at all — not a threshold, not a derivation, not a fault — while its own file's
+    `open_debts` entry said the two constants are *"recorded once — in the domain that owns the
+    instrument"*. The sentence and the field were three lines apart and no tool read either.
+
+    The rule is the intersection, as it is in the four joins above: everything the two entries both
+    state must agree. `class` is in that intersection here where the other joins exclude it, and
+    the reason is not an inconsistency — those compare a domain's view against a *vehicle-level*
+    bill of materials, which has no class to state, while these compare two domains that are each
+    saying what the box is.
+
+    A refusal rather than a debt, because both readings have a fix and neither is missing
+    information: either the two entries are one object and must agree, or the id is doing two jobs
+    and one of them needs a different name. What is not available is carrying both.
+    """
+    declared: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    for name, document in sorted(documents.items()):
+        if not name.endswith("components.yaml"):
+            continue
+        for entry in (document or {}).get("components") or []:
+            if isinstance(entry, dict) and entry.get("id"):
+                declared.setdefault(str(entry["id"]), []).append((name, entry))
+
+    for cid, copies in sorted(declared.items()):
+        if len(copies) < 2:
+            continue
+        first_name, first = copies[0]
+        for other_name, other in copies[1:]:
+            for field in comparable(first, other, COMPONENT_STRUCTURAL):
+                if first[field] == other[field]:
+                    continue
+                report.refuse(
+                    f"{other_name}:components.{cid}.{field}",
+                    f"is {other[field]!r}, and {first_name} gives the same component id "
+                    f"{first[field]!r}. Two domains declare `{cid}` and they disagree about what it "
+                    "is: either this is one box and the two entries are one declaration that has "
+                    "drifted, or the id is doing two jobs and one of them needs a name of its own",
+                )
+
+
 # The keys of a thermal component that are never a quantity the two files both state: identity, the
 # prose keys, and the link itself. What is deliberately *not* here is the point — `fluid`,
 # `flow_l_min`, `vehicle`, `coolant_mass_kg`, `panels`, `area_m2` and `rejection_w` are the figures
@@ -11861,6 +11935,7 @@ def main(argv: list[str] | None = None) -> int:
     check_threshold_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_domain_reads(documents, report)
+    check_component_identity(documents, report)
     check_consumers(documents, report)
     check_argument_vocabularies(documents, report)
     check_spacecraft_vocabulary(documents, report)

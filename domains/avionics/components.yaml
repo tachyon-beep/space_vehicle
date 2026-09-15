@@ -609,16 +609,23 @@ components:
 
   - id: imu
     kind: state
-    class: inertial_reference
-    alignment_error_deg: UNCONFIGURED
+    class: inertial_platform
     provenance:
       basis: apollo
       ref: "apollo_diode.md:123, :178"
       note: >-
-        the platform, its power (`avionics.imu_power`), and the "unexpected loss" event. The
-        alignment error is owed to `domains/gnc/`: apollo publishes
-        `gnc.imu_alignment_error_deg` and F-10's second observable, and neither the drift rate
-        nor the alignment budget is in any source reached
+        the platform, its power (`avionics.imu_power`), and the "unexpected loss" event. **It
+        carries no figure, and that is the point of the entry.** This domain's view of the IMU is
+        the instrument layer's — that the layer contains one — and the two constants the platform
+        owes are recorded once, in the domain that owns the instrument: `drift_deg_per_h` and
+        `alignment_budget_deg` on `domains/gnc/components.yaml#components.imu`, where two of that
+        domain's thresholds derive their limits from them. The alignment *error* is not a constant
+        at all: `gnc.imu_alignment_error_deg` is the observable of `imu_platform` and
+        `imu_alignment`, which the plant integrates, and a state declared as a component field is
+        an unknown counted twice. Until this round this entry carried
+        `alignment_error_deg: UNCONFIGURED` under `class: inertial_reference` — a third name, a
+        second class for one box, and a debt this file's own `open_debts` entry below says should
+        not be here
 
   - id: sensor_bus
     kind: discrete

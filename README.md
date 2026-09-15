@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 289 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 288 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 289 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 288 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **289** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **288** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **215** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **214** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -6929,6 +6929,107 @@ complete; the tick asks whether the whole graph got there. Fifteen states are re
 sense and one advances, because a state can be perfectly declared and still read a node whose
 producer could not compute. That is the same distinction as `usable` against `declared`, one layer
 up, and it now has two figures in one report rather than one figure doing both jobs.
+
+## One box, two domains, and the sentence three lines below the field that broke it
+
+`domains/avionics/components.yaml` and `domains/gnc/components.yaml` both declared a component with
+the id `imu`. Nothing compared them, and **`imu` is the vehicle's only component id that two domains
+both declare** — so this is one instance rather than a family, and the instance had three things
+wrong at once, each of which hid the others:
+
+| | `domains/avionics/` | `domains/gnc/` |
+|---|---|---|
+| `class` | `inertial_reference` | `inertial_platform` |
+| figures | `alignment_error_deg: UNCONFIGURED` | `drift_deg_per_h`, `alignment_budget_deg` — both `UNCONFIGURED` |
+| read by | **nothing at all** | two thresholds' `derives_from` |
+| provenance | `apollo`, with a ref | `UNCONFIGURED`, no ref |
+
+**One box had two class names**, and no check reads a component's `class` against a vocabulary — the
+linter only ever compares it to literals (`== "loop"`, `== "engine"`, `in ("radiator",
+"evaporator")`), and 21 of the vehicle's 35 classes are compared to nothing. So neither name could be
+wrong, and the corpus carried two names for one instrument with no reader that noticed.
+
+**The instrument's unknowns were counted three ways.** `alignment_error_deg`, `drift_deg_per_h` and
+`alignment_budget_deg` are three fields in two files for one platform, and the debt walk reports
+every unset value it reaches, so the vehicle reported one IMU's missing figures as three separate
+obligations under two different domains.
+
+**And the avionics copy was read by nothing, while its own file said it should not exist.** No
+threshold, no derivation, no fault named `components.imu.alignment_error_deg`. Three lines below the
+field, that file's `open_debts` carried this sentence:
+
+> The IMU's drift rate and alignment budget. `domains/gnc/` has landed and carries them as its own
+> debt … Both domains are waiting on the same two unpublished instrument constants, **which is why
+> they are recorded once — in the domain that owns the instrument**.
+
+The prose and the field contradicted each other in the same file, three lines apart, and no tool read
+either. That is this folder's oldest finding with a new sharpness: it is not that the declaration had
+drifted from a tool, it is that **the file wrote down the rule and then broke it, and both halves
+were inert.**
+
+### The fix
+
+One object, one statement of what it owes. The avionics entry keeps its place — the instrument layer
+really does contain the platform, and its power channel `avionics.imu_power` is this domain's — and
+loses the figure, because the two constants are gnc's and are declared there:
+
+- `class: inertial_reference` → **`inertial_platform`**, agreeing with the domain that owns the
+  instrument and with the `imu_platform` state on gnc's `imu` node.
+- `alignment_error_deg: UNCONFIGURED` → **deleted**. It is not a constant at all: the alignment
+  *error* is the observable of `imu_platform` and `imu_alignment`, which the plant integrates and
+  which `gnc.imu_alignment_error_deg` publishes. The constant the vehicle owes is the *budget*, and
+  gnc declares it. A state declared as a component field is an unknown counted twice **and** a
+  category error.
+- The note now says what the entry claims and where the two figures live, instead of naming a third
+  one.
+
+**289 became 288 declared debts, and 215 became 214 unset scalars.** Both moves are subtractions of a
+duplicate rather than an answer to a question: nothing was learned about the IMU, one of its three
+recorded unknowns was the same unknown written down a second time in a file that said it was
+recorded once. Round 74 removed this inflation from `assert`/`clear` in one file and the
+`derives_from` rule removed it across files for a threshold's limit; this is the same instrument
+applied to a component that two domains both claim.
+
+### The refusal
+
+`check_component_identity` is the fifth of the intersection joins, and it is the one that compares
+`class` — which the other four deliberately exclude. That is not an inconsistency: `check_comms`,
+`check_thermal` and `check_electrical` compare a domain's view against a *vehicle-level* bill of
+materials, which has no class to state, so `class` sits in their structural sets because it can only
+ever be one-sided. Two domains describing one box are each saying what it *is*, and that is the claim
+that had drifted. `COMPONENT_STRUCTURAL` therefore holds identity, the declared link and the prose,
+and **not** `class` or `kind` — the same reasoning `ZONE_STRUCTURAL` uses when it omits `regulated`
+and `volume_m3` because two views of one zone have to agree about them.
+
+A refusal rather than a debt, because both readings have a fix and neither is missing information:
+either the two entries are one object and must agree, or the id is doing two jobs and one of them
+needs a name of its own. What is not available is carrying both.
+
+Breaking copies in `.scratch/r37/` shows the rule is about the id rather than about `imu`, and that
+it is not order-dependent: the second class name is refused from either side, a *figure* both views
+state and disagree about is refused (proving it reaches past the label), two views that agree about a
+shared figure are silent, and a second duplicated id with its own disagreement is refused on that
+disagreement.
+
+**What the rule cannot see is worth stating, because the second half of this fix rests on it.** A
+field only one side carries is invisible to an intersection by construction — the same limitation
+`ZONE_STRUCTURAL` records in its own comment, which is why that comment says a one-sided field "needs
+its own reader". `alignment_error_deg` was exactly that: gnc never declared it, so no comparison
+between the two copies could ever have found it. The deletion is held by the corpus assertions in
+`test_one_component_id_in_two_domains_must_be_one_object`, not by the refusal, and the honest
+statement of the rule's reach is that it catches a drifted *agreement* rather than an unread
+*addition*.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **288** — a duplicate subtracted, not a question answered |
+| `UNCONFIGURED` scalars | 215 | **214** |
+| component ids declared by two domains | 1 (`imu`) | 1 (`imu`) — still, and now agreeing |
+| tests in `tests/test_vehicle_config.py` | 204 | **205** |
+| linters' checks | — | one more: the fifth intersection join |
+| states, nodes, edges, build-order buckets | 134 / 57 / 79, 15-33-7-79 | unchanged |
 
 ## The invariants, and which of them are enforced
 
