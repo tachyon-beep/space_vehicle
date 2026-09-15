@@ -325,6 +325,25 @@ state:
     unit: bit/s
     moved_by:
       - "command:set_telemetry_profile"
+    command_value:
+      - verb: set_telemetry_profile
+        argument: profile
+        maps:
+          low: 1600
+          high: 51200
+          emergency: UNCONFIGURED
+          normal: UNCONFIGURED
+          burst: UNCONFIGURED
+        why: >-
+          the state is a rate and the command names a profile, so the mapping is the profile's bit
+          rate. Two of the five are published — `vehicle.yaml#comms.rates` declares `low` at 1,600
+          and `high` at 51,200, both from `apollo_diode.md:7, :165` — and they are *carried* here
+          rather than restated, which is what makes the other three visible as missing
+        note: >-
+          three of the five profiles have no published rate, so the vehicle can be told to run a
+          profile whose bit rate it does not know. `emergency`, `normal` and `burst` are ceilings in
+          `presentation.yaml`'s cadence classes rather than rates any source gives. What closes each
+          is one figure: apollo's downlink rate for the mode it flew
     dwell:
       min_on_s: 5
       min_off_s: 5

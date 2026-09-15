@@ -175,6 +175,21 @@ state:
     unit: "enum[open,closed,tripped]"
     moved_by:
       - "command:set_bus_tie"
+    command_value:
+      - verb: set_bus_tie
+        argument: state
+        maps:
+          auto: UNCONFIGURED
+        why: >-
+          `open` and `closed` are the identity. `auto` is not a position at all: it hands the
+          decision to the service, "which closes only when the two buses are within 1 V and no
+          ground fault is active" (`set_bus_tie`'s help), so it names no value this state can hold
+        note: >-
+          the tie's control *mode* has nowhere to live. `auto` is a delegation the service acts on
+          and nothing records, so a vehicle told to work the tie automatically cannot say that it
+          was. What would hold it is a mode beside the position — and the position itself is then
+          set by the service through `E-BUSB-TIE`, which is the one edge into this node that is not
+          the executive's
     dwell: {min_on_s: 0.2, min_off_s: 0.2}
     note: >-
       The tie may close only when the two buses are within 1 V, and it latches open on a ground

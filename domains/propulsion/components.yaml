@@ -47,6 +47,16 @@ state:
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
     moved_by:
       - "command:arm_engine"
+    command_value:
+      - verb: arm_engine
+        argument: state
+        maps:
+          safe: standby
+        why: >-
+          `armed` is the identity. `safe` is not a value of this state; it is the command's word for
+          leaving the armed state, and the state it leaves to is written here because nothing else
+          says it. `main_propulsion_diode.md:810` names the destination in as many words — "Power
+          brownout during pre-burn | readiness false | stay/return to safe **standby**"
     dwell: {min_on_s: 0.5, min_off_s: 5}
     provenance:
       basis: apollo
@@ -59,6 +69,16 @@ state:
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
     moved_by:
       - "command:arm_engine"
+    command_value:
+      - verb: arm_engine
+        argument: state
+        maps:
+          safe: standby
+        why: >-
+          `armed` is the identity. `safe` is not a value of this state; it is the command's word for
+          leaving the armed state, and the state it leaves to is written here because nothing else
+          says it. `main_propulsion_diode.md:810` names the destination in as many words — "Power
+          brownout during pre-burn | readiness false | stay/return to safe **standby**"
     dwell: {min_on_s: 2, min_off_s: 5}
     provenance:
       basis: historical
@@ -70,6 +90,17 @@ state:
     unit: "enum[off,armed,ignition,mainstage,shutdown,failed]"
     moved_by:
       - "command:arm_engine"
+    command_value:
+      - verb: arm_engine
+        argument: state
+        maps:
+          safe: "off"
+        why: >-
+          `armed` is the identity, and `safe` becomes `off` rather than `standby` because the ascent
+          engine **has no standby**: its vocabulary is `off,armed,ignition,mainstage,shutdown,failed`
+          and `vehicle.yaml#propulsion.lm_aps` says the engine cannot throttle, "which is why an
+          ascent commit is a single irreversible act". There is no ready-but-not-armed position to
+          return to, so safing it puts it out
     dwell: {min_on_s: 0.5, min_off_s: 0}
     provenance:
       basis: historical

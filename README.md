@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 272 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 277 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 272 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 277 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **272** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **277** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **39** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **30** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **202** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **206** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1566,7 +1566,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 85 of the 134 states need code before the plant can walk a
+`internal` sentinel counted among them, so 83 of the 134 states need code before the plant can walk a
 whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1757,9 +1757,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     15   11 %  ready now — the two classes the reference plant can advance
-    26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
+    28   21 %  owes a value — the cheapest to close, and the debt count already tracks them
      8    6 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    85   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    83   62 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -6318,6 +6318,100 @@ not declare, an argument that is not an enum, a value the argument cannot take, 
 take, an empty `why`, an empty `values`, a condition that is not a mapping, the condition removed
 (which composes, and is the defect this round found), the sentinel itself as a positive control, and
 the unbroken corpus composing at 272.
+
+## The effect of a command, which was a vocabulary overlap and nothing more
+
+`check_domain`'s rule for a `command:<verb>` mover is `values & offered` non-empty: the verb must be
+able to express *one* of the state's values. That is all it proves. **Which argument carries the
+value, and what each of its values becomes, was prose — and for three states there was not even a
+vocabulary to compare against.**
+
+`structure.relief_valve_state` is the case that makes it concrete. It was a `bool`, and
+`set_relief_valve`'s `state` argument takes `auto`, `open` and `isolated`: *"`auto` lets the valve do
+its job; `open` vents deliberately; `isolated` holds pressure and accepts the consequence."* Two of
+the three must collapse onto one boolean, so the vehicle could be told to isolate its last line of
+defence against the trapped-line chain's overpressure — F-09, whose only counter is a decision about
+this valve — and **could not report that it was isolated.**
+
+The corpus had already diagnosed exactly this, once, on `power.bus_tie_closed`, and named the
+consequence in as many words: *"a boolean has no third value to latch into … the same fault as a
+regulator position it cannot report, arriving through a type rather than a vocabulary."* The rule was
+silent because it reads the state's vocabulary to find the carrying argument and the sentence that
+scopes it says the overlap is required *where there are values* — and a `bool` has none. Its
+vocabulary is now the verb's own three modes, which is the construction `bus_tie_closed` already
+uses.
+
+`crew.switch_panel` was the second, and worse: `map[switch_id,enum]` — a unit naming an enum and
+listing no values at all — moved by `set_display_mode`. **The link was wrong.** `switch_panel`'s own
+note says "the switch positions are the crew's own control surface: agents observe them and cannot
+move them", its channel `controls.switches` says "a crew-only surface … agents observe it and cannot
+move it", and `set_display_mode`'s gate, conflict domain (`crew.display.<position>`) and provenance
+are all about *displays*, whose four modes are `crew_diode.md:352-370`'s widget types. Its `position`
+argument takes crew **stations** while the state's key was a **switch id** — two vocabularies that
+never meet, which is why the vocabulary rule saw nothing to compare. The agent mover is gone and the
+display mode is a debt: a state per station holding one of the four modes needs a new state *and* a
+new coupling node, which is a design decision rather than a value.
+
+### `command_value`: which argument, and what each value becomes
+
+Declared where the answer is not derivable and silent where it is. The carrying argument is the
+unique enum argument whose values intersect the state's, so the seven states whose vocabulary is
+already the verb's need nothing; where a value does not fit, or where there is no vocabulary to
+intersect, the state says so:
+
+| state | its command | what the declaration says |
+|---|---|---|
+| `power.bus_tie_closed` | `set_bus_tie` | `auto` is **not a position** — it hands the decision to the service — so it is `UNCONFIGURED`: the tie's *mode* has nowhere to live |
+| `crew.breaker_panel` | `set_breaker` | `reset` is an action, not a position: it clears a latch and **attempts a reclose**, so the breaker ends `in` |
+| `propulsion.sps_state`, `dps_state` | `arm_engine` | `safe` → `standby`, which `main_propulsion_diode.md:810` names: *"stay/return to safe standby"* |
+| `propulsion.aps_state` | `arm_engine` | `safe` → `off`, because the ascent engine **has no standby** to return to |
+| `rcs.thruster_valve` | `set_rcs_quad` | `enable` → `true`, `inhibit` → `false`: two values onto two, readable off neither side |
+| `rcs.thruster_valve` | `isolate_rcs_manifold` | a `constant`: `branch` selects *which* thrusters lose their feed, and the value is the same for all of them |
+| `structure.pyro_fired` | `execute_event` | a `constant`: `event` names **which device**, not what value it takes |
+| `comms.telemetry_rate` | `set_telemetry_profile` | the profile's bit rate — `low` at 1,600 and `high` at 51,200, carried from `vehicle.yaml#comms.rates` rather than restated |
+
+**And two argument values may not become one state value.** That rule is what makes a `bool`
+unusable for three modes, so it forces the type fix instead of letting a mapping paper over it: a
+state that cannot tell `isolated` from `automatic` cannot report either. `UNCONFIGURED` targets are
+exempt — that is an owe rather than a value, and two owes are two debts, which is why four new ones
+appear: the tie's mode, and three profiles whose bit rate no source gives.
+
+### And the readiness view sorted the sentinel first
+
+Landing a value on an `internal` state exposed it. `readiness` prints the blocked states "in the
+order the schedule reaches them" and sorted them `order.get(s.node, -1)` — and `internal` is not a
+node in `coupling.yaml`, so a state the schedule **never reaches** was given a key that sorts before
+every node in it and reported as the first thing the schedule reaches. The old test asserted that
+`gnc` came first, so it was passing because of the bug. The fallback is `len(world.schedule)` now,
+the sentinel's states are listed last, and the test asserts the shape rather than a name.
+
+### What the round got wrong first: `off` is not `"off"`
+
+The first version of the target check let any boolean through unexamined, on the reasoning that a
+per-element boolean is a legitimate target — which is true only where the state has *no* vocabulary.
+That leniency hid a real accident in this round's own edit. `aps_state`'s mapping was written
+`safe: off` against a vocabulary of `off,armed,ignition,…`, and **PyYAML read `off` as the boolean
+`False`**, because YAML 1.1 counts `off`, `on`, `no` and `yes` as boolean words. The mapping said one
+thing, the parser read another, and the branch written for keyed booleans waved it through — the
+state value `off` and the boolean `False` are the same nine characters apart from two quote marks.
+The corpus assertion caught it, the mapping is `safe: "off"` now, and the rule says so: a state with
+a vocabulary holds values *from* it, and `str(False)` is not one of them. A scan of all sixty YAML
+files found exactly one such scalar, and it was this one.
+
+**272 became 277** — the display mode, the tie's missing mode, and three unpublished profile rates —
+and the pins moved together. **193 became 195 vehicle tests.** Plant: 134 states over 57 nodes,
+79 edges, **106 of 134 fully configured, 28 with a debt**, 65 of 79 edges declared, **206 unset
+scalars**, build order **15 ready / 28 value / 8 edge / 83 rule** — two states moved *out* of "owes a
+rule" and into "owes a value", which is the more accurate answer: they are discrete, and what blocks
+them is now named to the field. `--strict` exits 2, ruff clean, faults `NAME-KEYING HOLDS`.
+
+Verified by breaking fourteen copies in `.scratch/r30/`: the relief valve back to a `bool`, a mapping
+that papers over it by collapsing three modes onto two, a gap value unmapped, a mapped target the
+state cannot hold, a map key the argument cannot take, an effect for a verb that is not a mover, an
+argument that is not an enum argument, an empty `why`, neither `maps` nor `constant`, an
+`UNCONFIGURED` with no note, the display mode wired back to the switch panel, a state whose unit
+declares no vocabulary, the unbroken corpus composing at 277, and a corpus assertion that every
+`trigger:` verb resolves and that the two `constant` effects are the two keyed-boolean ones.
 
 ## The invariants, and which of them are enforced
 

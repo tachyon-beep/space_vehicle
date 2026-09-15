@@ -5459,6 +5459,254 @@ def check_domain(
                     "values it claims to write",
                 )
 
+        # --------------------------------------------------------------------------------------
+        # **The rule above proves the verb can say *a* value, and stops there.** Everything past it
+        # — which argument carries the value, and what each of its values becomes — was prose.
+        #
+        # `relief_valve_state` is the case that makes it concrete. It is a `bool`, and
+        # `set_relief_valve`'s `state` argument takes `auto`, `open` and `isolated`: "`auto` lets the
+        # valve do its job; `open` vents deliberately; `isolated` holds pressure and accepts the
+        # consequence." Two of the three must collapse onto one boolean, so the vehicle can be told
+        # to isolate its last line of defence against the trapped-line chain's overpressure (F-09)
+        # and **cannot report that it is isolated**. The corpus diagnosed exactly this once already,
+        # on `power.bus_tie_closed`, and named the consequence: *"a boolean has no third value to
+        # latch into ... the same fault as a regulator position it cannot report, arriving through a
+        # type rather than a vocabulary."*
+        #
+        # The rule was silent because it reads the state's vocabulary to find the carrying argument,
+        # and the sentence that scopes it says the overlap is required *where there are values* —
+        # a `bool` has none. `crew.switch_panel` is the second: `map[switch_id,enum]` names an enum
+        # and lists no values at all, so the state says nothing about what its own command sets.
+        #
+        # So the declaration is `command_value`, and it does three jobs:
+        #
+        #   * **Which argument carries the value.** Where the state has a vocabulary, the carrying
+        #     argument is the unique enum argument whose values intersect it, and nothing needs
+        #     saying. Where it does not — or where two arguments could — the state says which.
+        #   * **What the values that do not fit become.** `reset` on a breaker, `auto` on a tie,
+        #     `safe` on an engine: values the verb offers that the state cannot hold.
+        #   * **The translation onto a type with no names.** `thruster_valve` is a per-thruster
+        #     boolean and `set_rcs_quad` says `enable`/`inhibit`; `telemetry_rate` is bit/s and
+        #     `set_telemetry_profile` names a profile; `pyro_fired` is a boolean and `execute_event`
+        #     names *which device*, which is the key rather than the value.
+        #
+        # And **two argument values may not become one state value**, which is the rule that makes
+        # `bool` unusable for three modes and is therefore what forces the type fix rather than
+        # letting a mapping paper over it. An `UNCONFIGURED` target is exempt: that is an owe rather
+        # than a value, and two owes are two debts.
+        # --------------------------------------------------------------------------------------
+        # Every `command:` mover of this state, resolved to its verb spec — the verbs this
+        # state's effects can be written against, and the ones the gap rule below walks.
+        command_movers: dict[str, dict[str, Any]] = {}
+        for mover in movers:
+            text = str(mover)
+            kind, _, name = text.partition(":")
+            if kind != "command":
+                continue
+            spec_here = verbs_here.get(name)
+            if spec_here is None:
+                other = (all_verbs or {}).get(name)
+                if other is None:
+                    continue
+                spec_here = next(
+                    (
+                        c
+                        for c in (load(path.parent / str(other) / "commands.yaml", Report()) or {}).get(
+                            "commands"
+                        )
+                        or []
+                        if isinstance(c, dict) and str(c.get("verb")) == name
+                    ),
+                    {},
+                )
+            command_movers[name] = spec_here
+        declared_maps = state.get("command_value")
+        maps_by_verb: dict[str, dict[str, Any]] = {}
+        if declared_maps is not None:
+            entries = declared_maps if isinstance(declared_maps, list) else [declared_maps]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    report.refuse(
+                        f"{where}:state {sid}.command_value",
+                        f"declares {entry!r}, not a mapping of `verb`, `argument` and what each "
+                        "value becomes",
+                    )
+                    continue
+                cwhere2 = f"{where}:state {sid}.command_value[{entry.get('verb')}]"
+                verb_name = str(entry.get("verb"))
+                if verb_name not in command_movers:
+                    report.refuse(
+                        cwhere2,
+                        f"declares an effect for {verb_name!r}, which is not a `command:` mover of "
+                        f"this state ({sorted(command_movers)}). An effect nothing declares the "
+                        "command for is a second description of the same thing",
+                    )
+                    continue
+                maps_by_verb[verb_name] = entry
+                spec2 = command_movers[verb_name]
+                argument = str(entry.get("argument"))
+                arg_spec = (spec2.get("argument_schema") or {}).get(argument)
+                if not isinstance(arg_spec, dict) or arg_spec.get("type") != "enum":
+                    report.refuse(
+                        f"{cwhere2}.argument",
+                        f"names {argument!r}, which is not an enum argument of {verb_name!r} (it "
+                        f"has {sorted(spec2.get('argument_schema') or {})}). An effect is a mapping "
+                        "from an argument's values, and an argument with no vocabulary has no "
+                        "values to map from",
+                    )
+                if not str(entry.get("why") or "").strip():
+                    report.refuse(
+                        f"{cwhere2}.why",
+                        "is empty. What a command value becomes in a state is a claim about the "
+                        "vehicle, and `reset` clearing a latch rather than setting a position is "
+                        "exactly the kind of claim that has to be written down",
+                    )
+                constant = entry.get("constant")
+                becomes = entry.get("maps")
+                if constant is None and not isinstance(becomes, dict):
+                    report.refuse(
+                        f"{cwhere2}",
+                        "declares neither `maps` nor `constant`. Use `maps` where the argument "
+                        "carries the value and `constant` where it selects *which* element is set "
+                        "and the value is the same one every time",
+                    )
+                if constant is not None and not isinstance(entry.get("argument"), str):
+                    report.refuse(
+                        f"{cwhere2}.constant",
+                        "declares a constant with no `argument`, so nothing says which element of a "
+                        "keyed state the command sets",
+                    )
+                if not isinstance(becomes, dict):
+                    continue
+                allowed_args = [str(v) for v in (arg_spec or {}).get("values") or []]
+                targets: dict[str, str] = {}
+                for source, target in becomes.items():
+                    source = str(source)
+                    if allowed_args and source not in allowed_args:
+                        report.refuse(
+                            f"{cwhere2}.maps",
+                            f"maps {source!r}, which {argument!r} cannot take; it takes "
+                            f"{allowed_args}",
+                        )
+                        continue
+                    if target == "UNCONFIGURED":
+                        if not entry.get("note"):
+                            report.refuse(
+                                f"{cwhere2}.maps.{source}",
+                                "is UNCONFIGURED with no `note`. A value a command can take that "
+                                "becomes nothing declared is an obligation, and the note says what "
+                                "would close it",
+                            )
+                        continue
+                    # **A state with a vocabulary holds values from it, and a boolean is not
+                    # one of them.** The first version of this let any `bool` through unexamined,
+                    # on the reasoning that a per-element boolean is a legitimate target — and that
+                    # is true only where the state has *no* vocabulary. It hid a real accident:
+                    # `safe: off` in a mapping onto an engine state whose vocabulary is
+                    # `off,armed,ignition,…` was parsed by PyYAML as the boolean `False`, which is
+                    # YAML 1.1 reading `off` as a boolean word. The mapping said one thing, the
+                    # parser read another, and the branch written for keyed booleans waved it
+                    # through. `str(False)` is not `'off'` and the rule now says so.
+                    if values:
+                        if str(target) not in values:
+                            report.refuse(
+                                f"{cwhere2}.maps.{source}",
+                                f"becomes {target!r}, which {sid} cannot hold; it holds "
+                                f"{sorted(values)}. A boolean here is usually a *writing* accident "
+                                "rather than a value — YAML 1.1 reads `off`, `on`, `no` and `yes` "
+                                "as booleans, so a state value spelled that way has to be quoted",
+                            )
+                            continue
+                    elif not isinstance(target, (bool, int, float)):
+                        report.refuse(
+                            f"{cwhere2}.maps.{source}",
+                            f"becomes {target!r}, and {sid} declares no vocabulary to hold it in "
+                            f"(`unit: {state.get('unit')!r}`)",
+                        )
+                        continue
+                    # The injectivity rule, and the one that forces a type fix rather than a map.
+                    if isinstance(target, bool) or not values:
+                        key = repr(target)
+                        if key in targets:
+                            report.refuse(
+                                f"{cwhere2}.maps",
+                                f"sends both {targets[key]!r} and {source!r} to {target!r}. Two "
+                                "modes reported as one position is the distinction the command was "
+                                "making, thrown away at the boundary — a state that cannot tell "
+                                "'isolated' from 'automatic' cannot report either",
+                            )
+                        targets[key] = source
+
+        # And the gap the declaration exists for: a `command:` mover whose carrying argument offers
+        # values this state cannot hold. Refused rather than skipped, because the alternative is a
+        # command that a fleet may issue and whose effect is nothing.
+        if state.get("method") == "discrete":
+            for verb_name, spec2 in sorted(command_movers.items()):
+                entry = maps_by_verb.get(verb_name)
+                if entry is not None and entry.get("constant") is not None:
+                    continue
+                arg_values: set[str] = set()
+                if entry is not None and isinstance(entry.get("maps"), dict):
+                    argument = str(entry.get("argument"))
+                    arg_values = set(entry["maps"])
+                    carried = {
+                        str(v)
+                        for v in ((spec2.get("argument_schema") or {}).get(argument) or {}).get(
+                            "values"
+                        )
+                        or []
+                    }
+                else:
+                    carriers = [
+                        (str(a.get("values") and name), a)
+                        for name, a in (spec2.get("argument_schema") or {}).items()
+                        if isinstance(a, dict) and a.get("type") == "enum"
+                    ]
+                    reaching = [
+                        (name, a)
+                        for name, a in carriers
+                        if values & {str(v) for v in a.get("values") or []}
+                    ]
+                    if len(reaching) > 1:
+                        report.refuse(
+                            f"{where}:state {sid}.moved_by",
+                            f"is moved by {verb_name!r}, and {len(reaching)} of its arguments "
+                            f"({[n for n, _ in reaching]}) can take values this state holds. Which "
+                            "one carries the value is not readable off the verb, so declare it: "
+                            "`command_value` with `verb`, `argument` and `maps`",
+                        )
+                        continue
+                    if not reaching:
+                        holds = (
+                            f"it holds {sorted(values)}"
+                            if values
+                            else f"its `unit` is {state.get('unit')!r}, which declares no values"
+                        )
+                        report.refuse(
+                            f"{where}:state {sid}.command_value",
+                            f"declares none, and {verb_name!r} is a `command:` mover whose "
+                            f"arguments reach no value this state can hold ({holds}). Either the "
+                            "state's `unit` cannot hold what the command sets — a `bool` for three "
+                            "modes, or an `enum` with no values — or the argument that carries the "
+                            "value is not the one whose vocabulary matches. Both are declarations: "
+                            "fix the `unit`, or write `command_value`",
+                        )
+                        continue
+                    carried = {str(v) for v in reaching[0][1].get("values") or []}
+                    arg_values = carried
+                gap = sorted(carried - values) if values else sorted(arg_values)
+                declared = {str(k) for k in (entry.get("maps") or {})} if entry else set()
+                undeclared = [v for v in gap if v not in declared]
+                if undeclared and values:
+                    report.refuse(
+                        f"{where}:state {sid}.command_value",
+                        f"declares no mapping for {undeclared}, which {verb_name!r} can be called "
+                        f"with and {sid} cannot hold (it holds {sorted(values)}). A command a fleet "
+                        "may issue whose effect is nothing is a command that silently did not "
+                        "happen — write what each value becomes, or `UNCONFIGURED` with the note "
+                        "that says what would close it",
+                    )
+
     # --------------------------------------------------------------------------------------
     # A stock's initial condition, which the plant now integrates from and which the
     # configuration declared nowhere.

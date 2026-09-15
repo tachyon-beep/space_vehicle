@@ -155,6 +155,24 @@ state:
       - "logic:the allocator commands each valve from the requested wrench"
       - "command:set_rcs_quad"
       - "command:isolate_rcs_manifold"
+    command_value:
+      - verb: set_rcs_quad
+        argument: state
+        maps:
+          enable: true
+          inhibit: false
+        why: >-
+          the map is a boolean per thruster and the command speaks in `enable`/`inhibit`: two values
+          onto two values, and the pairing is readable off neither side, so it is written. This is
+          the whole of what a two-valued command against a `bool` needs
+      - verb: isolate_rcs_manifold
+        argument: branch
+        constant: false
+        why: >-
+          closing a feed branch is a topology action rather than a valve command: `branch` selects
+          *which* thrusters lose their feed and the value is the same one for all of them. The
+          thrusters on an isolated branch are not commanded closed — they are unfeedable, and the
+          valve map says so for each of them
     dwell:
       min_on_s: UNCONFIGURED
       min_off_s: UNCONFIGURED

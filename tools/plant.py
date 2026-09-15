@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 272 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 277 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -268,7 +268,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 272 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 277 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1242,8 +1242,16 @@ def readiness(world: World) -> None:
     print()
     if blocked:
         print("blocked states, in the order the schedule reaches them:")
+        # **The sentinel's states go last, not first.** `coupling.yaml#nodes` does not declare
+        # `internal`, so no node in the schedule carries those states and `order.get(node, -1)`
+        # answered "not in the schedule" with a value that sorts *before* everything in it. The
+        # header says the list is in the order the schedule reaches them, and a state the schedule
+        # never reaches was reported as the first one it does. Nothing was owed on the sentinel at
+        # the value level until this round — three profiles and a tie mode landed as `UNCONFIGURED`
+        # map targets — so the fallback had never been exercised. A state advanced with its domain
+        # is reached *after* the nodes, and `len(world.schedule)` says that.
         order = {node: index for index, node in enumerate(world.schedule)}
-        for state in sorted(blocked, key=lambda s: order.get(s.node, -1)):
+        for state in sorted(blocked, key=lambda s: order.get(s.node, len(world.schedule))):
             print(
                 f"  {state.domain:12s} {state.id:26s} {state.method:9s} needs {', '.join(state.owed)}"
             )

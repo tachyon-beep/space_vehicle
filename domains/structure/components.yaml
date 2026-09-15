@@ -133,6 +133,15 @@ state:
     moved_by:
       - "event:pyro_fire"
       - "command:execute_event"
+    command_value:
+      - verb: execute_event
+        argument: event
+        constant: true
+        why: >-
+          `event` names *which* device fires, not what value it takes: a pyro command is a one-way
+          set and the value is the same `true` for every device. That is why this is a `constant`
+          with an `argument` rather than a `maps` — the argument is the key, and the value is the
+          verb. The other mover, `event:pyro_fire`, is the executive raising the same value
     one_way: true
     requires_arm: true
     provenance:
@@ -189,7 +198,7 @@ state:
   - id: relief_valve_state
     node: internal
     method: discrete
-    unit: "bool"
+    unit: "enum[auto,open,isolated]"
     moved_by:
       - "command:set_relief_valve"
     dwell:

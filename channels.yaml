@@ -2310,7 +2310,7 @@ crew:
         has stopped, and the two want opposite responses — one is a crew who have not looked at
         the panel, the other is a panel that is no longer reporting.
   - id: controls.switches
-    unit: "map[switch_id,enum]"
+    unit: "map[switch_id,bool]"
     layer: service
     precision: exact
     rate_hz: 1
