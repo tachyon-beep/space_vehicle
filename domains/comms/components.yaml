@@ -216,6 +216,7 @@ state:
     command_value:
       - verb: select_antenna
         argument: antenna
+        selects: antenna_selection
         computed: >-
           the link budget closes in one tick from the selected antenna's gain, its pointing loss,
           the range and the receiver's threshold — `comms.link_snr` is algebraic for exactly that
@@ -233,6 +234,14 @@ state:
         why: >-
           `point_hga` is authority A1 and declarative; what it changes is where the high-gain
           antenna looks, and the SNR follows
+        selects: UNCONFIGURED
+        note: >-
+          the gimbal's target and mode have no state. `antenna_pointing` is on `antenna_geometry`
+          and is computed from the vehicle's attitude and the Earth's direction, and it has no
+          command mover at all; what this verb sets is the *requested* target (`earth`,
+          `moon_limb`, `csm`, `inertial`) and the mode (`auto`, `manual`), and nothing holds it. So
+          a vehicle pointed at the Moon's limb cannot say that it is, and `link_snr` is computed
+          from a geometry the command chose but did not record
     provenance:
       basis: apollo
       ref: "apollo_diode.md:164"
@@ -263,6 +272,13 @@ state:
         why: >-
           `tx_power` is also where the flagship thermal cycle closes: a hot amplifier draws more
           current for the same output, and that returns to the bus as extra load
+        selects: UNCONFIGURED
+        note: >-
+          which transmitter is on has no state. `vehicle.yaml#comms.transmitters` declares the two
+          articles with their `dc_w` and `rf_w`, and the domain's `tx_power` is the draw; what is
+          missing is the switch position itself — a state keyed by transmitter holding on or off,
+          which is the same shape as `antenna_selection` three lines up and which the link budget
+          and the flagship cycle both need
     provenance:
       basis: apollo
       ref: "apollo_diode.md:168, :157"

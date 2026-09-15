@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 281 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 286 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 281 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 286 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **281** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **286** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **33** are engineering debts written as sentences (thermal time constants, loop
+the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **207** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **212** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -1566,7 +1566,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 83 of the 134 states need code before the plant can walk a
+`internal` sentinel counted among them, so 79 of the 134 states need code before the plant can walk a
 whole tick.
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
@@ -1757,9 +1757,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     15   11 %  ready now — the two classes the reference plant can advance
-    29   22 %  owes a value — the cheapest to close, and the debt count already tracks them
+    33   25 %  owes a value — the cheapest to close, and the debt count already tracks them
      7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    83   62 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    79   59 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -6562,6 +6562,77 @@ Verified by applying every verb through the API — thirteen applied, eight refu
 silent — and by running the console end to end: a node write, a sentinel write, a `computed` refusal,
 an owed-map refusal, and a verb that writes no state, which is a different sentence from a plant that
 does not know.
+
+## `computed` said why, and not what the command changes
+
+Round 32 gave five verbs a `computed` effect: the state they move follows from its own rule, so there
+is no value for the command to carry. `link_snr`, `tx_power`, `instrumentation_power` and
+`nav_solution` are `algebraic` and the plant will not run a rule that is domain code — which is the
+right refusal. **But `computed` names only *why*, and a command that changes an input has an input.**
+Six entries across five verbs, and the input each one writes has a state for exactly one of them:
+
+| the computed state | its command | the input it changes |
+|---|---|---|
+| `comms.link_snr` | `select_antenna` | **`comms.antenna_selection`** — exists, and declares the same verb |
+| `comms.link_snr` | `point_hga` | the gimbal's requested target and mode — no state |
+| `comms.tx_power` | `set_power_amplifier` | which transmitter is on — no state |
+| `avionics.instrumentation_power` | `set_instrumentation_mode` | the active profile — no state |
+| `gnc.nav_solution` | `load_state_vector` | the loaded vector — no state |
+| `gnc.nav_solution` | `select_nav_source` | the selected source — no state |
+
+For the other five, the command's real effect is a state the corpus does not declare — a debt. And
+**one of them claimed otherwise in prose**, which is the finding:
+
+> the state a command assigns here is the *source*, which is published as `gnc.nav_source` rather
+> than held as a state of its own — recorded in this domain's `open_debts`
+
+Neither half is true. `gnc.nav_source` is not a registered channel — 191 are, and it is not among
+them — and no such debt was ever written. Round 32 wrote that sentence, and it read as a considered
+answer for a round. **A `computed` effect is prose, and prose is where a claim like that survives**,
+which is this folder's oldest finding arriving in text the folder itself produced.
+
+### `selects`, and the one that resolves
+
+A `computed` effect now names its input: a **state id**, which must exist *and* must declare the same
+verb as a `command:` mover — the two halves of the command surface agreeing about which state the
+command actually writes, which is the join rounds 27 and 28 built — or `UNCONFIGURED` with a note,
+which is a counted debt.
+
+The resolved one is what makes it worth having. `select_antenna` writes `comms.antenna_selection`,
+which is a state on the sentinel with the identity mapping, so **the effect became performable**:
+`apply_command` stages the input and leaves `link_snr` to the rule rather than inventing a dB. The
+plant's tally moved from thirteen applied to **fourteen**, and the console shows the difference:
+
+```
+accepted: 'select_antenna'. Authority A2, phase translunar_coast, gate 'antenna_high_gain_enable'
+  open, 2 interlock(s) clear. succeeded: 'select_antenna' applied. Changed:
+  internal:antenna_selection=high_gain
+```
+
+The other five refuse by name and say what is missing — five new debts, each naming the state that
+would hold an input nobody has declared:
+
+- the HGA's requested target and mode, so a vehicle pointed at the Moon's limb cannot say that it is;
+- the transmitter switch position, which the link budget and the flagship thermal cycle both need;
+- the active instrumentation profile, which `instrumentation_power` and the fresh-evidence limit are
+  both computed from;
+- the loaded state vector — that an estimate was *reset* rather than propagated, which is the first
+  question an operator asks about a suspicious solution;
+- and the selected navigation source.
+
+**281 became 286** — the five missing input states — and the pins moved together. **198 became 199
+vehicle tests.** Plant: 134 states over 57 nodes, 79 edges, **101 of 134 fully configured, 33 with a
+debt**, 65 of 79 edges declared, **212 unset scalars**, build order **15 ready / 33 value / 7 edge /
+79 rule** — four states moved out of "owes a rule" and into "owes a value", which is the more
+accurate answer: they are computed, and what blocks them is now the *input* nobody has declared
+rather than the rule that would consume it. `--strict` exits 2, ruff clean, faults
+`NAME-KEYING HOLDS`.
+
+Verified by breaking five copies in `.scratch/r33/`: the selected state losing its mover (the two
+halves disagreeing), a `selects` naming a state that does not exist, an owe with no note, the
+`selects` removed altogether, and a `computed` effect with no reason — plus a corpus assertion that
+six effects declare one, that exactly one resolves, that its two halves agree, and that
+`gnc.nav_source` is not registered.
 
 ## The invariants, and which of them are enforced
 

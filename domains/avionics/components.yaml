@@ -338,6 +338,13 @@ state:
         why: >-
           a command that changes an input its target's rule reads is not a command that assigns the
           target, and this is one of the five links where that is the case
+        selects: UNCONFIGURED
+        note: >-
+          the active instrumentation profile has no state. The verb's gate is
+          `instrumentation_profile_<profile>_enable`, which is a *preference* the fleet opens and
+          not a record of what the vehicle is running, and `groups` narrows it further — so the
+          vehicle can be told which instruments are active and cannot report which set that is,
+          while `instrumentation_power` and the fresh-evidence limit are both computed from it
     provenance:
       basis: apollo
       ref: "apollo_diode.md:182"

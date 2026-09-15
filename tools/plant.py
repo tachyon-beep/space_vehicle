@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 281 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 286 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -268,7 +268,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 281 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 286 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1056,6 +1056,19 @@ def step(world: World, values: dict[str, Any], dt: float) -> dict[str, Any]:
     return committed
 
 
+class SkipComputed(Exception):
+    """This state's value is its rule's, and the command's effect is on the input it selects.
+
+    Not an error: `apply_command` catches it and moves on, because the state the command *does*
+    write is reached by the same loop — both halves declare the same verb, and the linter refuses a
+    `selects` that says otherwise.
+    """
+
+    def __init__(self, where: str) -> None:
+        super().__init__(where)
+        self.where = where
+
+
 def prune(value: Any, width: int = 40) -> str:
     """A value, short enough to print beside another one."""
     text = repr(value)
@@ -1132,10 +1145,18 @@ def command_effect(world: World, state: State, verb: str, arguments: dict[str, A
         return str(arguments[argument])
 
     if entry is not None and entry.get("computed") is not None:
-        raise Unconfigured(
-            f"{where}.command_value",
-            f"is `computed`: {entry['computed']}",
-        )
+        # **A rule-computed state is changed through an input, and `selects` names it.** The state
+        # itself is the rule's business, so there is no value here to write — and the input is a
+        # state of its own, which the loop in `apply_command` reaches because it declares the same
+        # verb. What is left is the case where the input does not exist: then the command's real
+        # effect is a state nobody has declared, and the honest answer is the field that is owed
+        # rather than a value the plant would have to invent.
+        if str(entry.get("selects")) == "UNCONFIGURED":
+            raise Unconfigured(
+                f"{where}.command_value.selects",
+                f"is owed: {entry.get('note', '')}",
+            )
+        raise SkipComputed(where)
     if entry is not None and entry.get("constant") is not None:
         return entry["constant"]
     source = carried()
@@ -1192,7 +1213,11 @@ def apply_command(
         raise Unconfigured(f"plant.py:verb {verb}", "is not registered by any domain")
     staged: dict[str, Any] = {}
     for state in command_targets(world, verb):
-        value = command_effect(world, state, verb, arguments)
+        try:
+            value = command_effect(world, state, verb, arguments)
+        except SkipComputed:
+            # The input this command selects carries the effect; see `SkipComputed`.
+            continue
         entry = next(
             (
                 e

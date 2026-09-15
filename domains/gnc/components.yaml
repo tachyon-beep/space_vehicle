@@ -284,14 +284,28 @@ state:
         why: >-
           one of two commands that move the navigation solution, and the only one that assigns it a
           starting value rather than weighting its sources
+        selects: UNCONFIGURED
+        note: >-
+          the loaded vector has no state. The command carries a position, a velocity, an epoch, a
+          frame and a sigma, and the filter's estimate is computed from them; what is missing is
+          the *injection* — that a state vector was loaded, in which frame, at which MET. Without
+          it the vehicle cannot say its estimate was reset rather than propagated, which is the
+          distinction an operator checking a suspicious solution asks about first
       - verb: select_nav_source
         argument: source
         computed: >-
           as `load_state_vector`: this chooses what the filter navigates from and the estimate
           follows. `weight` is the second half of the same statement
         why: >-
-          the state a command assigns here is the *source*, which is published as `gnc.nav_source`
-          rather than held as a state of its own — recorded in this domain's `open_debts`
+          the state a command assigns here is the *source*, and the estimate follows from it
+        selects: UNCONFIGURED
+        note: >-
+          the selected navigation source has no state. It is not published as `gnc.nav_source` —
+          no such channel is registered, and this note replaces a sentence that claimed one was,
+          along with a claim that the gap was recorded in this domain's `open_debts`, which it was
+          not. What would hold it is a state naming which of `imu_only`, `star`, `radar`,
+          `ground_uplink` and the blend the filter is navigating from, which is what `weight` and
+          the `nav_source_<source>_enable` gate are both about
     provenance:
       basis: apollo
       ref: "apollo_diode.md:119-122"

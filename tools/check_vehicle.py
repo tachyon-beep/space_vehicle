@@ -5312,6 +5312,14 @@ def check_domain(
     events_here = {
         str(e.get("id")) for e in components.get("one_way_events") or [] if isinstance(e, dict)
     }
+    # This domain's states by id, for a `computed` effect's `selects`: the input a rule-computed
+    # state is changed through is a state of the domain that owns the command, and a cross-domain
+    # name is not readable from here.
+    held = {
+        str(s.get("id")): s
+        for s in components.get("state") or []
+        if isinstance(s, dict) and s.get("id")
+    }
     # --------------------------------------------------------------------------------------
     # **The guard here said `method != "discrete": continue`, and three rounds of declarations
     # landed behind it.** A mode is what a command sets, so the field was written for modes — but
@@ -5612,6 +5620,66 @@ def check_domain(
                         "rather than from this command, so it carries the reason the way `logic` "
                         "carries one",
                     )
+                # ------------------------------------------------------------------------------
+                # **`computed` says why the state follows from a rule and not what the command
+                # changes**, and that made it a place a missing state could hide. Six entries
+                # declare one across five verbs — `select_antenna` and `point_hga` on `link_snr`,
+                # `set_power_amplifier` on `tx_power`, `set_instrumentation_mode` on
+                # `instrumentation_power`, `load_state_vector` and `select_nav_source` on
+                # `nav_solution` — and the input each command writes has a state for exactly one of
+                # them. For the other five the command's real effect is a state the corpus does not
+                # declare, which is a *debt*; and one of them claimed otherwise in prose:
+                # `select_nav_source`'s reason said its missing state "is published as
+                # `gnc.nav_source`" and that the gap was "recorded in this domain's `open_debts`",
+                # and neither is true. `gnc.nav_source` is not a registered channel and no such
+                # debt was ever written.
+                #
+                # So a `computed` effect names the input: a state id, which must exist **and** must
+                # declare this verb as a `command:` mover — the two halves of the command surface
+                # agreeing about which state the command actually writes — or `UNCONFIGURED` with a
+                # note, which is the honest answer for a state nobody has declared yet.
+                # ------------------------------------------------------------------------------
+                selects = entry.get("selects")
+                if computed is not None and selects is None:
+                    report.refuse(
+                        f"{cwhere2}.selects",
+                        "declares no `selects`, and its effect is `computed`. A rule-computed state "
+                        "is changed through an *input*, and naming that input is the difference "
+                        "between a command whose effect is a state this vehicle has and one whose "
+                        "effect is a state nobody has declared. Write the state id, or "
+                        "`UNCONFIGURED` with the note that says what is missing",
+                    )
+                if selects is not None:
+                    if str(selects) == "UNCONFIGURED":
+                        if not entry.get("note"):
+                            report.refuse(
+                                f"{cwhere2}.selects",
+                                "is UNCONFIGURED with no `note`. The command changes an input this "
+                                "vehicle has no state for, and that is an obligation: the note says "
+                                "what would hold it",
+                            )
+                    else:
+                        target = held.get(str(selects))
+                        if target is None:
+                            report.refuse(
+                                f"{cwhere2}.selects",
+                                f"names {selects!r}, which is not a state of this domain (they are "
+                                f"{sorted(held)}). A qualified name across domains is not readable "
+                                "here, so the input a computed effect writes must be a state of the "
+                                "domain that owns the command",
+                            )
+                        elif verb_name not in [
+                            str(m).split(":", 1)[1]
+                            for m in target.get("moved_by") or []
+                            if str(m).startswith("command:")
+                        ]:
+                            report.refuse(
+                                f"{cwhere2}.selects",
+                                f"names {selects!r}, which does not declare {verb_name!r} as a "
+                                "`command:` mover. The effect says this command writes that state "
+                                "and the state says something else writes it, which is the two "
+                                "halves of the command surface disagreeing about the same command",
+                            )
                 # A keyed state needs to be told *which* element the command sets, and the argument
                 # that names it is not derivable: `set_hatch_valve` names `hatch_crew_csm` while the
                 # unit says `hatch_id`, and `set_breaker` names `lcl`, which is a class of many.
