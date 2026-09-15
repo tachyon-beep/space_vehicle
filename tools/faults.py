@@ -451,10 +451,37 @@ def main(argv: list[str] | None = None) -> int:
         return check_name_keying(faults, args.seed, args.hours)
 
     if args.list:
+        # **The magnitude, which nothing read at all until round 35.** The `seeding` block declares
+        # a fault in two halves — when it fires and how far it moves the channel it perturbs — and
+        # only the first was read. The second had twenty spellings (`bias_walk` and five suffixed
+        # variants, four `drift_*`, `rate_kg_per_h` beside `rate_per_s`, and four sentences in the
+        # field meant for a number), the unit was inside the key name rather than in a field, and
+        # nothing compared it with the channel. `magnitude`, `magnitude_unit` and
+        # `magnitude_channel` are the one pair and its host, and this prints them: a fault is now
+        # something the adversary can size, not only schedule.
         for fault in faults:
             form = "hazard" if fault.hazard is not None else "armed"
             rate = f"{fault.hazard:g}/h" if fault.hazard is not None else f"when {fault.trigger}"
-            print(f"  {fault.id:38} {fault.domain:12} {fault.kind:22} {form:6} {rate}")
+            seeding = fault.seeding
+            amount = seeding.get("magnitude")
+            if isinstance(amount, (int, float)):
+                unit_text = seeding.get("magnitude_unit")
+                if unit_text == "UNCONFIGURED":
+                    # A number whose unit nobody has stated. Printed as the owe it is rather than
+                    # with a `?` where a unit would go, because the two owe different things.
+                    size = f"{amount:g} with unit owed"
+                else:
+                    size = f"{amount:g} {unit_text} on {seeding.get('magnitude_channel', '?')}"
+            elif amount == "UNCONFIGURED":
+                size = "magnitude owed"
+                if seeding.get("magnitude_unit") == "UNCONFIGURED":
+                    size += " (unit too)"
+            else:
+                size = seeding.get("condition") or "-"
+            condition = seeding.get("condition")
+            if condition and isinstance(amount, (int, float)):
+                size = f"{size} ({str(condition)[:28]})"
+            print(f"  {fault.id:38} {fault.domain:12} {fault.kind:22} {form:6} {rate:14} {size}")
         return 0
 
     postures = load_postures(root)

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 286 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 289 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 286 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 289 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **286** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **289** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **212** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **215** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -6711,6 +6711,71 @@ Verified by breaking three copies in `.scratch/r34/` — a commanded state guard
 commanded state guarded by a band in place of its dwell, and a one-way state as the positive control
 — plus the reader end to end through the console: a command applied, a second inside a 10 s dwell
 refused by name, and an owed guard refused with `GUARD OWED`.
+
+## The magnitude of a fault, in twenty spellings and read by nothing
+
+`seeding` declares a fault in two halves: **when** it fires — `hazard` with its `unit`,
+`on_demand_p`, `coupled_to`, `trigger` — and **how far** it moves the channel it perturbs. The first
+half is read by `faults.py` on every draw. The second half was read by nothing at all, and it had
+twenty spellings:
+
+| the spelling | count |
+|---|---|
+| `bias_walk`, `bias_walk_g_per_h`, `bias_walk_k_per_h`, `bias_walk_kpa_per_h`, `bias_walk_pa_per_h`, `bias_walk_pct_per_h` | 6 for one idea |
+| `drift_deg_per_h`, `drift_pct_per_h`, `drift_ms_per_h`, `drift_db_per_h` | 4 for another |
+| `rate_kg_per_h`, `rate_kg_per_h_growth`, `rate_per_s`, `loss_pct` | 4 more |
+| `bias_psia`, `bias_m`, `bias` | 3 |
+| `schedule`, `stress`, `onset` | **sentences in the field meant for a number** |
+
+The unit was inside the key name rather than in a field, which is *why* one idea had six names — and
+because nothing compared the two, four of them named a unit the channel they perturb is not in.
+`CNS-05`'s `bias_walk_kpa_per_h: 0.05` sat against a channel published in **psi**; `ECL-05`'s
+`bias_walk_pa_per_h: 30` against one in **psia**; and `STR-01`, `STR-08` and `STR-11` all said
+`rate_kg_per_h` against `structure.leak_estimate_g_s`, which is in **g/s**. The adversary could
+schedule a fault and not size it, and a "sensor drift" fault drifted nothing.
+
+### One name, one unit, one host
+
+`magnitude` is the number, `magnitude_unit` is what it is in, `magnitude_channel` is the channel it
+moves, and `condition` is where a sentence goes. **And the key set is closed** — which is the part
+that stops the twenty recurring, because an open key set is a list nobody wrote.
+
+The host is the piece that makes a magnitude applicable rather than merely declared. A fault perturbs
+several channels and the magnitude is in *one* of them: a leak of 0.05 kg/h drains a tank, and a
+cabin pressure is what you see. The linter derives the candidates — the perturbed channels in the
+magnitude's unit, or in its unit over a time basis — and the fault *names* one, and the check holds
+the two together. Four magnitudes were converted into the unit of the channel they move, using the
+corpus's own constants rather than rounded ones: `0.05 kPa/h` becomes `0.0072519 psi/h`, `30 Pa/h`
+becomes `0.0043511 psi/h`, and `0.01`/`0.002 kg/h` become `0.0027778`/`0.00055556 g/s`. Two more were
+not conversions but a change of *what is measured*: `TCS-06`'s coolant leak is expressed on
+`thermal.primary_flow_l_min` because the vehicle publishes no coolant-mass channel, and `RCS-08`'s
+branch leak named the tank it drains — which meant adding `res.rcs_propellant_kg` to its `perturbs`,
+and the domain's own `coverage.cross_domain` claim caught that edit and refused it until the count
+moved with it.
+
+The four sentences are `condition` now, and `faults.py --list` is the reader:
+
+```
+AVI-03-sensor-drift          avionics     instrument  hazard 0.0002/h   0.02 with unit owed
+CNS-01-o2-tank-leak          consumables  ...         hazard 2e-05/h    0.02 kg/h on res.o2_remaining_kg
+ECL-05-pressure-sensor-bias  eclss        instrument  hazard 0.0002/h   0.0043511 psi/h on eclss.cabin_pressure_psia
+```
+
+Twelve of the twenty-seven magnitudes are owed, and this is the round's own mistake recorded: the
+first version of the note rule required a note only for an owed **unit**, so nine faults saying
+`magnitude: UNCONFIGURED` with a perfectly good unit said nothing about what would close them — the
+same asymmetry the round is about, applied to the rule that fixes it. All nine have notes now.
+
+**286 became 289** — three magnitudes whose unit no source states — and the pins moved together.
+**200 became 201 vehicle tests.** Plant: 134 states over 57 nodes, 79 edges, 101 of 134 fully
+configured, 33 with a debt, 65 of 79 edges declared, **215 unset scalars**, build order 15 ready /
+33 value / 7 edge / 79 rule. `--strict` exits 2, ruff clean, faults `NAME-KEYING HOLDS`.
+
+Verified by breaking nine copies in `.scratch/r35/`: a twenty-first spelling, a magnitude with no
+unit and a unit with no magnitude, a unit from nowhere, an owed unit with no note, a magnitude with
+no host, a host the fault does not perturb, a host in the wrong unit, and a sentence where the number
+goes — plus a corpus assertion that the key set is exactly the ten, that the fifteen numeric
+magnitudes each name a host, and that the twelve owed ones each carry a note.
 
 ## The invariants, and which of them are enforced
 

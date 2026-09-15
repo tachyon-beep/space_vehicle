@@ -40,7 +40,11 @@ faults:
     seeding:
       hazard: 2.5e-4
       unit: per_h
-      drift_deg_per_h: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "deg/h"
+      magnitude_channel: gnc.imu_alignment_error_deg
+      note: >-
+        the inertial platform's drift rate is the one figure the IMU's own specification would carry, and it is not in the corpus. What closes it is the platform's published bias stability, which is also what `drift_deg_per_h` on the component is owed
     perturbs: [gnc.imu_alignment_error_deg, "gnc.gyro_bias_xyz_deg_s",
                gnc.nav_position_sigma_m, gnc.estimator_rejection_reason,
                gnc.nav_integrity]
@@ -298,7 +302,11 @@ faults:
     seeding:
       hazard: 1.5e-4
       unit: per_h
-      bias_m: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "m"
+      magnitude_channel: gnc.radar_altitude_m
+      note: >-
+        a false lock's *magnitude* is an altitude error, and how far wrong the radar can be depends on what it locks onto — the CSM, the surface, or a sidelobe. What closes it is a worst-case altitude error for the landing radar, which is a property of its beam
     perturbs: [gnc.radar_altitude_m, gnc.radar_range_rate_m_s, gnc.nav_position_sigma_m,
                gnc.maneuver_state]
     detection:

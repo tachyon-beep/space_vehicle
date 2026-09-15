@@ -120,7 +120,11 @@ faults:
     seeding:
       hazard: 3.5e-4
       unit: per_h
-      drift_db_per_h: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "dB/h"
+      magnitude_channel: comm.snr_db
+      note: >-
+        the rate at which a thin link degrades depends on the mechanism — range rate, antenna pointing loss, or rain — and no source gives one for a lunar-distance link. What closes it is a measured dB/h against the same geometry
     perturbs: [comm.snr_db, comm.rx_frame_loss_pct, comm.telemetry_rate_bps]
     detection:
       evidence: >-
@@ -180,7 +184,11 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      loss_pct: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "%"
+      magnitude_channel: comm.rx_frame_loss_pct
+      note: >-
+        the frame-loss rate is not published; `comm.rx_frame_loss_pct` has a threshold and no source for the rate a fault would add to it. What closes it is a bit-error-rate figure for the downlink at the mission's worst geometry
     perturbs: [comm.rx_frame_loss_pct, comm.carrier_lock]
     detection:
       evidence: >-

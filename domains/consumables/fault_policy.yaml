@@ -22,7 +22,16 @@ faults:
     component: o2_csm
     mechanism: "a fitting weeps: the oxidiser tank loses mass slowly and the pressure falls with it"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, rate_kg_per_h: 0.02}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      magnitude: 0.02
+      magnitude_unit: "kg/h"
+      # The observed quantity and not the ledger's: a leak moves what the tank holds, and
+      # `res.recon_o2_kg` is the accounting model's prediction, which does *not* know about the leak
+      # — the residual between the two is the evidence, and it only exists if the leak is on the
+      # observation's side.
+      magnitude_channel: res.o2_remaining_kg
     perturbs: [res.o2_remaining_kg, "res.recon_o2_kg", eclss.o2_supply_pressure_psi,
                res.time_to_limit_s, "res.status_[resource]"]
     detection:
@@ -42,7 +51,12 @@ faults:
     component: water_cooling
     mechanism: "the evaporator feed line weeps: cooling water is lost and the loop's rejection capacity falls with it"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: 0.05}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      magnitude: 0.05
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.water_cooling_kg
     perturbs: [res.water_cooling_kg, thermal.evaporator_rejection_w, thermal.coolant_supply_c,
                "res.recon_water_potable_kg"]
     detection:
@@ -58,7 +72,14 @@ faults:
     component: prop_main
     mechanism: "a seal fails on the feed line: the main tanks lose mass without a burn"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, rate_kg_per_h: UNCONFIGURED}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      magnitude: UNCONFIGURED
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.main_propellant_kg
+      note: >-
+        the main propellant leak rate is genuinely unpublished — a seal failure's mass flow is a property of the failure rather than of the vehicle. What closes it is a measured loss from the SPS feed, and the observable is the residual between the tank and the ledger
     perturbs: [res.main_propellant_kg, "res.recon_main_propellant_kg", prop.feed_pressure_pct,
                res.time_to_limit_s]
     detection:
@@ -75,7 +96,12 @@ faults:
     component: prop_rcs
     mechanism: "a thruster valve seats imperfectly: propellant escapes in the pauses between firings"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: 0.01}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      magnitude: 0.01
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.rcs_propellant_kg
     perturbs: [res.rcs_propellant_kg, rcs.total_impulse_ns, "res.recon_rcs_propellant_kg",
                "rcs.thruster_[n]_pressure_switch"]
     detection:
@@ -92,7 +118,16 @@ faults:
     component: o2_csm
     mechanism: "the tank's pressure transducer develops a slowly walking bias"
     kind: instrument
-    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_kpa_per_h: 0.05}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      # 0.05 kPa/h in the unit the channel publishes: `eclss.o2_supply_pressure_psi` is psi, and
+      # the old key said `bias_walk_kpa_per_h` — a millimetre-of-mercury-scale figure against a
+      # psi channel, which is 0.0072519 psi/h. The conversion uses the corpus's own constant,
+      # `psi_to_pa` from `eclss.atmosphere_model`, not a rounded one.
+      magnitude: 0.0072519
+      magnitude_unit: "psi/h"
+      magnitude_channel: eclss.o2_supply_pressure_psi
     perturbs: [eclss.o2_supply_pressure_psi, res.o2_remaining_kg, "res.recon_o2_kg"]
     detection:
       evidence: >-
@@ -111,7 +146,10 @@ faults:
     component: prop_main
     mechanism: "the tank quantity sensor intermittently reads high: for a few minutes it reports more propellant than the tank holds"
     kind: instrument
-    seeding: {on_demand_p: 1.0e-3, trigger: "any tank-mixing or heater cycle", schedule: "crisis scenario seeds this deliberately"}
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any tank-mixing or heater cycle"
+      condition: "crisis scenario seeds this deliberately"
     perturbs: [res.main_propellant_kg, "res.recon_main_propellant_kg", res.time_to_limit_s]
     detection:
       evidence: >-
@@ -130,7 +168,9 @@ faults:
     component: cabin_regulator
     mechanism: "the oxygen regulator jams open: flow continues at the high band regardless of cabin pressure"
     kind: latent_then_acute
-    seeding: {on_demand_p: 5.0e-4, trigger: "any regulator mode transition"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any regulator mode transition"
     perturbs: [eclss.cabin_pressure_psia, res.o2_remaining_kg, "res.status_[resource]",
                eclss.cabin_regulator_state]
     detection:
@@ -147,7 +187,9 @@ faults:
     component: csm_lioh_element
     mechanism: "the lithium-hydroxide bed channels: CO2 passes through an unspent cartridge"
     kind: latent_then_acute
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [eclss.co2_pp_mmhg, eclss.absorber_capacity_pct, "res.status_[resource]",
                cw.active_lights]
     detection:
@@ -168,7 +210,9 @@ faults:
     component: crew_state
     mechanism: "a suit leak or a strenuous EVA raises one crew member's consumption: the crew's O2 draw and CO2 production rise well above plan"
     kind: continuous_degradation
-    seeding: {on_demand_p: 5.0e-4, trigger: "any EVA or depressurisation cycle"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any EVA or depressurisation cycle"
     perturbs: [eclss.co2_pp_mmhg, res.o2_remaining_kg, eclss.absorber_capacity_pct,
                res.time_to_limit_s]
     detection:
@@ -185,7 +229,9 @@ faults:
     component: pressurant_he
     mechanism: "the helium regulator's outlet pressure drifts down: the tanks are pressurised less than commanded, and the feed pressure follows"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
     perturbs: [prop.pressurant_pressure_psi, prop.feed_pressure_pct, prop.chamber_pressure_pct,
                "res.ledger_[resource]_kg"]
     detection:
@@ -202,7 +248,10 @@ faults:
     component: prop_main
     mechanism: "no physical loss at all: the accounting model's own terms drift — an uncharged transfer, a temperature-dependent density correction applied twice, a burn charged to the wrong tank"
     kind: accounting
-    seeding: {on_demand_p: 1.0e-3, trigger: "any burn or transfer", schedule: "also seeded deliberately in the nominal posture, because a fleet must meet this before it meets a real leak"}
+    seeding:
+      on_demand_p: 1.0e-3
+      trigger: "any burn or transfer"
+      condition: "also seeded deliberately in the nominal posture, because a fleet must meet this before it meets a real leak"
     perturbs: ["res.recon_main_propellant_kg", "res.ledger_[resource]_kg", "res.recon_o2_kg",
                "res.status_[resource]"]
     detection:

@@ -27,7 +27,9 @@ faults:
     seeding:
       hazard: 2.0e-5
       unit: per_h
-      rate_kg_per_h: 0.05
+      magnitude: 0.05
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.o2_remaining_kg
     perturbs: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s, eclss.o2_supply_pressure_psi,
                eclss.pp_o2_mmhg, res.o2_remaining_kg]
     detection:
@@ -145,7 +147,12 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      bias_walk_pa_per_h: 30
+      # 30 Pa/h in the unit the channel publishes: `eclss.cabin_pressure_psia` is psia, and the
+      # old key said `bias_walk_pa_per_h` — 30 Pa is 0.0043511 psi. Converted with the corpus's own
+      # `psi_to_pa` from `eclss.atmosphere_model`.
+      magnitude: 0.0043511
+      magnitude_unit: "psi/h"
+      magnitude_channel: eclss.cabin_pressure_psia
     perturbs: [eclss.cabin_pressure_psia, eclss.leak_rate_g_s]
     detection:
       evidence: >-
@@ -393,7 +400,9 @@ faults:
     seeding:
       hazard: 2.0e-05
       unit: per_h
-      rate_kg_per_h: 0.023
+      magnitude: 0.023
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.o2_remaining_kg
     perturbs:
       - eclss.lm_cabin_pressure_psia
       - eclss.lm_pp_o2_mmhg
@@ -531,7 +540,9 @@ faults:
     seeding:
       hazard: 1.0e-04
       unit: per_h
-      bias_psia: 0.15
+      magnitude: 0.15
+      magnitude_unit: "psia"
+      magnitude_channel: eclss.lm_cabin_pressure_psia
     perturbs:
       - eclss.lm_cabin_pressure_psia
     detection:

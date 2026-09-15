@@ -20,7 +20,10 @@ faults:
     component: dps
     mechanism: "the feed-pressure transducer freezes at a high reading: the engine is starved and the instrument says the feed is nominal"
     kind: instrument
-    seeding: {on_demand_p: 5.0e-4, trigger: "any burn start", schedule: "degraded scenario seeds this"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any burn start"
+      condition: "degraded scenario seeds this"
     perturbs: [prop.feed_pressure_pct, prop.thrust_pct_estimated, prop.chamber_pressure_pct,
                prop.accumulated_dv_m_s, prop.cutoff_mode]
     detection:
@@ -41,7 +44,9 @@ faults:
     component: feed_valve_sps
     mechanism: "the feed valve does not open: the engine is commanded and nothing reaches the chamber"
     kind: discrete
-    seeding: {on_demand_p: 1.0e-4, trigger: "any burn start after a long cold soak"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any burn start after a long cold soak"
     perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, prop.feed_pressure_pct,
                prop.accumulated_dv_m_s, prop.main_armed]
     detection:
@@ -58,7 +63,9 @@ faults:
     component: pressurant_regulator
     mechanism: "the regulator's outlet pressure drifts below its setpoint: the tanks are pressurised less than commanded and the feed pressure follows with a lag"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
     perturbs: [prop.pressurant_pressure_psi, prop.feed_pressure_pct, prop.chamber_pressure_pct,
                prop.leak_state]
     detection:
@@ -75,7 +82,9 @@ faults:
     component: dps_throttle_actuator
     mechanism: "the throttle actuator jams at its last position: commanded throttle and delivered thrust part company"
     kind: latent_then_acute
-    seeding: {on_demand_p: 5.0e-4, trigger: "any throttle change during a burn"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any throttle change during a burn"
     perturbs: [prop.dps_throttle_pct, prop.thrust_pct_estimated, prop.chamber_pressure_pct,
                prop.accumulated_dv_m_s]
     detection:
@@ -91,7 +100,10 @@ faults:
     component: sps
     mechanism: "chamber pressure oscillates: thrust fluctuates at a frequency the estimator averages away"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, onset: "usually within the first seconds of a burn"}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      condition: "usually within the first seconds of a burn"
     perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, structure.accel_xyz_g]
     detection:
       evidence: >-
@@ -111,7 +123,10 @@ faults:
     component: aps
     mechanism: "the engine fails to light: hypergolic ignition does not occur and the chamber stays at zero"
     kind: discrete
-    seeding: {on_demand_p: 1.0e-4, trigger: "any ignition", note: "the ascent engine is the case that matters: there is no second attempt"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any ignition"
+      note: "the ascent engine is the case that matters: there is no second attempt"
     perturbs: [prop.chamber_pressure_pct, prop.thrust_pct_estimated, prop.main_armed,
                prop.cutoff_mode]
     detection:
@@ -128,7 +143,9 @@ faults:
     component: sps
     mechanism: "the engine does not stop: the shutdown command is received and the chamber stays lit"
     kind: latent_then_acute
-    seeding: {on_demand_p: 2.0e-4, trigger: "any commanded cutoff"}
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any commanded cutoff"
     perturbs: [prop.chamber_pressure_pct, prop.accumulated_dv_m_s, prop.cutoff_mode,
                prop.propellant_remaining_pct, "res.status_[resource]"]
     detection:
@@ -144,7 +161,9 @@ faults:
     component: feed_valve_dps
     mechanism: "propellant freezes in an uninsulated line: flow is restricted, then blocked, and the trapped fluid's pressure climbs as it warms"
     kind: latent_then_acute
-    seeding: {coupled_to: TCS-07, trigger: "a long cold soak with the engine safed"}
+    seeding:
+      coupled_to: TCS-07
+      trigger: "a long cold soak with the engine safed"
     perturbs: [prop.feed_pressure_pct, prop.pressurant_pressure_psi, prop.chamber_pressure_pct,
                structure.relief_valve_state]
     detection:
@@ -164,7 +183,12 @@ faults:
     component: sps
     mechanism: "the thrust estimator's calibration drifts: the believed thrust departs from the delivered thrust while every sensor reads correctly"
     kind: instrument
-    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_pct_per_h: 0.2}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      magnitude: 0.2
+      magnitude_unit: "%/h"
+      magnitude_channel: prop.thrust_pct_estimated
     perturbs: [prop.thrust_pct_estimated, prop.accumulated_dv_m_s, prop.cutoff_mode]
     detection:
       evidence: >-
@@ -184,7 +208,10 @@ faults:
     component: dps
     mechanism: "the injector erodes: Isp falls, so the same burn duration delivers less delta-v"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, stress: "x2 for each burn longer than 300 s"}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      condition: "x2 for each burn longer than 300 s"
     perturbs: [prop.thrust_pct_estimated, prop.chamber_pressure_pct, prop.accumulated_dv_m_s,
                prop.feed_pressure_pct]
     detection:
@@ -200,7 +227,10 @@ faults:
     component: sps
     mechanism: "the engine fails to restart: the hypergolic ignition sequence does not take on a later burn"
     kind: discrete
-    seeding: {on_demand_p: 2.0e-4, trigger: "any restart beyond the fifth", note: "the probability is per-activation and apollo's baseline is 1e-4; it is raised here because a restart failure is the fault that turns a survivable mission into a one-way one"}
+    seeding:
+      on_demand_p: 2.0e-4
+      trigger: "any restart beyond the fifth"
+      note: "the probability is per-activation and apollo's baseline is 1e-4; it is raised here because a restart failure is the fault that turns a survivable mission into a one-way one"
     perturbs: [prop.chamber_pressure_pct, prop.sps_burn_count, prop.thrust_pct_estimated,
                prop.main_armed]
     detection:

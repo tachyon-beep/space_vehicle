@@ -27,7 +27,10 @@ faults:
     component: source_converter_v
     mechanism: "the converter's regulation loop degrades: bus voltage follows load instead of holding its setpoint"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, stress: "2x beyond the caution temperature limit"}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      condition: "2x beyond the caution temperature limit"
     perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.load_margin_w]
     detection:
       evidence: "bus voltage falls further than the measured load step explains; the two buses diverge under a shared load change"
@@ -42,7 +45,9 @@ faults:
     component: fc_1
     mechanism: "one cell's output falls away: the stack loses a third of its capacity and its internal resistance rises"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
     perturbs: [power.source_1_current_a, power.dc_bus_a_v, power.load_margin_w, res.time_to_limit_s]
     detection:
       evidence: "one source current falls while the others rise to hold the bus; margin shrinks before the voltage does"
@@ -58,7 +63,9 @@ faults:
     component: lcl
     mechanism: "a protection device trips on a transient that was inside its rating: an inrush the model did not predict"
     kind: transient
-    seeding: {on_demand_p: 1.0e-4, trigger: "any load energisation with inrush_w > 300"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any load energisation with inrush_w > 300"
     perturbs: ["power.lcl_[n]_state", "power.lcl_[n]_current_a", power.dc_bus_a_v, power.load_margin_w]
     detection:
       evidence: "a load current steps to zero with no command; the bus voltage rises slightly as the load leaves"
@@ -73,7 +80,9 @@ faults:
     component: lcl
     mechanism: "the protection device fails to open: its sensed current stops responding to actual current, so it never trips"
     kind: latent_then_acute
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [power.bus_a_current_a, "power.lcl_[n]_current_a", power.dc_bus_a_v, power.source_1_current_a]
     detection:
       evidence: "bus current rises above what the enabled load list accounts for, with no LCL tripped. The overload is visible only at the bus, not at the load"
@@ -88,7 +97,9 @@ faults:
     component: csm_tie_ab
     mechanism: "the tie contactor welds closed: the two buses cannot be separated"
     kind: latent_then_acute
-    seeding: {on_demand_p: 5.0e-4, trigger: "tie closure into a bus that is already faulted"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "tie closure into a bus that is already faulted"
     perturbs: [power.bus_tie_state, power.dc_bus_a_v, power.dc_bus_b_v, power.bus_a_current_a]
     detection:
       evidence: "a tie commanded open reports closed and the voltages stay coupled: the healthy bus's voltage sags toward the faulted one's"
@@ -104,7 +115,9 @@ faults:
     component: csm_tie_ab
     mechanism: "the tie fails to close: cross-support between buses is unavailable when it is asked for"
     kind: latent_then_acute
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [power.bus_tie_state, power.dc_bus_a_v, power.dc_bus_b_v, power.load_margin_w]
     detection:
       evidence: "a tie command is accepted and the tie does not close; a subsequent single-bus failure has no cross-support"
@@ -119,7 +132,9 @@ faults:
     component: battery_lm_descent_1
     mechanism: "battery capacity derates with temperature: the same charge delivers less, and the SOC estimate does not know"
     kind: continuous_degradation
-    seeding: {coupled_to: TCS-*, trigger: "battery zone temperature above 318 K"}
+    seeding:
+      coupled_to: TCS-*
+      trigger: "battery zone temperature above 318 K"
     perturbs: [power.battery_soc_pct, power.battery_temp_c, res.battery_energy_wh, res.time_to_limit_s]
     detection:
       evidence: "the published SOC estimate and the actual delivered energy part company; the estimate is the thing that is wrong, so the evidence is a load that lasts less long than predicted"
@@ -135,7 +150,9 @@ faults:
     component: csm_bus_b
     mechanism: "bus voltage sags below the contactor hold threshold: a running motor's contactor opens, and the load is gone until the bus recovers"
     kind: transient
-    seeding: {on_demand_p: 1.0e-4, trigger: "bus voltage below 24.5 V for more than one tick with the pump energised"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "bus voltage below 24.5 V for more than one tick with the pump energised"
     perturbs: [power.dc_bus_b_v, power.bus_a_current_a, thermal.pump_1_commanded,
                thermal.primary_flow_l_min, thermal.coolant_return_c]
     detection:
@@ -152,7 +169,9 @@ faults:
     component: lcl
     mechanism: "the instrumentation feed's protection opens and does not reclose: a group of channels goes dead together"
     kind: discrete
-    seeding: {hazard: 2.0e-5, unit: per_h}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
     perturbs: [avionics.instrumentation_power_w, avionics.telemetry_frame_sync,
                avionics.oldest_sample_age_ms, "power.lcl_[n]_state"]
     detection:
@@ -169,7 +188,9 @@ faults:
     component: lcl
     mechanism: "a connector's resistance creeps upward: voltage drop grows slowly, load by load"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.load_margin_w]
     detection:
       evidence: "the bus sags a little more each day at the same load, and the sag is not explained by any single load's current"
@@ -184,7 +205,9 @@ faults:
     component: csm_bus_a
     mechanism: "a hard short to structure: bus voltage collapses, current spikes, the upstream protection opens"
     kind: discrete
-    seeding: {on_demand_p: 1.0e-4, trigger: "any bus with a pre-existing high-resistance joint"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any bus with a pre-existing high-resistance joint"
     perturbs: [power.dc_bus_a_v, power.bus_a_current_a, power.bus_tie_state,
                "power.lcl_[n]_state", power.load_margin_w]
     detection:
@@ -200,7 +223,9 @@ faults:
     component: fc_2
     mechanism: "the source current transducer sticks at its last value: the source looks steady while its output is not"
     kind: instrument
-    seeding: {on_demand_p: 5.0e-4, trigger: "any degraded source on the same bus"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any degraded source on the same bus"
     perturbs: [power.source_1_current_a, power.load_margin_w]
     detection:
       evidence: "a current that never varies at all: real currents breathe with the load, and a perfectly steady one is the signature"

@@ -128,7 +128,10 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      bias_walk: 0.02
+      magnitude: 0.02
+      magnitude_unit: UNCONFIGURED
+      note: >-
+        the walk is per hour and the unit is not stated: the old key was a bare `bias_walk`, which named neither the quantity nor the interval. What closes it is the decision the four spelled variants have already made — which unit of the perturbed channel the walk accumulates in
     perturbs: [avionics.oldest_sample_age_ms, "avionics.drift_statistic_[group]",
                "avionics.drift_state_[group]"]
     detection:
@@ -244,7 +247,11 @@ faults:
     seeding:
       hazard: 1.5e-4
       unit: per_h
-      drift_ms_per_h: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "ms/h"
+      magnitude_channel: avionics.clock_offset_ms
+      note: >-
+        the clock's drift rate is published nowhere for either spacecraft. What closes it is a measured rate against a ground reference — apollo carried a crystal oscillator whose stability is in the CSM/LM reports rather than in any source reached here
     perturbs: [avionics.clock_offset_ms, avionics.time_sync_state,
                "mission.met_s"]
     detection:
@@ -323,7 +330,11 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      rate_per_s: UNCONFIGURED
+      magnitude: UNCONFIGURED
+      magnitude_unit: "count/s"
+      magnitude_channel: avionics.sensor_bus_errors_s
+      note: >-
+        a degraded bus's error *rate* is a property of the harness rather than of the vehicle, and no source gives one. What closes it is a bit-error-rate figure for the sensor bus, which the avionics spec leaves to the implementer
     perturbs: [avionics.sensor_bus_errors_s, "avionics.sensor_health_[class]",
                avionics.redundancy_disagreement, avionics.telemetry_frame_sync]
     detection:

@@ -126,7 +126,7 @@ faults:
     seeding:
       hazard: 3.0e-4
       unit: per_h
-      bias: "stuck low, intermittent"
+      condition: "stuck low, intermittent"
     perturbs: ["rcs.thruster_[n]_pressure_switch", "rcs.thruster_[n]_health",
                rcs.control_authority_margin]
     detection:
@@ -167,7 +167,10 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      bias_walk: 0.03
+      magnitude: 0.03
+      magnitude_unit: UNCONFIGURED
+      note: >-
+        the walk is per hour and the unit is not stated: the old key was a bare `bias_walk`, which named neither the quantity nor the interval. What closes it is the decision the four spelled variants have already made — which unit of the perturbed channel the walk accumulates in
     perturbs: ["rcs.thruster_[n]_impulse_ns", rcs.total_impulse_ns,
                rcs.propellant_remaining_pct, rcs.allocation_residual,
                rcs.control_authority_margin]
@@ -257,7 +260,9 @@ faults:
     seeding:
       hazard: 4.0e-4
       unit: per_h
-      drift_pct_per_h: 1.5
+      magnitude: 1.5
+      magnitude_unit: "%/h"
+      magnitude_channel: rcs.quad_[a-d]_feed_pressure_pct
     perturbs: ["rcs.quad_[a-d]_feed_pressure_pct", "rcs.thruster_[n]_impulse_ns",
                rcs.control_authority_margin, rcs.allocation_residual]
     detection:
@@ -288,8 +293,12 @@ faults:
     seeding:
       hazard: 1.0e-4
       unit: per_h
-      rate_kg_per_h: UNCONFIGURED
-    perturbs: ["rcs.quad_[a-d]_feed_pressure_pct", rcs.propellant_remaining_pct,
+      magnitude: UNCONFIGURED
+      magnitude_unit: "kg/h"
+      magnitude_channel: res.rcs_propellant_kg
+      note: >-
+        the branch leak's mass flow is unpublished for the reason the main leak's is: it is a property of the failure rather than of the vehicle. What closes it is a measured loss from a branch, and `rcs.propellant_remaining_pct` is where it would show
+    perturbs: [res.rcs_propellant_kg, "rcs.quad_[a-d]_feed_pressure_pct", rcs.propellant_remaining_pct,
                rcs.propellant_sigma_pct, "rcs.thruster_[n]_pressure_switch"]
     detection:
       evidence: >-
@@ -442,12 +451,13 @@ coverage:
   unperturbed_reason: >-
     a commanded state: the crew or an agent sets it and no fault writes it
   cross_domain:
-    faults_outside: 4
+    faults_outside: 5
     note: >-
-      four of the eleven faults perturb a channel outside `rcs.*`, and in each case that channel
+      five of the eleven faults perturb a channel outside `rcs.*`, and in each case that channel
       is the *first* or the *only* evidence: `gnc.body_rate_xyz_deg_s` for a stuck thruster (the
       valve reads as commanded), `structure.accel_xyz_g` for a no-response thruster and for a
-      failed pressure switch (the switch is the thing in doubt), and `power.bus_a_current_a` for
+      failed pressure switch (the switch is the thing in doubt), `power.bus_a_current_a` for
       a driver fault (a driver with no current envelope cannot be seen electrically from inside
-      this domain). An RCS fault list that only perturbed `rcs.*` would be a list of faults that
-      cannot be seen.
+      this domain), and `res.rcs_propellant_kg` for the branch leak — the tank the leak drains,
+      which is the consumables domain's channel and the one place a mass flow is a mass. An RCS
+      fault list that only perturbed `rcs.*` would be a list of faults that cannot be seen.

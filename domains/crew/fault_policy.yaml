@@ -64,7 +64,7 @@ faults:
     seeding:
       on_demand_p: 0.02
       trigger: "any ask_crew whose answer is a number"
-      schedule: "seeded perturbation of the perceivable subset, per components.yaml#display_contract.wrongness"
+      condition: "seeded perturbation of the perceivable subset, per components.yaml#display_contract.wrongness"
     perturbs: ["cw.alert_[id]_state", crew.workload, "crew.location_[id]"]
     detection:
       evidence: >-
@@ -199,7 +199,10 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      bias_walk: 0.02
+      magnitude: 0.02
+      magnitude_unit: UNCONFIGURED
+      note: >-
+        the walk is per hour and the unit is not stated: the old key was a bare `bias_walk`, which named neither the quantity nor the interval. What closes it is the decision the four spelled variants have already made — which unit of the perturbed channel the walk accumulates in
     perturbs: [crew.workload, "cw.alert_[id]_state"]
     detection:
       evidence: >-

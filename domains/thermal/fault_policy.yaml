@@ -19,7 +19,9 @@ faults:
     component: pump_1
     mechanism: "the rotor stalls: the motor still draws current, the shaft stops, and the flow stops with it"
     kind: discrete
-    seeding: {on_demand_p: 1.0e-4, trigger: "any bus voltage below the contactor hold threshold"}
+    seeding:
+      on_demand_p: 1.0e-4
+      trigger: "any bus voltage below the contactor hold threshold"
     perturbs: ["thermal.pump_[n]_speed_rpm", thermal.primary_flow_l_min, thermal.pump_1_current_a,
                thermal.coolant_return_c, thermal.avionics_plate_c, thermal.comm_amp_c]
     detection:
@@ -40,7 +42,10 @@ faults:
     component: pump_1
     mechanism: "bearing friction rises: the pump slows at a constant command and the flow follows, with the current creeping up"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-5, unit: per_h, stress: "x2 while running above its rated duty"}
+    seeding:
+      hazard: 2.0e-5
+      unit: per_h
+      condition: "x2 while running above its rated duty"
     perturbs: ["thermal.pump_[n]_speed_rpm", thermal.primary_flow_l_min, thermal.pump_1_current_a,
                thermal.coolant_return_c, thermal.avionics_plate_c]
     detection:
@@ -56,7 +61,10 @@ faults:
     component: radiator_csm
     mechanism: "the radiator's view of the sun changes: attitude, a staging event, or a jammed panel leaves it absorbing instead of rejecting"
     kind: environmental
-    seeding: {coupled_to: gnc.*, trigger: "attitude such that the radiator's solar load exceeds 60 % of its rejection capacity", schedule: "scenario-driven rather than stochastic"}
+    seeding:
+      coupled_to: gnc.*
+      trigger: "attitude such that the radiator's solar load exceeds 60 % of its rejection capacity"
+      condition: "scenario-driven rather than stochastic"
     perturbs: [thermal.radiator_rejection_w, thermal.radiator_inlet_c, thermal.coolant_return_c,
                "thermal.zone_[id]_t_c", power.battery_temp_c]
     detection:
@@ -73,7 +81,9 @@ faults:
     component: evaporator_csm
     mechanism: "the evaporator's feed path fouls: rejection falls away and the water it consumes falls with it"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [thermal.evaporator_rejection_w, thermal.coolant_supply_c, res.water_cooling_kg,
                thermal.radiator_inlet_c]
     detection:
@@ -92,7 +102,9 @@ faults:
     component: heater_bank_csm
     mechanism: "a heater relay welds closed: the bank runs at full duty regardless of command"
     kind: latent_then_acute
-    seeding: {on_demand_p: 5.0e-4, trigger: "a heater transition at full duty"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "a heater transition at full duty"
     perturbs: ["thermal.heater_[bank]_duty", "thermal.zone_[id]_t_c",
                thermal.coolant_return_c, power.bus_a_current_a]
     detection:
@@ -108,7 +120,17 @@ faults:
     component: loop_primary
     mechanism: "a fitting weeps: coolant mass falls, and with it the loop's pressure and the pump's load"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h, rate_kg_per_h: UNCONFIGURED}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      # Expressed on the flow, not on a mass: the vehicle publishes no coolant-mass channel, and
+      # `thermal.primary_flow_l_min` is where a leak shows. The old key said `rate_kg_per_h`, which
+      # is the unit the mechanism is thought in and not the one anything measures.
+      magnitude: UNCONFIGURED
+      magnitude_unit: "L/min"
+      magnitude_channel: thermal.primary_flow_l_min
+      note: >-
+        the coolant leak's mass flow is unpublished. What closes it is a measured loss from the loop, and the observables are the flow and the pump current that the fault already perturbs
     perturbs: [thermal.primary_flow_l_min, thermal.pump_1_current_a, thermal.coolant_return_c,
                thermal.coolant_supply_c]
     detection:
@@ -124,7 +146,9 @@ faults:
     component: loop_primary
     mechanism: "an uninsulated run of the loop freezes: the effective transit grows, then the passage closes"
     kind: latent_then_acute
-    seeding: {coupled_to: status, trigger: "coolant supply below 1 C sustained, or a cold-soaked service bay after a long coast"}
+    seeding:
+      coupled_to: status
+      trigger: "coolant supply below 1 C sustained, or a cold-soaked service bay after a long coast"
     perturbs: [thermal.loop_transport_c, thermal.primary_flow_l_min, thermal.coolant_supply_c,
                thermal.radiator_inlet_c]
     detection:
@@ -141,7 +165,13 @@ faults:
     component: loop_primary
     mechanism: "the supply temperature transducer develops a slowly walking bias: it reads a little low, then a little lower"
     kind: instrument
-    seeding: {hazard: 2.0e-4, unit: per_h, bias_walk_k_per_h: 0.01}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
+      magnitude: 0.01
+      magnitude_unit: "K/h"
+      # The supply sensor is the biased one; the return follows it through the loop.
+      magnitude_channel: thermal.coolant_supply_c
     perturbs: [thermal.coolant_supply_c, thermal.radiator_rejection_w, thermal.coolant_return_c]
     detection:
       evidence: >-
@@ -160,7 +190,9 @@ faults:
     component: bypass_valve
     mechanism: "the valve jams in its last position: a command to route through the radiator does nothing"
     kind: discrete
-    seeding: {on_demand_p: 5.0e-4, trigger: "any bypass transition after a long cold soak"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any bypass transition after a long cold soak"
     perturbs: [thermal.radiator_inlet_c, thermal.coolant_supply_c, thermal.radiator_rejection_w,
                "thermal.zone_[id]_t_c"]
     detection:
@@ -176,7 +208,9 @@ faults:
     component: loop_primary
     mechanism: "the flow transducer freezes at its last value: a stalled pump still reports flow"
     kind: instrument
-    seeding: {on_demand_p: 5.0e-4, trigger: "any pump transition"}
+    seeding:
+      on_demand_p: 5.0e-4
+      trigger: "any pump transition"
     perturbs: [thermal.primary_flow_l_min, thermal.pump_1_state, thermal.coolant_return_c]
     detection:
       evidence: >-
@@ -195,7 +229,9 @@ faults:
     component: loop_primary
     mechanism: "a partial blockage in the loop's return run: the flow falls and the transit grows, but neither stops"
     kind: continuous_degradation
-    seeding: {hazard: 2.0e-4, unit: per_h}
+    seeding:
+      hazard: 2.0e-4
+      unit: per_h
     perturbs: [thermal.primary_flow_l_min, thermal.loop_transport_c, thermal.coolant_return_c,
                "thermal.pump_[n]_speed_rpm"]
     detection:

@@ -27,7 +27,13 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      rate_kg_per_h: 0.02
+      # 0.02 kg/h in the unit the channel publishes: `structure.leak_estimate_g_s` is g/s, and
+      # 0.02 kg/h is 0.0055556 g/s. Declared rather than derived, because the derivation found one
+      # host by luck — `res.o2_remaining_kg` is also a mass — and a hatch seal's leak is not in the
+      # oxygen tank.
+      magnitude: 0.0055556
+      magnitude_unit: "g/s"
+      magnitude_channel: structure.leak_estimate_g_s
     perturbs: [structure.leak_estimate_g_s, eclss.lm_cabin_pressure_psia,
                eclss.leak_rate_g_s, res.o2_remaining_kg]
     detection:
@@ -117,7 +123,7 @@ faults:
     seeding:
       on_demand_p: 5.0e-5
       trigger: "any thermal excursion of the stage above its qualified range"
-      schedule: "crisis scenario seeds this deliberately"
+      condition: "crisis scenario seeds this deliberately"
     perturbs: ["structure.pyro_continuity_[n]", structure.stage_state,
                structure.accel_xyz_g, eclss.cabin_pressure_psia]
     detection:
@@ -222,7 +228,11 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      rate_kg_per_h: 0.01
+      # 0.01 kg/h in the unit the channel publishes: `structure.leak_estimate_g_s` is g/s, and
+      # the old key said `rate_kg_per_h` — 0.01 kg/h is 0.0027778 g/s.
+      magnitude: 0.0027778
+      magnitude_unit: "g/s"
+      magnitude_channel: structure.leak_estimate_g_s
     perturbs: [structure.leak_estimate_g_s, eclss.cabin_pressure_psia, structure.docking_latches]
     detection:
       evidence: >-
@@ -248,7 +258,9 @@ faults:
     seeding:
       hazard: 2.0e-4
       unit: per_h
-      bias_walk_g_per_h: 0.0005
+      magnitude: 0.0005
+      magnitude_unit: "g/h"
+      magnitude_channel: structure.accel_xyz_g
     perturbs: [structure.accel_xyz_g, prop.thrust_pct_estimated, prop.accumulated_dv_m_s]
     detection:
       evidence: >-
@@ -305,7 +317,10 @@ faults:
     seeding:
       hazard: 2.0e-5
       unit: per_h
-      rate_kg_per_h_growth: 0.002
+      # 0.002 kg/h in the unit the channel publishes: 0.00055556 g/s, by the same conversion.
+      magnitude: 0.00055556
+      magnitude_unit: "g/s"
+      magnitude_channel: structure.leak_estimate_g_s
     perturbs: [structure.leak_estimate_g_s, eclss.leak_rate_g_s, eclss.cabin_pressure_psia]
     detection:
       evidence: "a leak that grows monotonically rather than appearing, with the growth correlating with the thermal cycles rather than with time"

@@ -191,6 +191,28 @@ SEVERITIES = {"EMERGENCY", "WARNING", "CAUTION", "ADVISORY", "INFO"}
 # forcing them into one schema would be a schema about nothing.
 SEEDING_FORMS = ("hazard", "on_demand_p", "coupled_to")
 
+# **The keys a `seeding` block may carry, closed.** The block declares a fault in two halves: when
+# it fires — `hazard` + `unit`, `on_demand_p`, `coupled_to`, `trigger` — and how far it moves the
+# channel it perturbs. The second half had **twenty spellings**: `bias_walk` and its five suffixed
+# variants, four `drift_*`, `rate_kg_per_h`, `rate_kg_per_h_growth`, `rate_per_s`, `loss_pct`,
+# `bias_psia`, `bias_m`, and four that were not magnitudes at all (`schedule`, `stress`, `onset`,
+# `bias` — sentences about *when* a fault fires, sitting in the field for *how much*). None of the
+# twenty was read by any tool, the unit was inside the key name rather than in a field, and one idea
+# therefore had six names. `magnitude` + `magnitude_unit` is the one pair, `condition` is where a
+# sentence goes, and an open key set is the thing that let the twenty accumulate.
+SEEDING_KEYS = {
+    "hazard",
+    "unit",
+    "on_demand_p",
+    "coupled_to",
+    "trigger",
+    "note",
+    "magnitude",
+    "magnitude_unit",
+    "magnitude_channel",
+    "condition",
+}
+
 # A domain lands as five files (simulator-design.md:128-134). `components.yaml` also carries
 # the declaration the scheduler reads, so the factoring stays at five rather than growing a
 # sixth file that only the tooling looks at.
@@ -5074,6 +5096,163 @@ def check_domain(
                 "the rate's time basis — `faults.py` scales the hazard by it across the mission's "
                 "ladder — so a word that merely reads like the right one changes the rate",
             )
+        # --------------------------------------------------------------------------------------
+        # The magnitude half, which nothing read at all. See `SEEDING_KEYS` for what the twenty
+        # spellings were. Three rules, and the first is the one that stops it recurring: a key that
+        # is not in the set is refused, so the next author who wants to say "how much" has one name
+        # to reach for and cannot invent a twenty-first.
+        # --------------------------------------------------------------------------------------
+        unknown = sorted(str(k) for k in seeding if str(k) not in SEEDING_KEYS)
+        if unknown:
+            report.refuse(
+                f"{fwhere}.seeding",
+                f"declares {unknown}, which is not one of {sorted(SEEDING_KEYS)}. The block has a "
+                "closed key set because it did not, and twenty spellings of one idea accumulated "
+                "in it — six `bias_walk*`, four `drift_*`, `rate_kg_per_h` beside `rate_per_s`, "
+                "and four sentences in the field meant for a number. How far a fault moves a "
+                "channel is `magnitude` with its `magnitude_unit`, and what *condition* it fires "
+                "under is `condition`",
+            )
+        magnitude = seeding.get("magnitude")
+        unit_field = seeding.get("magnitude_unit")
+        if (magnitude is None) != (unit_field is None):
+            report.refuse(
+                f"{fwhere}.seeding",
+                f"declares magnitude={magnitude!r} with magnitude_unit={unit_field!r}. The two go "
+                "together: a magnitude without its unit is a number whose meaning is a guess, and "
+                "a unit without a magnitude is a claim about nothing — which is how the old "
+                "spellings put the unit inside the key name and then disagreed with the channel",
+            )
+        # **An owed magnitude is an obligation, and it owes a sentence either way.** The first
+        # version required a note only for an owed *unit*, so nine faults with `magnitude:
+        # UNCONFIGURED` and a perfectly good unit said nothing about what would close them — the
+        # same asymmetry this round is about, with the value half read less carefully than the rate
+        # half.
+        if magnitude == "UNCONFIGURED" and not seeding.get("note"):
+            report.refuse(
+                f"{fwhere}.seeding.magnitude",
+                "is UNCONFIGURED with no `note`. A fault the adversary can schedule and cannot size "
+                "is an obligation, and the note is what says which figure would close it",
+            )
+        if unit_field == "UNCONFIGURED":
+            if not seeding.get("note"):
+                report.refuse(
+                    f"{fwhere}.seeding.magnitude_unit",
+                    "is UNCONFIGURED with no `note`. A magnitude whose unit is not stated cannot be "
+                    "applied to anything, and that is an obligation rather than a value",
+                )
+        elif unit_field is not None:
+            known = set(SI_UNITS) | set(DIMENSIONLESS_UNITS) | set(DIMENSION)
+            # **A magnitude is usually a *rate*** — a leak in kg/h, a drift in deg/h — and the
+            # registry's units are levels. The vocabulary has `/s` forms and no `/h` ones, so the
+            # first version of this refused every leak on the vehicle: `kg/h` is not in the set and
+            # neither is `K/h`, `Pa/h`, `%/h` or `dB/h`. A rate is a known unit over a known time
+            # basis, and that is what is checked rather than a list of the combinations.
+            text = str(unit_field)
+            if "/" in text:
+                head, _, basis = text.rpartition("/")
+                known = known | {
+                    f"{head}/{basis}"
+                    for basis in ("s", "min", "h", "day")
+                    if head in known and basis in ("s", "min", "h", "day")
+                }
+            if text not in known:
+                report.refuse(
+                    f"{fwhere}.seeding.magnitude_unit",
+                    f"is {unit_field!r}, which is not a unit this corpus knows "
+                    f"({len(known)} of them, from `channels.yaml`'s registry and the linter's own "
+                    "tables). A magnitude in an uninterpretable unit cannot be applied to the "
+                    "channel the fault perturbs, which is the whole of what it is for",
+                )
+        if magnitude is not None and not (
+            isinstance(magnitude, (int, float)) or magnitude == "UNCONFIGURED"
+        ):
+            report.refuse(
+                f"{fwhere}.seeding.magnitude",
+                f"is {magnitude!r}. A magnitude is a number or an owed one; a sentence here is what "
+                "`condition` is for",
+            )
+        # --------------------------------------------------------------------------------------
+        # **Which channel the magnitude is expressed in**, which is the other half of what the
+        # twenty spellings hid. A fault perturbs several channels and the magnitude is in one of
+        # them: a leak of 0.05 kg/h drains a tank, and a cabin pressure is what you *see*. So the
+        # number needs a host, and it is usually derivable — the magnitude's unit is the unit of
+        # one of the perturbed channels, or that unit over a time basis (`kg/h` into a `kg` stock,
+        # `g/h` into a `g` sensor, `%/h` into a `%` gauge). Where it is not exactly one, the fault
+        # says which: `magnitude_channel`.
+        # --------------------------------------------------------------------------------------
+        if magnitude is not None and unit_field not in (None, "UNCONFIGURED"):
+            unit_text = str(unit_field)
+            head = unit_text.rpartition("/")[0] if "/" in unit_text else None
+            # Two equivalences the registry already relies on, and neither is a convenience: a
+            # `% nominal` gauge is a percentage, so `%/h` is a rate into it; and a kelvin and a
+            # degree Celsius are the same *interval*, so `K/h` is a rate into a `degC` channel. The
+            # offset between them is a property of the scale and cancels in a rate.
+            # Bound rather than closed over: `unit_text` and `head` are loop variables, and a
+            # closure that reads them is a claim about when it runs rather than what it reads.
+            def same_quantity(
+                channel_unit: str, unit_text: str = unit_text, head: str | None = head
+            ) -> bool:
+                if channel_unit == unit_text:
+                    return True
+                # **By dimension, not by spelling.** `psi` and `psia` are both pressure and
+                # `DIMENSION` says so; a magnitude in one against a channel in the other is the
+                # same quantity under a different name, and the registry is where that is
+                # declared. Comparing strings refused `ECL-05`'s converted `psi/h` against a
+                # channel in `psia` — the right magnitude in the right unit, rejected for the
+                # suffix.
+                if DIMENSION.get(channel_unit) and DIMENSION.get(channel_unit) == DIMENSION.get(
+                    head or unit_text
+                ):
+                    return True
+                pairs = {("%", "% nominal"), ("K", "degC")}
+                if (head or unit_text, channel_unit) in pairs:
+                    return True
+                if (channel_unit, head or unit_text) in pairs:
+                    return True
+                return bool(head) and channel_unit == head
+
+            hosts = [str(cid) for cid in perturbs if same_quantity(str((index.row(str(cid)) or {}).get("unit")))]
+            declared_host = seeding.get("magnitude_channel")
+            if declared_host is not None:
+                if str(declared_host) not in [str(c) for c in perturbs]:
+                    report.refuse(
+                        f"{fwhere}.seeding.magnitude_channel",
+                        f"names {declared_host!r}, which this fault does not perturb "
+                        f"({[str(c) for c in perturbs]}). A magnitude in a channel the fault cannot "
+                        "move is a number with no effect",
+                    )
+                elif not same_quantity(
+                    str((index.row(str(declared_host)) or {}).get("unit"))
+                ):
+                    report.refuse(
+                        f"{fwhere}.seeding.magnitude_channel",
+                        f"names {declared_host!r}, whose unit is "
+                        f"{(index.row(str(declared_host)) or {}).get('unit')!r}, against a magnitude "
+                        f"in {unit_text!r}. The declaration says *which* channel the number moves, "
+                        "and the units still have to agree — a magnitude in one unit against a "
+                        "channel in another is a number nothing can apply",
+                    )
+            else:
+                # **Declared, always.** The derivation is what *checks* the declaration rather than
+                # what replaces it: it found exactly one host for most faults and the reader still
+                # could not tell which, because a fault that derives its host and a fault whose
+                # host is ambiguous looked the same from outside. A magnitude is a perturbation of
+                # one channel, and the channel is named. `hosts` is in the message because it is
+                # what makes a wrong declaration visible.
+                report.refuse(
+                    f"{fwhere}.seeding.magnitude_channel",
+                    f"is not declared, and the magnitude {magnitude!r} {unit_text} must name the "
+                    f"channel it moves. {len(hosts)} of the perturbed channels are in "
+                    f"{unit_text!r}{f' or {head!r}' if head else ''} ({hosts}) — the derivation "
+                    "narrows it and nothing but the fault can say it, because a magnitude without "
+                    "a host is a number no tool can apply",
+                )
+        if "condition" in seeding and not str(seeding["condition"]).strip():
+            report.refuse(
+                f"{fwhere}.seeding.condition", "is empty; a condition is the sentence saying when"
+            )
+
         detection = fault.get("detection")
         if not isinstance(detection, dict):
             report.refuse(
