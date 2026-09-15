@@ -6179,6 +6179,83 @@ backs it, `link` losing both at once (which is one refusal, because the rule is 
 ladder edge put back on the executive, a commanded state's edge deleted, the coolant pump's edge
 retargeted to a node nothing commands, and the unbroken corpus composing at 272.
 
+## The trigger: a verb that starts a state, which was a sentence until now
+
+`moved_by` has four kinds, and the third was doing two jobs badly. Its rule draws a line between a
+`command:<verb>` mover — which must be able to express the value it is said to set — and a verb that
+only **starts** the state, and its own comment names the class: *"`request_imu_alignment` starts an
+alignment the vehicle then drives, `arm_event` mints a token whose lifecycle the state follows —
+cannot express the state's values and is not claimed to. Those are `logic` with the verb named in
+the reason."*
+
+So the corpus wrote them as prose, and **five of the twenty-two `logic:` reasons named a verb in
+backticks.** Nothing resolved the name. A verb renamed in `commands.yaml` would leave five states
+whose only record of what starts them is a stale sentence, and `check_command_reach` never saw them
+at all — they declared no command, so neither direction of the join ever ran on them.
+
+**And one of the five was already false.** `power.lcl_tripped` read *"the protection trips it and
+`reset_latched_fault` is the only thing that clears it"* — and that verb's `fault_id` takes
+`thruster_health`, `allocation_status` and `safety_state`: three RCS conclusions, **no LCL among
+them**. The verb that clears an LCL is `set_breaker`, whose own help says *"`reset` clears a latched
+LCL"*, and the state did not name it. A prose mover is checked by nothing, so a wrong one read
+exactly like a right one.
+
+**`trigger:<verb>` is the fourth kind**: a verb that starts or clears the state without setting it.
+The verb is resolved against the same registry `command:` uses, across domains, and it counts as a
+command arrival in `check_command_reach` — a command that starts a state has the same reason to be
+placed after the executive as one that sets it.
+
+Two guards make the kind a statement rather than a loophole, and the second is the one that matters:
+
+- **A `trigger:` is refused where the vocabulary rule would have passed.** Skipping the test is the
+  point of the kind, so a trigger whose arguments *can* take the state's values is a `command:`
+  wearing a weaker kind — and the weaker kind is the one with no obligation. Without this, `trigger:`
+  would be how an author opts out of the rule rather than how they describe a verb.
+- **A `logic:` reason may no longer name a registered verb.** The name in backticks is exactly the
+  declaration `trigger:` carries, so the check resolves the tokens and refuses. That is what makes
+  the prose form impossible to hide a declaration in.
+
+All six trigger pairs in the corpus genuinely fail the vocabulary test — `load_burn`'s arguments are
+trajectory names against a lifecycle enum; `set_docking_latch` offers `engage` while the latch
+reports `engaged`; `set_breaker` offers `reset` while the LCL reports `latched` — so none of them is
+a downgraded command.
+
+**272 stayed 272** — nothing was owed here; five declarations changed form and one claim changed from
+false to true. **190 became 191 vehicle tests.** Plant unchanged: 134 states over 57 nodes, 79 edges,
+108 of 134 fully configured, 26 with a debt, 65 of 79 edges declared, 202 unset scalars, build order
+15 ready / 26 value / 8 edge / 85 rule. `--strict` exits 2.
+
+Verified by breaking eight copies in `.scratch/r28/`: a trigger naming a verb no domain registers, a
+trigger that can express the value it starts (which is refused *because* it can), the LCL reason put
+back to naming a verb, another domain's verb named in a reason, a `command:` mover that cannot
+express its values, a mover of no declared kind, and the maneuver lifecycle put back in prose. The
+corpus assertion walks all 43 discrete states and requires that every `trigger:` verb resolves, that
+its vocabulary does **not** reach, and that no `logic:` reason names one.
+
+### And the flake was a bug, twice recorded and never caught
+
+Running the suite to check this round reproduced, for the third time, a failure that the two previous
+rounds had written down as an unreproduced flake: `test_the_engines_the_mission_is_flown_on_are_one_set_of_figures`
+failing under `-n 8` and passing in isolation. This time the traceback survived, and it is not a
+scheduling artefact at all:
+
+```
+FileExistsError: [Errno 17] File exists: '/tmp/pytest-of-john/pytest-0/popen-gw1/
+    test_the_engines_the_mission_i0/prop992/domains'
+```
+
+Nine helpers in `tests/test_vehicle_config.py` named their broken-copy fixture
+`abs(hash((old, new))) % 10000`. **`hash` of a string is salted per process** unless
+`PYTHONHASHSEED` is set, so the directory name is different on every run — and ten thousand buckets
+for fourteen fixtures collide about once in a hundred runs. Two that collide share a destination,
+and the second `shutil.copytree` raises. The failure is not a wrong answer about the vehicle; it is a
+test that *cannot run*, which is why it looked like a flake and why re-running it always worked.
+
+That is this folder's own finding arriving in its own test suite: a name generated by a function
+nobody can reproduce is a name two things can share, and the collision is invisible until it is.
+`fixture_dir(tmp_path, prefix)` is a counter now — no buckets, no salt — and the nine call sites use
+it. Three runs of the full suite under `-n 8` are green.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

@@ -197,7 +197,8 @@ state:
     node: internal
     unit: "map[load_id,enum[closed,tripped,retrying,latched]]"
     moved_by:
-      - "logic:the protection trips it and `reset_latched_fault` is the only thing that clears it"
+      - "trigger:set_breaker"
+      - "logic:the protection trips it and reports it on power.lcl_[n]_state; one controlled reclose, then latch"
     hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}
     note: >-
       One controlled reclose and then latch (electrical_diode.md:254, :888-901). The

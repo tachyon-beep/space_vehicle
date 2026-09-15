@@ -2530,10 +2530,14 @@ def check_command_reach(
         for state in components.get("state") or []:
             if not isinstance(state, dict):
                 continue
+            # A `trigger:` is a command arrival too: `set_breaker(reset)` clears a latch the
+            # protection set, `request_imu_alignment` starts an alignment the platform then drives.
+            # The verb is resolved by `check_domain` and the graph has the same reason to place the
+            # node after the executive, so both kinds count here.
             verbs = [
-                str(m).split(":", 1)[1]
+                f"{str(m).split(':', 1)[0]}:{str(m).split(':', 1)[1]}"
                 for m in state.get("moved_by") or []
-                if str(m).startswith("command:")
+                if str(m).split(":", 1)[0] in ("command", "trigger")
             ]
             if not verbs:
                 continue
@@ -5226,12 +5230,35 @@ def check_domain(
                         f"declares {text!r}. `logic` is a claim that the vehicle computes this "
                         "state, so it carries the reason the way `independent` carries one",
                     )
+                # ------------------------------------------------------------------------------
+                # **A verb named in the reason is a declaration nothing reads**, and this is where
+                # the corpus put them. The rule below draws the line between a `command:` mover,
+                # which must be able to express the value it sets, and a verb that only *starts*
+                # the state — and the corpus wrote those as prose: five of the twenty-two reasons
+                # name a verb in backticks. Nothing resolved the name, so a renamed verb would
+                # leave five states whose only record of what starts them is a stale sentence, and
+                # one of the five was already false: `lcl_tripped` said `reset_latched_fault` "is
+                # the only thing that clears it", and that verb's `fault_id` takes three RCS
+                # conclusions and no LCL at all. `trigger:<verb>` is the declaration; naming a verb
+                # in a `logic:` reason is now refused, because that is exactly what it duplicates.
+                # ------------------------------------------------------------------------------
+                for token in re.findall(r"`([^`]+)`", name):
+                    if token in (all_verbs or {}) or token in verbs_here:
+                        report.refuse(
+                            f"{mwhere}",
+                            f"names verb {token!r} inside a `logic:` reason. A verb that only "
+                            "*starts* this state rather than setting it is a `trigger:` mover, "
+                            "which this file resolves against the registry the way `command:` is — "
+                            "a name in a sentence is read by nothing, so a renamed verb leaves the "
+                            "reason pointing at a verb that no longer exists and the state with no "
+                            "record of what starts it",
+                        )
                 continue
-            if kind not in ("command", "event"):
+            if kind not in ("command", "event", "trigger"):
                 report.refuse(
                     f"{mwhere}",
-                    f"declares {text!r}; a mover is `command:<verb>`, `event:<id>` or "
-                    "`logic:<reason>`",
+                    f"declares {text!r}; a mover is `command:<verb>`, `trigger:<verb>`, "
+                    "`event:<id>` or `logic:<reason>`",
                 )
                 continue
             if kind == "event":
@@ -5243,11 +5270,18 @@ def check_domain(
                     )
                 continue
             # The verb may live in **another** domain, and three of the movers do: the crew's
-            # `breaker_panel` is written by `power`'s `set_breaker`, `maneuver_state` by
-            # `propulsion`'s `load_burn`, and `lcl_tripped` by `avionics`'s
-            # `reset_latched_fault`. A command is an effect on the executive rather than a call
+            # `breaker_panel` is written by `power`'s `set_breaker`, the crew's `switch_panel` by
+            # `crew`'s own `set_display_mode`, and `computer_mode` by `avionics`'s
+            # `set_computer_mode`. A command is an effect on the executive rather than a call
             # between domains, so the state it moves need not be its own domain's — but the verb
             # must exist somewhere, which is what the vehicle-wide map is for.
+            #
+            # `lcl_tripped` was the fourth and it was **false**: its reason said `reset_latched_fault`
+            # (an RCS verb) was "the only thing that clears it", and that verb's `fault_id` takes
+            # three RCS conclusions with no LCL among them. The verb that clears an LCL is
+            # `set_breaker`, whose own help says so — which is the shape of the defect this file
+            # just closed: a prose mover is checked by nothing, so a wrong one reads exactly like a
+            # right one.
             verb = verbs_here.get(name)
             home = name if verb is not None else (all_verbs or {}).get(name)
             if verb is None and home is None:
@@ -5274,16 +5308,37 @@ def check_domain(
                     offered.update(str(v) for v in argument.get("values") or [])
             # A mover that is a *trigger* rather than a setter — `request_imu_alignment` starts an
             # alignment the vehicle then drives, `arm_event` mints a token whose lifecycle the
-            # state follows — cannot express the state's values and is not claimed to. Those are
-            # `logic` with the verb named in the reason, and this rule is what draws the line:
-            # a `command:` mover has to be able to say the value it is said to set.
-            if values and not (values & offered):
+            # state follows, `set_breaker(reset)` clears a latch the protection set — cannot express
+            # the state's values and is not claimed to. **That is the whole of `trigger:`**, and
+            # the distinction is a declaration now rather than a sentence: the verb is resolved
+            # exactly as a `command:` mover's is, and the vocabulary test is skipped because it is
+            # the test a trigger cannot pass.
+            #
+            # **And it is skipped only where the test actually fails.** A `trigger:` whose
+            # vocabulary *does* reach would be a `command:` wearing a weaker kind, and the weaker
+            # kind is the one with no obligation — so without the second rule below the field would
+            # be a way to opt out of the vocabulary check rather than a statement about the verb.
+            # Both directions are checked, and every one of the corpus's six trigger pairs fails
+            # the vocabulary test for real: `load_burn`'s arguments are trajectory names against a
+            # lifecycle enum, and `set_docking_latch` offers `engage` while the latch reports
+            # `engaged`.
+            if kind == "command" and values and not (values & offered):
                 report.refuse(
                     f"{mwhere}",
                     f"names {name!r}, whose arguments can take {sorted(offered)}, and {sid} can take "
                     f"{sorted(values)}. A command that cannot express the value it is said to set "
-                    "is a command that never sets it — if the verb only *triggers* the change, the "
-                    "mover is `logic` with the verb written into the reason",
+                    "is a command that never sets it — if the verb only *starts* the change rather "
+                    "than setting it, the mover is `trigger:`",
+                )
+            if kind == "trigger" and values and (values & offered):
+                report.refuse(
+                    f"{mwhere}",
+                    f"names {name!r} as a `trigger:`, and its arguments can take "
+                    f"{sorted(values & offered)}, which {sid} can hold. A trigger is a verb that "
+                    "*starts* this state without being able to set it, which is why the vocabulary "
+                    "test is skipped for one; a verb that can set the value is a `command:` mover, "
+                    "and declaring it as a trigger opts out of the rule that holds a command to the "
+                    "values it claims to write",
                 )
 
     # --------------------------------------------------------------------------------------

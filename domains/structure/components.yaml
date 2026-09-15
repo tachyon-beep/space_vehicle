@@ -106,7 +106,8 @@ state:
     method: discrete
     unit: "map[event,enum[none,armed,expired,consumed]]"
     moved_by:
-      - "logic:the token's own lifecycle, which `arm_event` mints and use consumes"
+      - "trigger:arm_event"
+      - "logic:the token's own lifecycle: minted, then consumed by use or expired by time"
     dwell:
       min_on_s: 0
       min_off_s: 0
@@ -172,7 +173,8 @@ state:
     method: discrete
     unit: "map[latch_id,enum[open,engaged,released,failed]]"
     moved_by:
-      - "logic:the latch mechanism's own report, which `set_docking_latch` commands but does not set"
+      - "trigger:set_docking_latch"
+      - "logic:the latch mechanism's own report: the verb drives the mechanism and the mechanism reports back"
     dwell:
       min_on_s: 1
       min_off_s: 1

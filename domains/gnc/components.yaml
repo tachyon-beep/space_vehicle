@@ -381,7 +381,8 @@ state:
     method: discrete
     unit: "enum[idle,target_loaded,plan_valid,plan_invalid,armed,executing,verifying,complete]"
     moved_by:
-      - "logic:the maneuver lifecycle `load_burn` opens and the guidance then drives through it"
+      - "trigger:load_burn"
+      - "logic:the maneuver lifecycle the guidance drives once the burn is loaded"
     dwell:
       min_on_s: 5
       min_off_s: 5
@@ -403,7 +404,8 @@ state:
     method: discrete
     unit: "enum[unaligned,aligning,aligned,drifted]"
     moved_by:
-      - "logic:the alignment the platform drives once `request_imu_alignment` starts it"
+      - "trigger:request_imu_alignment"
+      - "logic:the alignment the platform drives once it has been started"
     dwell:
       min_on_s: 30
       min_off_s: 10
