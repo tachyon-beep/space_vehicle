@@ -841,10 +841,49 @@ electrical:
     modules: 3
     power_w_each: 1420
     bus_v: [27, 31]
+    # **The operating point the reactant chain was missing.** `bus_v` is the rated band and these
+    # three are the numbers a division needs: the nominal the band is centred on, the cell count
+    # that makes it a per-cell voltage, and the reactant rate per ampere of stack current. Every
+    # consumer derives from them rather than restating them — `per_joule_kg` on `fc_o2_draw_kg_s`,
+    # both reactant edges and the waste-heat edge.
+    output_v: 29
+    cells_per_module: 31
+    h2_lb_per_h_per_a: 0.00257
+    # The reaction's own masses, so the O2:H2 ratio is a division rather than a third
+    # declaration. 2 * 0.002016 / 0.032 = 0.126, which is **7.9365 kilograms of oxygen per
+    # kilogram of hydrogen** — not the rounded 8:1 the corpus carried as `0.125`, and the
+    # Mission E analysis's own 7.936 is an independent corroboration of the exact figure.
+    reactant_molar_mass_kg_per_mol: {h2: 0.002016, o2: 0.032}
     reactant_sustain_flow_kg_per_h: {o2: 4.72, h2: 0.46}
     provenance:
       basis: historical
-      source: "TN D-7142 and NR: three modules at 563-1,420 W each, 27-31 V dc, cryogenic O2 and H2. NR p.110 gives tank-sustain flows of 10.4 lb O2/hr and 1.02 lb H2/hr total = 4.72 and 0.46 kg/h. Apollo 11 produced about 393 kWh over 195 h at an average 68.7 A on a 29.4 V CM bus, a 2.02 kW average load (derived). A kg-per-kWh reactant figure is NOT published"
+      source: >-
+        TN D-7142 and NR: three modules at 563-1,420 W each, 27-31 V dc, cryogenic O2 and H2. NR
+        p.110 gives tank-sustain flows of 10.4 lb O2/hr and 1.02 lb H2/hr total = 4.72 and 0.46
+        kg/h. Apollo 11 produced about 393 kWh over 195 h at an average 68.7 A on a 29.4 V CM bus, a
+        2.02 kW average load (derived). The operating point is
+        `ApolloTrainingElectricalPowerSystemStudyGuide.pdf` PDF p. 14, printed p. 3.1-1, "DC system":
+        "The three fuel cell modules are activated prior to launch. Each is rated at **29 +- 2 VDC**
+        and can normally produce up to **1420 watts**" — read from the rendered page, because the
+        text layer renders the sign as a plus and the figure as "{420" — and PDF p. 38: "the primary
+        loop is comprised of the H2 exhaust side of each of the **31 cells**". The reactant rate is
+        `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` PDF p. 16,
+        CSM EPS assumptions 1 and 2: "EPS hydrogen consumption rate = **.00257 x I_FC** (lb/hr)" and
+        "EPS oxygen consumption rate = **7.936 x** hydrogen consumption rate"
+      note: >-
+        **This block used to end "A kg-per-kWh reactant figure is NOT published", and the figure it
+        denied was one division away from three published numbers.** The per-kWh figure is the
+        per-joule figure times 3.6e6, and the per-joule figure is the hydrogen rate divided by the
+        module's output voltage — so the reactant chain's last unknown was the *operating point*,
+        not an electrochemistry. 0.3216 kg O2 per kWh and 0.0402 kg H2 per kWh are now derived on
+        `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg` rather than quoted here.
+        The source's own oxygen-to-hydrogen ratio is 7.936 where the stoichiometry is exactly 8, and
+        **the corpus carried this ratio as 0.125, the rounded 8:1, and its own relation computed
+        0.1260 from the molar masses two lines away** — a live contradiction between a value and
+        the arithmetic stated beside it. The ratio is now derived from the molar masses in this
+        block, so it is 0.126 and it cannot drift; the Mission E analysis's 7.936 is an
+        independent corroboration, which is why the analysis's own oxygen rate and the
+        stoichiometric one now agree to four significant figures
   batteries:
     csm_entry:
       domain_group: battery_csm
@@ -885,5 +924,4 @@ open_debts:
   - "LM sublimator rejection capacity and water consumption rate: genuinely unpublished, and it is half of the thermal water budget."
   - "Minimum impulse bit and minimum qualified firing time for all three RCS systems: not published in any source reached. The 4 ms figure in rcs_diode.md:91 is a Voyager anecdote its own text flags as hardware-specific, so it is not adopted. `domains/rcs/` bounds the consequence instead of filling the hole: rcs_diode.md:800-825's residual accumulator preserves mean delivered impulse whatever the constant is, so the error is unbounded in *phase* and zero in *mean* — and RCS-11 names the one case that is not benign, where the accumulator grows and the thruster silently stops complying."
   - "Thruster geometry for the forty-four RCS thrusters: each unit thrust direction and lever arm from the centre of mass. rcs_diode.md:685-693 builds the allocator's wrench matrix B from them, so without them the allocator cannot select jets and the deadband has no derivation."
-  - "Fuel-cell reactant consumption per kWh: not published. The sustain-flow figure here is a standby rate rather than a per-kilowatt rate, so the O2-to-power coupling cannot yet be closed exactly."
   - "Retrograde and ullage motor behaviour, and the LM descent engine's 65-92.5 % non-operating region: both named in the sources and neither yet modelled. The non-operating region matters because it makes a throttle command between 65 % and 92.5 % impossible rather than merely unwise."

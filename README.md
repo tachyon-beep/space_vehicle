@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 283 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 271 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 283 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 271 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **283** is every obligation the linter can name:
-**126** literal `UNCONFIGURED` scalars and **157** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **271** is every obligation the linter can name:
+**118** literal `UNCONFIGURED` scalars and **153** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **208** the plant
+the missing charging efficiency, the pump-speed conversion). The **194** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 208 is the linter's 126 **plus** the graph's unset edge
+`coupling.yaml` included, so its 194 is the linter's 118 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1575,7 +1575,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 82 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 84 of the 134 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1767,9 +1767,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     15   11 %  ready now — the two classes the reference plant can advance
-    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
-     7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    29   22 %  owes a value — the cheapest to close, and the debt count already tracks them
+     6    4 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -8422,6 +8422,127 @@ The three states moving from *owes a value* to *owes a rule* is the more honest 
 rather than a regression: a valve, a thrust and a pulse width were never waiting on a figure the
 corpus could not supply. They were waiting on `domains/rcs/`'s code, and the figure they were
 blocked on turned out to have been on page 77 the whole time.
+
+## The electrochemistry no source publishes was one division, and the corpus had all three numbers
+
+`coupling.yaml#edge E-FC-DRAW-O2` carried the strongest "this cannot be known" claim in the folder:
+
+> **UNCONFIGURED and staying that way**, because the one number that would close it is not published:
+> a real cell runs near 0.7-0.9 V rather than at the 1.229 V Gibbs voltage, so the true draw is
+> 1.4-1.8x the floor … What the derivation buys is a bound and a single named owe: the value lies in
+> [6.747e-08, 1.105e-07] kg/J, the floor is exact, and **the only missing scalar is the cell voltage
+> under load** — `vehicle.yaml#electrical` carries a standby sustain flow and no operating point.
+
+Three other files said the same thing: `fc_o2_draw_kg_s`'s provenance, the `fc_o2_draw` node's note,
+and `vehicle.yaml:open_debts`, which ended *"A kg-per-kWh reactant figure is NOT published"*. And
+the missing scalar was in `vehicle.yaml` — **as a band**:
+
+```yaml
+  fuel_cells:
+    power_w_each: 1420
+    bus_v: [27, 31]          # 29 +- 2, which is the rating
+```
+
+`ApolloTrainingElectricalPowerSystemStudyGuide.pdf` PDF p. 14, "DC system":
+
+> The three fuel cell modules are activated prior to launch. **Each is rated at 29 ± 2 VDC** and can
+> normally produce up to **1420 watts**.
+
+Read from the rendered page, because the text layer renders the sign as a plus and the figure as
+`{420` — the same document, page and failure mode as the battery charger in round 2. PDF p. 38 gives
+the other half: *"the primary loop is comprised of the H₂ exhaust side of each of the **31 cells**"*.
+And the reactant rate was already in the manifest: `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf`
+PDF p. 16, CSM EPS assumptions 1 and 2 — *"EPS hydrogen consumption rate = **.00257 × I_FC** (lb/hr)"*,
+*"EPS oxygen consumption rate = **7.936 ×** hydrogen consumption rate"*.
+
+So the per-joule figure was three published numbers and a division:
+
+```
+per_joule_kg = 0.00257 lb/hr per A  ×  0.45359237 / 3600  /  29 V  /  0.126
+             = 8.8619e-08 kg O2 per joule           (0.3190 kg O2 per kWh)
+```
+
+The corpus's own bound, [6.747e-08, 1.105e-07], is the per-cell thermodynamic relation over a
+0.75–1.229 V cell — and the derived value sits inside it. The rated ± 2 V narrows that bound to
+8.36e-08 … 9.59e-08, so the published tolerance is *tighter* than the thermodynamic one the folder
+had been reasoning with.
+
+### Twelve obligations, one declaration, and no new refusal
+
+| what closed | where it lived |
+|---|---|
+| `per_joule_kg` and its `provenance.basis` | `domains/power/components.yaml#state fc_o2_draw_kg_s` |
+| `E-FC-DRAW-O2`, `E-FC-DRAW-H2`, `E-FC-HEAT` | `coupling.yaml`, the three edges' sensitivities |
+| `rate_kg_s` and `provenance.basis` on all three | `domains/consumables/components.yaml#consumers` |
+| "Fuel-cell reactant consumption per kWh: not published" | `vehicle.yaml:open_debts` |
+
+**All twelve were closed by declarations, not by a new check.** The linter gained no refusal this
+round: `check_provenance_derivations`, `check_edge_derivations` and the consumers' own arithmetic
+check already existed and already re-evaluated a `derivation` on every run. What was missing was the
+*declaration*, and the round's finding is that the folder had spent four files' worth of prose
+arguing that a division was unknowable.
+
+The three edges carry the state's figure rather than restating it — `E-FC-DRAW-O2`'s derivation is
+the single input `per_joule_kg` — so the chain is one number in four places and the linter holds
+every link. `E-FC-HEAT` is the enthalpy balance the debt's own sentence described: per mole of
+oxygen the reaction releases 571,660 J and delivers `4·F·V_cell` electrically, so the heat is the
+difference, **0.58336 W per watt of electrical output** — which at the module's 1,420 W rating is
+828 W into the coolant loop, the hottest input the flagship thermal cycle has.
+
+### The 8:1 that was 7.9365
+
+Landing the chain exposed a live contradiction that had been in the corpus since the ratio was
+written. `E-H2-FC` declared:
+
+```yaml
+value: 0.125
+relation: "… a H2:O2 ratio of 0.1260 = 1/7.937 — the 8:1 the cell's own stoichiometry fixes …"
+```
+
+The value was the rounded 8:1 and the relation computed 0.1260 from the molar masses two lines away,
+and `fc_h2_draw_kg_s.ratio_of_o2_draw` derived *from* the 0.125. **Two declarations in two files
+disagreed by 0.8 %, in the number every oxygen budget in the mission is denominated in.** The exact
+stoichiometry of 2 H₂ + O₂ → 2 H₂O is 2 × 0.002016 / 0.032 = **0.126**, i.e. 7.9365 kg of oxygen per
+kilogram of hydrogen — and the Mission E analysis's own 7.936, from an independent mass balance, is
+what settles it. The ratio is now derived from the molar masses, which have one home in the fuel
+cell block, so it cannot drift again.
+
+Two smaller corrections came with it. The hydrogen draw is the *measurement* of the pair and the
+oxygen draw is over the stoichiometry, not the other way round — which is why an 0.8 % error in the
+ratio moved the oxygen figure. And the consumers ledger's water entry, which had said 0.45 kg of
+water per kilogram of *reactants* until a previous round fixed the edge and left the copy, is now
+`E-FC-WATER`'s 1.126 kg per kilogram of oxygen applied to the derived draw.
+
+### What the round did not do
+
+- **The `searched` field is still owed for the other 22 unavailability claims.** This round is the
+  second in a row where a claim that a figure "is not published" turned out to be false, and the
+  mechanical fix is unchanged: a `basis: UNCONFIGURED` provenance that asserts unavailability should
+  name what was searched. It needs an honest record per claim rather than a rule, and it is named
+  here for the third time rather than half-done.
+- **`E-FC-BUS`'s and `E-TIE-BUSA`'s source resistance is untouched.** It is the same *file* and a
+  different quantity, bounded rather than determined, and `--debts` still names it.
+- **The 275 s / 290 s RCS Isp conflict from round 2 is still open.** It belongs in the conflict
+  register and not in a field.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 283 | **271** — twelve, all from one operating point |
+| edges with a sensitivity | 65 / 79 | **68 / 79** |
+| states fully configured | 104 / 134 | **105 / 134** |
+| states that owe a value | 30 | **29** |
+| states that owe an edge | 7 | **6** |
+| states that owe a rule | 82 | **84** |
+| `UNCONFIGURED scalars` the plant counts | 208 | **194** |
+| `report.refuse` call sites in the linter | 699 | **699** — the round adds no check, only declarations |
+| tests in `tests/test_vehicle_config.py` | 236 | **239** |
+
+The three states moving *value → rule* is the same correction round 2 made for the RCS cluster, and
+for the same reason: a state was counted as blocked by a number, and the number was published. The
+refusal count not moving is this round's point — the folder's existing derivations were sufficient
+to hold the chain, and the missing piece was the declaration they had nothing to hold.
 
 ## The invariants, and which of them are enforced
 

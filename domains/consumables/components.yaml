@@ -40,9 +40,10 @@ natural_rate_hz: 1
 # the removal rates that `E-ATM-ABSORB` and `E-LM-ATM-ABSORB` spend the absorbers' man-hours at, the
 # counters this domain writes and eclss drains.
 #
-# `fuel_cell` stays, and it is a different read: this domain's own `fuel_cell_o2` consumer is a
-# kg-per-kWh figure against the cell's output, which is why its `rate_kg_s` is UNCONFIGURED —
-# the reactant figure is unpublished — and why no edge carries that one yet.
+# `fuel_cell` stays, and it is a different read: this domain's own `fuel_cell_o2` consumer is the
+# cell's reactant draw at the declared demand, which is now derived from `per_joule_kg` and
+# `load_budget.csm_total_demand_w` rather than quoted. It was UNCONFIGURED for as long as the
+# corpus believed the kg-per-kWh figure was unpublished.
 reads: [fuel_cell, fc_o2_draw, radiator_reject, crew_state, thrust_main, rcs_thrust,
         battery_energy, co2_removal_csm, co2_removal_lm]
 writes: [o2_csm, o2_lm, h2_csm, water_potable, water_cooling, prop_main, prop_rcs,
@@ -247,24 +248,63 @@ consumers:
   - id: fuel_cell_o2
     stock: o2_csm
     edge: E-O2-DRAW
-    rate_kg_s: UNCONFIGURED
+    rate_kg_s: 0.000152690537
+    derivation:
+      expression: per_joule_kg * demand_w
+      inputs:
+        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+        demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
     provenance:
-      basis: UNCONFIGURED
-      note: "the cell's kg-per-kWh reactant figure is NOT published; vehicle.yaml#electrical carries only the standby sustain flow of 4.72 kg O2/h"
+      basis: derived
+      relation: >-
+        the cell's oxygen draw at the CSM's declared 1,723 W demand: 8.8619e-8 kg/J x 1,723 W =
+        1.526905e-4 kg/s, which is 0.550 kg O2 per hour. **This entry said the kg-per-kWh figure was
+        "NOT published" and it was one division from three published numbers** — the reactant rate
+        per ampere, the module's rated 29 V and the reaction's mass ratio — see
+        `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg`. What changed the entry
+        rather than only the claim is that `rate_kg_s` is an absolute rate and it needs a load:
+        `load_budget.csm_total_demand_w` supplies it, so the draw is a product of two declarations
+        instead of a fourth place for one number
   - id: fuel_cell_h2
     stock: h2_csm
     edge: E-H2-DRAW
-    rate_kg_s: UNCONFIGURED
+    rate_kg_s: 1.92390077e-05
+    derivation:
+      expression: per_joule_kg * h2_per_o2 * demand_w
+      inputs:
+        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+        h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
+        demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
     provenance:
-      basis: UNCONFIGURED
-      note: "as above; the 8:1 O2:H2 mass ratio fixes the relationship, not the magnitude"
+      basis: derived
+      relation: >-
+        the oxygen draw over the reaction's mass ratio: 1.923901e-5 kg/s, or 0.069 kg H2 per hour.
+        The two fuel-cell entries are deliberately not folded into one: the gases are separate
+        stocks, and a hydrogen tank draining at the oxygen rate is a leak in the wrong tank
   - id: fuel_cell_product_water
     stock: water_potable
     edge: E-FC-WATER
-    rate_kg_s: UNCONFIGURED
+    rate_kg_s: 0.000171929544662
+    derivation:
+      expression: per_joule_kg * demand_w * kg_water_per_kg_o2
+      inputs:
+        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+        demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
+        kg_water_per_kg_o2: coupling.yaml:edges.E-FC-WATER.sensitivity.value
     provenance:
-      basis: UNCONFIGURED
-      note: "the rate is 1.126 x the cell's oxygen draw and that draw is the unpublished kg-per-kWh figure the two entries above are unset for, so this is the third name for one unknown rather than a number. It said 0.45 until this round, which is the figure `E-FC-WATER`'s own note records as the one that was corrected: 0.45 kg of water per kg of reactants asserts that 55 % of the reactant mass becomes neither electricity nor water nor heat. The edge was fixed and this copy was not, because the edge carried a `computation` the linter re-evaluates and this block had no reader at all"
+      basis: derived
+      relation: >-
+        the third name for one unknown is now the third consequence of one division:
+        the oxygen draw at the declared demand times `E-FC-WATER`'s 1.126 kg of water per kg of
+        oxygen, which is 1.719295e-4 kg/s. A by-product rather than a draw, and it is the stock
+        Apollo 13's crew rationed
+      note: >-
+        this entry said 0.45 until the round that found it, which is the figure `E-FC-WATER`'s own
+        note records as corrected: 0.45 kg of water per kg of *reactants* asserts that 55 % of the
+        reactant mass becomes neither electricity nor water nor heat. The edge was fixed and this
+        copy was not, because the edge carried a `computation` the linter re-evaluates and this
+        block had no reader at all — which is the argument for `derivation` over `computation`
+        arriving a second time, in the block that copied a figure the linter had already checked
   - id: crew_metabolic_o2
     stock: o2_csm
     rate_kg_s: 3.16e-5

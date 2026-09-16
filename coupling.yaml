@@ -191,11 +191,13 @@ nodes:
     kind: flow
     unit: kg O2/s
     note: >-
-      oxygen into the cell, set by its electrical output. The per-joule figure is **not published**:
-      `vehicle.yaml#electrical` gives a standby sustain flow and no operating point, so the rate is
-      owed and `E-FC-DRAW-O2` carries it as `UNCONFIGURED`. What the node buys is that everything
-      downstream is derivable once it lands — the hydrogen draw by the published 8:1 mass ratio, and
-      the water produced by stoichiometry
+      oxygen into the cell, set by its electrical output. The per-joule figure is
+      `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg`, and everything downstream is
+      the same division: the hydrogen draw over the reaction's 0.126 mass ratio, and the water by
+      stoichiometry. **The note here said the per-joule figure was "not published" and the node's
+      own reason for existing was that everything downstream becomes derivable once it lands** —
+      which is what happened, from three published numbers rather than from a source for the
+      per-joule figure itself
   fc_h2_draw:
     domain: power
     kind: flow
@@ -477,8 +479,27 @@ edges:
     from: fc_h2_draw
     to: fuel_cell
     kind: rate
-    sensitivity: {value: 0.125, unit: "kg H2 per kg H2", basis: derived, relation: "1 kg H2 per 8 kg O2 consumed (the cell reaction stoichiometry)",
-    at: nominal, note: "8:1 O2:H2 mass ratio for the cell reaction"}
+    sensitivity:
+      value: 0.126
+      unit: "kg H2 per kg H2"
+      basis: derived
+      derivation:
+        expression: h2_per_o2_stoich * m_h2 / m_o2
+        inputs:
+          h2_per_o2_stoich: 2
+          m_h2: vehicle.yaml:electrical.fuel_cells.reactant_molar_mass_kg_per_mol.h2
+          m_o2: vehicle.yaml:electrical.fuel_cells.reactant_molar_mass_kg_per_mol.o2
+      relation: >-
+        the reaction 2 H2 + O2 -> 2 H2O consumes two moles of hydrogen per mole of oxygen, so the
+        mass ratio is 2 * 0.002016 / 0.032 = **0.126**, i.e. 7.9365 kg of O2 per kg of H2. The
+        corpus declared 0.125 — the rounded 8:1 — while the relation beside it computed 0.1260
+        from the same molar masses, and the Mission E consumables analysis gives 7.936 from its
+        own mass balance. The exact stoichiometry wins and it is now derived rather than quoted
+      at: nominal
+      note: >-
+        the ratio the two reactant edges and `fc_h2_draw_kg_s` are all denominated in. It was a
+        literal until the round that closed the reactant chain, and the 0.8 % it was out by is
+        the whole reason the chain's three numbers now re-derive instead of agreeing by hand
   # --------------------------------------------------------------------------------------
   # Bus B's source, which did not exist and had to: `electrical_diode.md:16` specifies a
   # "**dual 28 VDC A/B bus architecture** with **two independent generation/source channels**,
@@ -642,8 +663,37 @@ edges:
     from: fuel_cell
     to: coldplate_t
     kind: rate
-    sensitivity: {value: UNCONFIGURED, unit: "W per W", basis: UNCONFIGURED,
-    at: nominal, note: "waste heat: the cell rejects heat through the coolant loop (apollo_diode.md:849-853). Owed with the cell's conversion rather than on its own: waste heat is the difference between what the reactants carry in and what the cell delivers, so this figure and `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg` are two consequences of one unknown — the electrochemistry no source publishes. The fifth time this session has found one missing datum under several names, and the first where the names are a heat rate and a mass rate: they do not look like the same quantity, and they are"}
+    sensitivity:
+      value: 0.58336
+      unit: "W per W"
+      basis: derived
+      derivation:
+        expression: >-
+          enthalpy_j_per_mol_o2 * cells_per_module / (electrons * faraday_c_per_mol * output_v) - 1
+        inputs:
+          enthalpy_j_per_mol_o2: 571660
+          cells_per_module: vehicle.yaml:electrical.fuel_cells.cells_per_module
+          electrons: 4
+          faraday_c_per_mol: 96485.33212
+          output_v: vehicle.yaml:electrical.fuel_cells.output_v
+      at: nominal
+      relation: >-
+        the enthalpy balance, which is exactly the sentence this debt was written with — "waste heat
+        is the difference between what the reactants carry in and what the cell delivers". Per mole
+        of oxygen the reaction releases 571,660 J (2 x 285.83 kJ, the standard enthalpy of formation
+        of liquid water, doubled because one O2 makes two H2O) and delivers 4 * F * V_cell joules
+        electrically, so the heat is the difference: **0.5834 W of heat per watt of electrical
+        output** at the module's 29 V over 31 cells. The same number is the ratio of the
+        thermoneutral voltage to the cell voltage minus one, 1.4812 / 0.9355 - 1, which is the form
+        a fuel-cell engineer would write and the same arithmetic
+      note: >-
+        **the third consequence of one unknown, and the debt said so**: this entry and
+        `fc_o2_draw_kg_s.per_joule_kg` were "two consequences of one unknown — the electrochemistry
+        no source publishes". They were three consequences of one *division*: the operating point.
+        The enthalpy is a physical constant, the voltage is published, and the reactant rate is
+        published, so there was never an electrochemistry to publish. What the heat edge gives the
+        plant is the flagship thermal cycle's hottest input: at the 1,420 W rating the module dumps
+        828 W into the coolant loop, which is the load `C-AMP-BUS-PUMP` exists to carry
   # The edge the corrected schedule order found on its first tick. `battery_energy` had exactly
   # one inbound edge — `E-PLATE-BAT`, the thermal back-edge — so it was a stock nothing ever
   # filled, and the plant said so: "is a stock with no incoming edge, so nothing drives it". The
@@ -1351,49 +1401,64 @@ edges:
     kind: rate
     advances: fc_o2_draw_kg_s
     sensitivity:
-      value: UNCONFIGURED
+      value: 8.8619e-08
       unit: "kg/s per W"
-      basis: UNCONFIGURED
+      basis: derived
+      derivation:
+        expression: per_joule_kg
+        inputs:
+          per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
       at: nominal
       relation: >-
-        the consume side of E-O2-FC, and the one edge in this file whose value has a hard floor
-        and no published ceiling. Faraday fixes the floor exactly: a cell moving four electrons
-        per O2 and delivering V volts draws 0.032 / (4 * 96485.33212 * V) kg of oxygen per
-        joule, so at the Gibbs voltage of 1.229 V the floor is 6.747e-08 kg/J and the flown cell
-        is worse than the floor by exactly 1.229 / V_cell. The hydrogen edge is the same
-        arithmetic at two electrons and 0.002016 kg/mol, which gives 8.501e-09 kg/J and a
-        H2:O2 ratio of 0.1260 = 1/7.937 — the 8:1 the cell's own stoichiometry fixes and the
-        ratio C-REACTANT-DRAW-H2 uses as its diagnostic
+        the consume side of E-O2-FC: one kilogram of oxygen per kilogram of oxygen, at the rate the
+        cell's own operating point fixes. It carries the state's figure rather than restating it,
+        so the edge and the state cannot disagree about what a joule costs. Faraday's floor is
+        still exact and still the check on it — a cell moving four electrons per O2 draws
+        0.032 / (4 * 96485.33212 * V_cell) kg/J, which at the module's 29 V over 31 cells is
+        8.863e-08 kg/J, and the derived 8.8619e-08 sits 0.01 % away from it because the ratio step
+        divides by 0.126 where Faraday's own arithmetic divides by 0.1260
       note: >-
-        UNCONFIGURED and staying that way, because the one number that would close it is not
-        published: a real cell runs near 0.7-0.9 V rather than at the 1.229 V Gibbs voltage, so
-        the true draw is 1.4-1.8x the floor, and using the floor as the value would silently
-        stretch every oxygen budget in the mission by that factor. That is the failure this file
-        exists to prevent, and it is worse here than elsewhere because oxygen duration *is* the
-        experiment. What the derivation buys is a bound and a single named owe: the value lies in
-        [6.747e-08, 1.105e-07] kg/J, the floor is exact, and the only missing scalar is the cell
-        voltage under load — vehicle.yaml#electrical carries a standby sustain flow and no
-        operating point. `E-FC-WATER` was the same class of number and it was wrong by 2.2x
+        **this edge was declared UNCONFIGURED and "staying that way", and it was one division
+        away from three published numbers.** The claim was that the only missing scalar was "the
+        cell voltage under load" — and the missing scalar was the module's *rated* output, 29 +- 2
+        VDC, which `ApolloTrainingElectricalPowerSystemStudyGuide.pdf` PDF p. 14 publishes and
+        `vehicle.yaml#electrical.fuel_cells.bus_v` had been carrying as a 27-31 V band all along.
+        The reactant rate per ampere is on PDF p. 16 of the Mission E consumables analysis. The
+        bound the note gave, [6.747e-08, 1.105e-07], is the per-cell thermodynamic relation over a
+        0.75-1.229 V cell, and the derived value is inside it; the rated tolerance narrows it to
+        8.36e-08 .. 9.59e-08. `E-FC-WATER` was the same class of number and it was wrong by 2.2x —
+        which is why this one was left unset, and why the lesson is that "unpublished" needs the
+        same reader as any other claim
   - id: E-FC-DRAW-H2
     from: fuel_cell
     to: fc_h2_draw
     kind: rate
     advances: fc_h2_draw_kg_s
     sensitivity:
-      value: UNCONFIGURED
+      value: 1.1166e-08
       unit: "kg/s per W"
-      basis: UNCONFIGURED
+      basis: derived
+      derivation:
+        expression: per_joule_kg * h2_per_o2
+        inputs:
+          per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+          h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
       at: nominal
       relation: >-
-        as E-FC-DRAW-O2, at two electrons and 0.002016 kg/mol rather than four and 0.032: the
-        floor is 0.002016 / (2 * 96485.33212 * 1.229) = 8.501e-09 kg/J, which is 0.1260 of the
-        oxygen floor and 1/7.937 of it, the 8:1 mass ratio the reaction fixes. Owed on the same
-        single scalar, the cell's operating voltage, so the two edges close together or not at
-        all
+        the oxygen edge's figure times the reaction's 0.126 mass ratio, which is the same answer as
+        the published hydrogen rate divided by the same 29 V: 0.00257 lb/hr per ampere is
+        1.116602e-8 kg per joule, or 0.0402 kg H2 per kWh. Two routes to one number, and the edge
+        carries the one that keeps it joined to the oxygen edge, so a drift in either the operating
+        point or the stoichiometry moves both
       note: >-
         separate from the oxygen edge and deliberately not folded into it: the two gases are
         separate stocks, either can limit the cell, and a fleet that has run out of one has not
         run out of the other. Keeping them as two edges with a fixed ratio between their floors
+        is what makes a hydrogen tank draining at the oxygen rate a *diagnosis* — a leak in the
+        wrong tank — rather than an unexplained consumption. **And the hydrogen figure is the
+        measurement of the pair**: the oxygen draw is this one over the stoichiometry, not the
+        other way round, which is why the ratio being 0.8 % wrong moved the number every oxygen
+        budget in the mission is denominated in
         is what makes a hydrogen tank draining at the oxygen rate a *diagnosis* — a leak in the
         wrong tank — rather than an unexplained consumption
   - id: E-RAD-WATER
@@ -2136,7 +2201,7 @@ cycles:
     note: >-
       The same loop as the oxygen one through a second tank, and it is a separate cycle in the
       schedule because the two gases are separate stocks: the cell needs both, either can limit
-      it, and a fleet that has run out of one has not run out of the other. The 8:1 oxygen-to-
+      it, and a fleet that has run out of one has not run out of the other. The 0.126 oxygen-to-
       hydrogen mass ratio the cell consumes them in is what makes the pair diagnostic — a
       hydrogen tank draining at the oxygen rate is a leak in the wrong tank, and the ratio is
       published on `E-H2-FC` for exactly that comparison.
@@ -2409,10 +2474,12 @@ open_debts:
   # finally exercised it summed every incoming edge as `sensitivity x dt`. Handed
   # `lm_cabin_o2_kg` it returned the same mass whether one crew member was aboard or three.
   #
-  # Three of the eleven are simply unset (E-BUS-BAT, E-PRESS-PROP, E-FC-DRAW-O2 and E-FC-DRAW-H2,
-  # whose values are `UNCONFIGURED` and already debts elsewhere) or a per-hour rate the integrator
-  # can now convert (E-LM-CREW-ATM, E-CREW-ATM and E-RAD-WATER are the three that work). The other
-  # eight divide into two kinds, and each kind needs a different thing declared:
+  # Two of the eleven are simply unset (E-BUS-BAT and E-PRESS-PROP, whose values are `UNCONFIGURED`
+  # and already debts elsewhere) or a per-hour rate the integrator can now convert (E-LM-CREW-ATM,
+  # E-CREW-ATM and E-RAD-WATER are the three that work). The other eight divide into two kinds, and
+  # each kind needs a different thing declared. The list said *three* unset until the round that
+  # closed the fuel cell's reactant chain: `E-FC-DRAW-O2` and `E-FC-DRAW-H2` carried the same
+  # "unpublished" claim in four files and the operating point they needed was declared all along.
   #
   #   * **A ratio whose flow is undeclared** — E-O2-ECLSS and E-LM-O2-ECLSS at `1.0 kg O2 per
   #     kg O2`, E-FC-WATER at `1.0 kg water per kg reactants`. A dimensionless ratio converts the
