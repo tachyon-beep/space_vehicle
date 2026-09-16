@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 259 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 259 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
-**111** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **259** is every obligation the linter can name:
+**109** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **185** the plant
+the missing charging efficiency, the pump-speed conversion). The **183** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 187 is the linter's 111 **plus** the graph's unset edge
+`coupling.yaml` included, so its 183 is the linter's 109 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1779,9 +1779,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    15   11 %  ready now — the two classes the reference plant can advance
-    29   22 %  owes a value — the cheapest to close, and the debt count already tracks them
-     6    4 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    16   12 %  ready now — the two classes the reference plant can advance
+    27   20 %  owes a value — the cheapest to close, and the debt count already tracks them
+     7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -8844,6 +8844,93 @@ because none of it is what the bays owe.
 
 States advancing and edges usable are unmoved: the two bay edges still owe their value, and what
 changed is that each now names the single scalar that closes it.
+
+## Two propellant stocks owed an initial because nothing said which tank they were — and asking showed a third of the propellant was in no tank
+
+`domains/consumables/components.yaml#state prop_main_kg` had owed its `initial` since the domain
+landed, and its `initial_note` gave the reason:
+
+> owed with the tank split. `prop_main` is one node feeding three engines whose loads
+> `vehicle.yaml#propulsion` declares separately (SPS 18,508 kg, LM descent 8,248, LM ascent 2,376),
+> so a single initial for the node would be a choice about which tank it *is* rather than a figure
+> anything publishes.
+
+**The choice had already been made, one file over.** The only edge out of the node derives its rate
+from a named engine:
+
+```yaml
+  - id: E-PROP-ENG
+    from: prop_main
+    to: thrust_main
+    sensitivity:
+      derivation:
+        expression: 1 / (isp_s * 9.80665)
+        inputs:
+          isp_s: vehicle.yaml:propulsion.sps.isp_s
+```
+
+so the tank `prop_main` is, is the SPS's. What was missing was a declaration of it rather than a
+figure. `prop_rcs` is the same question with a different answer: three RCS loads against one node,
+and the RCS domain models **all forty-four thrusters as one article** (`thruster_100lbf`,
+`vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]`), so the one node is the right lump rather than a
+convenience — a fleet that has spent the SM's propellant has spent the vehicle's.
+
+### And the question found the other half
+
+Asking *which tanks the graph carries* is what turned it up: `vehicle.yaml#propulsion` declares six
+loaded tanks and the graph had stocks for four of them.
+
+| tank | load | carried by |
+|---|---:|---|
+| `sps` | 18,508 kg | `prop_main` |
+| `rcs_sm` | 608 kg | `prop_rcs` |
+| `rcs_cm` | 112 kg | `prop_rcs` |
+| `rcs_lm` | 288 kg | `prop_rcs` |
+| `lm_dps` | 8,248 kg | **nothing** |
+| `lm_aps` | 2,376 kg | **nothing** |
+
+**10,624 kg — a third of the vehicle's propellant — was in the mass closure and in the Δv budget and
+in no stock at all**, and nothing compared the two lists. So the nodes declare `carries:`, the two
+the graph does not carry are named in `vehicle.yaml#propulsion.not_on_a_coupling_stock` with their
+reason, and `check_propellant_stocks` refuses four things:
+
+- a loaded tank carried by no stock **and** named nowhere — an engine in the mass closure the plant
+  has no propellant for;
+- a `carries` entry that is not a loaded tank of this vehicle, or that two stocks both claim;
+- a `not_on_a_coupling_stock` entry that names no engine, gives no reason, or is carried anyway;
+- **a carrier's `initial` that is not the sum of its `carries` list**, which is the reader the two
+  derived initials have.
+
+The last one is why the round is not merely bookkeeping: `prop_main_kg.initial` is `derived` from
+`vehicle.yaml:propulsion.sps.mass_kg` and `prop_rcs_kg.initial` from the three RCS loads summed, and
+a stock whose level drifts from the list it declares is now refused by name.
+
+### Why the LM's two tanks are declared off the graph rather than given stocks
+
+Not because they are unmodelled — `check_propulsion` flies the mission sequentially through every
+tank in phase order, and `mission.yaml#delta_v_budget` is where that lives. A coupling stock for them
+would need a drain edge into `thrust_main` per engine, and `E-PROP-ENG` states one engine's flow:
+one edge cannot be three engines' drain. So the choice is a stock per engine with three edges into
+`thrust_main`, or the accounting — and the accounting is where the mission's Δv already is. The
+declaration makes that a decision on the record instead of an omission nobody could see.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | **259** |
+| states fully configured | 105 / 134 | **107 / 134** |
+| **`ready now` in the build order** | **15** | **16** |
+| states that owe a value | 29 | **27** |
+| states that owe an edge | 6 | **7** |
+| `UNCONFIGURED scalars` the plant counts | 185 | **183** |
+| `report.refuse` call sites in the linter | 706 | **715** |
+| tests in `tests/test_vehicle_config.py` | 244 | **246** |
+
+That is the first movement in the `ready now` bucket for several rounds, and it is the figure the
+definition of done watches: **16 of 134 states are now advanceable by the reference plant against the
+1 it actually advances**, and the gap between those two numbers is the build order's own instruction
+about what to write next.
 
 ## The invariants, and which of them are enforced
 

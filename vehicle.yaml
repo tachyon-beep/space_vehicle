@@ -374,6 +374,19 @@ configurations:
 # --------------------------------------------------------------------------------------
 propulsion:
 
+  # **Two of the six loaded tanks are carried by no coupling stock, and that is now a decision
+  # rather than an omission.** The graph's `prop_main` and `prop_rcs` carry the SPS's 18,508 kg and
+  # the three RCS systems' 1,008; the LM's descent and ascent propellant — 10,624 kg — is carried by
+  # the mission's own delta-v accounting instead, which `check_propulsion` flies sequentially
+  # through each tank in phase order. A coupling stock for them would need a drain edge into
+  # `thrust_main` per engine, and the engine whose flow `E-PROP-ENG` states is the SPS's: one edge
+  # cannot be three engines' drain, so the choice is a stock per engine or the accounting, and the
+  # accounting is where the mission's delta-v already lives. `check_propellant_stocks` refuses a
+  # loaded tank that is neither carried by a stock nor named here.
+  not_on_a_coupling_stock:
+    lm_dps: "8,248 kg, flown by `check_propulsion` through `mission.yaml#delta_v_budget` in phase order"
+    lm_aps: "2,376 kg, flown the same way; the ascent burn is 434.88 s of the ascent engine's 460 s rating"
+
   sps:
     name: "Service Propulsion System"
     engine: AJ10-137

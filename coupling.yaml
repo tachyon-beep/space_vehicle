@@ -77,13 +77,36 @@ nodes:
       13 kg of evaporator feed loaded at the pad (vehicle.yaml#consumables.csm). It has no fill
       because there is none to have: the evaporator spends it and nothing aboard makes it, which is
       why `E-RAD-WATER` is a *clamp* on how fast it may be spent rather than a flow into it
-  prop_main:         {domain: consumables, kind: stock,    unit: kg, apollo: "836-847"}
+  prop_main:
+    domain: consumables
+    kind: stock
+    unit: kg
+    apollo: "836-847"
+    # **Which tank this node *is*, declared rather than implied by an edge.** The state owed its
+    # `initial` for as long as the domain has existed, on the reasoning that "a single initial for
+    # the node would be a choice about which tank it *is* rather than a figure anything publishes"
+    # — and the only edge out of the node had already made that choice: `E-PROP-ENG` derives its
+    # rate from `vehicle.yaml:propulsion.sps.isp_s`, so the tank it drains is the SPS's.
+    carries: [sps]
+    note: >-
+      the choice the state's `initial_note` said nothing published, made explicit. Asking which
+      tanks the graph carries turned up the other half of it: `vehicle.yaml#propulsion` declares six
+      loaded tanks and the graph had stocks for four of them, so **the LM's descent and ascent
+      propellant — 10,624 kg, a third of the vehicle's propellant — was in no stock at all.**
+      `vehicle.yaml#propulsion.not_on_a_coupling_stock` names those two and why, and
+      `check_propellant_stocks` refuses a loaded tank that is neither carried nor declared
   prop_rcs:
     domain: consumables
     kind: stock
     unit: kg
     apollo: "836-847"
+    carries: [rcs_sm, rcs_cm, rcs_lm]
     preloaded: "RCS propellant is loaded at the pad and nothing in the mission refills it. The RCS load is 4.9 % of the LM's ascent budget at the tightest point, so this is the tank whose margin a crew spends first"
+    note: >-
+      all three systems at one node, and that is the right lump rather than a convenience: the RCS
+      domain models **all forty-four thrusters as one article** (`thruster_100lbf`, with
+      `vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]`), so the service the allocator commands is one
+      service, and a fleet that has spent the SM's propellant has spent the vehicle's
   pressurant_he:
     domain: consumables
     kind: stock

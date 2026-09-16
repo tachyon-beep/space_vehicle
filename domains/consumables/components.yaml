@@ -178,9 +178,23 @@ state:
     node: prop_main
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the tank split. `prop_main` is one node feeding three engines whose loads `vehicle.yaml#propulsion` declares separately (SPS 18,508 kg, LM descent 8,248, LM ascent 2,376), so a single initial for the node would be a choice about which tank it *is* rather than a figure anything publishes
+    initial: 18508
+    initial_derivation:
+      expression: sps_load
+      inputs:
+        sps_load: vehicle.yaml:propulsion.sps.mass_kg
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the SPS's own loaded mass, which is what this node *is*: `coupling.yaml#nodes.prop_main`
+        declares `carries: [sps]`, and the fact was already in the graph — the only edge out of the
+        node derives its rate from `vehicle.yaml:propulsion.sps.isp_s`, so the tank it drains is the
+        SPS's. **This entry owed an initial on the reasoning that "a single initial for the node
+        would be a choice about which tank it *is* rather than a figure anything publishes"**, and
+        the choice had been made one file over; what was missing was a declaration of it. The
+        eighteen and a half tonnes are the whole of what the node holds, and the LM's two tanks —
+        10,624 kg between them — are carried by the mission's own delta-v accounting instead, which
+        `vehicle.yaml#propulsion.not_on_a_coupling_stock` names and `check_propellant_stocks` holds
     quantum: 1.0e-4
     min_flow_per_s: 29.57
     provenance:
@@ -190,9 +204,21 @@ state:
     node: prop_rcs
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the tank split, as `prop_main`'s: `vehicle.yaml#propulsion` declares three RCS loads (SM 608 kg, CM 112, LM 288) against the one node
+    initial: 1008
+    initial_derivation:
+      expression: sm + cm + lm
+      inputs:
+        sm: vehicle.yaml:propulsion.rcs_sm.mass_kg
+        cm: vehicle.yaml:propulsion.rcs_cm.mass_kg
+        lm: vehicle.yaml:propulsion.rcs_lm.mass_kg
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the three systems' loads summed: 608 + 112 + 288 = **1,008 kg**, which is the right lump
+        rather than a convenience. The RCS domain models all forty-four thrusters as one article
+        (`thruster_100lbf`, `vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]`), so the service the allocator
+        commands is one service: a fleet that has spent the SM's propellant has spent the vehicle's,
+        and a per-system stock would be four stocks for one tank farm
     quantum: 1.0e-5
     min_flow_per_s: 0.1565
     provenance:

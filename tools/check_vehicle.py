@@ -7073,6 +7073,18 @@ def check_propulsion_bindings(root: Path, vehicle: dict[str, Any], report: Repor
                     )
 
     for key in sorted(propulsion):
+        entry = propulsion[key]
+        # **Every key under `propulsion:` is an engine, except the ones that are declarations about
+        # the engines.** The block is "one mapping per engine" and this rule is what holds it to
+        # that, so a key that declares neither a mass nor a thrust is not an engine and must not be
+        # read as an unclaimed one. `not_on_a_coupling_stock` is the case: it names the two loaded
+        # tanks no coupling stock carries, which is a statement about the block rather than a
+        # seventh engine, and reading it as one produced "an engine that exists in the budget and
+        # not on the vehicle" about a key that names no engine at all.
+        if not isinstance(entry, dict) or not (
+            {"mass_kg", "thrust_n", "thrusters"} & set(entry)
+        ):
+            continue
         if key not in claiming:
             report.refuse(
                 f"vehicle.yaml:propulsion {key}",
@@ -11738,6 +11750,135 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
             )
 
 
+def check_propellant_stocks(root: Path, coupling: dict[str, Any], report: Report) -> None:
+    """Every loaded tank is carried by a stock or declared not to be, and a carrier holds their sum.
+
+    `vehicle.yaml#propulsion` declares six loaded tanks. The coupling graph carried two stocks —
+    `prop_main` and `prop_rcs` — and **nothing joined the two lists**, which is how the LM's descent
+    and ascent propellant, 10,624 kg or a third of the vehicle's propellant, came to be in no stock
+    at all while the mass closure and the Δv budget both knew about it.
+
+    The question surfaced from the other end. `prop_main_kg` had owed its `initial` since the domain
+    landed, on the reasoning that "a single initial for the node would be a choice about which tank
+    it *is* rather than a figure anything publishes" — and the only edge out of the node had already
+    made the choice, deriving its rate from `vehicle.yaml:propulsion.sps.isp_s`. So the node declares
+    `carries: [sps]`, `prop_rcs` declares its three, and the two tanks the graph does not carry are
+    named in `vehicle.yaml#propulsion.not_on_a_coupling_stock` with the reason.
+
+    Four refusals, and the second is the one the round is for:
+
+      - a loaded engine carried by no stock **and** named nowhere is an engine in the mass closure
+        that the plant has no propellant for;
+      - a `carries` entry that is not a loaded engine of this vehicle is a stock claiming a tank
+        that does not exist;
+      - a `not_on_a_coupling_stock` entry that is also carried is a declaration contradicting
+        itself, and one that names no engine is a reason attached to nothing;
+      - **a carrier's `initial` must equal the sum of the tanks it carries**, which is the reader the
+        two derived initials have and the check that a stock's content did not drift from its list.
+
+    An `UNCONFIGURED` initial is left to the debt walk, as everywhere else.
+    """
+    vehicle = load(root / "vehicle.yaml", report) or {}
+    propulsion = vehicle.get("propulsion") or {}
+    engines = {
+        str(key): float(entry["mass_kg"])
+        for key, entry in propulsion.items()
+        if isinstance(entry, dict) and isinstance(entry.get("mass_kg"), (int, float))
+    }
+    declared_off = propulsion.get("not_on_a_coupling_stock")
+    if declared_off is not None and not isinstance(declared_off, dict):
+        report.refuse(
+            "vehicle.yaml:propulsion.not_on_a_coupling_stock",
+            f"is a {type(declared_off).__name__}, which is not a mapping of engine to reason. A "
+            "declaration of what the graph does not carry has to name each thing it exempts",
+        )
+        declared_off = {}
+    declared_off = declared_off or {}
+
+    carried: dict[str, str] = {}
+    where = "coupling.yaml:nodes"
+    for name, node in sorted(((coupling or {}).get("nodes") or {}).items()):
+        if not isinstance(node, dict):
+            continue
+        keys = node.get("carries")
+        if keys is None:
+            continue
+        if not isinstance(keys, list) or not keys:
+            report.refuse(f"{where}.{name}.carries", f"is {keys!r}; a carrier holds a list of tanks")
+            continue
+        for key in (str(k) for k in keys):
+            if key not in engines:
+                report.refuse(
+                    f"{where}.{name}.carries",
+                    f"names {key!r}, which vehicle.yaml#propulsion does not declare as a loaded "
+                    f"tank; it declares {sorted(engines)}",
+                )
+                continue
+            if key in carried:
+                report.refuse(
+                    f"{where}.{name}.carries",
+                    f"names {key!r}, which {carried[key]!r} already carries. Two stocks holding one "
+                    "tank is two levels for one quantity, and the mass closure counts it once",
+                )
+                continue
+            carried[key] = str(name)
+
+    for key in sorted(engines):
+        if key in carried or key in declared_off:
+            continue
+        report.refuse(
+            "vehicle.yaml:propulsion",
+            f"declares {engines[key]:g} kg of {key!r} loaded and no coupling stock carries it. A "
+            "tank in the mass closure that the graph has no level for is propellant the plant "
+            "cannot spend — name it in `not_on_a_coupling_stock` with the reason, or give it a "
+            "stock",
+        )
+    for key, reason in sorted(declared_off.items()):
+        if key not in engines:
+            report.refuse(
+                "vehicle.yaml:propulsion.not_on_a_coupling_stock",
+                f"names {key!r}, which is not a loaded engine of this vehicle",
+            )
+        elif key in carried:
+            report.refuse(
+                "vehicle.yaml:propulsion.not_on_a_coupling_stock",
+                f"names {key!r} as carried by no stock, and coupling.yaml:"
+                f"{carried[key]}.carries carries it",
+            )
+        elif not str(reason).strip():
+            report.refuse(
+                f"vehicle.yaml:propulsion.not_on_a_coupling_stock.{key}",
+                "gives no reason. A tank left off the graph is a decision, and the decision is the "
+                "declaration",
+            )
+
+    # And a carrier's level is the sum of what it carries.
+    consumables = load(root / "domains" / "consumables" / "components.yaml", report) or {}
+    by_node = {
+        str(state.get("node")): state
+        for state in consumables.get("state") or []
+        if isinstance(state, dict) and state.get("node")
+    }
+    for name, node in sorted(((coupling or {}).get("nodes") or {}).items()):
+        keys = (node or {}).get("carries") if isinstance(node, dict) else None
+        if not isinstance(keys, list) or not keys:
+            continue
+        state = by_node.get(str(name))
+        if state is None:
+            continue
+        initial = state.get("initial")
+        if not isinstance(initial, (int, float)) or isinstance(initial, bool):
+            continue  # the debt walk's business
+        total = sum(engines.get(str(k), 0.0) for k in keys)
+        if not agrees_with_derivation(float(initial), total):
+            report.refuse(
+                f"domains/consumables/components.yaml:state {state.get('id')}",
+                f"holds {initial} kg and coupling.yaml:{name}.carries names "
+                f"{', '.join(str(k) for k in keys)}, which load to {total:g} kg. A stock's level is "
+                "the tanks it says it is",
+            )
+
+
 def check_thermal_lumps(root: Path, report: Report) -> None:
     """A zone's time constant is its lump over its conductance, and the lump is data now.
 
@@ -14110,6 +14251,9 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_thermal_budget(root, report)
+    # And the propellant: which tanks the graph carries, which it does not, and whether a carrier's
+    # level is the sum of what it says it holds.
+    check_propellant_stocks(root, coupling or {}, report)
     # And the lumps the time constants above them are computed from: three fields and one relation,
     # where the relation used to be a sentence in each state's provenance.
     check_thermal_lumps(root, report)
