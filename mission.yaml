@@ -637,6 +637,9 @@ delta_v_budget:
     engine: sps
     configuration: csm_lm_docked
     dv_m_s: 889.2
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 357.53
     provenance:
       basis: historical
       source: "A11 Tbl 7-II: LOI-1 2,917.4 ft/s over 357.53 s, the SPS's largest single burn and the one that captures the whole docked stack"
@@ -645,6 +648,9 @@ delta_v_budget:
     engine: sps
     configuration: csm_lm_docked
     dv_m_s: 48.6
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 16.88
     provenance:
       basis: historical
       source: "A11: LOI-2 159.3 ft/s over 16.88 s, circularising the parking orbit"
@@ -653,6 +659,9 @@ delta_v_budget:
     engine: lm_dps
     configuration: lm_alone_descent
     dv_m_s: 23.3
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 30.0
     provenance:
       basis: historical
       source: "A11: descent orbit insertion 76.4 ft/s over 30 s, dropping perilune to the descent altitude"
@@ -661,6 +670,9 @@ delta_v_budget:
     engine: lm_dps
     configuration: lm_alone_descent
     dv_m_s: 2065
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 756.39
     provenance:
       basis: historical
       source: "A11 Tbl 9-V: powered descent 6,775 ft/s over 756.39 s, of which 971 ft/s horizontal and 5,550 ft/s vertical, including the hover and redesignation reserve"
@@ -669,6 +681,9 @@ delta_v_budget:
     engine: lm_aps
     configuration: lm_ascent_stage
     dv_m_s: 1850
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 434.88
     provenance:
       basis: historical
       source: "SP4029: LM ascent 6,070.1 ft/s over 434.88 s to orbit insertion. The single most irreversible burn in the mission: the ascent engine cannot throttle and there is no second attempt"
@@ -685,6 +700,9 @@ delta_v_budget:
     engine: sps
     configuration: csm_alone
     dv_m_s: 999.4
+    # the duration the source quotes, as a field rather than as a
+    # clause in the sentence it is cited from
+    burn_s: 151.4
     provenance:
       basis: historical
       source: "A11: TEI 3,279.0 ft/s actual against 3,283.2 planned, over 151.4 s, flown by a CSM that has lost the LM"

@@ -7067,6 +7067,152 @@ def check_antenna_patterns(root: Path, vehicle: dict[str, Any], report: Report) 
                 )
 
 
+def check_burn_capability(root: Path, report: Report, mission: dict[str, Any]) -> None:
+    """The burn budget the mission spends, against the burns that spend it.
+
+    `domains/propulsion/components.yaml#capability` declares the SPS's 750 s of total burn time and
+    50 qualified restarts, and its own note says why the figure is there: *"that makes 'can we fix
+    this with a burn' a question with a number behind it rather than a question with an attitude
+    behind it"*. **No tool read it**, and the block's name made that hard to see: `capability`
+    appears eight times in this file and in both other tools, all of them the *diode's*
+    `capability.snapshot` — so a sweep over the tools' own vocabulary reported the block as read.
+
+    What it had to be spent against was not a field either. The mission's burn **durations** were
+    clauses in `delta_v_budget`'s provenance — *"A11 Tbl 7-II: LOI-1 2,917.4 ft/s over 357.53 s"* —
+    so a budget existed, the figures that spend it existed, and the two were joined by nothing. The
+    durations are `burn_s` fields now.
+
+    Three rules, and the first is the one the note asks for:
+
+      - the burns on an engine **must fit inside its declared budget**, summed by the engine the
+        burn names. The units are seconds because that is what the qualification is in;
+      - a burn on one of **this vehicle's engines** with no capability entry is a debt naming the
+        seconds it flies, because the rating is unpublished rather than wrong — and a burn on an
+        engine that is *not* a component of this domain is none of this block's business, the TLI
+        burn having been flown by the S-IVB, which is not part of the vehicle at all;
+      - a burn on a budgeted engine with **no recorded duration** is a debt, because the sum is
+        then incomplete — the budget cannot be added up, which is the state two midcourse
+        corrections are in today: their durations are not published, and the mission's own note
+        accounts for them only as the 6.09 s between the three quoted SPS burns and the 531.9 s
+        Apollo 11 spent.
+
+    A budget declared `UNCONFIGURED` is left to the debt walk, which already reports it: absence is
+    the walk's business and disagreement is this rule's, and a second sentence about the same
+    missing figure is the inflation this folder has removed three times.
+    """
+    domain = load(root / "domains" / "propulsion" / "components.yaml", report) or {}
+    capability = domain.get("capability")
+    if not isinstance(capability, list) or not capability:
+        report.debt(
+            "domains/propulsion/components.yaml:capability",
+            "declares no engine budgets, so the mission's burns have no rating to be held against",
+        )
+        return
+    # The domain's own engines, which are what a budget can be about. An engine the mission burns
+    # that is not one of these is not this vehicle's: `tli` names `external_sivb`, the S-IVB stage
+    # that flew the translunar injection and stayed behind.
+    # The domain names its engines `sps`, `dps` and `aps`; the mission's budget names them `sps`,
+    # `lm_dps` and `lm_aps`. The link between the two spellings is the component's own
+    # `vehicle_keys`, which is what that field is for — so the map is read rather than guessed, and
+    # an engine the mission burns that neither spelling reaches (`external_sivb`, the S-IVB stage
+    # that flew the translunar injection and stayed behind) is not this vehicle's at all.
+    components = [c for c in domain.get("components") or [] if isinstance(c, dict)]
+    vehicle_to_component: dict[str, str] = {}
+    for component in components:
+        if component.get("class") != "engine" or not component.get("id"):
+            continue
+        cid = str(component["id"])
+        vehicle_to_component[cid] = cid
+        for key in component.get("vehicle_keys") or []:
+            vehicle_to_component[str(key)] = cid
+    ours = {str(c["id"]) for c in components if c.get("class") == "engine" and c.get("id")}
+    budgets: dict[str, dict[str, Any]] = {}
+    for entry in capability:
+        if not isinstance(entry, dict) or not entry.get("engine"):
+            report.refuse(
+                "domains/propulsion/components.yaml:capability",
+                f"declares {entry!r}, which names no engine",
+            )
+            continue
+        engine = str(entry["engine"])
+        if engine not in ours:
+            report.refuse(
+                f"domains/propulsion/components.yaml:capability {engine}",
+                f"declares a burn budget for {engine!r}, which is not an engine of this domain "
+                f"({sorted(ours)}). A rating for something this vehicle does not have is a figure "
+                "about a different vehicle",
+            )
+        if engine in budgets:
+            report.refuse(
+                f"domains/propulsion/components.yaml:capability {engine}",
+                "declares a budget for this engine twice",
+            )
+        budgets[engine] = entry
+
+    spent: dict[str, float] = {}
+    counted: dict[str, int] = {}
+    unmeasured: list[str] = []
+    unrated: list[tuple[str, str]] = []
+    for burn in mission.get("delta_v_budget") or []:
+        if not isinstance(burn, dict):
+            continue
+        named = str(burn.get("engine"))
+        engine = vehicle_to_component.get(named, named)
+        bid = str(burn.get("id"))
+        if engine not in ours:
+            # Not this vehicle's engine, so not this vehicle's budget: the burn is in the mission's
+            # delta-v accounting because it sets the trajectory, and the stage that flew it is gone.
+            continue
+        if engine not in budgets:
+            unrated.append((bid, engine))
+            continue
+        counted[engine] = counted.get(engine, 0) + 1
+        seconds = burn.get("burn_s")
+        if not isinstance(seconds, (int, float)):
+            unmeasured.append(f"{bid} ({engine})")
+            continue
+        spent[engine] = spent.get(engine, 0.0) + float(seconds)
+
+    for engine, entry in sorted(budgets.items()):
+        total = entry.get("total_burn_s")
+        where = f"domains/propulsion/components.yaml:capability {engine}"
+        burned = spent.get(engine, 0.0)
+        if not isinstance(total, (int, float)):
+            # The walk owns the unset value; this rule owns nothing to compare it to.
+            continue
+        if burned > float(total):
+            report.refuse(
+                f"{where}.total_burn_s",
+                f"declares {total} s and the mission's burns on {engine} sum to {burned:g} s. The "
+                "budget is what the engine is qualified for, so a mission that spends more than it "
+                "has is a mission whose last burn is the one that runs out",
+            )
+        restarts = entry.get("restarts_qualified")
+        if isinstance(restarts, (int, float)) and counted.get(engine, 0) > float(restarts):
+            report.refuse(
+                f"{where}.restarts_qualified",
+                f"declares {restarts} restarts and the mission flies {counted[engine]} burns on "
+                f"{engine}",
+            )
+    if unrated:
+        report.debt(
+            "domains/propulsion/components.yaml:capability",
+            f"declares no budget for {len(unrated)} burn(s) on this vehicle's own engines "
+            f"({', '.join(f'{bid} on {engine}' for bid, engine in unrated)}), so what those engines "
+            "are qualified for is not in the corpus. `lm_aps` is the case: the ascent engine's "
+            "rating is unpublished, and its 434.88 s burn is flown against nothing",
+        )
+    if unmeasured:
+        report.debt(
+            "mission.yaml:delta_v_budget",
+            f"records no `burn_s` for {len(unmeasured)} burn(s) on budgeted engines "
+            f"({', '.join(unmeasured)}), so the budget cannot be added up. Two midcourse "
+            "corrections are the case: no source reached publishes their duration, and the "
+            "mission's own note accounts for them only as the difference between the three quoted "
+            "SPS burns and the 531.9 s Apollo 11 spent",
+        )
+
+
 def check_throttle_bands(root: Path, report: Report) -> None:
     """An engine declared able to run in a band it declares it cannot run in.
 
@@ -12574,6 +12720,7 @@ def main(argv: list[str] | None = None) -> int:
     check_perception_model(documents, report)
     check_component_identity(documents, report)
     check_throttle_bands(root, report)
+    check_burn_capability(root, report, mission or {})
     check_ontology(documents, report)
     check_consumers(documents, report)
     check_argument_vocabularies(documents, report, channels)

@@ -298,11 +298,31 @@ thrust_curve:
       # --------------------------------------------------------------------------------------
 capability:
 
-  sps_total_burn_s: 750
-  sps_restarts_qualified: 50
-  dps_total_burn_s: UNCONFIGURED
-  note: >-
-    The SPS's 750 s of total burn capability is a budget the mission spends, and Apollo 11
-    spent 531.9 s of it. That makes "can we fix this with a burn" a question with a number
-    behind it rather than a question with an attitude behind it, which is the whole reason the
-    figure is here. The DPS's equivalent is unpublished.
+  # **The engine each budget is for is now a component id rather than a prefix of a key.** The
+  # block read `sps_total_burn_s` and `dps_total_burn_s`, and `mission.yaml`'s burns name their
+  # engine `sps`, `lm_dps` and `lm_aps` — so `dps` and `lm_dps` are one engine under two names, and
+  # a check that matched the key's prefix to the burn's `engine` would have had to know that. That
+  # is the divergence `vehicle_keys` exists for, and here the link is the field itself.
+
+  - engine: sps
+    total_burn_s: 750
+    restarts_qualified: 50
+    provenance:
+      basis: historical
+      source: "the SPS is qualified for 750 s of total burn time and 50 restarts; the mission's own burns are in mission.yaml#delta_v_budget"
+    note: >-
+      a budget the mission spends, and Apollo 11 spent 531.9 s of it. That makes "can we fix this
+      with a burn" a question with a number behind it rather than a question with an attitude
+      behind it, which is the whole reason the figure is here. Until this round nothing read the
+      budget and the mission's burn *durations* were sentences in `delta_v_budget`'s provenance —
+      "LOI-1 2,917.4 ft/s over 357.53 s" — so there was nothing to spend it against. The durations
+      are `burn_s` fields now and the sum is checked against this figure.
+
+  - engine: dps
+    total_burn_s: UNCONFIGURED
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        the DPS's equivalent is unpublished. The mission's own descent burn is 756.39 s, which is
+        the sum the check reports against this entry — so the vehicle knows what it spends on the
+        descent and does not know what the engine is rated for

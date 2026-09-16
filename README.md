@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 289 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 292 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 289 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 292 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **289** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **292** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **214** the plant
+pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **215** the plant
 reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
 differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
 left-hand number was itself incomplete: the domain files were walked for unset values by
@@ -7653,6 +7653,79 @@ lines carry exactly as much information as one.
 | refusals for one unparseable domain file | 102 | **98**, and one line for the parse |
 | files a structural refusal could mean | 11 | **1** |
 | tests in `tests/test_vehicle_config.py` | 212 | **214** |
+
+## A budget, the figures that spend it, and nothing joining the two
+
+`domains/propulsion/components.yaml#capability` declared the SPS's burn budget, and its own note says
+exactly why the figure is there:
+
+> The SPS's 750 s of total burn capability is a budget the mission spends, and Apollo 11 spent
+> 531.9 s of it. **That makes "can we fix this with a burn" a question with a number behind it**
+> rather than a question with an attitude behind it, which is the whole reason the figure is here.
+
+**No tool read it.** And the block's *name* is what made that hard to see: `capability` appears eight
+times in the linter and in both other tools, every one of them the diode's `capability.snapshot` — so
+a sweep over the tools' own vocabulary reported the block as read. The name was the camouflage.
+
+What it had to be spent against was not a field either. The mission's burn **durations** were clauses
+inside `delta_v_budget`'s provenance:
+
+> A11 Tbl 7-II: LOI-1 2,917.4 ft/s **over 357.53 s**, the SPS's largest single burn …
+
+So a budget existed, the figures that spend it existed, and **nothing joined them**. The durations
+are `burn_s` fields now:
+
+| burn | engine | `burn_s` | its source says |
+|---|---|---|---|
+| `loi_1` | sps | 357.53 | "2,917.4 ft/s over 357.53 s" |
+| `loi_2` | sps | 16.88 | "159.3 ft/s over 16.88 s" |
+| `tei` | sps | 151.4 | "3,279.0 ft/s actual against 3,283.2 planned, over 151.4 s" |
+| `doi` | lm_dps | 30 | "76.4 ft/s over 30 s" |
+| `powered_descent` | lm_dps | 756.39 | "6,775 ft/s over 756.39 s" |
+| `ascent` | lm_aps | 434.88 | "6,070.1 ft/s over 434.88 s" |
+
+**The three SPS burns sum to 525.81 s of the 750**, and Apollo 11's own total is 531.9 s — the 6.09 s
+between them being the two midcourse corrections, whose durations no source reached publishes.
+
+### The fix
+
+The block becomes a list of engines with their budgets — `- engine: sps` / `total_burn_s: 750` /
+`restarts_qualified: 50` — so the engine is a **component id** rather than a prefix of a key name,
+and `check_burn_capability` joins it to the mission with three rules:
+
+- the burns on an engine **must fit inside its declared budget**, summed by the engine the burn
+  names — a mission that spends more than it has is a mission whose last burn is the one that runs
+  out;
+- a burn on one of **this vehicle's engines** with no capability entry is a **debt** naming the
+  seconds it flies, because the rating is unpublished rather than wrong: `lm_aps` is the case, and
+  its 434.88 s ascent burn is flown against nothing;
+- a burn on an engine that is **not a component of this domain** is none of the block's business —
+  the TLI burn names `external_sivb`, the S-IVB stage that flew the translunar injection and stayed
+  behind.
+
+**The join reads `vehicle_keys` rather than guessing.** The domain names its engines `sps`, `dps`
+and `aps`; the mission names them `sps`, `lm_dps` and `lm_aps`. The component's own `vehicle_keys`
+is the declared link between the two spellings, which is what that field is for — and it is also
+what tells the S-IVB apart from the vehicle's own engines, because no component claims it.
+
+### What the round got wrong on the way
+
+The first version of the coverage rule **refused both edges of the same distinction**: it refused
+`external_sivb` for having no budget (a stage this vehicle does not have does not need one) and it
+refused `lm_aps` too, where the truth is that the rating is *unpublished* — a missing value, which
+this corpus reports as a debt rather than as a fault. The rule is now "a debt where the engine is
+ours and unrated, silence where it is not ours at all", and the difference is the whole point of the
+block existing.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **292** — two owed budgets and two unmeasured burns |
+| `UNCONFIGURED` scalars | 214 | **215** — the DPS entry's own `basis` |
+| burn durations declared as fields | 0 | **6** |
+| engines with a declared burn budget | 0 of 3 | **2 of 3**, the third owed |
+| tests in `tests/test_vehicle_config.py` | 214 | **215** |
 
 ## The invariants, and which of them are enforced
 
