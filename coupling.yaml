@@ -1486,7 +1486,14 @@ edges:
     to: coolant_supply_t
     kind: algebraic
     sensitivity: {value: UNCONFIGURED, unit: "K per W", basis: UNCONFIGURED, at: nominal,
-    note: "rejection is a function of coolant temperature, not a constant. This edge and E-COOL-COOL below form an algebraic loop that is solved to consistency within the tick rather than delayed."}
+    note: "rejection is a function of coolant temperature, not a constant, and the edge is
+    declared here in that direction because what the plant needs is the temperature the
+    radiator settles at given what it is rejecting. The loop the sentence above describes
+    needs a second edge back from coolant_supply_t into radiator_reject, and there is none:
+    an earlier version of this note named `E-COOL-COOL` as its partner, and no edge of that
+    name has ever existed. So the two-way dependence is stated in prose and carried by one
+    edge, which is why `C-RAD-COOL` is gone rather than declared and why this edge's `value`
+    is the debt: what belongs here is the rejection law and not a slope."}
   - id: E-AMP-LOAD
     from: link
     to: bus_a
@@ -2014,18 +2021,6 @@ cycles:
         carry hysteresis, and the recovery-minus-assert gap must exceed the load delta the
         transition itself causes.
 
-  - id: C-RAD-COOL
-    name: "radiator rejection versus coolant temperature"
-    members: [E-RAD-THERM, E-WATER-RAD]
-    back_edge: null
-    delay_ticks: 0
-    algebraic: true
-    note: >-
-      Not a delayed cycle but a genuine algebraic loop: rejection is a function of coolant
-      supply temperature and the supply temperature is a function of rejection. Solve to
-      consistency within the tick at t, commit at t+dt. Declared here so the scheduler knows
-      to iterate rather than to order.
-
   - id: C-BAT-THERMAL
     name: "battery temperature versus available capacity"
     members: [E-PLATE-BAT, E-BAT-BUS, E-BUS-PUMP, E-PUMP-COOL, E-COOL-TRANSPORT, E-TRANSPORT-PLATE]
@@ -2098,9 +2093,11 @@ cycles:
       load within the tick; and the link's signal-to-noise ratio is a consequence of both. So
       `comms` precedes `power` in the schedule, the load is known before the bus is solved, and
       the link reads the bus voltage as it stood one tick ago. Twenty milliseconds of lag on a
-      stiff 28 V bus is not a modelling compromise — and the alternative, an algebraic solve of a
-      two-node loop across two domains, is what `C-RAD-COOL` does *within* one domain and cannot
-      do across two.
+      stiff 28 V bus is not a modelling compromise — and the alternative, solving six members
+      across two domains to consistency inside one tick, is a different proposition from the
+      two-edge algebraic pair a domain can close on its own. `C-RAD-COOL` was declared as that
+      pair and was deleted for naming a path rather than a loop, so the small case is not
+      available either until the radiator's reverse edge lands.
     stability:
       hysteresis_required: false
       note: >-
@@ -2452,9 +2449,9 @@ open_debts:
   - "Every thermal time constant and conductance (tau on E-PUMP-COOL, E-TRANSPORT-PLATE, E-PLATE-*). thermal_diode.md:965 declares them all UNSPECIFIED and refuses to infer them."
   - "Loop transit delay in ticks (E-COOL-TRANSPORT). Needs loop volume and flow; apollo_diode.md:97 gives ~24 gal/h."
   - "Throttle-to-thrust law for main propulsion (E-PROP-ENG). Isp and mass flow are supplied (vehicle.yaml#propulsion, Apollo 11 tables) and the RCS rate edge is now closed at 2843.9 N per kg/s; what main propulsion still owes is the shape — build-up, tailoff and the descent engine's 65-92.5 % non-operating region, which `domains/propulsion/` refuses to interpolate across."
-  - "Inertia tensor and centre of mass (E-RCS-DYN, E-GNC-RCS). The masses are supplied; the rotational properties are not, and without them the vehicle cannot tumble. Landing `domains/rcs/` turned this from one unknown into two named ones: the inertia, and the thrusters' geometry — forty-four unit thrust directions and lever arms, which are what the allocator's wrench matrix is built from."
+  - "Inertia tensor and centre of mass, owed to `E-RCS-DYN` — and the thrusters' geometry, owed to `domains/rcs/`. The masses are supplied; the rotational properties are not, and without them the vehicle cannot tumble. Landing `domains/rcs/` turned this from one unknown into two named ones: the inertia, and forty-four unit thrust directions with their lever arms, which are what the allocator's wrench matrix is built from. The guidance-to-valve edge was named here as a third and does not belong: it carries a commanded selection one for one from the `guidance` service node, and the matrix is the allocator's rather than that edge's."
   - "Per-edge crisis-point gains for the power->thermal->power loop (E-BUS-PUMP especially). Required before the fidelity closure means anything at the crisis operating point."
-  - "A `regimes` table for the four remaining bus-driven edges (E-BUS-GNC, E-BUS-INST, E-BUS-COMM) and E-BAT-BUS's availability half. `regimes:` now exists and is enforced: a `discrete` coupling leaving physical equipment must declare one, `E-BUS-RCS` and `E-STRUCT-PLATE` are converted, and `E-GNC-ENG`/`E-GNC-RCS` closed outright by promoting guidance to a service node — they had been coupling from `nav_state`, the navigation solution, to ask a question only a decision can answer. A consumer's draw is constant inside the 24-32 V envelope and then stops; that envelope is already the undervoltage ladder in domains/power/profiles.yaml, so a `1 per V` here would model a load that grows without bound as the bus sags, which is the opposite of what a load does. E-GNC-RCS is not a scalar under any form — rcs_dode.md:685-693 maps a wrench to thruster pulses through B = [F_i d_i ; r_i x F_i d_i], so its sensitivity is a matrix over forty-four thrust directions and lever arms that are themselves unpublished. The closing move is a `regimes:` table on a discrete edge whose bands are checked against the thresholds that already exist, which would connect the coupling graph to the ladders it currently ignores."
+  - "A `regimes` table for the four remaining bus-driven edges (E-BUS-GNC, E-BUS-INST, E-BUS-COMM) and E-BAT-BUS's availability half. `regimes:` now exists and is enforced: a `discrete` coupling leaving physical equipment must declare one, `E-BUS-RCS` and `E-STRUCT-PLATE` are converted, and the two `guidance` command edges want none at all — promoting `guidance` to a service node turned them into commands, which the command exception covers without a table, where before they coupled from `nav_state`, the navigation solution, to ask a question only a decision can answer. A consumer's draw is constant inside the 24-32 V envelope and then stops; that envelope is already the undervoltage ladder in domains/power/profiles.yaml, so a `1 per V` here would model a load that grows without bound as the bus sags, which is the opposite of what a load does. The closing move for the four is a `regimes:` table on a discrete edge whose bands are checked against the thresholds that already exist, which would connect the coupling graph to the ladders it currently ignores."
 
   # Round 49 found this one by reading the node's own note: it promised a debt in `open_debts` and
   # there was none, so the only record of 324 man-hours of LiOH was the sentence saying they were

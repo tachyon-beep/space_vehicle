@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Schedule the faults a run will suffer, from the policies the domains already declare.
 
-The vehicle has 118 declared faults and, until this file, **no way to fail**. Every domain carries
+The vehicle has 128 declared faults and, until this file, **no way to fail**. Every domain carries
 a `fault_policy.yaml` naming what can break, what it looks like, what the service does about it
 without asking, and how it seeds — and nothing read the seeding. A challenge whose vehicle never
 breaks is a piloting exercise, and the 118 entries were the adversity sitting unused.
 
 Three things make this a schedule rather than a dice roll:
 
-  - **the hazard rates are the domains' own.** 58 faults seed on `{hazard, unit: per_h}` and the
+  - **the hazard rates are the domains' own.** 66 faults seed on `{hazard, unit: per_h}` and the
     rate is a number a domain argued for in its provenance, not one chosen here.
   - **the streams are name-keyed**, per `simulator-design.md` §3.4: "Every stream derives by name:
     `(master_seed, domain, component_id, purpose)`. ... Name-keyed means **adding a component is not
     class-breaking**." That is the property `--check` tests, and it is the difference between a
     schedule a prior run can be compared against and one that silently changes when a domain
     lands.
-  - **the conditional faults are reported as armed and not scheduled.** 60 of the 118 seed on
+  - **the conditional faults are reported as armed and not scheduled.** 62 of the 128 seed on
     `on_demand_p` or `coupled_to` rather than on a rate, because they can only occur when a trigger
     holds — "any fault that removes a publisher's input without removing the publisher", "any
     redundant group with two or more live members". Sampling those from a rate would be inventing a

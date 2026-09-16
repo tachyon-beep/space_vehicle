@@ -520,5 +520,5 @@ open_debts:
   - "The qualified minimum firing time for the 100 lbf thruster, and with it t_max_on and the duty cycle. Not in any source reached; bounded rather than defaulted (header), and RCS-11 is the failure mode of getting it wrong."
   - "Thrust rise and tailoff time constants. The asymmetry between them is what a total-impulse gauge misreads, and no source gives either."
   - "Inertia tensor and centre of mass, owed by `vehicle.yaml` and owed *to* this domain before the deadband, the allocator's wrench matrix and E-RCS-DYN can exist. Three of this domain's twelve states are waiting on it."
-  - "Thruster geometry: the unit thrust direction and lever arm of each of the 44 thrusters. Without it the allocator has no B matrix (rcs_dode.md:685-693) and E-GNC-RCS has no sensitivity."
+  - "Thruster geometry: the unit thrust direction and lever arm of each of the 44 thrusters. Without it the allocator has no B matrix (rcs_dode.md:685-693)."
   - "The mission's RCS propellant allocation. `rcs.total_impulse_ns` can be checked against the load (capability.impulse_capacity) but the mission declares no RCS budget, so the three systems still carry the linter's 'no mission burn' note while their loads are flown by attitude control, which no budget line can price."

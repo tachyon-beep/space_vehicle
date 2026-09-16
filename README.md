@@ -12,14 +12,14 @@ attached, so that a plant can be built against them and a run can be interpreted
 
 | File | What it is |
 |---|---|
-| `plant.md` | The core contract: what `step()` is, the six integrator classes, determinism, the event queue, and what the plant may never do. |
+| `plant.md` | The core contract: what `step()` is, the seven integrator classes, determinism, the event queue, and what the plant may never do. |
 | `vehicle.yaml` | Globals: the frame registry and the four scalar conventions, environment, configurations and their mass closure, propulsion, consumable loads, thermal zones, antennas. |
 | `mission.yaml` | The profile: eight phases summing to 192.0 h, the ten-posture execution machine, the freshness manifest, the derived lunar occultation, MET epoch, crew, the Δv budget, objectives, the three scenario postures. |
-| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, six declared cycles and the fifteen failure chains. The linter derives the 39-node tick order from it. |
+| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, seven declared cycles and the fifteen failure chains. The linter derives the 57-node tick order from it. |
 | `presentation.yaml` | The vehicle's side of the frozen window: the epistemic mapping, the six files, the frame envelope, the mirror and its bound, the ring's cadence classes, and which of `diode_probe.py`'s twelve checks the configuration satisfies. |
 | `channels.yaml` | The point dictionary: 148 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound, plus the registry's own `coverage` block. |
 | `domains/<name>/` | One landed subsystem: `components` · `points` · `profiles` · `commands` · `fault_policy`. |
-| `tools/check_vehicle.py` | The linter. `--order` prints the derived 39-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
+| `tools/check_vehicle.py` | The linter. `--order` prints the derived 57-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
 | `tools/generate_help.py` | Emits the vehicle's `HELP.md` from the command registries — §8's only place a verb name may appear, so it is generated rather than written. |
 | `tools/plant.py` | A **reference plant**: loads the world from the configuration, builds the tick order, emits a frame, and runs until it reaches something it cannot compute — where it names what is missing instead of guessing. `--readiness` prints the build order. |
 
@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 294 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 290 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 294 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 290 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,25 +184,27 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **294** is every obligation the linter can name,
-prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
-the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
-transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
-pack-voltage state, and the missing charging efficiency, and the pump-speed conversion). The **215** the plant
-reports is narrower: only literal `UNCONFIGURED` scalars it would have to compute with, so the two
-differ by exactly the obligations that are not yet a field anywhere — and until round 46 the
-left-hand number was itself incomplete: the domain files were walked for unset values by
-`check_domain` and the coupling graph by its edge walk, so every literal `UNCONFIGURED` was counted
-*except the eleven in the two files nothing walks*. `mission.yaml`'s initial position, velocity and
+Two counts, and the difference is deliberate. The **290** is every obligation the linter can name:
+**133** literal `UNCONFIGURED` scalars and **157** prose obligations — the sentences in the
+`open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
+law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
+the missing charging efficiency, the pump-speed conversion). The **215** the plant
+reports is a *different* count rather than a smaller one, and the difference is which files are
+walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
+`coupling.yaml` included, so its 215 is the linter's 133 **plus** the graph's unset edge
+sensitivities, which the linter reports against the edge they belong to instead of against a
+top-level path. The headline number is the debt count, and until round 46 the left-hand number was
+itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
+graph by its edge walk, so every literal `UNCONFIGURED` was counted *except the eleven in the two
+files nothing walks*. `mission.yaml`'s initial position, velocity and
 state-vector basis, and `vehicle.yaml`'s three minimum impulse bits, the LM sublimator's rejection
 and water consumption and its radiators — two of them named in a prose `open_debts` entry
-somewhere else, which is how they stayed plausible. The headline number is the debt count, so the
-omission was invisible by construction. Counting the graph's seven
+somewhere else, which is how they stayed plausible. Counting the graph's seven
 took them from being read by nobody to being refusals under `--strict`, which is where a debt that
 is only displayed stops being a debt.
 
-`domains/power/` carries a 25-load inventory with inrush currents and shed classes, nine
-states with their integrator classes, thirteen thresholds, five verbs and twelve faults. Two
+`domains/power/` carries a 25-load inventory with inrush currents and shed classes, and it
+declares 13 states, 17 thresholds, 5 verbs, 12 faults. Two
 things in it are worth reading rather than skimming:
 
 - **The load-shed ladder is re-anchored.** `review-findings.md` recommends generalising
@@ -215,7 +217,7 @@ things in it are worth reading rather than skimming:
   observable, because such a fault cannot be diagnosed.
 
 `domains/thermal/` pays the debt `thermal_diode.md:965` created when it refused to infer a
-single TCS constant. Eleven states, eighteen thresholds, five verbs, eleven faults — and the
+single TCS constant. It declares 20 states, 17 thresholds, 5 verbs, 11 faults — and the
 parameters are **derived** wherever a published geometry plus a standard material property
 determines them, with the relation stated so the linter can disagree:
 
@@ -234,8 +236,8 @@ determines them, with the relation stated so the linter can disagree:
 `events_diode.md` is labelled "Structural, Pressure, and Sequential Events" and contains **no**
 staging, pyro, hatch, docking, jettison, latch or separation event — the words occur zero times —
 while describing modal and spectral health monitoring that `apollo_diode.md:753` explicitly rules
-out. So the taxonomy is authored rather than extracted. Eight states, eleven thresholds, six
-verbs, eleven faults, and a five-entry **one-way event taxonomy** that records each irreversible
+out. So the taxonomy is authored rather than extracted. It declares 10 states, 9 thresholds, 6
+verbs, 11 faults, and a five-entry **one-way event taxonomy** that records each irreversible
 action with its predecessor configuration, its consequence in terms of what the vehicle *becomes*,
 and the channels that would reveal the change.
 
@@ -248,9 +250,9 @@ must declare `requires_arm: true`, and the linter refuses one that does not — 
 are the vehicle's only two-step verbs (C-16: a burn is interruptible, so requiring arm/commit for
 one adds a delay rather than a safety).
 
-`domains/eclss/` is the fifth, and the one where a fault has minutes rather than hours.
-Twelve states — four conserved gases in each of **two** compartments — thirteen thresholds, six
-verbs, eleven faults. Three things in it are worth reading:
+`domains/eclss/` is the one where a fault has minutes rather than hours.
+It declares 16 states, 20 thresholds, 6 verbs, 21 faults — four conserved gases in each of
+**two** compartments. Three things in it are worth reading:
 
 - **The atmosphere is modelled as gas masses, not as a pressure.** Pressure is `nRT/V`, so a
   cabin that heats up gains pressure without gaining gas. A leak diagnosis built on a pressure
@@ -267,8 +269,8 @@ verbs, eleven faults. Three things in it are worth reading:
   equalise in between. Which one is crewed is a mission-phase fact, so it comes from
   `mission.yaml` rather than from the domain.
 
-`domains/propulsion/` is the fourth: ten states including three engine state machines with
-minimum on and off times, eleven thresholds, six verbs, eleven faults. It is the domain where
+`domains/propulsion/` declares 10 states, 12 thresholds, 6 verbs, 11 faults, including three
+engine state machines with minimum on and off times. It is the domain where
 the mission's Δv stops being a budget and starts being spent, and it closes conflict C-12 —
 `prop.accumulated_dv_m_s` had no producer and no consumer until `set_burn_cutoff` and
 `prop.cutoff_mode` existed. Two things in it are worth reading:
@@ -282,8 +284,9 @@ the mission's Δv stops being a budget and starts being spent, and it closes con
   quantity that would reveal it — `apollo_diode.md:336` — and the corroboration has to come
   from an accelerometer outside the domain.
 
-`domains/consumables/` is the third and the most consequential, because it is where the
-experiment's two structural decisions become code:
+`domains/consumables/` is the most consequential domain, because it is where the
+experiment's two structural decisions become code. It declares 10 states, 16 thresholds, 3
+verbs, 11 faults, and three things in it are worth reading:
 
 - **The ledger pair is three channels, not one number.** `Δ_recon = observed − ledger` is
   published *with both of its terms*, because a residual alone is a diagnosis and
@@ -316,11 +319,11 @@ delay *is* its history, so there is now a seventh class — and the linter refus
 name rather than letting it default into a lag with a long time constant. That is the mechanism
 working.
 
-`domains/rcs/` is the eighth, and it is the domain where the corpus's best document had to be
+`domains/rcs/` is the domain where the corpus's best document had to be
 argued with rather than ported. `rcs_diode.md` is the strongest engineering artifact in the
 sixteen thousand lines and its central claim is architectural (`:9`): **expose RCS/ACS as a
-trusted attitude-and-wrench execution service, not as a remote thruster-firing bus.** Thirteen
-states, ten thresholds, nine verbs, eleven faults, and three things in it are worth reading:
+trusted attitude-and-wrench execution service, not as a remote thruster-firing bus.** It declares
+13 states, 11 thresholds, 9 verbs, 11 faults, and three things in it are worth reading:
 
 - **The vehicle's one unpublished constant, bounded instead of guessed.** No source reached gives
   a minimum firing time for the 100 lbf thruster — the only figure in the corpus is a Voyager
@@ -365,9 +368,9 @@ open and is now precise about why: the allocator does not map a radian to a valv
 wrench through `B = [Fᵢdᵢ ; rᵢ × Fᵢdᵢ]`, so what that edge needs is forty-four thrust directions and
 lever arms plus the inertia tensor — one artifact, and the same one `E-RCS-DYN` is waiting on.
 
-`domains/crew/` is the seventh, and it is the one that decides what the experiment actually
-measures. It carries no physics at all: five states, ten points, nine thresholds, four verbs,
-seven faults. What it carries is the **display contract** — the third argument of
+`domains/crew/` is the one that decides what the experiment actually
+measures. It carries no physics at all: 7 states, 10 points, 9 thresholds, 4 verbs, 7 faults.
+What it carries is the **display contract** — the third argument of
 `review-findings.md` #4's perception function, `(full_truth, crew_position, display_contract) →
 perceivable_subset`, which the design claimed `crew_diode.md` supplied and which that document
 does not contain (`crew_diode.md:42`: display topology was not supplied). Three things in it are
@@ -3477,7 +3480,7 @@ So: block mappings, always. A `provenance` is written as a block, never as `{…
 a third more lines in the files where components are dense, and it removes a whole class of fault
 that produced a worse failure than the one it caused.
 
-`domains/avionics/` is the ninth, and it is the domain that attacks the experiment rather than the
+`domains/avionics/` is the domain that attacks the experiment rather than the
 mission. `corpus-review.md` §1 dismisses the document it comes from in one line — "an aircraft
 avionics ICD template: ARINC 429/664, GNSS, elevons, DO-178C" — and the dismissal of the *vehicle*
 is right (C-15 prunes the GNSS and the aerosurfaces exactly as it pruned reaction wheels). The
@@ -3512,7 +3515,7 @@ and four close gaps nothing else in sixteen thousand lines closes:
   disagreement stands — `apollo_diode.md:333`'s "a single discrepant switch must not condemn a
   thruster" generalised from pressure switches to every redundant group on the vehicle.
 
-Thirteen states, fourteen points, eleven thresholds, four verbs, eleven faults, and the narrowest
+It declares 13 states, 14 points, 13 thresholds, 4 verbs, 11 faults, and the narrowest
 verb surface on the vehicle — because this is the one domain whose commands change *what the fleet
 can see*. The three refusals at the bottom of its `commands.yaml` are therefore the most important
 entries in it: `set_sensor_good`, `override_stale_limit` and `clear_drift_monitor` are each a way
@@ -3526,13 +3529,13 @@ rather than a synthesized single health score." So the aggregate is refused on t
 rather than left open: apollo declines it, `design.md` §8 refuses to publish diagnoses, and it is
 not derivable from the published channels without a weighting nobody could disagree with.
 
-`domains/comms/` is the tenth, and it is the one domain whose subject is **the fleet's own
+`domains/comms/` is the one domain whose subject is **the fleet's own
 ability to observe**. `apollo_diode.md:901` is the sentence it is built around: "when
 communications degrade, the simulator should actually have to choose which data arrives. Do not
 merely set `comm.degraded=true` while delivering every telemetry field normally." Every other
 domain models a quantity; this one models a constraint on observation, and it is the only place
-in the vehicle where the experiment's epistemology has a bandwidth. Ten states, ten thresholds,
-five verbs, eleven faults, and four things worth reading:
+in the vehicle where the experiment's epistemology has a bandwidth. It declares 10 states, 9
+thresholds, 5 verbs, 11 faults, and four things worth reading:
 
 - **The blackout is derived, planned, and deliberately not alarmed.** The Moon occults the Earth
   whenever the vehicle is within `arcsin(R_moon / r_orbit)` of the anti-Earth direction: a
@@ -3572,15 +3575,15 @@ than a deferral, since an identity relation has a value and it is 1.0. The fix m
 distinction visible: the edge is the geometry, and `comm.hga_pointing_error_deg` is the residual
 after the gimbal compensates.
 
-`domains/gnc/` is the eleventh and last, and it is the domain that had to be pruned hardest
+`domains/gnc/` is the domain that had to be pruned hardest
 before anything could be kept. C-15 is blunt: `gnc_diode.md` is written for a different vehicle
 class. Gone are the reaction wheels, CMGs, magnetorquers, momentum dump, GNSS, LiDAR,
 terrain-relative navigation and aerosurfaces — and with them the QP control allocator and the
 quaternion feedback law, both of which are `domains/rcs/`'s on a vehicle whose attitude is RCS
 only. What survives is the **navigation** half, and it is real mathematics: an error-state EKF
 with a Joseph-form covariance update, a fifteen-state error vector, a quintic trajectory segment
-with exact coefficients, and two state machines. Twelve states, seven thresholds, five verbs,
-eleven faults.
+with exact coefficients, and two state machines. It declares 12 states, 9 thresholds, 5 verbs,
+11 faults.
 
 Four things in it are worth reading:
 
@@ -8111,7 +8114,197 @@ The debt count not moving is the second time in four rounds: this is a check tha
 wrong thing rather than a value that was missing, and the fix is a field the corpus already had on
 two of the six zones that needed it.
 
+## The status board's own figures had no reader, and all ten per-domain clauses had drifted
+
+`test_the_readme_status_matches_the_tools` was written three rounds ago because three rounds of
+structural work had moved the state, node and debt counts while the README kept the old ones. It
+worked. It pinned the *totals* — channels, states, scheduled nodes, debts, the four build-order
+buckets — and every one of them has been right since. **What it could not do was read a figure it
+had not been told about**, and there were twenty of those, in three shapes: three in the front
+table, ten in the per-domain paragraphs, and seven in declarations that are not status figures at
+all — two in `tools/plant.py`, three in `tools/faults.py` and two in `channels.yaml`'s own census of
+its `range_kind` field.
+
+The first shape is the front table, which describes the folder to a reader who has just opened it.
+It called `plant.md`'s integrator classes **six** — a number the file itself corrected to seven
+when the first transport delay landed, because a delay is not a lag — called `coupling.yaml`'s
+cycles **six** against eight, and gave the tick order as **39 nodes** against the linter's 57. The
+third is the worst of the three: `plant.md:71` makes the total order a deliverable and the schedule
+was printed by `--order` on every run, so the figure was one command away from anybody who doubted
+it, and it was wrong by eighteen.
+
+The second shape is the per-domain paragraphs, and here the count is exact: **ten clauses, ten
+wrong.**
+
+| domain | states | thresholds | verbs | faults | what the domain declares |
+|---|---:|---:|---:|---:|---|
+| power | 9 → **13** | 13 → **17** | 5 | 12 | 13 / 17 / 5 / 12 |
+| thermal | 11 → **20** | 18 → **17** | 5 | 11 | 20 / 17 / 5 / 11 |
+| structure | 8 → **10** | 11 → **9** | 6 | 11 | 10 / 9 / 6 / 11 |
+| eclss | 12 → **16** | 13 → **20** | 6 | 11 → **21** | 16 / 20 / 6 / 21 |
+| propulsion | 10 | 11 → **12** | 6 | 11 | 10 / 12 / 6 / 11 |
+| rcs | 13 | 10 → **11** | 9 | 11 | 13 / 11 / 9 / 11 |
+| crew | 5 → **7** | 9 | 4 | 7 | 7 / 9 / 4 / 7 |
+| avionics | 13 | 11 → **13** | 4 | 11 | 13 / 13 / 4 / 11 |
+| comms | 10 | 10 → **9** | 5 | 11 | 10 / 9 / 5 / 11 |
+| gnc | 12 | 7 → **9** | 5 | 11 | 12 / 9 / 5 / 11 |
+| consumables | *none stated* | | | | 10 / 16 / 3 / 11 |
+
+The verbs column is right in all ten, which is the tell rather than a comfort: a verb is a verb
+because a `commands.yaml` has an entry for it, and the count was written when the domain landed and
+never re-read. States grew as states were added — thermal's from eleven to twenty as six zones and
+their equilibria arrived, eclss's from twelve to sixteen when the LM cabin gained its own four gases
+and structure's from eight to ten when `configuration` and `arm_state` landed — and no sentence
+moved. **Nine of the ten paragraphs also stated a landing ordinal** — "is the fourth", "is the
+eleventh and last" — and those were a claim about the order the domains were written in that no file
+records and that contradicts the order the paragraphs themselves appear in (rcs is called the
+eighth and is the seventh paragraph; crew is called the seventh and is the eighth). They are gone.
+An ordinal that nothing derives is not history, it is a figure with no reader wearing a word.
+
+The third shape is in two tools' own docstrings and one registry census. `tools/faults.py` said the
+vehicle has **118** declared faults, of which **58** seed on a hazard and **60** are conditional;
+the domains declare **128**, **66** and **62** — ten domains landed faults after the sentence was
+written and the sentence never moved. `tools/plant.py` said **294** declared debts in two places.
+And `channels.yaml`'s own entry arguing that the `range_kind` assignments are derived gave the
+census as **57 channels, 43 `band`, 14 `scale`** against a registry carrying **58** and **44**.
+
+### What was done about it
+
+Every figure now has a reader in `tools/check_vehicle.py`, which is where a defect has to be refused
+rather than mentioned:
+
+- **`check_readme_figures`** derives the method count from `METHODS`, the cycle count from
+  `coupling.yaml`, the node count from the schedule the linter itself just derived, and each
+  domain's states, points, thresholds, verbs and faults from that domain's five files. It refuses a
+  figure that disagrees, a domain whose paragraph carries **two** different clauses (one domain
+  contradicting itself is the defect the single clause form exists to prevent), and a domain whose
+  paragraph carries **none** — because a claim nobody can read is the next round's finding, and
+  consumables had been stating no counts at all.
+- **The clause form is fixed**: `N states, [N points, ]N thresholds, N verbs, N faults`, in digits,
+  in one order, so that it can be parsed rather than admired. Prose wrapping is *not* a claim, so the
+  reader flattens whitespace before matching: the first version refused every domain in the file
+  because the clauses were hard-wrapped at 100 columns, which is a check failing for a reason that is
+  not the defect.
+- **`check_tool_docstrings`** holds `faults.py`'s three figures against `domains/*/fault_policy.yaml`
+  with the predicate the scheduler uses (`hazard is None` for the conditional half), so the docstring
+  and `--list` cannot disagree. `plant.py` had met this and solved it by removing its figures
+  entirely, on the reasoning that "a figure written into this docstring has no reader"; these stay,
+  because the size of the fault corpus and its split is worth a reader knowing, and a reader is now
+  cheap.
+- **`check_range_kind_census`** sits beside `check_range_kinds`, which reads the assignments
+  themselves, and counts the registry against the sentence that describes it.
+
+### Four declarations that had answered themselves, and one that was never true
+
+The drift was not only arithmetic. Reading the `open_debts` lists for the shape this folder keeps
+finding — *a debt that was answered and left standing* — turned up four declarations that disagreed
+with other declarations about the same thing:
+
+| declaration | what it said | what was true |
+|---|---|---|
+| `mission.yaml` phase `descent` | "names no configuration holding `['csm']`, so a crew member whose default station is there cannot be placed" | `also_present: [csm_alone]` places her, and `plant.py --crew` had been placing her since the field landed |
+| `mission.yaml` phase `surface` | the same | the same |
+| `mission.yaml:open_debts` | "the lunar occultation comms blackout is **modelled** and no longer a debt" | answered, still counted, and its second half restated the per-phase *sequence* debt three entries above it — one obligation declared twice in one list and counted twice |
+| `mission.yaml:open_debts` | "`transition_evidence` … **Resolved against the vehicle rather than left open**" | recorded in full in this file's own round log, still counted |
+| `coupling.yaml:cycle C-RAD-COOL` | "a genuine algebraic loop … solved to consistency within the tick" | its two members chain `water_cooling -> radiator_reject -> coolant_supply_t`: a **path**, not a loop |
+
+**The first two are the sharpest, because two tools disagreed about one field and each was
+internally consistent.** `tools/plant.py --crew` builds a phase's crew-holding set from
+`configurations` **joined with** `also_present`, which is exactly what the field is for: during
+`descent` and `surface` the phase is about the LM and the CSM is waiting in lunar orbit with the CM
+pilot alone aboard it. The linter's crew check read `configurations` alone, so it went on reporting
+two debts naming the CSM as missing — debts the vehicle had already answered, which is worse than
+debts it had not, because the count is the headline and the entry names the wrong thing. The check
+now reads the same two keys, and `test_the_linter_and_the_plant_read_one_crew_placement_declaration`
+holds them together: with the declaration removed the linter must report the phase and the plant must
+report the same person unplaced, and with it present neither may say anything.
+
+`C-RAD-COOL` was the more interesting failure. **The closure check needs a `back-edge` to walk back
+to, so it skips a cycle that declares none — and an algebraic loop declares none by definition**,
+because there is no delay to carry. So the one cycle that could not be closure-checked was the one
+that was not a cycle, and the absence of a back-edge read as a property of the loop rather than as
+the reason the check did not run. That is `review-findings.md`'s *a check that cannot run is not a
+check that passed* arriving at the check that exists to police cycles. There are now two rules: the
+existing one for a back-edge that does not close, and a new one that a cycle entry with no back-edge
+must still have members that close on each other — tested by reconstructing `C-RAD-COOL` verbatim,
+because building the fixture by corrupting a *working* loop removes a back-edge from the schedule as
+well and gets refused for that instead. The first version of that test did exactly that and asserted
+on the wrong refusal.
+
+### Five debts about one edge that had stopped owing, and the key nobody read
+
+`E-GNC-RCS` carries `1.0 mode per mode`, `basis: derived`, from the `guidance` service node — it has
+since the round that promoted `guidance` off the `internal` sentinel — and its own note ends "and
+this edge is now closed without them". Five `open_debts` entries across four files said the
+opposite:
+
+- `vehicle.yaml` and `domains/rcs/components.yaml`: the forty-four thrust directions are owed "so
+  without them **E-GNC-RCS has no sensitivity**".
+- `domains/gnc/components.yaml`: the plume keep-out shares one unknown with "what stops **E-GNC-RCS
+  being a scalar** — its sensitivity is a matrix".
+- `coupling.yaml`, twice: naming it in the inertia-and-centre-of-mass debt, and "**E-GNC-RCS is not a
+  scalar under any form**" in the `regimes` debt — in the same sentence that said the edge had been
+  "closed outright".
+
+The geometry *is* owed. It is owed to `E-RCS-DYN` and to the allocator in `domains/rcs/`, which is
+what the edge's own note says: a matrix is not a missing sensitivity on *this* edge, it is the
+content of a different one. So the two `coupling.yaml` entries and the three domain debts were
+corrected, the `regimes` entry lost a clause that argued both sides of its own sentence, and
+`check_debts_are_still_owed` refuses both shapes: an entry that says its own obligation is met
+(`no longer a debt`, `Resolved against`, `closed outright`), and an entry that names a coupling edge
+as owing a sensitivity the edge carries.
+
+**That second rule did not fire the first time it was run, and the reason is the round's own
+finding.** It read `edge["note"]`, and an edge's long note lives *inside* `sensitivity:` — the split
+is not a convention anybody chose, the short note sits beside `from`/`to`/`kind` and the argument for
+the value went one level down. `E-GNC-RCS`'s "is now closed without them" is at `sensitivity.note`,
+so the rule stayed silent on the one edge it was written for. `edge_prose` now reads both keys and
+deliberately not `relation`, which is full of "the closed loop" and "the contactor is closed" —
+English where `is closed` means a circuit rather than an obligation.
+
+And the blunt rule earned its keep immediately by refusing the paragraph this round had just
+written: the corrected `coupling.yaml` debt explained that `E-GNC-RCS` "was named here too and does
+not belong", and a list of what the vehicle still owes has no business naming an edge whose own prose
+says it is closed. The escape is to not write the id, which is the right burden — the debt did not
+need it to make its point.
+
+### What the round got wrong on the way
+
+- **The path-cycle fixture corrupted a working loop.** Setting `back_edge: null` on `C-WATER-BUDGET`
+  and re-pointing its members at a path also removes the back-edge from the *schedule*, so the
+  undeclared-cycle refusal fired first and the case failed asserting on the wrong message. The fix is
+  to reconstruct the defect rather than adapt one: `C-RAD-COOL` is inserted verbatim, which is also
+  the honest fixture, because the defect is a cycle entry whose members are a path and nothing else.
+- **The reader refused every domain in the file on its first run**, because it matched clauses
+  against hard-wrapped prose. A line break is not a claim.
+- **`check_readme_figures` broke 200 fixtures at once**, because `copy_definition` copies the YAML and
+  `domains/` and the linter now reads three more declarations — the status board, the method table,
+  and one tool's docstring. That is the same defect the helper's own docstring records about the
+  domains, arriving in the helper that records it, and the fix is the same: the fixture copies what
+  the linter reads.
+- **A region cut at the wrong mention.** The first version ended a domain's paragraph at *any*
+  mention of any domain, so `gnc`'s ended four lines in — at `domains/rcs/`, named in passing in
+  "both of which are `domains/rcs/`'s" — and the reader then reported that `gnc` states no figures
+  while the figures sat eleven lines below the cut. The anchor is now the backtick at the start of a
+  line, which is what distinguishes a paragraph heading from a mention.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 294 | **290** — two false `also_present` debts and two answered entries |
+| figures a tool now refuses to see stale | 0 | **18** — 3 front-table, 10 per-domain clauses, 3 in `faults.py`'s docstring, 1 registry census, 1 method-table heading |
+| declared cycles | 8 | **7** — `C-RAD-COOL` named a path |
+| per-domain clauses stating a landing ordinal | 9 | **0** |
+| `report.refuse` call sites in the linter | 669 | **691** |
+| tests in `tests/test_vehicle_config.py` | 219 | **232** |
+
+The debt count falling is the point rather than a side effect: four of the 294 were obligations the
+vehicle had already met, and a count that includes answered questions is a count nobody can plan
+against. The 290 that remain are all still owed, and the next round starts sourcing them.
+
 ## The invariants, and which of them are enforced
+
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
 with the document rather than from it — several are properties this vehicle already had, stated

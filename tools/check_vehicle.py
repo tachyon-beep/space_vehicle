@@ -45,6 +45,7 @@ convention of the operator-side services this project already has.
 from __future__ import annotations
 
 import argparse
+import collections
 import math
 import re
 import sys
@@ -1583,6 +1584,59 @@ def derive_schedule(doc: dict[str, Any], report: Report) -> list[str]:
                 f"{where}:cycle {cid}",
                 f"names {edge_id!r} as its back-edge, but its other members do not form a path "
                 f"from {start!r} back to {target!r}: the cycle is declared and does not close",
+            )
+
+    # **A declared cycle has to be a cycle, back-edge or not.** The closure check above needs a
+    # back-edge to walk back to, so it skips a cycle that declares none — and an algebraic loop
+    # declares none *by definition*, because there is no delay to carry. So the one cycle that
+    # could not be closure-checked was the one that was not a cycle: `C-RAD-COOL` named
+    # `E-RAD-THERM` and `E-WATER-RAD`, which chain `water_cooling -> radiator_reject ->
+    # coolant_supply_t`. That is a path. It read as a loop because a cycle entry is a claim, and
+    # the absence of a back-edge read as a property of the loop rather than as the reason the
+    # check did not run — `review-findings.md`'s "a check that cannot run is not a check that
+    # passed" arriving at the check that exists to police cycles.
+    #
+    # The test is the weak one, deliberately: *some* member's endpoints must be mutually
+    # reachable through the others. A cycle entry that names a path is refused whether or not its
+    # members are individually valid edges, which they always are — every one of these edges is a
+    # real coupling that a domain needs. What is false is only that they close.
+    for cycle in doc.get("cycles") or []:
+        if cycle.get("back_edge") is not None:
+            continue  # the closure check above owns it
+        cid = str(cycle.get("id"))
+        members = [str(m) for m in cycle.get("members") or []]
+        closes = False
+        for candidate in members:
+            edge = edges.get(candidate)
+            if edge is None:
+                continue  # refused in check_coupling by name
+            need, start = str(edge.get("from")), str(edge.get("to"))
+            reachable = {start}
+            changed = True
+            while changed and need not in reachable:
+                changed = False
+                for member in members:
+                    if member == candidate or member not in edges:
+                        continue
+                    source = str(edges[member].get("from"))
+                    sink = str(edges[member].get("to"))
+                    if source in reachable and sink not in reachable:
+                        reachable.add(sink)
+                        changed = True
+            if need in reachable:
+                closes = True
+                break
+        if members and not closes:
+            report.refuse(
+                f"{where}:cycle {cid}",
+                f"names {len(members)} members that together form a path rather than a loop: "
+                + ", ".join(
+                    f"{m} ({edges[m].get('from')} -> {edges[m].get('to')})"
+                    for m in members
+                    if m in edges
+                )
+                + ". A cycle entry with no back-edge is an algebraic loop and is never walked "
+                "back, so nothing was checking that it closes",
             )
 
     # Kahn's algorithm, emitting the *sources* first: a node is ready when every node that must
@@ -3777,6 +3831,44 @@ def check_conventions(
                 f"declares {unit!r} as an exception and no channel publishes it, so nothing reads "
                 "the entry. The units the registry uses are " + ", ".join(sorted(used)),
             )
+
+
+def check_range_kind_census(
+    channels: dict[str, Any], registry: dict[str, dict[str, Any]], report: Report
+) -> None:
+    """`channels.yaml` counts its own `range_kind` assignments, and the count had drifted by one.
+
+    The entry that argues the 57 assignments are derived rather than chosen states its own census
+    — "57 channels carry the field — 43 `band`, 14 `scale`" — and by the time anything read it the
+    registry carried 58, 44 and 14. One channel gained the field and the prose that explains the
+    field did not. It is the same defect as every other figure in this round, in the file whose
+    whole subject is what a channel declares, and the check is short because the census is: count
+    the rows, count the two values, and hold all three against the sentence.
+    """
+    prose = " ".join(str(row) for row in channels.get("open_debts") or [])
+    match = re.search(
+        r"(\d+) channels carry the field — (\d+) `band`, (\d+) `scale`", prose
+    )
+    if match is None:
+        report.refuse(
+            "channels.yaml:open_debts",
+            "no longer states its `range_kind` census in a form this check can read "
+            "(`N channels carry the field — N `band`, N `scale``), so the numbers it gives for the "
+            "field it is arguing about are unchecked",
+        )
+        return
+    stated = [int(g) for g in match.groups()]
+    live = collections.Counter(
+        row.get("range_kind") for row in registry.values() if "range_kind" in row
+    )
+    actual = [sum(live.values()), live.get("band", 0), live.get("scale", 0)]
+    if stated != actual:
+        report.refuse(
+            "channels.yaml:open_debts",
+            f"states the `range_kind` census as {stated[0]} channels, {stated[1]} band and "
+            f"{stated[2]} scale, while the registry carries {actual[0]}, {actual[1]} and "
+            f"{actual[2]}",
+        )
 
 
 def check_range_kinds(registry: dict[str, dict[str, Any]], report: Report) -> None:
@@ -12715,17 +12807,33 @@ def check_crew_bindings(
                     "station would be two people with one perception bound",
                 )
 
-    # The finding this check was written for, reported rather than refused because the fix is a
-    # decision rather than a repair. `descent` and `surface` name only LM configurations, so no
-    # configuration in those phases can hold the CSM pilot — while her own note in this same file
-    # says she is "alone in the CSM for the surface phase". The two readings of `configurations`
-    # (the configurations a phase passes *through* versus the vehicles *present* in it) give
-    # different answers here and the corpus never says which it means.
+    # The finding this check was written for, and the *second* finding it made by surviving its own
+    # repair.
+    #
+    # `descent` and `surface` name only LM configurations, so no configuration in those phases can
+    # hold the CSM pilot — while her own note in this same file says she is "alone in the CSM for
+    # the surface phase". The two readings of `configurations` (the configurations a phase passes
+    # *through* versus the vehicles *present* in it) give different answers here, and this check
+    # reported the gap as a debt because the corpus had no field for the second reading.
+    #
+    # It has one now: `mission.yaml` declares `also_present: [csm_alone]` on both phases, and
+    # **this walk kept reading `configurations` alone**, so it went on reporting two debts that
+    # `tools/plant.py --crew` had already stopped seeing. `plant.py`'s walk (`--crew`, and the
+    # same list in its placement report) reads `configurations + also_present`; this one read
+    # half the declaration. A debt the vehicle has answered is worse than a debt it has not: it
+    # inflates the headline count and it names the wrong thing as missing, and nothing could see
+    # the two tools disagree because each one's output was internally consistent.
+    #
+    # So the phase's crew-holding set is `configurations` **joined with** `also_present`, which is
+    # the same list `plant.py` builds. The two readers now read one declaration.
     by_id = {c.get("id"): c for c in configurations}
     for phase in mission.get("phases") or []:
+        named = [str(n) for n in phase.get("configurations") or []] + [
+            str(n) for n in phase.get("also_present") or []
+        ]
         vehicles = {
             str(by_id[name].get("crew_in"))
-            for name in phase.get("configurations") or []
+            for name in named
             if name in by_id and by_id[name].get("crew_in")
         }
         missing = sorted(
@@ -12970,6 +13078,510 @@ def phases_report(
         print(f"\nverbs allowed in no phase: {', '.join(undeclared)}")
 
 
+# --------------------------------------------------------------------------------------
+# The README states figures, and until this check none of them had a reader in this file.
+# --------------------------------------------------------------------------------------
+
+# The ten count clauses the README's per-domain paragraphs carry, in one form so that they can be
+# read rather than admired. `points` is optional because two domains state it and the rest do not:
+# a domain that drops the clause is making a smaller claim, which is not drift.
+README_CLAUSE = re.compile(
+    r"(\d+) states, (?:(\d+) points, )?(\d+) thresholds, (\d+) verbs, (\d+) faults"
+)
+
+# A number the README writes as a word. Only the forms its prose actually uses, and a word outside
+# this table is a refusal rather than a silent miss — an unreadable claim is the defect this whole
+# check exists to remove.
+SPOKEN = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20,
+}
+
+
+def spoken_number(word: str) -> int | None:
+    """A count the README wrote as a word, or None when it is a word nobody taught this reader."""
+    word = word.strip().lower()
+    if word.isdigit():
+        return int(word)
+    return SPOKEN.get(word)
+
+
+def readme_domain_regions(text: str, domains: list[str]) -> dict[str, str]:
+    """The stretch of README each domain's paragraph occupies, by the folder's own naming.
+
+    A domain's paragraph is the text between the mention of `` `domains/<name>/` `` that opens a
+    line and whatever comes first of the next such mention or the next ``## `` heading. That is
+    how a reader finds it, and the line anchor is load-bearing rather than a detail. The first
+    version of this reader cut the region at *any* mention of any domain, so `gnc`'s paragraph
+    ended four lines in — at `domains/rcs/`, named in passing in the sentence "both of which are
+    `domains/rcs/`'s" — and the reader then reported that `gnc` states no figures while the
+    figures sat eleven lines below the cut. A rule that ends a paragraph at another paragraph's
+    name has to be able to tell a mention from a heading, and in this file the difference is
+    whether the backtick is the first character of its line.
+    """
+    mentions = [
+        (m.start(), m.group(1)) for m in re.finditer(r"(?m)^`domains/([a-z_]+)/`", text)
+    ]
+    headings = [m.start() for m in re.finditer(r"(?m)^## ", text)]
+    regions: dict[str, str] = {}
+    for index, (start, name) in enumerate(mentions):
+        if name not in domains or name in regions:
+            continue
+        end = len(text)
+        if index + 1 < len(mentions):
+            end = mentions[index + 1][0]
+        for heading in headings:
+            if start < heading < end:
+                end = heading
+                break
+        regions[name] = text[start:end]
+    return regions
+
+
+def domain_figures(root: Path) -> dict[str, dict[str, int]]:
+    """What each domain's five files actually declare, counted from the files themselves."""
+    figures: dict[str, dict[str, int]] = {}
+    domains_dir = root / "domains"
+    if not domains_dir.is_dir():
+        return figures
+    for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+        counts: dict[str, int] = {}
+        for key, filename, field in (
+            ("states", "components.yaml", "state"),
+            ("thresholds", "profiles.yaml", "thresholds"),
+            ("verbs", "commands.yaml", "commands"),
+            ("faults", "fault_policy.yaml", "faults"),
+            ("points", "points.yaml", "points"),
+        ):
+            document = load(path / filename, Report()) or {}
+            rows = document.get(field)
+            counts[key] = len(rows) if isinstance(rows, list) else 0
+        figures[path.name] = counts
+    return figures
+
+
+def check_readme_figures(
+    root: Path,
+    documents: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    schedule: list[str],
+    report: Report,
+) -> None:
+    """Every figure the README states about the vehicle is held to the tool that derives it.
+
+    This is the folder's own recurring finding turned on its own status board for the second time.
+    Round 46 built `test_the_readme_status_matches_the_tools` because three rounds of structural
+    work had moved the state, node and debt counts while the README kept the old ones. That test
+    pinned the *totals* — channels, states, nodes, debts, the four build-order buckets — and it
+    worked, which is exactly why the figures it did not name went on drifting:
+
+      - the front table described `plant.md` as having **six** integrator classes when it has had
+        seven since the first transport delay landed, called `coupling.yaml`'s cycles **six** when
+        it declares eight, and gave the tick order as **39 nodes** when it is 57;
+      - the ten per-domain paragraphs stated their own state, threshold, verb and fault counts, and
+        **nine of the ten had drifted**: power's states read 9 against 13 and its thresholds 13
+        against 17, thermal's states 11 against 20 and its thresholds 18 against 17, structure 8/11
+        against 10/9, eclss 12/13/11 against 16/20/21, propulsion 11 thresholds against 12, rcs 10
+        against 11, crew 5 states against 7, comms 10 thresholds against 9, gnc 7 against 9. Only
+        consumables was right, and that is because it stated no counts at all.
+
+    A test that reads the figures it was told about cannot see the ones beside them. So the reader
+    is here, in the build, and it derives every number from the files rather than from a second
+    counter — a counter written for this check would be one more declaration to drift.
+
+    It refuses four things: a stated figure that disagrees with the file it describes; a domain
+    whose paragraph carries two different clauses, which is a file contradicting itself; a domain
+    whose paragraph carries none, because a figure nobody can check is the next round's finding;
+    and a README that cannot be read at all, because a check that cannot run is not a check that
+    passed.
+    """
+    readme_path = root / "README.md"
+    if not readme_path.is_file():
+        report.refuse(
+            "README.md",
+            "is missing, so every figure the folder's status board states is unchecked. The README "
+            "is a declaration about the corpus and it is read by people rather than by tools",
+        )
+        return
+    text = readme_path.read_text()
+    # Prose wraps. A claim does not. The README's paragraphs are hard-wrapped at 100 columns, so a
+    # clause written `10 states, 9 thresholds, 5 verbs, 11 faults` acquires a newline in the middle
+    # of it the first time a paragraph is reflowed — and a reader that refused on that would be
+    # refusing a line break, which is not the defect it exists to find. Collapsing runs of
+    # whitespace to one space makes every claim in the file a single-line string without changing
+    # a word of it, and the clauses are matched against that.
+    flat = re.sub(r"\s+", " ", text)
+
+    # ---- the front table, and the three figures in it that nothing derived -------------------
+    methods = len(METHODS)
+    for match in re.finditer(r"the ([A-Za-z0-9]+) integrator classes", flat):
+        stated = spoken_number(match.group(1))
+        if stated != methods:
+            report.refuse(
+                "README.md:front table",
+                f"calls `plant.md`'s integrator classes {match.group(1)!r} while `METHODS` holds "
+                f"{methods} ({', '.join(sorted(METHODS))}). The set grew when the first transport "
+                "delay landed, and a delay is not a lag",
+            )
+    plant_md = (root / "plant.md").read_text() if (root / "plant.md").is_file() else ""
+    heading = re.search(r"(?m)^## 3\. ([A-Za-z0-9]+) methods", plant_md)
+    if plant_md and heading is None:
+        report.refuse(
+            "plant.md:§3",
+            "no longer heads a section with the number of integrator methods in it, so the "
+            "README's own count of them has nothing to be held against",
+        )
+    elif heading is not None and spoken_number(heading.group(1)) != methods:
+        report.refuse(
+            "plant.md:§3",
+            f"heads the method table {heading.group(1)!r}, but `METHODS` holds {methods}",
+        )
+
+    cycles = (documents.get("coupling.yaml") or {}).get("cycles") or []
+    for match in re.finditer(r"([A-Za-z0-9]+) declared cycles", flat):
+        stated = spoken_number(match.group(1))
+        if stated != len(cycles):
+            report.refuse(
+                "README.md:front table",
+                f"calls `coupling.yaml`'s cycle list {match.group(1)!r} while it declares "
+                f"{len(cycles)}",
+            )
+    if re.search(r"(\d+)-node tick order", flat) is None:
+        report.refuse(
+            "README.md:front table",
+            "no longer gives the tick order a node count, so the schedule it describes cannot be "
+            "held against the schedule the linter derives",
+        )
+    for match in re.finditer(r"(\d+)-node tick order", flat):
+        if int(match.group(1)) != len(schedule):
+            report.refuse(
+                "README.md:front table",
+                f"gives the tick order {match.group(1)} nodes while the linter derives "
+                f"{len(schedule)}",
+            )
+
+    # ---- the status line, which is the one sentence every reader starts from -------------------
+    #
+    # `test_the_readme_status_matches_the_tools` reads three of its figures — channels, states over
+    # nodes, and the debt count — and left the rest to a reader's eye. Four of the remaining five
+    # are counts of things a domain declares, so they are derivable here in one line each, and the
+    # fifth is the number of directories the sentence claims to be summarising. A status line that
+    # counts its own subjects wrongly is not a smaller defect than one that miscounts the subjects.
+    figures = domain_figures(root)
+    status = re.search(
+        r"(\d+) channels, (\d+) states over (\d+) scheduled nodes, (\d+) thresholds, "
+        r"(\d+) verbs and (\d+) classified events",
+        flat,
+    )
+    if status is None:
+        report.refuse(
+            "README.md:status line",
+            "no longer states the vehicle's totals in a form this check can read "
+            "(`N channels, N states over N scheduled nodes, N thresholds, N verbs and N classified "
+            "events`), so the figures it gives for the corpus are unchecked",
+        )
+    else:
+        channels_total = len(registry or {})
+        live = {
+            "channels": channels_total,
+            "states": sum(row["states"] for row in figures.values()),
+            "scheduled nodes": len(schedule),
+            "thresholds": sum(row["thresholds"] for row in figures.values()),
+            "verbs": sum(row["verbs"] for row in figures.values()),
+            "classified events": sum(row["faults"] for row in figures.values()),
+        }
+        for (stated, key) in zip(status.groups(), live, strict=True):
+            if int(stated) != live[key]:
+                report.refuse(
+                    "README.md:status line",
+                    f"states {stated} {key} while the corpus declares {live[key]}",
+                )
+
+    # ---- the ten per-domain paragraphs -------------------------------------------------------
+    if not figures:
+        report.refuse(
+            "domains/",
+            "holds no domain directories, so the per-domain figures the README states describe "
+            "nothing that can be counted",
+        )
+        return
+    regions = readme_domain_regions(text, sorted(figures))
+    for name in sorted(figures):
+        where = f"README.md:domains/{name}/"
+        region = regions.get(name)
+        if region is None:
+            report.refuse(
+                where,
+                "is a domain the README never names in its own paragraph, so its figures are "
+                "stated nowhere a reader would look",
+            )
+            continue
+        clauses = {match.groups() for match in README_CLAUSE.finditer(re.sub(r"\s+", " ", region))}
+        if not clauses:
+            report.refuse(
+                where,
+                "states no count clause for this domain. The README's per-domain paragraphs carry "
+                "one form — `N states, [N points, ]N thresholds, N verbs, N faults` — and a domain "
+                "without one is a domain whose figures no reader can check",
+            )
+            continue
+        if len(clauses) > 1:
+            report.refuse(
+                where,
+                f"states {len(clauses)} different count clauses for one domain: "
+                + " and ".join(" / ".join(str(part) for part in clause) for clause in sorted(clauses))
+                + ". One domain's paragraph contradicting itself is the defect this clause form "
+                "exists to make impossible",
+            )
+            continue
+        (states, points, thresholds, verbs, faults) = next(iter(clauses))
+        for stated, key, label in (
+            (int(states), "states", "states"),
+            (int(thresholds), "thresholds", "thresholds"),
+            (int(verbs), "verbs", "verbs"),
+            (int(faults), "faults", "faults"),
+        ):
+            if stated != figures[name][key]:
+                report.refuse(
+                    where,
+                    f"states {stated} {label} while `domains/{name}/` declares "
+                    f"{figures[name][key]}",
+                )
+        if points is not None and int(points) != figures[name]["points"]:
+            report.refuse(
+                where,
+                f"states {points} points while `domains/{name}/points.yaml` publishes "
+                f"{figures[name]['points']}",
+            )
+
+
+# --------------------------------------------------------------------------------------
+# A debt is a question, so a debt that answers itself is not one.
+# --------------------------------------------------------------------------------------
+
+# Phrases with which a standing `open_debts` entry says the obligation it exists to record has
+# been met. Each of these was written by a round that answered the thing and left the entry in the
+# list the headline count is taken from — which is worse than a stale figure, because the entry
+# still *names* what is missing and the name is now wrong.
+ANSWERED_PHRASES = (
+    "no longer a debt",
+    "no longer owed",
+    "Resolved against",
+    "is resolved",
+    "has been resolved",
+    "closed outright",
+)
+
+# Phrases with which a standing debt claims a coupling edge has no sensitivity to configure. Each
+# is refused only when the edge it names *carries* one, so a debt about a genuinely unset
+# sensitivity — `E-RCS-DYN`'s inertia, `E-BAT-BUS`'s pack-voltage chain — is untouched.
+SENSITIVITY_DEFICIT_PHRASES = (
+    "has no sensitivity",
+    "owes a sensitivity",
+    "not a scalar",
+    "being a scalar",
+    "sensitivity is a matrix",
+    "sensitivity is a table",
+    "is UNCONFIGURED",
+)
+
+# Phrases with which an edge's own `note` says the edge is closed. A debt that names such an edge
+# is a debt about something the edge has already stopped owing: the note and the debt are two
+# declarations about one edge, in two keys, and nothing had ever compared them.
+EDGE_CLOSED_PHRASES = (
+    "is now closed",
+    "is closed",
+    "closed without",
+    "closed outright",
+)
+
+
+def open_debts_everywhere(root: Path, top: dict[str, Any]) -> list[tuple[str, str]]:
+    """Every prose obligation the folder keeps, with the path that reaches it.
+
+    Read from the files rather than from `Report.debts`, because the point of the two checks below
+    is to ask what a debt *says* — and the report holds the same strings with the location glued
+    on the front, which is a format rather than a declaration.
+    """
+    found: list[tuple[str, str]] = []
+    for name, document in sorted(top.items()):
+        if not isinstance(document, dict):
+            continue
+        for row in document.get("open_debts") or []:
+            found.append((f"{name}:open_debts", str(row)))
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            for filename in (
+                "components.yaml",
+                "points.yaml",
+                "profiles.yaml",
+                "commands.yaml",
+                "fault_policy.yaml",
+            ):
+                document = load(path / filename, Report()) or {}
+                for row in document.get("open_debts") or []:
+                    found.append((f"domains/{path.name}/{filename}:open_debts", str(row)))
+    return found
+
+
+def edge_prose(edge: dict[str, Any]) -> str:
+    """Every word an edge says about itself, wherever the edge keeps it.
+
+    An edge's sentences live in two places and the split is not a convention anybody chose: the
+    short `note:` beside `from`/`to`/`kind` and the long one *inside* `sensitivity:`, which is
+    where the argument for a value went. `E-GNC-RCS`'s "this edge is now closed without them" is
+    at `sensitivity.note`, so a reader that looked only at `edge["note"]` found nothing — and a
+    rule whose evidence is in the other key is a rule that never fires. That is the failure this
+    folder calls *a check that cannot run*, and it was found here by writing the rule and watching
+    it stay silent on the one edge it was written for.
+    """
+    parts = [str(edge.get("note") or "")]
+    sensitivity = edge.get("sensitivity")
+    if isinstance(sensitivity, dict):
+        parts.append(str(sensitivity.get("note") or ""))
+    # `relation` is deliberately *not* read here. It is the sentence that justifies a value, and it
+    # is full of "the closed loop" and "the contactor is closed" — English where `is closed` means
+    # a circuit rather than an obligation. A rule written to catch one sentence should not be
+    # broadened to sentences that use the same words about different things.
+    return " ".join(parts)
+
+
+def check_debts_are_still_owed(
+    root: Path, top: dict[str, Any], coupling: dict[str, Any], report: Report
+) -> None:
+    """A debt that has been answered is not a debt, and the count is not the only thing it costs.
+
+    Two shapes, both found by asking of every standing entry what it disagrees with:
+
+      - **an entry that says its own obligation is met.** `mission.yaml` carried "the lunar
+        occultation comms blackout is **modelled** and no longer a debt" and "`transition_evidence`
+        ... **Resolved against the vehicle rather than left open**", both still counted in the
+        headline. The blackout one was worse than redundant: its second half restated the
+        per-phase *sequence* debt that the entry three above it already carried, so one obligation
+        was declared twice in one list and counted twice.
+
+      - **an entry that names a coupling edge as owing a sensitivity the edge carries.** Five
+        entries across four files said `E-GNC-RCS` "has no sensitivity" or "is not a scalar" while
+        the edge has carried `1.0 mode per mode`, `basis: derived`, since the round that promoted
+        `guidance` to a service node. The edge's own note says the opposite in as many words —
+        "this edge is now closed without them" — so the corpus was contradicting itself across two
+        keys of one file and three other files, and the contradiction inflated the count by five.
+
+    Every clause here was arrived at from a real instance and is refused only when a declaration
+    disagrees with another declaration; none of them is a rule about vocabulary for its own sake.
+    """
+    edges = {str(e.get("id")): e for e in coupling.get("edges") or []}
+    for where, prose in open_debts_everywhere(root, top):
+        for phrase in ANSWERED_PHRASES:
+            if phrase in prose:
+                report.refuse(
+                    where,
+                    f"says {phrase!r} about its own obligation and is counted as a debt anyway. An "
+                    "entry that records an answer belongs in the README's round log, where the "
+                    "decision is kept, and not in the list the debt headline is taken from",
+                )
+                break
+        for edge_id, edge in edges.items():
+            if not re.search(rf"\b{re.escape(edge_id)}\b", prose):
+                continue
+            sensitivity = edge.get("sensitivity")
+            numeric = isinstance(sensitivity, dict) and isinstance(
+                sensitivity.get("value"), (int, float)
+            )
+            if numeric:
+                for phrase in SENSITIVITY_DEFICIT_PHRASES:
+                    if phrase in prose:
+                        report.refuse(
+                            where,
+                            f"names {edge_id} and says {phrase!r}, but the edge carries "
+                            f"{sensitivity.get('value')!r} {sensitivity.get('unit') or ''}".rstrip()
+                            + f" ({sensitivity.get('basis')}). A debt about an edge that has stopped "
+                            "owing is a debt about something else, or it is not a debt",
+                        )
+                        break
+            note = edge_prose(edge)
+            for phrase in EDGE_CLOSED_PHRASES:
+                if phrase in note:
+                    report.refuse(
+                        where,
+                        f"names {edge_id}, whose own note says it {phrase!r}. The note and the debt "
+                        "are two declarations about one edge and this is the first check that has "
+                        "ever put them side by side",
+                    )
+                    break
+
+
+# The figures `tools/faults.py` states about the fault corpus in its own module docstring, each
+# with the walk that derives it. The docstring said 118 faults, 58 stochastic and 60 conditional
+# while the tool's own output said 128, 66 and 62 — the same defect the folder keeps finding, in
+# the one file whose job is to make the vehicle's failures countable.
+FAULT_DOCSTRING_FIGURES = (
+    (r"has (\d+) declared faults", ((0, "declared"),)),
+    (r"(\d+) faults seed on", ((0, "stochastic"),)),
+    (r"(\d+) of the (\d+) seed on", ((0, "conditional"), (1, "declared"))),
+)
+
+
+def check_tool_docstrings(root: Path, documents: dict[str, Any], report: Report) -> None:
+    """A figure in a tool's own docstring is a declaration, and it needs a reader like any other.
+
+    `tools/plant.py` solved this by *removing* its figures and pointing at `--readiness`, on the
+    reasoning that "a figure written into this docstring has no reader". `tools/faults.py` kept
+    three, and by the time anything looked they were wrong by ten, eight and two: ten domains
+    landed faults after the sentence was written and the sentence never moved. Correcting them
+    without a reader would be to schedule the same round again, so the numbers stay and this check
+    derives all three from `domains/*/fault_policy.yaml` — with the same predicate the scheduler
+    uses, `hazard is None` for the conditional half, so the docstring and `--list` cannot disagree.
+    """
+    faults_doc = root / "tools" / "faults.py"
+    if not faults_doc.is_file():
+        report.refuse(
+            "tools/faults.py",
+            "is missing, so its docstring's figures about the fault corpus cannot be held "
+            "against the corpus",
+        )
+        return
+    source = faults_doc.read_text()
+    docstring = source.split('"""', 2)[1] if source.count('"""') >= 2 else ""
+
+    declared = 0
+    stochastic = 0
+    for path in sorted((root / "domains").glob("*/fault_policy.yaml")):
+        policy = load(path, Report()) or {}
+        for fault in policy.get("faults") or []:
+            declared += 1
+            seeding = fault.get("seeding") or {}
+            if isinstance(seeding, dict) and seeding.get("unit") in SEEDING_RATE_UNITS and isinstance(
+                seeding.get("hazard"), (int, float)
+            ):
+                stochastic += 1
+    live = {
+        "declared": declared,
+        "stochastic": stochastic,
+        "conditional": declared - stochastic,
+    }
+    for pattern, groups in FAULT_DOCSTRING_FIGURES:
+        match = re.search(pattern, docstring)
+        if match is None:
+            report.refuse(
+                "tools/faults.py:docstring",
+                f"no longer states the fault figures in a form this check can read "
+                f"({pattern!r}), so the numbers it states there are unchecked",
+            )
+            continue
+        for index, key in groups:
+            stated = int(match.group(index + 1))
+            if stated != live[key]:
+                report.refuse(
+                    "tools/faults.py:docstring",
+                    f"states {stated} {key} faults while `domains/*/fault_policy.yaml` declares "
+                    f"{live[key]}",
+                )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check that the vehicle definition composes.")
     parser.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent))
@@ -13057,6 +13669,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         schedule = derive_schedule(coupling, report)
     check_range_kinds(registry, report)
+    if channels is not None:
+        # The registry's own census of the field, in the entry that argues the assignments are
+        # derived. It sits beside the check that reads the assignments rather than in the README
+        # walk, because the figure is a claim about the registry made inside the registry.
+        check_range_kind_census(channels, registry, report)
     threshold_ids: set[str] = set()
     all_commands: dict[str, dict[str, Any]] = {}
     all_faults: dict[str, list[Any]] = {}
@@ -13187,6 +13804,26 @@ def main(argv: list[str] | None = None) -> int:
     if channels is not None:
         check_producers(root, registry, presentation or {}, report)
         check_event_classes(root, registry, report)
+    # Last, because it reads the README rather than the corpus: every figure the status board
+    # states about the files above is held against the files above, so it wants the schedule the
+    # rest of this function derived before it can check the node count the front table gives.
+    check_readme_figures(root, documents, registry, schedule, report)
+    check_tool_docstrings(root, documents, report)
+    # The debts themselves, held against the declarations they are about: an entry that says it is
+    # answered, or that names a coupling edge which has stopped owing, is counted above by the
+    # walks that count every `open_debts` entry and is refused here.
+    check_debts_are_still_owed(
+        root,
+        {
+            "coupling.yaml": coupling or {},
+            "mission.yaml": mission or {},
+            "vehicle.yaml": vehicle or {},
+            "channels.yaml": channels or {},
+            "presentation.yaml": presentation or {},
+        },
+        coupling or {},
+        report,
+    )
 
     if schedule:
         # Reported before the print so it appears in the report, and it is a note rather than a
