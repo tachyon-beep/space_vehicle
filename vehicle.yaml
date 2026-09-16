@@ -577,6 +577,7 @@ thermal:
   radiators:
 
       - id: csm_radiator
+        vehicle: csm
         panels: 2
         area_m2: 9.1
         rejection_w_per_panel: 1294
@@ -584,16 +585,35 @@ thermal:
           basis: historical
           source: "NR and TN D-6718: two panels of about 49 sq ft each, about 4,415 Btu/hr per panel = 1,294 W"
       - id: csm_evaporator
+        vehicle: csm
         rejection_w: 2345
         provenance:
           basis: historical
           source: "NR: about 8,000 Btu/hr = 2,345 W; the evaporator consumes water, which is why water_cooling is a scored resource"
       - id: lm_sublimator
-        rejection_w: UNCONFIGURED
-        water_consumption_kg_per_h: UNCONFIGURED
+        vehicle: lm
+        rejection_w: 3649
+        water_consumption_kg_per_h: 5.171
         provenance:
           basis: historical
-          source: "the LM sublimator's water consumption rate is NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented: this is half of the thermal water budget"
+          source: >-
+            `lunar_module_environmental_control_subsystem.pdf`, PDF p. 88, "Item 209 SUBLIMATOR",
+            Spec. no. SVHS 2405, Variable Conditions table: max normal heat load **12,450 Btu/hr** at
+            100 F coolant inlet with **0.19 lb/min** evaporant flow. 12,450 x 0.29307107 = 3,648.7 W,
+            rounded to 3,649 as the CSM's 8,000 Btu/hr was rounded to 2,345; 0.19 lb/min x 60 x
+            0.45359237 = 5.171 kg/h. Read from the rendered page
+          note: >-
+            **"NOT published in any source reached" named four documents that do not have it, and the
+            LM's own ECS subsystem specification has both figures on one line of one table.** This
+            entry carries the water rate because the water is the LM's own — the vehicle's
+            water-rejection cycle is denominated in the CSM's latent heat, and the sublimator's
+            *mixed* mode gives it a higher effective one (1,092 Btu/lb against the cycle's 2.45e6
+            J/kg = 1,053 Btu/lb). `check_thermal_bindings` holds this copy against
+            `domains/thermal/components.yaml#sublimator_lm` through `vehicle_keys`, so the two cannot
+            drift and the field has a reader on both sides. **The budget's totals are split by
+            vehicle** (`csm_rejection_capacity_w` and `lm_rejection_capacity_w`) because this
+            capacity landing in a single `total_rejection_capacity_w` would have added the LM's
+            sublimator to a number whose own relation argues a CSM margin
   zones:
 
       - id: csm_cabin

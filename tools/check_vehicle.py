@@ -11637,49 +11637,96 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
 
 
 def check_thermal_budget(root: Path, report: Report) -> None:
-    """The rejection total is a closure, and nothing summed the two things it closes over.
+    """The rejection total is a closure, and it is a closure **per vehicle**.
 
-    `domains/thermal/components.yaml#load_budget.total_rejection_capacity_w` states 4,933 W and its
-    own relation says what that is: "2,588 W of radiator plus 2,345 W of evaporator". Both of those
-    live in the same file — the radiator's in `radiator_model.csm.rejection_w` and the evaporator's
-    in the `evaporator_csm` component — and **no tool read the block at all.** A deletion test that
-    removed all sixteen lines and diffed every tool's output found nothing.
+    `domains/thermal/components.yaml#load_budget` states each vehicle's rejection capacity and its
+    relation says what that is: "2,588 W of radiator plus 2,345 W of evaporator" for the CSM, and
+    3,649 W of sublimator for the LM. The parts live in the same file — the CSM radiator's in
+    `radiator_model.csm.rejection_w`, the other two on the components themselves — and **no tool read
+    the block at all** until the round that wired it: a deletion test that removed all sixteen lines
+    and diffed every tool's output found nothing.
 
     That is the mass closure's shape for the fifth time, and it is worth wiring for the reason the
     other four were: a total nobody sums is a total that drifts, and this one is the denominator a
-    fleet reasons about when it decides whether the vehicle can reject what it is generating. The
-    evaporator's LM twin is `UNCONFIGURED`, so the sum is taken over the parts that have values and
-    the missing one is reported as the debt it already is rather than silently omitted.
+    fleet reasons about when it decides whether the vehicle can reject what it is generating.
+
+    **It was one total until the LM's sublimator capacity was published, and the sentence beside it
+    was about the CSM.** `load_budget` splits its *demands* by vehicle — `csm_total_demand_w` and
+    `lm_total_demand_w` — and summed its capacities into one `total_rejection_capacity_w`, so the
+    moment the LM's 3,649 W landed the block argued a 1,723 W CSM margin from a total that included
+    the LM's sublimator. Two vehicles' capacities under a one-vehicle sentence is the defect; the
+    partition is the fix, and it is a partition rather than a sum because both directions matter:
+
+      - a part whose vehicle's total does not reach it is refused, which is the closure;
+      - a part that declares no `vehicle` is refused rather than added to whichever total is
+        nearest, because a watt in the wrong vehicle's budget is a margin nobody has;
+      - a declared total with no parts is refused, so a total cannot outlive the hardware it counts.
+
+    An `UNCONFIGURED` part is left to the debt walk, which already reports it: absence is the walk's
+    business and disagreement is this rule's, the split `check_burn_capability` makes too.
     """
     thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
     budget = thermal.get("load_budget") or {}
-    total = budget.get("total_rejection_capacity_w")
-    if not isinstance(total, (int, float)):
-        return
-    parts: dict[str, float] = {}
+    where = "domains/thermal/components.yaml:load_budget"
+
+    parts: dict[str, dict[str, float]] = {}
+    # The CSM radiator's capacity is derived into `radiator_model` rather than declared on the
+    # component — the component carries the panels and the area — so the model is where its part is.
     radiator = ((thermal.get("radiator_model") or {}).get("csm") or {}).get("rejection_w")
     if isinstance(radiator, (int, float)):
-        parts["radiator_model.csm"] = float(radiator)
+        parts.setdefault("csm", {})["radiator_model.csm"] = float(radiator)
+
+    unowned: list[str] = []
     for component in thermal.get("components") or []:
         if not isinstance(component, dict):
             continue
         value = component.get("rejection_w")
-        if isinstance(value, (int, float)):
-            parts[str(component.get("id"))] = float(value)
-    if not parts:
+        if not isinstance(value, (int, float)):
+            continue
+        vehicle = component.get("vehicle")
+        if not isinstance(vehicle, str) or not vehicle:
+            unowned.append(str(component.get("id")))
+            continue
+        parts.setdefault(vehicle, {})[str(component.get("id"))] = float(value)
+
+    if unowned:
         report.refuse(
-            "domains/thermal/components.yaml:load_budget",
-            "states a total rejection capacity and nothing declares a part of it, so the total is "
-            "a number with no arithmetic behind it",
+            where,
+            f"counts no total for {sorted(unowned)}, which declare a `rejection_w` and no `vehicle`. "
+            "A capacity belongs to a vehicle, and one that names none is a watt in whichever budget "
+            "a reader assumes rather than in the one it is",
         )
-        return
-    stated = sum(parts.values())
-    if abs(stated - float(total)) > 1.0:
+
+    declared = {
+        str(key)[: -len("_rejection_capacity_w")]: value
+        for key, value in budget.items()
+        if str(key).endswith("_rejection_capacity_w")
+    }
+    for vehicle, mine in sorted(parts.items()):
+        stated = sum(mine.values())
+        if vehicle not in declared:
+            report.refuse(
+                where,
+                f"declares no `{vehicle}_rejection_capacity_w`, and {sorted(mine)} are {vehicle} "
+                f"parts summing to {stated:g} W. A part whose total is not declared is a capacity "
+                "the balance does not close over",
+            )
+            continue
+        total = declared[vehicle]
+        if not isinstance(total, (int, float)):
+            continue  # the debt walk's business, like every other unset value
+        if abs(stated - float(total)) > 1.0:
+            report.refuse(
+                f"{where}.{vehicle}_rejection_capacity_w",
+                f"is {total:g} W and the parts this file declares sum to {stated:g} W "
+                f"({', '.join(f'{k} {v:g}' for k, v in sorted(mine.items()))}). A total whose parts "
+                "do not reach it is a capacity the vehicle does not have",
+            )
+    for vehicle in sorted(set(declared) - set(parts)):
         report.refuse(
-            "domains/thermal/components.yaml:load_budget.total_rejection_capacity_w",
-            f"is {total:g} W and the parts this file declares sum to {stated:g} W "
-            f"({', '.join(f'{k} {v:g}' for k, v in sorted(parts.items()))}). A total whose parts "
-            "do not reach it is a capacity the vehicle does not have",
+            f"{where}.{vehicle}_rejection_capacity_w",
+            "is declared and no component of that vehicle declares a `rejection_w`, so the total "
+            "counts hardware this file does not have",
         )
 
 

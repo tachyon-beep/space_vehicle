@@ -451,6 +451,7 @@ components:
   - id: radiator_csm
     kind: flow
     class: radiator
+    vehicle: csm
     # The link to `vehicle.yaml#thermal.radiators`, declared rather than inferred because the two
     # files name one panel from opposite ends — `csm_radiator` against `radiator_csm` — so a rule
     # guessed from the string would have to know that the vehicle's name leads with the vehicle
@@ -466,6 +467,7 @@ components:
   - id: evaporator_csm
     kind: flow
     class: evaporator
+    vehicle: csm
     vehicle_keys: [csm_evaporator]
     rejection_w: 2345
     fluid: water
@@ -475,11 +477,36 @@ components:
   - id: sublimator_lm
     kind: flow
     class: evaporator
+    vehicle: lm
     vehicle_keys: [lm_sublimator]
-    rejection_w: UNCONFIGURED
+    rejection_w: 3649
+    water_consumption_kg_per_h: 5.171
     provenance:
       basis: historical
-      source: "the LM sublimator's rejection capacity and water consumption are NOT published in any source reached (TN D-6724, NR ch.6, A11, SP4029). Declared unset rather than invented"
+      source: >-
+        `lunar_module_environmental_control_subsystem.pdf` (LM ECS subsystem specification), PDF
+        p. 88, "Item 209 SUBLIMATOR", Spec. no. SVHS 2405, the Variable Conditions table. Four
+        columns, each with a coolant inlet temperature, a heat load and an evaporant flow:
+        Startup and Suit Integ. — 86 F, **9,500 Btu/hr**, 0.15 lb/min; Low Load — 65 F, 5,860
+        Btu/hr, 0.09 lb/min; a proof condition at 38 F, 1,845 Btu/hr, 0.02 lb/min; and **Max.
+        Normal Heat Load — 100 F coolant inlet, 12,450 Btu/hr, 0.19 lb/min evaporant**. Constant
+        conditions on the same page: 5.5 psia coolant inlet, 3.7 gpm, 400 microns Hg evaporant
+        outlet, 6.2 psia evaporant inlet to the flow limiter, 81 F evaporant inlet (130 F at max
+        normal heat load). Read from the rendered page: the text layer interleaves the header rows
+        and drops the decimal points out of the flow column
+      note: >-
+        **this entry said the LM sublimator's capacity and water consumption are "NOT published in
+        any source reached (TN D-6724, NR ch.6, A11, SP4029)" and named four documents that do not
+        have them, while the LM's own ECS subsystem specification has both on one line of one
+        table.** The capacity is the max normal heat load: 12,450 Btu/hr at 0.29307107 W per
+        Btu/hr is 3,648.7 W, rounded to **3,649 W** as the CSM's 8,000 Btu/hr was rounded to 2,345.
+        The water is the same row's 0.19 lb/min: 11.4 lb/hr is **5.171 kg/h**. The pair implies an
+        effective latent heat of 1,092 Btu/lb = 2.540e6 J/kg, against the 2.45e6 J/kg the vehicle's
+        own water-rejection cycle carries on `E-RAD-WATER` — and the 3.7 % difference is the
+        *physics* rather than an error: that page explains that the sublimator runs in evaporative,
+        sublimation or **mixed** mode depending on the heat flux, and the latent heat of
+        sublimation (about 1,220 Btu/lb) is higher than that of vaporisation (about 1,050). So the
+        LM's own figure is the one carried here and the cycle's constant is the CSM's
   - id: heater_bank_csm
     kind: flow
     class: heater
@@ -624,10 +651,22 @@ load_budget:
     through the radiator and what leaves through the evaporator is the vehicle's thermal
     budget. The numbers live in `domains/power/components.yaml#loads` and are not duplicated
     here, because two copies of one figure is how a vehicle changes mass between two files.
-  total_rejection_capacity_w: 4933
-  provenance:
+  csm_rejection_capacity_w: 4933
+  lm_rejection_capacity_w: 3649
+  rejection_capacity_provenance:
     basis: derived
-    relation: "2,588 W of radiator plus 2,345 W of evaporator, against a 1,723 W CSM demand — so the vehicle has a comfortable nominal margin and no margin at all if the radiator is sunlit and the evaporator is dry"
+    relation: >-
+      2,588 W of radiator plus 2,345 W of evaporator for the CSM = **4,933 W**, against a 1,723 W
+      CSM demand — so the CSM has a comfortable nominal margin and no margin at all if the radiator
+      is sunlit and the evaporator is dry. The LM's sublimator is **3,649 W** on its own, against a
+      1,007 W LM demand
+    note: >-
+      **this was one number, `total_rejection_capacity_w`, and it summed both vehicles.** The
+      demands beside it were already split (`csm_total_demand_w` and `lm_total_demand_w`), so the
+      block argued a CSM margin from a total that included the LM's sublimator the moment that
+      capacity was published — a two-vehicle number under a one-vehicle sentence. The parts are now
+      held to the total *of their own vehicle*, and a part that declares no `vehicle` is refused
+      rather than added to whichever total is nearest
 
 # --------------------------------------------------------------------------------------
 # What this domain still owes, and the one item that blocks the cabins.

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 271 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 268 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 271 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 268 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **271** is every obligation the linter can name:
-**118** literal `UNCONFIGURED` scalars and **153** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **268** is every obligation the linter can name:
+**115** literal `UNCONFIGURED` scalars and **153** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **194** the plant
+the missing charging efficiency, the pump-speed conversion). The **191** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 194 is the linter's 118 **plus** the graph's unset edge
+`coupling.yaml` included, so its 191 is the linter's 115 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -199,7 +199,9 @@ graph by its edge walk, so every literal `UNCONFIGURED` was counted *except the 
 files nothing walks*. `mission.yaml`'s initial position, velocity and
 state-vector basis, and `vehicle.yaml`'s three minimum impulse bits, the LM sublimator's rejection
 and water consumption and its radiators — two of them named in a prose `open_debts` entry
-somewhere else, which is how they stayed plausible. Counting the graph's seven
+somewhere else, which is how they stayed plausible. Two of those eleven are closed now and one is
+bounded: the sublimator's rejection and water are published (round 4), the fuel cell's reactant
+figure is derived (round 3), and the impulse bits carry a ceiling. Counting the graph's seven
 took them from being read by nobody to being refusals under `--strict`, which is where a debt that
 is only displayed stops being a debt.
 
@@ -413,25 +415,36 @@ LM descent-engine Isp of 311 s traces only to Wikipedia where NASA's design requ
 
 **Does not compose, and is declared rather than defaulted.**
 
-- **Inertia tensor and centre of mass.** The mission report tabulates c.g. and inertia per
-  phase, but the axis datum lives in the CSM/LM Operational Data Book, which is not reachable,
-  so the tabulated values cannot be converted to physical offsets. `rcs_diode.md:119-121`
-  names both as Unknown and says what they block. Without them the vehicle cannot tumble and
-  the attitude loop has no gains. Landing `domains/rcs/` split this into two named unknowns:
-  the inertia, and the forty-four thrusters' geometry — each unit thrust direction and lever arm,
-  which is what the allocator's wrench matrix is built from. `E-RCS-DYN` and `E-GNC-RCS` are both
-  waiting on the pair.
+- **Inertia tensor and centre of mass.** This said the axis datum "lives in the CSM/LM
+  Operational Data Book, which is not reachable" — **it is reachable, and it is complete**, and
+  `.scratch/apollo/SOURCES.md` §1 maps it page by page (966 pages of per-mission mass-property
+  tables, with the per-element tank CG and inertia on pp. 880-960). The same document's
+  consumables volume carries `TABLE XIV — MISSION E INITIAL VEHICLE CONDITIONS` on PDF p. 47,
+  which gives weight, X/Y/Z-CG and the full inertia tensor for the command module, the service
+  module, the SLA ring and both LM stages. So the debt is an **extraction**, not an absence, and
+  what it owes is the frame convention — every vector needs a declared frame, and the table's is
+  Apollo/LM coordinates with the LM rows in LM coordinates. Landing `domains/rcs/` split this into
+  two named unknowns, the inertia and the forty-four thrusters' geometry, and `E-RCS-DYN` is
+  still waiting on the pair.
 - **Thermal node heat capacities and conductances.** `thermal_diode.md:965` declares every
   thermal constant UNSPECIFIED and refuses to infer them, so the thermal edges have no `tau`
-  and the thermal domain cannot be integrated. This is the largest single debt.
-- **LM sublimator rejection and water consumption.** Genuinely unpublished, and it is half of
-  the thermal water budget.
-- **RCS minimum impulse bit and minimum qualified firing time, for all three systems.** Not
-  published anywhere reachable, and no longer a hole with no shape: the residual accumulator
-  bounds the consequence to zero mean error and unbounded phase error, and RCS-11 names the one
-  case that is not benign.
-- **Fuel-cell reactant consumption per kWh.** The sustain-flow figure is a standby rate, not a
-  per-kilowatt rate, so the O₂-to-power coupling cannot yet be closed exactly.
+  and the thermal domain cannot be integrated. This is the largest single debt, and it is the
+  next thing the manifest's §0.5 worklist sends a round after: the LM-3 thermal analysis, the
+  Apollo 15 thermal simulation and the ECS study guides are all named and none is opened yet.
+- **RCS minimum impulse bit, for all three systems.** The *firing time* half of this entry was
+  false and is closed: the 100 lbf thruster's minimum is **10 ms**, published on PDF p. 89 of the
+  LM Propulsion and RCS study guide, with the two life limits, the restart capability and the rise
+  and tailoff on the same page and the next. What stays owed is the **impulse** of a
+  minimum-width pulse, and it is bounded rather than unknown: the same page says the full 100 lbf
+  is not achieved in 10 ms, so the bit is below 445 N × 10 ms = 4.45 N·s, and the curve that would
+  integrate it is Figure 54, which is a graph. The residual accumulator keeps the mean right
+  either way, and RCS-11 names the case that is not benign.
+- **Fuel-cell reactant consumption per kWh.** Closed, and the claim was false in the same way:
+  three published numbers — 0.00257 lb of hydrogen per hour per ampere, the module's rated
+  29 ± 2 VDC, and the reaction's mass ratio — give the per-joule figure by one division, and
+  `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg` derives it as 8.8619e-08 kg/J,
+  or 0.3190 kg O₂ per kWh. What the same source does *not* give is the thrust-versus-time curve
+  for a minimum pulse, which is why one line of the entry above survives.
 - **The plant.** No document names an integrator. `../integration/reconciliation/01-conflict-register.md`
   D-09 adopts `review-findings.md` §5's method split by model form; writing it is the next artifact.
 - **The crew display contract, as a design rather than a transcription.** `crew_diode.md:42` says
@@ -8543,6 +8556,107 @@ The three states moving *value → rule* is the same correction round 2 made for
 for the same reason: a state was counted as blocked by a number, and the number was published. The
 refusal count not moving is this round's point — the folder's existing derivations were sufficient
 to hold the chain, and the missing piece was the declaration they had nothing to hold.
+
+## The LM sublimator was never unpublished, and landing its capacity split the budget it landed in
+
+The live "does not compose" list carried this, and had for the folder's whole life:
+
+> **LM sublimator rejection and water consumption.** Genuinely unpublished, and it is half of the
+> thermal water budget.
+
+The entry it describes named four documents as having been searched — `TN D-6724`, `NR` ch. 6,
+`A11`, `SP4029`. None of them has it. **The LM's own ECS subsystem specification has both figures on
+one line of one table**, PDF p. 88, "Item 209 SUBLIMATOR", Spec. no. SVHS 2405:
+
+| Variable Conditions | Startup and Suit Integ. | Low Load | For Proof | Max. Normal Heat Load |
+|---|---:|---:|---:|---:|
+| Coolant inlet temp. (°F) | 86 | 65 | 38 | 100 |
+| Heat load (Btu/hr) | 9,500 | 5,860 | 1,845 | **12,450** |
+| Evaporant flow (lb/min) | 0.15 | 0.09 | 0.02 | **0.19** |
+
+Read from the rendered page, because the text layer interleaves the two header rows and drops the
+decimal points out of the flow column — it prints `0.15` once and loses `0.09`, `0.02` and `0.19`
+entirely. The capacity is the max normal heat load, **3,649 W**; the water is the same row's
+0.19 lb/min, **5.171 kg/h**; and both are declared in `domains/thermal/components.yaml#sublimator_lm`
+*and* `vehicle.yaml#thermal.radiators`, held equal by the `vehicle_keys` join that already existed
+rather than by a new one.
+
+The pair also cross-checks the vehicle's water-rejection constant from outside. 12,450 Btu/hr over
+11.4 lb/hr implies an effective latent heat of **1,092 Btu/lb = 2.540e6 J/kg**, against the 2.45e6
+J/kg `E-RAD-WATER` carries — 3.7 % apart, and the page explains why: the sublimator runs in
+evaporative, sublimation or **mixed** mode depending on the heat flux, and sublimation's latent heat
+(~1,220 Btu/lb) is higher than vaporisation's (~1,050). So the LM's own figure is carried and the
+cycle's constant stays the CSM's.
+
+### The finding underneath: the demands were per vehicle and the capacities were not
+
+`load_budget` had split its demands by vehicle since it was written — `csm_total_demand_w` and
+`lm_total_demand_w` — and summed its **capacities** into one number:
+
+```yaml
+  csm_total_demand_w: 1723
+  lm_total_demand_w: 1007
+  total_rejection_capacity_w: 4933     # 2,588 W of radiator plus 2,345 W of evaporator
+```
+
+and the relation beside that total argues *"against a 1,723 W CSM demand"*. With the LM's sublimator
+unset the total was merely incomplete. The moment its capacity was published it became **two
+vehicles' rejection under a one-vehicle sentence** — 4,933 would have become 8,582 and the block
+would have claimed the CSM had five times the margin it has.
+
+So the totals are per vehicle, and `check_thermal_budget` is a **partition in both directions**
+rather than a sum:
+
+- a part whose vehicle's total does not reach it is refused — the closure it always was;
+- a part that declares no `vehicle` is refused rather than added to whichever total is nearest,
+  because a watt in the wrong vehicle's budget is a margin nobody has;
+- a declared total with no parts is refused, so a total cannot outlive the hardware it counts.
+
+The partition key is the `vehicle:` field, which is not new vocabulary: `check_spacecraft_vocabulary`
+already walks every document for `vehicle:` string keys and holds them against
+`vehicle.yaml#spacecraft`, so adding it to the three thermal articles made them members of a set the
+corpus already validates. An `UNCONFIGURED` part is left to the debt walk — absence is the walk's
+business and disagreement is this rule's, the split `check_burn_capability` makes too.
+
+### Three more claims in the same list that were false
+
+Reading that list for entries this round had answered turned up three more. **The inertia tensor's
+entry said the axis datum "lives in the CSM/LM Operational Data Book, which is not reachable"** — it
+is reachable, it is 966 pages, and `.scratch/apollo/SOURCES.md` §1 maps it page by page; the Mission E
+consumables volume's Table XIV alone gives weight, CG and the full tensor for five configurations.
+That debt is an extraction, not an absence. **The impulse-bit entry said the minimum firing time is
+"not published anywhere reachable"** — it is 10 ms, on PDF p. 89 of the LM Propulsion and RCS study
+guide, and round 2 landed it; what stays owed is the impulse of a minimum pulse, now with a ceiling
+of 4.45 N·s. **And the fuel-cell entry said the per-kWh figure could not be closed exactly** — round 3
+closed it by one division.
+
+All four bullets are corrected in place rather than deleted, because the wrong claim is the reason
+each debt survived and a reader who meets the correction learns what the debt actually wanted.
+
+### What the round did not do
+
+The `searched:` field is still owed, and this round makes it **three rounds running** that a claim
+of "not published" has turned out false. 22 `basis: UNCONFIGURED` provenances still assert
+unavailability and none records what was searched; the sublimator's named four documents that do not
+have the figure while the document that does sat in the manifest unopened. The mechanical fix is
+unchanged and needs an honest record per claim rather than a rule.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 271 | **268** |
+| `UNCONFIGURED scalars` the plant counts | 194 | **191** |
+| `report.refuse` call sites in the linter | 699 | **701** |
+| tests in `tests/test_vehicle_config.py` | 239 | **240** |
+| thermal articles declaring their vehicle | 0 of 3 | **3 of 3** |
+| rejection totals in `load_budget` | 1 | **2**, one per vehicle |
+
+Debts, states advancing and edges usable are otherwise unmoved: the sublimator's two fields are not
+edge sensitivities and not state fields, so this round closed two literals and the prose entry that
+denied them without touching the schedule. The next largest debt is unchanged and is now named in
+the list above as the next thing the manifest sends a round after — the thermal capacities and
+conductances `thermal_diode.md:965` refuses to infer.
 
 ## The invariants, and which of them are enforced
 
