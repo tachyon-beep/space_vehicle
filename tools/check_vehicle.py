@@ -166,6 +166,7 @@ VEHICLE_SECTIONS = {
     "electrical",  # `check_electrical_bindings`, against domains/power/components.yaml
     "spacecraft",  # `check_spacecraft_vocabulary`: every `vehicle:` is held against this list
     "open_debts",  # counted and printed, like every other open_debts in the folder
+    "mass_properties",  # `check_mass_properties`: the frame, the tables and the interpolation
 }
 # Declarations addressed to a reader rather than to a tool. Naming them is the point: an unread
 # section is either a decision or an oversight, and this set is where the decision is recorded.
@@ -12029,6 +12030,257 @@ def check_cabin_pressure_closure(root: Path, report: Report) -> None:
             )
 
 
+def check_mass_properties(root: Path, report: Report) -> None:
+    """The centre of mass and the inertia tensor, and the table they were read out of.
+
+    This is the folder's flagship debt, and it was false for a hundred rounds: the entry in
+    `vehicle.yaml#open_debts` said the axis datum "lives in the CSM/LM Operational Data Book
+    (SNA-8-D-027), which is not reachable". **The book is in the library.** It defines the
+    frame in section 2.0 and tabulates the mass properties in section 3.2, and both are now in
+    the corpus — the frame as a definition with its two transformations, and Table 3.2-21 as
+    *two rows carried whole*, not as an interpolated number.
+
+    Four things are refused, and the second is the one that makes a hand-read fold-out
+    trustworthy at all:
+
+      - a configuration the file declares with neither values nor a named table, because a
+        configuration with no mass properties and no record of what would give it them is a
+        silence rather than a debt;
+      - **a row whose `AVERAGE` column is not `(IYY + IZZ) / 2 / 10`.** The Operational Data
+        Book prints that column in every row, it is arithmetic over two numbers in the same row,
+        and no plausible misreading of a rotated scan preserves it. It is the only reason the
+        transcription in `vehicle.yaml` can be checked by anything but a second pair of eyes;
+      - a table whose rows do not bracket the configuration they are used for, or whose two
+        rows are the same weight, because an interpolation outside its own interval is an
+        extrapolation and the table says nothing there;
+      - a tensor that is not a real one: the three moments must satisfy the triangle
+        inequalities, since no mass distribution has principal moments that do not.
+    """
+    vehicle = load(root / "vehicle.yaml", report) or {}
+    block = vehicle.get("mass_properties")
+    if not isinstance(block, dict):
+        # Absent is a different failure from empty, and `check_vehicle_sections` reports it.
+        return
+    documents = load_documents(root, vehicle, None, None, None)
+    frame = block.get("frame")
+    if not isinstance(frame, dict) or not frame.get("definition"):
+        report.refuse(
+            "vehicle.yaml:mass_properties.frame",
+            "declares no frame definition, so every station and every tensor below is a number "
+            "against nothing — which is exactly the state this block exists to end",
+        )
+    tables = {
+        str(t.get("id")): t
+        for t in block.get("tables") or []
+        if isinstance(t, dict) and t.get("id")
+    }
+    # Every row is checked against the table's own average column before anything is derived
+    # from it.
+    for table_id, table in tables.items():
+        rows = [r for r in table.get("rows") or [] if isinstance(r, dict)]
+        if len(rows) < 2:
+            report.refuse(
+                f"vehicle.yaml:mass_properties.tables.{table_id}",
+                f"carries {len(rows)} row(s). A table is carried as its rows because the "
+                "variation is the value; one row is a number, not a table",
+            )
+            continue
+        for index, row in enumerate(rows):
+            where = f"vehicle.yaml:mass_properties.tables.{table_id}.rows[{index}]"
+            average = row.get("average_moment")
+            iyy, izz = row.get("iyy_slug_ft2"), row.get("izz_slug_ft2")
+            if not all(isinstance(v, (int, float)) for v in (average, iyy, izz)):
+                report.refuse(where, "does not carry `average_moment`, `iyy` and `izz` together")
+                continue
+            expected = (iyy + izz) / 2 / 10
+            if abs(average - expected) > 1.0:
+                report.refuse(
+                    f"{where}.average_moment",
+                    f"is {average} and the same row's (IYY + IZZ) / 2 / 10 is {expected:.1f}. "
+                    "That column is the table's own arithmetic over two numbers in its own row, "
+                    "so a row where it does not hold has been misread — and this is the check "
+                    "that lets a folded, rotated scan be trusted rather than believed",
+                )
+        weights = [r.get("weight_lb") for r in rows]
+        if any(not isinstance(w, (int, float)) for w in weights):
+            report.refuse(f"vehicle.yaml:mass_properties.tables.{table_id}", "has a row with no weight")
+        elif len(set(weights)) != len(weights):
+            report.refuse(
+                f"vehicle.yaml:mass_properties.tables.{table_id}",
+                f"has two rows at the same weight ({weights}), so one of them is a duplicate "
+                "rather than an interval",
+            )
+
+    declared = {str(c.get("id")): c for c in vehicle.get("configurations") or [] if isinstance(c, dict)}
+    entries = {
+        str(c.get("id")): c
+        for c in block.get("configurations") or []
+        if isinstance(c, dict) and c.get("id")
+    }
+    for config_id in declared:
+        entry = entries.get(config_id)
+        if entry is None:
+            report.refuse(
+                f"vehicle.yaml:configurations {config_id}",
+                "has no entry under `mass_properties.configurations`, so nothing says whether "
+                "its centre of mass and inertia are known or what would give them",
+            )
+            continue
+        if str(entry.get("properties")) == "UNCONFIGURED":
+            if not str(entry.get("note") or "").strip():
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}",
+                    "owes its mass properties and names no table, so the debt is a hole rather "
+                    "than a task",
+                )
+            # **An owed entry names a table this block does not carry, and that is the point.**
+            # `ODB_3_2_22` is a real table in the same section of the same book; what is missing is
+            # the transcription, so requiring membership here would refuse the debt for being a
+            # debt. What it must not do is name nothing, which is the check below.
+            if not str(entry.get("table") or "").strip():
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.table",
+                    "is empty, so the configuration owes its mass properties to nothing in "
+                    "particular — which is the state the open debt was in for a hundred rounds",
+                )
+            continue
+        table = tables.get(str(entry.get("table")))
+        if table is None:
+            report.refuse(
+                f"vehicle.yaml:mass_properties.configurations {config_id}.table",
+                f"names {entry.get('table')!r}, which is not a table this block carries",
+            )
+            continue
+        rows = sorted(
+            (r for r in table.get("rows") or [] if isinstance(r, dict) and isinstance(r.get("weight_lb"), (int, float))),
+            key=lambda r: float(r["weight_lb"]),
+        )
+        weight = entry.get("weight_lb")
+        if not isinstance(weight, dict) or not isinstance(weight.get("value"), (int, float)):
+            report.refuse(
+                f"vehicle.yaml:mass_properties.configurations {config_id}.weight_lb",
+                "is not a derived value, so the table row it selects cannot be checked",
+            )
+            continue
+        pounds = float(weight["value"])
+        if not (float(rows[0]["weight_lb"]) <= pounds <= float(rows[-1]["weight_lb"])):
+            report.refuse(
+                f"vehicle.yaml:mass_properties.configurations {config_id}.weight_lb",
+                f"is {pounds:.1f} lb and Table {table.get('id')} spans "
+                f"{rows[0]['weight_lb']} to {rows[-1]['weight_lb']} lb. A row outside that span "
+                "is an extrapolation, and the book says nothing there",
+            )
+            continue
+        bracketed = [
+            (lo, hi)
+            for lo, hi in zip(rows, rows[1:], strict=False)
+            if float(lo["weight_lb"]) <= pounds <= float(hi["weight_lb"])
+        ]
+        if not bracketed:
+            report.refuse(
+                f"vehicle.yaml:mass_properties.configurations {config_id}",
+                f"is at {pounds:.1f} lb, which this table's rows do not bracket",
+            )
+            continue
+        lo, hi = bracketed[0]
+        # **The two values that are not moments are derivations too**, and they were not checked
+        # here at first: `weight_lb` is the configuration's mass in the table's unit and `x_bar_m`
+        # is the centre of mass, and a fixture that swapped the two rows the *centre of mass*
+        # interpolates between left the linter silent — the moment derivations caught nothing
+        # because they name their own rows, and the weight pair still bracketed. A derivation that
+        # nothing evaluates is prose with arithmetic in it.
+        for field, subject in (("weight_lb", "the configuration's weight"), ("x_bar_m", "the centre of mass")):
+            value = entry.get(field)
+            if not isinstance(value, dict) or value.get("derivation") is None:
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.{field}",
+                    f"is not a derived value, so {subject} is a number nothing can re-derive",
+                )
+                continue
+            check_declared_derivation(
+                f"vehicle.yaml:mass_properties.configurations {config_id}.{field}.derivation",
+                value["derivation"],
+                value.get("value"),
+                subject,
+                documents,
+                report,
+            )
+        # The tensor, from the values the entry declares, and the triangle inequalities that
+        # every real inertia tensor satisfies.
+        tensor = entry.get("inertia_kg_m2") or {}
+        moments = {}
+        for axis in ("ixx", "iyy", "izz"):
+            value = tensor.get(axis)
+            if not isinstance(value, dict) or value.get("derivation") is None:
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.inertia_kg_m2.{axis}",
+                    "is not a derived value, so the interpolation it claims to be is a number "
+                    "nothing can re-derive",
+                )
+                continue
+            check_declared_derivation(
+                f"vehicle.yaml:mass_properties.configurations {config_id}.inertia_kg_m2.{axis}.derivation",
+                value["derivation"],
+                value.get("value"),
+                "the moment of inertia",
+                documents,
+                report,
+            )
+            if isinstance(value.get("value"), (int, float)):
+                moments[axis] = float(value["value"])
+        for axis in ("pxy", "pxz", "pyz"):
+            value = tensor.get(axis)
+            if isinstance(value, dict) and value.get("derivation") is not None:
+                check_declared_derivation(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.inertia_kg_m2.{axis}.derivation",
+                    value["derivation"],
+                    value.get("value"),
+                    "the product of inertia",
+                    documents,
+                    report,
+                )
+        if len(moments) == 3:
+            ixx, iyy, izz = moments["ixx"], moments["iyy"], moments["izz"]
+            for first, second, third in ((ixx, iyy, izz), (iyy, izz, ixx), (izz, ixx, iyy)):
+                if first + second < third:
+                    report.refuse(
+                        f"vehicle.yaml:mass_properties.configurations {config_id}.inertia_kg_m2",
+                        f"has {first:g} + {second:g} < {third:g}. No mass distribution has "
+                        "principal moments that violate the triangle inequality, so this tensor "
+                        "describes no vehicle at all",
+                    )
+                    break
+        # And the two rows the interpolation names, which must be the pair that brackets the
+        # weight rather than two rows that happen to be present.
+        for key in ("x_low", "x_high", "w_low", "w_high"):
+            named = ((entry.get("x_bar_m") or {}).get("derivation") or {}).get("inputs", {}).get(key)
+            if named is None:
+                continue
+            suffix = named.split("vehicle.yaml:", 1)[-1]
+            resolved = resolve_dotted(vehicle, suffix)
+            if resolved is None:
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.x_bar_m.derivation.inputs.{key}",
+                    f"names {named!r}, which does not resolve. A source that has been renamed "
+                    "reads exactly like a source that is unset",
+                )
+        names = ((entry.get("x_bar_m") or {}).get("derivation") or {}).get("inputs", {})
+        if names.get("w_low") and names.get("w_high"):
+            low = resolve_dotted(vehicle, str(names["w_low"]).split("vehicle.yaml:", 1)[-1])
+            high = resolve_dotted(vehicle, str(names["w_high"]).split("vehicle.yaml:", 1)[-1])
+            if (
+                isinstance(low, (int, float))
+                and isinstance(high, (int, float))
+                and not (float(low) <= pounds <= float(high))
+            ):
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.configurations {config_id}.x_bar_m",
+                    f"interpolates between {low} and {high} lb for a configuration at "
+                    f"{pounds:.1f} lb, so the arithmetic is reading the wrong pair of rows "
+                    "even though the table brackets it",
+                )
+
+
 def check_thermal_lumps(root: Path, report: Report) -> None:
     """A zone's time constant is its lump over its conductance, and the lump is data now.
 
@@ -14403,6 +14655,7 @@ def main(argv: list[str] | None = None) -> int:
     check_thermal_budget(root, report)
     # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
     # oxygen in it is what the compartment's own two alarms have to call habitable.
+    check_mass_properties(root, report)
     check_cabin_pressure_closure(root, report)
     # And the propellant: which tanks the graph carries, which it does not, and whether a carrier's
     # level is the sum of what it says it holds.

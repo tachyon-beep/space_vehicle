@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 256 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 256 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **253** is every obligation the linter can name:
-**103** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **256** is every obligation the linter can name:
+**107** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **177** the plant
+the missing charging efficiency, the pump-speed conversion). The **181** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 177 is the linter's 103 **plus** the graph's unset edge
+`coupling.yaml` included, so its 181 is the linter's 107 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -9011,6 +9011,96 @@ while the debt count fell.
 The six that closed are the six that were owed; the four that moved into *owes an edge* were already
 debts. What the round is for is the fifth figure: **113 of 134 states are fully configured**, and the
 band the vehicle watches its oxygen with is now the band its own mixture gives.
+
+## The inertia tensor was "not reachable", and the book that has it was in the library
+
+The debt has been in `vehicle.yaml#open_debts` since the folder had one, and it is the one every
+other attitude debt points at:
+
+> Inertia tensor and centre of mass per configuration. The Apollo 11 mission report tabulates c.g.
+> and inertia per mission phase, but the axis datum lives in the CSM/LM Operational Data Book
+> (SNA-8-D-027), **which is not reachable**, so the tabulated values cannot be converted to
+> physical offsets.
+
+**It is reachable.** `ODB-Vol3-MassProperties.pdf` has been in the library — and in this folder's own
+`.scratch/apollo/` — since the round that read Table XIV out of it for the propellant loads. It has
+967 pages, and it carries both halves of what the debt said was missing:
+
+| half | where |
+|---|---|
+| the frame | section 2.0, "Configuration and Reference Station Locations", Figures 2-16 and 2-17 (PDF pp. 41-42): `X_A = 4578.805 - X_LV`, `X_A = X_E + 399.5`, the LM docking interface at `X_A = 712.0` and the CM's at `X_A = 1110.25` |
+| the values | section 3.2, "Mission J-2 Mass Property Data Tables": Table 3.2-21, the docked CSM-113/LM-11 for the D.O.I. burn, PDF p. 351 (printed p. 3.2-111), as a function of spacecraft weight |
+
+### A table, not a number
+
+The tables are keyed by **spacecraft weight** rather than by configuration, because one row is one
+whole vehicle at one weight. So `vehicle.yaml#mass_properties` carries the **two rows that bracket
+this vehicle's docked configuration** — 97,787.4 lb and 96,787.4 lb — and derives the centre of mass
+and the six inertia components from them by interpolation, each as a named-input `derivation` the
+linter evaluates. The variation is the data; the interpolated number is the consequence.
+
+| | at 97,787.4 lb | at 96,787.4 lb | this vehicle at 97,190.8 lb |
+|---|---:|---:|---:|
+| centre of mass, X_A (in) | 1045.71 | 1046.93 | **1046.438** = 26.5795 m |
+| IXX (slug-ft²) | 59,378 | 58,853 | **59,064.8** = 80,081 kg m² |
+| IYY | 562,820 | 559,336 | **560,741** = 760,263 kg m² |
+| IZZ | 567,758 | 564,711 | **565,940** = 767,312 kg m² |
+| PXY / PXZ / PYZ | -11,020 / -4,822 / 1,295 | -11,009 / -4,617 / 1,150 | **-14,932 / -6,372 / 1,638 kg m²** |
+
+The tensor passes the sanity it should: the transverse moments are about ten times the roll moment,
+which is what a long slender stack looks like, and its centre of mass moves from `X_A = 1041.07` in at
+the heaviest row to `X_A = 1110.52` in at the lightest — between the two docking interfaces, moving
+toward the CM as the service module's propellant is burned.
+
+### How a rotated scan is checked
+
+The table is a fold-out, rotated ninety degrees, with a text layer that prints `Z | ee | N | Q`. It
+was read from the rendered page at 300 dpi, and **what makes that reading checkable is the table's
+own arithmetic**: every row carries an `AVERAGE` column, and it is `(IYY + IZZ) / 2 / 10`. No
+plausible misreading of a scan preserves that identity in a row whose two moments were transcribed
+wrong, so `check_mass_properties` refuses a row where it does not hold — which is the only reason a
+hand-read table can be carried in a corpus whose whole discipline is that a number with no reader
+does not have to be plausible.
+
+It refuses three more things: an interpolation whose rows do not bracket the configuration's weight
+(the book says nothing outside its own span), a tensor that violates the triangle inequality (no mass
+distribution does), and a configuration with neither values nor a named table.
+
+### What is still owed, and why it is now four walkable debts
+
+The single prose debt became four `UNCONFIGURED` scalars, each naming the table that answers it:
+`csm_alone` to Table 3.2-22, `lm_alone_descent` to 3.2-25, `lm_ascent_stage` to 3.2-26, and
+`csm_lm_ascent_docked` to the arithmetic over 3.2-22 and 3.2-26 — because **no table is the CSM
+docked to an ascent stage**, and saying so is more useful than a paragraph that says all four are
+missing. And the tensor alone does not close `E-RCS-DYN`: its sensitivity is an angular acceleration
+per newton, which needs the thrusters' lever arms, and those are the separate debt they always were.
+
+### The edit that the corpus caught
+
+Landing the block moved `configurations` and `mass_properties` apart with an anchor that had no blank
+line after it, and the four configurations' `mass_breakdown` blocks were deleted with it. Nothing
+about the tensor noticed. **`max_explainable_acceleration_g` did**: it is computed from the engine set
+crossed with the configuration set, and with only one configuration still carrying a breakdown the
+ceiling fell from the LM ascent engine's 0.32479 g to the SPS on the docked stack at 0.21092 g — so
+`uncommanded_acceleration`'s assertion stopped agreeing with its own derivation and the linter
+refused. That statistic is computed rather than quoted for exactly this reason, and this is the first
+time it has caught something the author did not.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | **256** |
+| literal `UNCONFIGURED` scalars | 103 | **107** |
+| prose obligations | 150 | **149** |
+| `UNCONFIGURED scalars` the plant counts | 177 | **181** |
+| `report.refuse` call sites in the linter | 720 | **738** |
+| tests in `tests/test_vehicle_config.py` | 249 | **251** |
+
+The headline went **up by three** and that is the round's accounting, stated rather than smoothed: one
+prose debt was retired (it was false) and four precise ones replaced it. Four configurations' mass
+properties are worth more as four fields with a table and a page each than as one sentence saying
+nobody can have them.
 
 ## The invariants, and which of them are enforced
 
