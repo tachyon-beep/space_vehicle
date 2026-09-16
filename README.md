@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 292 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 293 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 292 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 293 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **292** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **293** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -7808,7 +7808,7 @@ Two instruments on one channel is the redundant pair, and the rule is silent abo
   inside its own operating envelope.
 
 A disagreement is a refusal and a figure that is not there is a debt — the same split the display
-contract makes. A measured channel with no `range` at all composes, at 293 debts, and the debt says
+contract makes. A measured channel with no `range` at all composes, at 294 debts, and the debt says
 the containment cannot be decided rather than that it failed.
 
 ### What the round got wrong on the way
@@ -7846,6 +7846,99 @@ of fault". Both numbers were prose no tool derived, and the first was 450 adrift
 `report.refuse` call site count, which one command reproduces. The same table's row for
 `channels.yaml` still says 147 channels where the linter counts 148 — a drift of one that predates
 this round and whose definition is not stated, so it is named here rather than guessed at.
+
+## A rating declared three times and joined twice, and a debt that existed only in the sentence promising it
+
+Three declarations of one quantity, one chain, and the chain's two end links missing:
+
+    the article            ->  the counter              ->  the published figure
+    eclss.rated_man_hours      coupling.exhausted_at      vehicle.yaml.*_man_hours
+    (read by nothing)          (read)                     (read, via exhausted_at_source)
+
+`domains/eclss/components.yaml` declares three absorbers, each a `kind: stock` that names the
+counter it feeds and states its rating beside it:
+
+```yaml
+  - id: csm_lioh_element
+    kind: stock
+    class: absorber
+    node: absorber_capacity_csm
+    rated_man_hours: 72
+```
+
+The same two figures are published in `vehicle.yaml#consumables.co2_removal`, and `coupling.yaml`'s
+counters declare `exhausted_at` **with** an `exhausted_at_source` naming the published field — so
+`check_initial_sources` already held the counter to the figure it came from, and the threshold and
+the plant both read the counter. What nothing read was the copy on the article:
+
+| field | declarations | read by |
+|---|---|---|
+| `vehicle.yaml#consumables.co2_removal.*_man_hours` | 3 | `exhausted_at_source`, resolved and compared |
+| `coupling.yaml` `exhausted_at` | 2 | the threshold, the plant, and the check above |
+| `domains/eclss/components.yaml` `rated_man_hours` | 3 | **nothing** — the word appeared in no file under `tools/` |
+
+The file's own comment above those components had already said it, in the round that found the shared
+counter: *"The two ratings that would have exposed the shared counter were written right here the
+whole time."* They were written there, and they were read nowhere.
+
+### The comment that counted the copies and missed one
+
+The check that joins the other two copies says, in its own comment, that both ratings "are
+`vehicle.yaml#consumables.co2_removal`'s published ratings **written a second time**". That is this
+folder's oldest lesson arriving in the comment of the check written to catch it: **a hand-written
+list of what to compare is the bug**, and this one was a list of *two* where the corpus had three.
+The join needs no new field, because the component already names its counter and the counter is
+already held to the published figure — so the third copy is joined by the link that was sitting
+there: a component declaring `rated_man_hours` and naming a `node` is held against that node's
+`exhausted_at`, and a disagreement is refused. The reverse direction — a counter with a rating that
+no component is the article of — is a **debt**, for the reason the comms join gives one: a gap in
+the modelling rather than a contradiction between two files. It fires zero times today, and it exists
+so that deleting an article leaves a debt naming the counter rather than a capacity that quietly
+stopped being anybody's.
+
+### The half that came out of a note rather than a field
+
+The `absorber_capacity_lm` node explains why the LM's secondary cartridge and its six spares are not
+added to `exhausted_at`:
+
+> the 78 + 6 x 41 = 324 man-hours that are physically aboard are declared in `vehicle.yaml` and
+> modelled nowhere — **a debt, named in `open_debts`** rather than silently added to `exhausted_at`,
+> because a counter that started at 365 man-hours would be a vehicle whose crew can never run out of
+> LiOH
+
+`coupling.yaml#open_debts` held nine entries and none of them was that one. So the 324 man-hours were
+recorded **nowhere but in the sentence promising the record** — which is worse than an unset field,
+because a reader who meets the promise stops looking. The entry is written now, and it owes a
+decision rather than a number: either a cartridge-swap verb and a counter the 324 man-hours load
+into, or a sentence saying the spares are out of scope for this mission.
+
+### What the round got wrong on the way
+
+Two things, and the first is the same defect as the finding. The last case in the new test replaced
+`node: UNCONFIGURED` with `node: UNCONFIGURED` — a substitution whose old and new strings are equal.
+It satisfied the fixture's own guard (`count(old) == 1`), it composed, and it **tested nothing**: a
+check that cannot fail is not a check that passed, arriving in the fixture written to prove a check
+can fail. It is the plausible mistake now — wiring the spare to the only LM counter there is — which
+the rule refuses.
+
+And moving the count pins is order-dependent, which cost a pass. The script replaced `291 -> 292`
+first, which *created* a second occurrence of `292` in the test file, and the next replacement's
+uniqueness assertion fired on it. The pins are one below live (a fixture that removes an obligation)
+and one above (fixtures that add one), so they do not move independently; two of them became the same
+string partway through. The guard caught it rather than loosening the needle, which is what it is for.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 292 | **293** — the entry the note promised |
+| `domains/eclss` ratings a rule reads | 0 of 3 | **2 of 3**, the third's counter is the debt saying so |
+| `open_debts` entries in `coupling.yaml` | 9 | **10** |
+| `report.refuse` call sites in the linter | 661 | **664** |
+| tests in `tests/test_vehicle_config.py` | 216 | **217** |
+
+The plant's own figures do not move: this round adds no state, no node and no edge, so the readiness
+line and the build order are the ones round 48 left.
 
 ## The invariants, and which of them are enforced
 

@@ -8945,6 +8945,84 @@ def check_initial_sources(
                 f"{resolved}. One of the two is the rating and the other is a copy of it",
             )
 
+    # And the third copy, which is the one on the article itself.
+    #
+    # The comment above counts the rating's copies as **two** — vehicle.yaml and the coupling node —
+    # and it was wrong when it was written: `domains/eclss/components.yaml` states all three again as
+    # `rated_man_hours` (72, 41, 78) on the components that are the absorbers, and no tool read the
+    # field. That third copy is the one a reader meets first, because it is the only one that names
+    # the *article* — `csm_lioh_element`, `class: absorber` — while also naming the counter it feeds
+    # through `node:`. So the chain was article -> counter -> published figure with its middle link
+    # checked twice and its ends joined to nothing, which is this folder's oldest finding arriving in
+    # the comment of the check written to catch it: **a hand-written list of the copies is the bug**,
+    # and this one was a list of two where the corpus had three.
+    #
+    # The join needs no new field, because the component already names its counter and the counter is
+    # already held to the published figure. A component whose `node` is unset is skipped rather than
+    # refused: that gap is the unset-value walker's debt, and reporting one missing datum under two
+    # names is how it comes to look like two.
+    claimed_counters: set[str] = set()
+    for filename, document in sorted(documents.items()):
+        if not filename.endswith("components.yaml"):
+            continue
+        for component in (document or {}).get("components") or []:
+            if not isinstance(component, dict):
+                continue
+            rating = component.get("rated_man_hours")
+            if not isinstance(rating, (int, float)) or isinstance(rating, bool):
+                continue
+            cwhere = f"{filename}:components.{component.get('id')}.rated_man_hours"
+            node_id = component.get("node")
+            if not node_id or str(node_id) == "UNCONFIGURED":
+                continue
+            node = ((coupling or {}).get("nodes") or {}).get(str(node_id))
+            if not isinstance(node, dict):
+                report.refuse(
+                    cwhere,
+                    f"is a rating and the component names node {node_id!r}, which coupling.yaml "
+                    "does not declare. A component that is the article of a counter is exhausted at "
+                    "that counter's rating, and a name that resolves to no node is a link to nothing",
+                )
+                continue
+            claimed_counters.add(str(node_id))
+            exhausted = node.get("exhausted_at")
+            if not isinstance(exhausted, (int, float)) or isinstance(exhausted, bool):
+                report.refuse(
+                    cwhere,
+                    f"is {rating} and the counter it names, coupling.yaml:{node_id}, declares no "
+                    "numeric `exhausted_at`. A counter with no rating cannot spend the capacity the "
+                    "article it is the counter of claims to have",
+                )
+                continue
+            if abs(float(exhausted) - float(rating)) > 1e-9:
+                report.refuse(
+                    cwhere,
+                    f"is {rating} and the counter it names, coupling.yaml:{node_id}, is exhausted at "
+                    f"{exhausted}. The rating is published once and stated three times — on the "
+                    "article here, on the counter, and in vehicle.yaml#consumables.co2_removal — so "
+                    "this is the article disagreeing with the counter it feeds, and the counter is "
+                    "the one the threshold and the plant both read",
+                )
+
+    # The reverse direction, which is a debt rather than a refusal for the reason the comms join
+    # gives one: a counter nothing is the article of is a gap in the modelling rather than a
+    # contradiction between two files. Zero instances today, and the rule exists so that deleting
+    # the article leaves a debt naming the counter rather than a capacity that quietly stopped
+    # being anybody's.
+    for node_id, node in sorted(((coupling or {}).get("nodes") or {}).items()):
+        if not isinstance(node, dict):
+            continue
+        if not isinstance(node.get("exhausted_at"), (int, float)):
+            continue
+        if str(node_id) in claimed_counters:
+            continue
+        report.debt(
+            f"coupling.yaml:node {node_id}.exhausted_at",
+            "is a rating that no component in any domain is the article of. A counter with a rating "
+            "and no article is a capacity nothing declares it has, and the unattributed rating reads "
+            "exactly like one whose article was renamed",
+        )
+
 
 def check_consumers(documents: dict[str, Any], report: Report) -> None:
     """Every draw on a stock, against the stock it draws and the edge it says carries it.
