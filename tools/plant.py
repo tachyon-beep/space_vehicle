@@ -1589,8 +1589,19 @@ def build_order(world: World) -> dict[str, list[State]]:
             # by convention: a mode is moved by a command, an event or the domain's own logic, which
             # `moved_by` declares, and a hazard is drawn rather than computed.
             siblings = [o for o in world.states_on(state.node) if o.id != state.id]
+            # **Either form of declared arithmetic counts, and `derivation` is the stronger one.**
+            # This tested only `computation`, so the round that converted twelve literal
+            # computations into derivations moved five states — `cabin_heat_csm_w`,
+            # `cabin_heat_lm_w`, `service_bay_heat_w`, `descent_bay_heat_w` and
+            # `environment_heat_w` — out of "owes a rule" and into "owes an edge", which is the
+            # opposite of what happened: their inputs went from being *restated as literals* to
+            # being *named by dotted path*. A classifier keyed on one spelling of a declaration
+            # reads the other spelling as absence, which is this folder's oldest finding arriving
+            # in the worklist that exists to send an implementer to the right file.
+            provenance = state.spec.get("provenance") or {}
             declares_own_inputs = bool(
-                (state.spec.get("provenance") or {}).get("computation")
+                provenance.get("computation")
+                or provenance.get("derivation")
                 or state.spec.get("computation")
             )
             if not incoming and not preloaded:

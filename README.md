@@ -7576,6 +7576,84 @@ field is refused by name: **that shape is what let the contradiction be invisibl
 | curve segments declaring their operating state | 0 of 3 | **3 of 3** |
 | tests in `tests/test_vehicle_config.py` | 211 | **212** |
 
+## A computation restates its inputs, so it cannot disagree with them
+
+`state.environment_heat_w` declared `total_w: 2477.0` with `computation: '1361 * 0.2 * 9.1'` — and
+the three figures it multiplies are declared beside it:
+
+```yaml
+radiator_model:
+  environment:
+    solar_flux_w_m2: 1361
+    absorptivity: 0.2
+    projected_area_m2: 9.1
+    solar_load_w_at_bad_attitude: 2477
+```
+
+a block that exists so the flux, the absorptivity and the area have **one home**. No tool named any
+of the four, and the computation did not read them either: moving `solar_flux_w_m2` from **1361 to
+1400 composed**, because the expression multiplies its own copy. The block was decorative and the
+figure had two homes.
+
+**The corpus already had the stronger form and used it elsewhere** — a `derivation` of an
+`expression` over named `inputs`, each a number or a `"<file>.yaml:<dotted.path>"` source, evaluated
+by `check_declared_derivation`, the same function an edge's `sensitivity` and a consumer's
+`rate_kg_s` are held by. The two forms answer different questions: `computation` says *"here is the
+arithmetic"*, `derivation` says *"here is the arithmetic **and where each number comes from**"*.
+
+### The fix
+
+All **twelve** provenance computations became derivations, and each one now reads its declarations:
+
+| value | what it now reads |
+|---|---|
+| `environment_heat_w` | `radiator_model.environment`'s flux, absorptivity and area |
+| `cabin_heat_csm_w`, `cabin_heat_lm_w`, `service_bay_heat_w`, `descent_bay_heat_w` | the `demand_w` of every load `heat_inputs` assigns, in `domains/power/` |
+| `cabin_eq_csm_k`, `cabin_eq_lm_k` | the loop's `supply_c`, the cabin's heat total, the zone's `conductance_w_per_k` |
+| `cabin_o2_supply_csm_kg_s`, `cabin_o2_supply_lm_kg_s` | the leak rate, the crew size and the metabolic O2 rate |
+| `co2_removal_csm_kg_s`, `co2_removal_lm_kg_s` | the crew size and the metabolic CO2 rate |
+| `fc_h2_draw_kg_s` | `E-H2-FC`'s own sensitivity |
+
+Move any of them and the load refuses, naming the source and the value it resolved to. **They are
+also the reader for three clusters of declarations that had none**: the environment figures, the
+metabolic rates, and the loop conductance.
+
+And `provenance.computation` is now **refused by name** — *"restates its inputs rather than naming
+them … Write a `derivation` of an `expression` over named `inputs`"* — so the weak form cannot come
+back. The other two users of `rederive` are untouched: an edge's `sums_to_h` block and
+`mission.yaml`'s tick arithmetic are blocks whose inputs are numbers on their face.
+
+### The defect the round's own fixtures found
+
+Breaking a copy to test the above produced **102 refusals for one broken file**, and the first was
+`components.yaml: does not parse`. Two things were wrong in the loader, and both are about the one
+kind of message where the location *is* the whole content:
+
+- **`load()` reported `path.name`.** `components.yaml` is declared by all **eleven** domains and so
+  is `profiles.yaml`, so a parse error in `domains/power/components.yaml` sent a reader to one of
+  eleven files with nothing saying which. The four structural refusals — absent, unparseable, a
+  duplicate key, a key absorbed into the block scalar above it — now use `label()`, which spells a
+  domain file the way every other message in the linter does;
+- **the same file was refused five times.** `load` is called once per pass and the pass that owns
+  the real report sees a broken file more than once, so one unparseable file produced five identical
+  lines. `Report.refuse` now drops an exact duplicate: **102 refusals became 98, and the parse error
+  became one line.** That is the inflation round 74 removed from `assert`/`clear` and round 43 from
+  a missing value, arriving through the loader.
+
+**Debts are deliberately not deduped.** The count is the headline, and a debt repeated is a question
+about the walk rather than an error to swallow — the opposite of a refusal, where two identical
+lines carry exactly as much information as one.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **289** — the round changes how values are computed, not what is unset |
+| provenance computations | 12 | **0** — all twelve are derivations |
+| refusals for one unparseable domain file | 102 | **98**, and one line for the parse |
+| files a structural refusal could mean | 11 | **1** |
+| tests in `tests/test_vehicle_config.py` | 212 | **214** |
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

@@ -63,7 +63,16 @@ state:
     provenance:
       basis: derived
       computes: total_w
-      computation: "60 + 85 + 80 + 100 + 36 + 72 + 300"
+      derivation:
+        expression: "csm_cabin_fan + csm_suit_fan + csm_co2_scrubber + csm_lighting + csm_sband_transceiver + csm_sband_power_amplifier + csm_heaters"
+        inputs:
+          csm_cabin_fan: domains/power/components.yaml:loads.csm_cabin_fan.demand_w
+          csm_suit_fan: domains/power/components.yaml:loads.csm_suit_fan.demand_w
+          csm_co2_scrubber: domains/power/components.yaml:loads.csm_co2_scrubber.demand_w
+          csm_lighting: domains/power/components.yaml:loads.csm_lighting.demand_w
+          csm_sband_transceiver: domains/power/components.yaml:loads.csm_sband_transceiver.demand_w
+          csm_sband_power_amplifier: domains/power/components.yaml:loads.csm_sband_power_amplifier.demand_w
+          csm_heaters: domains/power/components.yaml:loads.csm_heaters.demand_w
       relation: >-
         the sum of the `demand_w` of the seven loads `heat_inputs.csm_cabin` assigns to this zone:
         cabin fan 60, suit fan 85, CO2 scrubber 80, lighting 100, S-band transceiver 36, S-band
@@ -83,7 +92,18 @@ state:
     provenance:
       basis: derived
       computes: total_w
-      computation: "62 + 85 + 80 + 40 + 20 + 90 + 150 + 100 + 200"
+      derivation:
+        expression: "lm_cabin_fan + lm_suit_fan + lm_co2_scrubber + lm_lighting + lm_sband_transmitter + lm_sband_high_power + lm_guidance_computer + lm_instrumentation + lm_heaters"
+        inputs:
+          lm_cabin_fan: domains/power/components.yaml:loads.lm_cabin_fan.demand_w
+          lm_suit_fan: domains/power/components.yaml:loads.lm_suit_fan.demand_w
+          lm_co2_scrubber: domains/power/components.yaml:loads.lm_co2_scrubber.demand_w
+          lm_lighting: domains/power/components.yaml:loads.lm_lighting.demand_w
+          lm_sband_transmitter: domains/power/components.yaml:loads.lm_sband_transmitter.demand_w
+          lm_sband_high_power: domains/power/components.yaml:loads.lm_sband_high_power.demand_w
+          lm_guidance_computer: domains/power/components.yaml:loads.lm_guidance_computer.demand_w
+          lm_instrumentation: domains/power/components.yaml:loads.lm_instrumentation.demand_w
+          lm_heaters: domains/power/components.yaml:loads.lm_heaters.demand_w
       relation: >-
         as the CSM's, over the nine loads `heat_inputs.lm_cabin` assigns: cabin fan 62, suit fan 85,
         CO2 scrubber 80, lighting 40, S-band transmitter 20, S-band high-power amplifier 90,
@@ -98,7 +118,13 @@ state:
     provenance:
       basis: derived
       computes: total_k
-      computation: "7.2 + 273.15 + 733 / 125"
+      derivation:
+        expression: "(supply_c + kelvin_offset) + cabin_heat_csm_w / conductance_w_per_k"
+        inputs:
+          supply_c: vehicle.yaml:thermal.loops.loop_primary.supply_c
+          kelvin_offset: 273.15
+          cabin_heat_csm_w: domains/thermal/components.yaml:state.cabin_heat_csm_w.total_w
+          conductance_w_per_k: domains/thermal/components.yaml:state.zone_csm_cabin_t.conductance_w_per_k
       relation: >-
         the equilibrium the cabin relaxes toward: the loop's mixed supply plus the rise the
         compartment's own equipment causes. Every term is declared elsewhere — the supply is
@@ -118,7 +144,13 @@ state:
     provenance:
       basis: derived
       computes: total_k
-      computation: "7.2 + 273.15 + 827 / 125"
+      derivation:
+        expression: "(supply_c + kelvin_offset) + cabin_heat_lm_w / conductance_w_per_k"
+        inputs:
+          supply_c: vehicle.yaml:thermal.loops.loop_lm.supply_c
+          kelvin_offset: 273.15
+          cabin_heat_lm_w: domains/thermal/components.yaml:state.cabin_heat_lm_w.total_w
+          conductance_w_per_k: domains/thermal/components.yaml:state.zone_lm_cabin_t.conductance_w_per_k
       relation: >-
         as the CSM's, over the LM cabin's larger heat load: 827 W over the same 125 W/K conductance is
         6.616 K above the same 280.35 K supply. The two cabins differ by 0.75 K at equilibrium, and
@@ -131,7 +163,12 @@ state:
     provenance:
       basis: derived
       computes: total_w
-      computation: "1361 * 0.2 * 9.1"
+      derivation:
+        expression: "solar_flux_w_m2 * absorptivity * projected_area_m2"
+        inputs:
+          solar_flux_w_m2: domains/thermal/components.yaml:radiator_model.environment.solar_flux_w_m2
+          absorptivity: domains/thermal/components.yaml:radiator_model.environment.absorptivity
+          projected_area_m2: domains/thermal/components.yaml:radiator_model.environment.projected_area_m2
       relation: >-
         the absorbed solar load at a bad attitude: 1361 W/m2 of flux, 0.2 absorptivity on a
         white thermal-control coating, and 9.1 m2 of radiator presented to the sun. 1,361 x 0.2 x 9.1
@@ -151,7 +188,13 @@ state:
     provenance:
       basis: derived
       computes: total_w
-      computation: "250 + 250 + 80 + 50"
+      derivation:
+        expression: "csm_coolant_pump_1 + csm_coolant_pump_2 + csm_rcs_heaters + csm_comm_heaters"
+        inputs:
+          csm_coolant_pump_1: domains/power/components.yaml:loads.csm_coolant_pump_1.demand_w
+          csm_coolant_pump_2: domains/power/components.yaml:loads.csm_coolant_pump_2.demand_w
+          csm_rcs_heaters: domains/power/components.yaml:loads.csm_rcs_heaters.demand_w
+          csm_comm_heaters: domains/power/components.yaml:loads.csm_comm_heaters.demand_w
       relation: >-
         the sum of the `demand_w` of the four loads `heat_inputs.csm_service_bay` assigns: coolant
         pump 1 at 250, pump 2 at 250, the RCS heaters at 80 and the comm heaters at 50. Algebraic
@@ -164,7 +207,11 @@ state:
     provenance:
       basis: derived
       computes: total_w
-      computation: "120 + 60"
+      derivation:
+        expression: "lm_landing_radar + lm_rcs_heaters"
+        inputs:
+          lm_landing_radar: domains/power/components.yaml:loads.lm_landing_radar.demand_w
+          lm_rcs_heaters: domains/power/components.yaml:loads.lm_rcs_heaters.demand_w
       relation: "the landing radar at 120 W and the descent stage's RCS heaters at 60, which is all `heat_inputs.lm_descent_bay` assigns"
   - id: zone_csm_cabin_t
     method: lag

@@ -121,7 +121,10 @@ state:
     provenance:
       basis: derived
       computes: ratio_of_o2_draw
-      computation: "1 / 8"
+      derivation:
+        expression: "h2_per_o2"
+        inputs:
+          h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
       relation: >-
         the cell consumes eight kilograms of oxygen for every kilogram of hydrogen — the 8:1 mass
         ratio for the reaction, which `E-H2-FC` has declared since it was written and

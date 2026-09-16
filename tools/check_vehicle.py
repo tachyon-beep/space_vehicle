@@ -486,7 +486,16 @@ class Report:
         self.notes: list[str] = []
 
     def refuse(self, where: str, why: str) -> None:
-        self.refusals.append(f"{where}: {why}")
+        # **One fault is one refusal.** `load` is called once per pass, and the pass that owns the
+        # real report sees the same unparseable file several times — a broken `components.yaml`
+        # produced **five identical lines**, which is the inflation round 74 removed from
+        # `assert`/`clear` and round 43 from a missing value, arriving through the loader. Two
+        # identical refusals carry exactly as much information as one, so the second is dropped.
+        # Debts are *not* deduped: the count is the headline, and a debt repeated is a question
+        # worth asking about the walk rather than an error to swallow.
+        line = f"{where}: {why}"
+        if line not in self.refusals:
+            self.refusals.append(line)
 
     def debt(self, where: str, why: str) -> None:
         self.debts.append(f"{where}: {why}")
@@ -861,29 +870,49 @@ def _parsed(path: Path) -> tuple[str, Any, dict[str, Any] | None, str | None]:
     return result
 
 
+def label(path: Path) -> str:
+    """The name a structural refusal is reported under — which has to identify the file it means.
+
+    These refusals used `path.name`, and for the corpus's *domain* files that is eleven names for
+    eleven files: `components.yaml` is declared by every domain, and so is `profiles.yaml`. So a
+    parse error in `domains/power/components.yaml` was reported as **"components.yaml: does not
+    parse"** — a reader told to go and fix one of eleven files, with nothing saying which. The four
+    structural refusals here (absent, unparseable, a duplicate key, a key absorbed into the block
+    scalar above it) are the ones a reader most needs to locate, because none of them names a
+    value: the whole message is the location.
+
+    The domain form is spelled the way every other message in this file spells it, because that is
+    the path `AGENTS.md` and the READMEs use when they name a domain file.
+    """
+    if path.parent.parent.name == "domains":
+        return f"domains/{path.parent.name}/{path.name}"
+    return path.name
+
+
 def load(path: Path, report: Report) -> dict[str, Any] | None:
+    where = label(path)
     if not path.exists():
-        report.refuse(path.name, "not present")
+        report.refuse(where, "not present")
         return None
     text, composed, data, error = _parsed(path)
     for line, trail in duplicate_keys(text, composed):
         report.refuse(
-            f"{path.name}:{line}",
+            f"{where}:{line}",
             f"writes {trail!r} a second time in the same mapping. The last one wins and the first "
             "is silently replaced, which is how an absorbed list item destroys the entry above it",
         )
     for line, key, opener in absorbed_keys(text):
         report.refuse(
-            f"{path.name}:{line}",
+            f"{where}:{line}",
             f"writes {key!r} at the indentation of the block scalar opened on line {opener}, so it "
             "is prose rather than a key and the declaration does not exist in the parsed document. "
             "Dedent it to the level of its siblings",
         )
     if error is not None:  # a config that does not parse is not a config
-        report.refuse(path.name, f"does not parse: {error}")
+        report.refuse(where, f"does not parse: {error}")
         return None
     if not isinstance(data, dict):
-        report.refuse(path.name, "is not a mapping")
+        report.refuse(where, "is not a mapping")
         return None
     # Semantic rather than structural, and here rather than in the per-file checks because every
     # document passes through this one call site. See `check_answered_debts`.
@@ -4045,44 +4074,10 @@ def check_domain(
     for state in (docs.get("components.yaml") or {}).get("state") or []:
         if not isinstance(state, dict):
             continue
-        # **A state's `computation` re-derives the field it says it derives.**
-        #
-        # This loop used to name the fields: `for field in ("nominal_kg_s", "total_w")`. The
-        # comment beside it said the point was that "a derived value states its arithmetic" stays
-        # *one rule* — and a list of two field names is not a rule, it is a list. A third name
-        # appeared and the list did not: `power.fc_h2_draw_kg_s` declares
-        # `computation: "1 / 8"` on `ratio_of_o2_draw`, and its arithmetic could be changed to
-        # `1 + 1` with the vehicle composing. A fourth name, `total_k`, was covered by a second
-        # hand-written call in the thermal check, and `total_w` was covered by a third — the same
-        # rule applied three times, which is why one wrong computation was refused *twice*.
-        #
-        # `provenance.computes` names the field, so the association is a declaration rather than a
-        # guess, and the three sites become this one. A `computation` with nothing to compute is
-        # refused, because an arithmetic that derives nothing is prose wearing an operator.
-        provenance = state.get("provenance") or {}
-        computation = provenance.get("computation")
-        if computation is not None:
-            swhere = f"domains/{name}/components.yaml:state {state.get('id')}"
-            subject = provenance.get("computes")
-            if not subject:
-                report.refuse(
-                    f"{swhere}.provenance.computes",
-                    f"is absent and the state declares `computation: {computation!r}`. A "
-                    "computation has to say which field it produces: naming the fields in the "
-                    "linter instead is a list that is right until somebody adds a fourth name, "
-                    "which is what `ratio_of_o2_draw` and `total_k` each found out",
-                )
-            elif not isinstance(state.get(str(subject)), (int, float)):
-                report.refuse(
-                    f"{swhere}.provenance.computes",
-                    f"names {subject!r}, which this state does not declare as a number, so the "
-                    "computation has nothing to be checked against",
-                )
-            else:
-                # The field is in the `where` because the rule now knows it: a refusal that says
-                # "this state's computation is wrong" makes a reader find the subject, and there
-                # may be four numeric fields on the state.
-                rederive(f"{swhere}.{subject}", state.get(str(subject)), computation, report)
+        # A state's declared arithmetic is checked by `check_provenance_derivations`, which is one
+        # rule in one place: `provenance.computes` names the field a `derivation` produces, and the
+        # derivation is evaluated by `check_declared_derivation`. It used to be here, as a loop over
+        # two field names — `("nominal_kg_s", "total_w")` — which is the defect that round removed.
 
     for component in components.get("components") or []:
         cid = component.get("id", "?")
@@ -10508,6 +10503,85 @@ def check_argument_vocabularies(
                         )
 
 
+def check_provenance_derivations(
+    root: Path, documents: dict[str, Any], report: Report
+) -> None:
+    """A `derived` value whose arithmetic reads the declarations rather than restating them.
+
+    `provenance.computation` shows its work as *literals*. `state.environment_heat_w` carried
+    `computation: '1361 * 0.2 * 9.1'`, and the three figures it multiplies are declared beside it in
+    `domains/thermal/components.yaml#radiator_model.environment` — a block that exists so the flux,
+    the absorptivity and the area have one home. **No tool named any of them**, and the computation
+    did not read them either: changing `solar_flux_w_m2` from 1361 to 1400 composed, because the
+    expression multiplies its own copy. The block was decorative and the figure had two homes.
+
+    The corpus already had the stronger form and used it elsewhere: a `derivation` of an
+    `expression` over named `inputs`, each either a number or a `"<file>.yaml:<dotted.path>"`
+    source, evaluated by `check_declared_derivation` — the same function an edge's `sensitivity`
+    and a consumer's `rate_kg_s` are held by. This pass points it at a state's provenance, so a
+    value can say *which declarations* it is computed from and have them read on every run.
+
+    **`derivation` is the form and `computation` is not**, and that is the round's whole finding
+    rather than a preference between two spellings. `computation` says "here is the arithmetic";
+    `derivation` says "here is the arithmetic **and where each number comes from**". A value with
+    only the first cannot disagree with the declarations it names, because it does not name them —
+    which is how `solar_flux_w_m2` could be moved from 1361 to 1400 with the vehicle composing.
+
+    So a provenance carrying a `computation` is refused by name, with the twelve converted values
+    as the worked example of what to write instead. The other two callers of `rederive` — an
+    edge's `sums_to_h` block and `mission.yaml`'s tick arithmetic — are untouched: they are blocks
+    whose inputs are numbers on their face rather than declarations elsewhere.
+    """
+    for name, document in sorted(documents.items()):
+        if not name.endswith("components.yaml"):
+            continue
+        for state in (document or {}).get("state") or []:
+            if not isinstance(state, dict):
+                continue
+            provenance = state.get("provenance") or {}
+            derivation = provenance.get("derivation")
+            computation = provenance.get("computation")
+            if derivation is None and computation is None:
+                continue
+            where = f"{name}:state {state.get('id')}"
+            subject = provenance.get("computes")
+            if not subject:
+                report.refuse(
+                    f"{where}.provenance.computes",
+                    "is absent, so nothing says which field this state's arithmetic produces. "
+                    "Naming the fields in the linter instead is a list that is right until somebody "
+                    "adds a fourth name, which is what `ratio_of_o2_draw` and `total_k` each found "
+                    "out",
+                )
+                continue
+            if not isinstance(state.get(str(subject)), (int, float)):
+                report.refuse(
+                    f"{where}.provenance.computes",
+                    f"names {subject!r}, which this state does not declare as a number, so the "
+                    "arithmetic has nothing to be checked against",
+                )
+                continue
+            if derivation is None:
+                report.refuse(
+                    f"{where}.provenance.computation",
+                    f"is {computation!r}, which restates its inputs rather than naming them. A "
+                    "literal arithmetic cannot disagree with the declarations it copies, so moving "
+                    "one of them — `solar_flux_w_m2` from 1361 to 1400 in "
+                    "`radiator_model.environment` — composed while this value went on reporting "
+                    "the old total. Write a `derivation` of an `expression` over named `inputs`, "
+                    "each a number or a `<file>.yaml:<dotted.path>` source",
+                )
+                continue
+            check_declared_derivation(
+                f"{where}.provenance.derivation",
+                derivation,
+                state.get(str(subject)),
+                f"{state.get('id')}.{subject}",
+                documents,
+                report,
+            )
+
+
 def check_threshold_derivations(root: Path, documents: dict[str, Any], report: Report) -> None:
     """A threshold whose limit *is* another declared quantity says so, and is checked against it.
 
@@ -12494,6 +12568,7 @@ def main(argv: list[str] | None = None) -> int:
     check_gnc_substepping(root, mission, report)
     check_mission_model(mission or {}, report)
     check_threshold_derivations(root, documents, report)
+    check_provenance_derivations(root, documents, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_domain_reads(documents, report)
     check_perception_model(documents, report)
