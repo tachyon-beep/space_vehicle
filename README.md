@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 263 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 263 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,11 +184,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **263** is every obligation the linter can name:
-**111** literal `UNCONFIGURED` scalars and **152** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
+**111** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **187** the plant
+the missing charging efficiency, the pump-speed conversion). The **185** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 187 is the linter's 111 **plus** the graph's unset edge
@@ -8755,6 +8755,95 @@ reported for two burns while only the SPS had a rating, and with the ascent engi
 rendezvous burn's absent duration is now counted too — `records no burn_s for 3 burn(s)` where it
 said 2. A rating that nothing is measured against is not a check; the third entry is what turns the
 ascent engine's budget into one.
+
+## The lump every thermal time constant divides by was a sentence, and the field for it was read by nothing
+
+Every `lag` zone in `domains/thermal/components.yaml` computes `tau = C/G` with `C = m × c_p`, and
+**the mass was written in prose in all of them**:
+
+| zone | what the relation said | what was declared |
+|---|---|---|
+| `zone_csm_cabin_t` | "C = 400 kg aluminium-equivalent × 900 J/kg-K" | `conductance_w_per_k: 125` only |
+| `zone_lm_cabin_t` | "as the CSM cabin" | the same |
+| `zone_csm_avionics_t` | "C = 60 kg aluminium-equivalent" | nothing |
+| `zone_csm_service_t` | nothing — a `chosen` time constant | `lumped_mass_kg: UNCONFIGURED` |
+| `zone_lm_descent_t` | nothing — a `chosen` time constant | `lumped_mass_kg: UNCONFIGURED` |
+| `zone_radiator_t` | a bracket, 625 s from its own lump and 300 s chosen | nothing |
+
+So the field was declared **exactly where the corpus could not fill it and omitted where it could**,
+and it appeared in no file under `tools/` at all. The instrument is the same question as ever — what
+reads this, and what does it disagree with — and the answer for `lumped_mass_kg` was: the debt walk,
+and nothing else.
+
+### The mass is not a second statement of the time constant
+
+It is the input that turns the constant into a **conductance**, which is what two edges need in K per
+W. The comment above `zone_csm_service_t` had said so since the zone was written:
+
+> `C = m x c_p` and `G = C / tau`, so ONE number closes the edge above: the lumped mass. The
+> propellant is the mass and the tank wall is the path, which is what the state's own reason says;
+> what is owed is that mass, not the conductance, because `tau` is already declared.
+
+Nothing evaluated it. So the round did three things:
+
+- **the three zones whose lump is stated declare it** — `lumped_mass_kg`, `specific_heat_j_per_kg_k`
+  and `conductance_w_per_k` — and their `tau_s` is `derived` from the three, re-evaluated every run
+  by the same `check_declared_derivation` the fuel cell's reactant chain uses. Three time constants
+  stopped being prose;
+- **`E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM` carry the division** `tau / (m × c_p)` with every input
+  named, so each edge now says *which* scalar closes it rather than that a conductance is owed;
+- **`check_thermal_lumps` reads the three fields**, refusing a mass with no heat capacity or path, a
+  path or capacity with no mass at all, and — the one that matters — a `tau_s` that disagrees with
+  `m × c_p / G`.
+
+The radiator is deliberately outside it. Its relation gives a *bracket* — 625 s from its own lump and
+a linearised conductance, chosen at 300 s because the linearisation overstates damping at the cold
+end — so its time constant is a judgement rather than a division, and declaring a lump for it would
+assert a relation the corpus overrode on purpose.
+
+### And the debt count fell by two for a reason that is not a value
+
+`E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM` were counted as debts in their own right *and* their input was
+counted where it lives — two entries for one unknown. `check_declared_derivation` states the rule
+against it in its own comment: **"the obligation is counted where the quantity lives, and this is a use
+of it rather than a second unknown."** The edge walk counted it anyway.
+
+The skip is not a hole, and the round proved both directions rather than asserting them: a derivation
+whose inputs are all numbers **resolves**, and `check_declared_derivation` then refuses it for
+"stating a derivation and carrying nothing to hold it against". So an edge with a derivation is either
+refused outright or its input is owed and already counted; what the skip leaves is exactly the edge
+that owes a value of its own. Two debts left the headline and no obligation did.
+
+### What the round did not do
+
+**The two bay masses are still owed, and the round says who by.** `lmo-510-1070_lm-3_thermal_analysis_6.pdf`
+— the document the manifest named for exactly this — has been downloaded, extracted (314 pages) and
+read, and it does **not** carry them: it is a temperature-prediction memo whose appendices hold
+mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*, and its
+capacitance data is in the document it cites as reference 5, `LM0-510-1036` "Revised Thermal Nodal
+Diagrams for LM-3", dated 17 December 1968, which is not in the library by that name. Each of the two
+provenances now names it, so the debt is one field wide with a named source rather than a conductance
+of unknown origin.
+
+What the same memo *did* yield, for a later round: the LM's blanket effective emittance is **0.01** for
+both stages (PDF p. 37), its launch condition is 65–75 °F cabin with both skins at 70 °F (p. 11), the
+D-mission analysed timeline runs to p. 13, and the solar/IR node inputs are on pp. 14–21 as scanned
+`Btu/sec` tables whose OCR is unusable and which need the render path. None of that is landed here
+because none of it is what the bays owe.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 263 | **261** — two double-counts removed, no obligation lost |
+| `UNCONFIGURED scalars` the plant counts | 187 | **185** |
+| `report.refuse` call sites in the linter | 702 | **706** |
+| tests in `tests/test_vehicle_config.py` | 242 | **244** |
+| zones declaring their thermal lump | 0 of 6 | **3 of 6**, with the other three named |
+| `lumped_mass_kg` readers in `tools/` | 0 | **1** |
+
+States advancing and edges usable are unmoved: the two bay edges still owe their value, and what
+changed is that each now names the single scalar that closes it.
 
 ## The invariants, and which of them are enforced
 

@@ -218,19 +218,45 @@ state:
     node: cabin_zone_t
     unit: K
     tau_s: 2880
+    lumped_mass_kg: 400
+    specific_heat_j_per_kg_k: 900
     conductance_w_per_k: 125
     provenance:
       basis: derived
-      relation: "C/G. C = 400 kg aluminium-equivalent x 900 J/kg-K = 360,000 J/K; G = 125 W/K, sized so a 1 kW cabin load sits about 8 K above the coolant supply, which is the order apollo's cabin-to-coolant difference implies. tau = 360,000/125 = 2,880 s"
+      computes: tau_s
+      derivation:
+        expression: lumped_mass_kg * specific_heat_j_per_kg_k / conductance_w_per_k
+        inputs:
+          lumped_mass_kg: domains/thermal/components.yaml:state.zone_csm_cabin_t.lumped_mass_kg
+          specific_heat_j_per_kg_k: domains/thermal/components.yaml:state.zone_csm_cabin_t.specific_heat_j_per_kg_k
+          conductance_w_per_k: domains/thermal/components.yaml:state.zone_csm_cabin_t.conductance_w_per_k
+      relation: >-
+        C/G, and every term of it is a field on this state now. C = 400 kg aluminium-equivalent x
+        900 J/kg-K = 360,000 J/K; G = 125 W/K, sized so a 1 kW cabin load sits about 8 K above the
+        coolant supply, which is the order apollo's cabin-to-coolant difference implies.
+        360,000/125 = 2,880 s
       note: "the cabin air alone is 2.4 kg (5.9 m3 at 5 psia and 295 K) and would have a thermal mass of 1,724 J/K, 0.5 % of the lumped value — which is why a bare-air cabin model has a time constant of seconds and is wrong. The structure, the equipment and the ECS water are the mass."
   - id: zone_csm_avionics_t
     method: lag
     node: coldplate_t
     unit: K
     tau_s: 406
+    lumped_mass_kg: 60
+    specific_heat_j_per_kg_k: 900
+    conductance_w_per_k: 133
     provenance:
       basis: derived
-      relation: "C/G. C = 60 kg aluminium-equivalent = 54,000 J/K; G = 133 W/K, sized so an 800 W electronics load sits about 6 K above the plate. tau = 54,000/133 = 406 s"
+      computes: tau_s
+      derivation:
+        expression: lumped_mass_kg * specific_heat_j_per_kg_k / conductance_w_per_k
+        inputs:
+          lumped_mass_kg: domains/thermal/components.yaml:state.zone_csm_avionics_t.lumped_mass_kg
+          specific_heat_j_per_kg_k: domains/thermal/components.yaml:state.zone_csm_avionics_t.specific_heat_j_per_kg_k
+          conductance_w_per_k: domains/thermal/components.yaml:state.zone_csm_avionics_t.conductance_w_per_k
+      relation: >-
+        C/G, with every term a field: C = 60 kg aluminium-equivalent x 900 J/kg-K = 54,000 J/K;
+        G = 133 W/K, sized so an 800 W electronics load sits about 6 K above the plate.
+        54,000/133 = 406.0 s
       note: "apollo_diode.md:97: electronics were directly cooled by coldplates, so the coldplate and its boxes are one lump"
   - id: zone_csm_service_t
     # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
@@ -242,20 +268,47 @@ state:
     # propellant is the mass and the tank wall is the path, which is what the state's own reason
     # says; what is owed is that mass, not the conductance, because `tau` is already declared.
     lumped_mass_kg: UNCONFIGURED
+    specific_heat_j_per_kg_k: 900
     unit: K
     tau_s: 7200
     provenance:
       basis: chosen
-      reason: "the service bay is unregulated and its mass is dominated by propellant and structure, which is a much larger lump than the cabin; twice the cabin's time constant because the propellant is the mass and the tank wall is the path"
+      reason: >-
+        the service bay is unregulated and its mass is dominated by propellant and structure, which
+        is a much larger lump than the cabin; twice the cabin's time constant because the propellant
+        is the mass and the tank wall is the path
+      note: >-
+        the comment above this entry said the arithmetic and nothing evaluated it: "`C = m x c_p` and
+        `G = C / tau`, so ONE number closes the edge above: the lumped mass". `c_p` is stated now, so
+        what remains is genuinely one scalar and `E-BAY-HEAT-CSM` carries the derivation that reads
+        it. What would source it is a thermal *math model* rather than a description: the LM's is
+        `LM0-510-1036`, "Revised Thermal Nodal Diagrams for LM-3", dated 17 December 1968 and cited
+        as reference 5 of `lmo-510-1070_lm-3_thermal_analysis_6.pdf`. **That memo has now been read
+        and does not have it** — it predicts node temperatures, and its appendices hold mission
+        timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*; the capacitances
+        are in the nodal-diagram document it references rather than in itself
   - id: zone_lm_cabin_t
     method: lag
     node: lm_cabin_zone_t
     unit: K
     tau_s: 2880
+    lumped_mass_kg: 400
+    specific_heat_j_per_kg_k: 900
     conductance_w_per_k: 125
     provenance:
       basis: derived
-      relation: "as the CSM cabin: 6.7 m3 at about 5 psia, so the same lumped mass and conductance within the precision of either figure"
+      computes: tau_s
+      derivation:
+        expression: lumped_mass_kg * specific_heat_j_per_kg_k / conductance_w_per_k
+        inputs:
+          lumped_mass_kg: domains/thermal/components.yaml:state.zone_lm_cabin_t.lumped_mass_kg
+          specific_heat_j_per_kg_k: domains/thermal/components.yaml:state.zone_lm_cabin_t.specific_heat_j_per_kg_k
+          conductance_w_per_k: domains/thermal/components.yaml:state.zone_lm_cabin_t.conductance_w_per_k
+      relation: >-
+        as the CSM cabin, and carried rather than asserted to be the same: 6.7 m3 at about 5 psia
+        against the CSM's 5.9, so the same lumped mass and conductance within the precision of
+        either figure. The two compartments are the same construction in two spacecraft, which is
+        why the second one is a copy of the first and says so
   - id: zone_lm_descent_t
     # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
     # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
@@ -263,11 +316,19 @@ state:
     method: lag
     node: descent_bay_zone_t
     lumped_mass_kg: UNCONFIGURED
+    specific_heat_j_per_kg_k: 900
     unit: K
     tau_s: 10800
     provenance:
       basis: chosen
-      reason: "an exposed, unregulated stage whose mass is mostly propellant and structure with a poor path to the loop; the longest constant in the vehicle, and the one that makes the frozen-line chain slow enough to be diagnosable"
+      reason: >-
+        an exposed, unregulated stage whose mass is mostly propellant and structure with a poor path
+        to the loop; the longest constant in the vehicle, and the one that makes the frozen-line
+        chain slow enough to be diagnosable
+      note: >-
+        as the service bay above and owed for the same reason: `E-BAY-HEAT-LM`'s sensitivity is
+        `tau / (m x 900)` K per W, so this one scalar closes the descent bay's edge as well as its
+        time constant. `LM0-510-1036` is what would answer both
   - id: zone_radiator_t
     method: lag
     node: radiator_reject

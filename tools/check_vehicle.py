@@ -2298,7 +2298,21 @@ def check_coupling(
                 "mode selection is a table rather than a sensitivity, and a scalar here would be "
                 "a proportional law the vehicle does not have",
             )
-        if sens.get("value") == "UNCONFIGURED":
+        # **An edge that names where its value comes from is not a second unknown.** The rule for
+        # a derivation is stated once, in `check_declared_derivation`: "the obligation is counted
+        # where the quantity lives, and this is a use of it rather than a second unknown." This
+        # walk counted it anyway — so an edge whose value is `derived` from an owed field appeared
+        # *twice* in the headline, once where the field is and once here. Two edges were in that
+        # state the moment their derivations landed (`E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM`, whose
+        # single input is a bay's `lumped_mass_kg`), and the count is the one figure a reader plans
+        # against.
+        #
+        # Skipping them is not a hole, because the two cases are already covered elsewhere: a
+        # derivation whose inputs are all numbers resolves, and `check_declared_derivation` then
+        # refuses it for stating a derivation and carrying nothing to hold it against; a derivation
+        # with an owed input is skipped by that same function by design, and the input is counted
+        # where it lives. What is left is exactly the edge that owes a *value of its own*.
+        if sens.get("value") == "UNCONFIGURED" and sens.get("derivation") is None:
             report.debt(
                 where, f"{edge.get('from')} -> {edge.get('to')}: {sens.get('note', '')}".strip()
             )
@@ -11724,6 +11738,86 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
             )
 
 
+def check_thermal_lumps(root: Path, report: Report) -> None:
+    """A zone's time constant is its lump over its conductance, and the lump is data now.
+
+    Every `lag` zone in this domain computes `tau = C/G` with `C = m x c_p`, and **the mass was
+    written in a sentence in every one of them**: the cabin's relation said "C = 400 kg
+    aluminium-equivalent x 900 J/kg-K", the avionics plate's said "C = 60 kg", and the two
+    unregulated bays declared a `lumped_mass_kg` that **appeared in no file under `tools/` at all**.
+    So the field was declared exactly where the corpus could not fill it and omitted where it could,
+    and nothing read it either way.
+
+    Two things made it worth wiring rather than deleting. The first is that the mass is not a second
+    statement of the time constant — it is the *input* that turns the constant into a conductance,
+    which is what `E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM` need in K per W. The comment above
+    `zone_csm_service_t` said so in as many words ("`C = m x c_p` and `G = C / tau`, so ONE number
+    closes the edge above: the lumped mass") and nothing evaluated it. The second is that the
+    three zones whose lump *is* stated can stop stating it in prose: their `tau` is `derived` now,
+    re-evaluated every run against three fields a reader can disagree with.
+
+    Three refusals, and the deliberate silence the corpus's own split requires:
+
+      - a zone declaring a numeric `lumped_mass_kg` must declare `specific_heat_j_per_kg_k` **and**
+        `conductance_w_per_k` — a mass with no conductance is a lump that computes nothing;
+      - its `tau_s` must equal `m x c_p / G` at its own precision, which is the relation the three
+        sentences were making;
+      - a zone declaring either of the other two **without declaring the mass at all** is refused,
+        because that is a lump someone started and did not finish;
+      - and a zone declaring `lumped_mass_kg` as `UNCONFIGURED` is left to the debt walk, which
+        already counts it. Adding a second sentence about the same missing scalar is the inflation
+        this folder has removed four times.
+
+    The radiator is deliberately outside all of it: its relation gives a *bracket* — 625 s from its
+    own lump and a linearised conductance, chosen at 300 s because the linearisation overstates
+    damping at the cold end — so its time constant is a judgement rather than a division, and
+    declaring a lump for it would assert a relation the corpus overrode on purpose.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    for state in thermal.get("state") or []:
+        if not isinstance(state, dict) or state.get("method") != "lag":
+            continue
+        where = f"domains/thermal/components.yaml:state {state.get('id')}"
+        mass = state.get("lumped_mass_kg")
+        heat = state.get("specific_heat_j_per_kg_k")
+        conductance = state.get("conductance_w_per_k")
+        described = heat is not None or conductance is not None
+        if "lumped_mass_kg" not in state and described:
+            report.refuse(
+                where,
+                "declares a specific heat or a conductance and no `lumped_mass_kg` at all. The "
+                "three are one computation — `tau = m x c_p / G` — and a zone that starts it and "
+                "does not declare the mass has a time constant nothing can re-derive",
+            )
+            continue
+        if not isinstance(mass, (int, float)) or isinstance(mass, bool):
+            continue  # unset, and the debt walk's business
+        if not isinstance(heat, (int, float)) or not isinstance(conductance, (int, float)):
+            report.refuse(
+                where,
+                f"declares a lumped mass of {mass!r} kg and "
+                f"specific_heat_j_per_kg_k {heat!r} / conductance_w_per_k {conductance!r}. The "
+                "three are one computation, and a lump without its heat capacity or its path is a "
+                "mass that computes nothing",
+            )
+            continue
+        if not conductance:
+            report.refuse(where, "declares a conductance of zero, so `tau = C/G` is undefined")
+            continue
+        tau = state.get("tau_s")
+        if not isinstance(tau, (int, float)) or isinstance(tau, bool):
+            continue  # the walk reports it
+        derived = float(mass) * float(heat) / float(conductance)
+        if not agrees_with_derivation(float(tau), derived):
+            report.refuse(
+                where,
+                f"declares {mass} kg at {heat} J/kg-K over {conductance} W/K, which is a time "
+                f"constant of {derived:g} s, and a `tau_s` of {tau}. The three fields and the time "
+                "constant are one relation, and the sentence that used to carry it could not "
+                "disagree with itself",
+            )
+
+
 def check_thermal_budget(root: Path, report: Report) -> None:
     """The rejection total is a closure, and it is a closure **per vehicle**.
 
@@ -14016,6 +14110,9 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_thermal_budget(root, report)
+    # And the lumps the time constants above them are computed from: three fields and one relation,
+    # where the relation used to be a sentence in each state's provenance.
+    check_thermal_lumps(root, report)
     check_cabin_volumes(root, vehicle, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)

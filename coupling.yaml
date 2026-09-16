@@ -1000,14 +1000,28 @@ edges:
     sensitivity:
       value: UNCONFIGURED
       unit: "K per W"
-      basis: UNCONFIGURED
-      relation: "the service bay's steady-state rise per watt: 1/G, with G = C/tau and tau declared as 7,200 s. So the single missing scalar is the lumped mass C = m x c_p — the propellant and structure the state's own reason names — and this value follows from it by division rather than by a second choice"
+      basis: derived
+      derivation:
+        expression: tau_s / (lumped_mass_kg * specific_heat_j_per_kg_k)
+        inputs:
+          tau_s: domains/thermal/components.yaml:state.zone_csm_service_t.tau_s
+          lumped_mass_kg: domains/thermal/components.yaml:state.zone_csm_service_t.lumped_mass_kg
+          specific_heat_j_per_kg_k: domains/thermal/components.yaml:state.zone_csm_service_t.specific_heat_j_per_kg_k
+      relation: >-
+        the service bay's steady-state rise per watt: 1/G, with G = C/tau over the declared 7,200 s
+        and C = m x c_p. So the single missing scalar is the lumped mass — the propellant and
+        structure the state's own reason names — and this value follows from it by division rather
+        than by a second choice. **The derivation is declared while the mass is still owed, and that
+        is the point of declaring it**: the edge now names which scalar closes it, and the check
+        that evaluates derivations skips an `UNCONFIGURED` input by design ("nothing to check until
+        it lands"), so the debt stays exactly one field wide instead of one edge wide
       at: "service bay, lumped"
       note: >-
-        the zone's driver, and its value is owed: `thermal_diode.md:965` declares every thermal
-        constant UNSPECIFIED, so the conductance that turns these watts into kelvin is not published
-        and is not guessed here. The *heat* is grounded — 630 W summed from the power domain's load
-        inventory — and the arithmetic that converts it is the single missing scalar
+        the zone's driver. `thermal_diode.md:965` declares every thermal constant UNSPECIFIED, so
+        the conductance that turns these watts into kelvin is not published — but it is not
+        *independent* of the figures this vehicle already declares, which is what the comment above
+        `zone_csm_service_t` said and nothing evaluated. The heat is grounded at 630 W from the
+        power domain's load inventory, and what remains is one mass
     from: service_bay_heat
     to: service_bay_zone_t
     kind: lag
@@ -1016,12 +1030,22 @@ edges:
     sensitivity:
       value: UNCONFIGURED
       unit: "K per W"
-      basis: UNCONFIGURED
-      relation: "as E-BAY-HEAT-CSM: 1/G with G = C/tau over the declared 10,800 s, so the lumped mass of the descent stage's propellant and structure is the one scalar that closes it"
+      basis: derived
+      derivation:
+        expression: tau_s / (lumped_mass_kg * specific_heat_j_per_kg_k)
+        inputs:
+          tau_s: domains/thermal/components.yaml:state.zone_lm_descent_t.tau_s
+          lumped_mass_kg: domains/thermal/components.yaml:state.zone_lm_descent_t.lumped_mass_kg
+          specific_heat_j_per_kg_k: domains/thermal/components.yaml:state.zone_lm_descent_t.specific_heat_j_per_kg_k
+      relation: >-
+        as E-BAY-HEAT-CSM: `G = C/tau` over the descent bay's declared 10,800 s, with `C = m x c_p`,
+        and owed the same one scalar — the mass of the stage's propellant and structure
       at: "descent bay, lumped"
       note: >-
         the frozen-line chain's zone, and the one of the two whose missing conductance has a
-        consequence rather than a bookkeeping cost
+        consequence rather than a bookkeeping cost. Its `c_p` is declared with its mass so that the
+        division is stated in full: a derivation that named only the mass would be reading a second
+        constant from somewhere the edge does not say
     from: descent_bay_heat
     to: descent_bay_zone_t
     kind: lag
