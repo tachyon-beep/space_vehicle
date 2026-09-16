@@ -17,11 +17,17 @@
 # ## The band that had to be derived rather than guessed
 #
 # The cabin sits at 4.8-5.2 psia of essentially pure oxygen (`apollo_diode.md:88`), which is
-# **248-269 mmHg** of oxygen partial pressure. The first version of `eclss.pp_o2_mmhg` in the
-# registry carried 140-180 — the value a mixed atmosphere at 14.7 psia would give — and the
-# correction matters because the failure modes are opposite: 140 is hypoxic at 5 psia, and 269
-# is a fire risk that a sea-level band would hide. It is the kind of error no range check catches
-# and a fire-risk threshold does.
+# **236.02-256.71 mmHg** of oxygen partial pressure — 248.23 to 268.92 mmHg of *total* pressure
+# less the 12.209 mmHg of water vapour and carbon dioxide the four-gas model declares. The first
+# version of `eclss.pp_o2_mmhg` in the registry carried 140-180 — the value a mixed atmosphere at
+# 14.7 psia would give — and the correction matters because the failure modes are opposite: 140 is
+# hypoxic at 5 psia, and the top of the band is a fire risk that a sea-level band would hide. It
+# is the kind of error no range check catches and a fire-risk threshold does.
+#
+# The second version carried 248-269, and that was the *same* error one order subtler: the total
+# pressure band read as a partial pressure. Splitting the cabin into four gas stocks and summing
+# them back into a pressure is what made it visible (`check_cabin_pressure_closure`), and it is
+# the reason the oxygen initial is a *remainder* rather than a declared mass.
 #
 # ## Two compartments, and the switch between them
 #
@@ -57,17 +63,19 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
-    # 2.653595831 kg before rounding, and the derivation below is what says so. It read 2.653760
-    # until this round: a seven-figure literal from a sum done once by hand, whose own relation
-    # named 34,474 Pa and R nowhere — and 34,474 Pa is 5 psia at a rounded 6,894.8 Pa per psi, which
-    # is 0.006 % away from the conversion the constant actually is. Nothing could see the difference
-    # because the arithmetic was prose.
-    initial: 2.653596
+    # 2.528302208 kg before rounding, and `initial_derivation` below is what says so. It read
+    # 2.653596 until round 8 — the whole of the 5 psia, which is only consistent with a cabin whose
+    # other three gases are nothing, and 2.653760 before that, which was the same sum done by hand.
+    initial: 2.528302
     initial_derivation:
-      expression: "psi_to_pa * pressure_psia * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      expression: "(psi_to_pa * pressure_psia - mmhg_to_pa * (pp_h2o + pp_co2 + pp_n2)) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
       inputs:
         psi_to_pa: 6894.757293168361
         pressure_psia: "domains/thermal/components.yaml:zones.csm_cabin.nominal_pressure_psia"
+        mmhg_to_pa: 133.322387415
+        pp_h2o: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.h2o
+        pp_co2: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.co2
+        pp_n2: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.n2
         volume_m3: "domains/eclss/components.yaml:atmosphere_model.volume_m3.csm"
         gas_constant: 8.314462618153
         temperature_k: "domains/thermal/components.yaml:zones.csm_cabin.nominal_temperature_k"
@@ -75,14 +83,17 @@ state:
     initial_provenance:
       basis: derived
       relation: >-
-        the ideal-gas relation `atmosphere_model.law` states, with every term bound rather than
-        quoted: the cabin's nominal 5 psia and 295 K from the zone that holds them, the volume and
-        the molar mass from the atmosphere model itself, and the two physical constants as literals
-        — 6,894.757293168361 Pa per psi and 8.314462618153 J per mol-K. `psi_to_pa` is exact by
-        definition and the gas constant is the SI value; the inputs that are *not* exact are the
-        cabin's pressure and temperature, which are the published nominal the mission is flown at.
-        atmosphere_model.check.total_pressure_at_5_psia works the same sum and rounds it to
-        '2.65 kg ... the initial load the mission starts with'
+        the oxygen partial pressure is the cabin total less the three declared shares — 5 psia less
+        9.209 and 3.0 mmHg, i.e. **246.37 mmHg** — and the mass is that pressure over the cabin volume
+        at 295 K: 82.9249 mol of gas in all, of which water vapour is 0.05315987 kg and carbon
+        dioxide 0.04233239 kg, leaving **2.528302 kg of oxygen**. **The oxygen is the remainder, and
+        that is what the vehicle does**: the cabin pressure regulator holds *total* pressure by
+        admitting oxygen and nothing else, so whatever the other three do not occupy is oxygen. This
+        entry used to claim the whole of the 5 psia for itself, which it could only do if the other
+        three were nothing at all — and the sum of the four is what `check_cabin_pressure_closure`
+        evaluates. The subtraction is by *partial pressure* rather than by mass, which matters:
+        carbon dioxide is 44 g/mol and subtracting its mass from an oxygen-mass total over-subtracts
+        by a quarter of it, and that error was made and caught here before the value landed
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -92,9 +103,27 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.0
+    initial_derivation:
+      expression: "(partial_pressure_mmhg * mmhg_to_pa) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        partial_pressure_mmhg: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.n2
+        mmhg_to_pa: 133.322387415
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        gas_constant: 8.314462618153
+        temperature_k: domains/thermal/components.yaml:zones.csm_cabin.nominal_temperature_k
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.n2.molar_mass_kg_per_mol
+    initial_provenance:
+      basis: derived
+      relation: >-
+        **zero, and the vehicle says so about itself.** The CSM's cabin pressure regulator meters *oxygen*
+        to hold 5.0 +- 0.2 psia (`csm_ecs_study_guide.pdf` PDF p. 16) and the LM's section "stores, in gaseous
+        form, all oxygen required by the ECS" and maintains "cabin and/or suit pressurization by supplying
+        oxygen" (`lm_ecs_study_guide.pdf`); the pad charge of sea-level air is vented and purged before the
+        mission starts, so the diluent fraction decays to nothing either cabin's instruments can see. The gas
+        is modelled anyway for the reason this stock's `source` gives — "a repressurisation that adds the
+        wrong gas is a fault worth being able to express" — and the initial is the *absence* of it rather than
+        a small number, because "small" was the claim that kept this entry unset for the whole folder's life
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -104,9 +133,17 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.04233239
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        the one-hour average this domain's own `co2_exposure_1h` threshold declares: **3.0 mmHg**, from
+        `eclss_diode.md:735`'s nominal requirement. Over 5.9 m3 at 295 K that is 0.9621 mol =
+        **0.04233239 kg**. The *apportionment* is derived — the pressure is declared in
+        `atmosphere_model.check.partial_pressures_mmhg` and every term of the gas law is a binding — but the
+        pressure itself is the design's own criterion rather than a measurement, and it is a ceiling rather
+        than a point: the mission starts with the bed at steady state and nothing publishes the transient
+        before it
     quantum: 1.0e-6
     min_flow_per_s: 3.16e-5
     provenance:
@@ -116,9 +153,25 @@ state:
     node: cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.05315987
+    initial_derivation:
+      expression: "(partial_pressure_mmhg * mmhg_to_pa) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        partial_pressure_mmhg: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.h2o
+        mmhg_to_pa: 133.322387415
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        gas_constant: 8.314462618153
+        temperature_k: domains/thermal/components.yaml:zones.csm_cabin.nominal_temperature_k
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.h2o.molar_mass_kg_per_mol
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the same ideal-gas relation as the oxygen, at the partial pressure the exchanger holds:
+        **9.209 mmHg**, the saturation vapour pressure of water at the 50 F dew point
+        `csm_ecs_study_guide.pdf` PDF p. 16 states the cooling process is run to. 9.209 mmHg over 5.9 m3 at
+        295 K is 2.9536 mol = **0.05315987 kg**. This entry owed "the fractions" for the folder's whole
+        life, on the note that "small is not a number" — and the number is the setpoint of the machine that
+        removes the vapour, which this gas's own `source` already names
     quantum: 1.0e-5
     min_flow_per_s: 1.0e-5
     provenance:
@@ -128,22 +181,36 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
-    # The same law, one volume apart, and the two applications disagreed until both were derived:
-    # 3.013592 was 0.006 % above what the CSM's own constants give on 6.7 m3 — the kind of
-    # difference that only shows when two copies of one computation are evaluated side by side.
-    initial: 3.013405
+    # 2.871122847 kg before rounding, by the same subtraction as the CSM's cabin over 6.7 m3. It read
+    # 3.013405, and the pair disagreed in the seventh figure because each was a hand sum.
+    initial: 2.87112285
     initial_derivation:
-      expression: "psi_to_pa * pressure_psia * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      expression: "(psi_to_pa * pressure_psia - mmhg_to_pa * (pp_h2o + pp_co2 + pp_n2)) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
       inputs:
         psi_to_pa: 6894.757293168361
         pressure_psia: "domains/thermal/components.yaml:zones.lm_cabin.nominal_pressure_psia"
+        mmhg_to_pa: 133.322387415
+        pp_h2o: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.h2o
+        pp_co2: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.co2
+        pp_n2: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.n2
         volume_m3: "domains/eclss/components.yaml:atmosphere_model.volume_m3.lm"
         gas_constant: 8.314462618153
         temperature_k: "domains/thermal/components.yaml:zones.lm_cabin.nominal_temperature_k"
         molar_mass_kg_per_mol: "domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol"
     initial_provenance:
       basis: derived
-      relation: "the same relation on the LM cabin's own 6.7 m3, which atmosphere_model.volume_m3 declares per compartment: 94.1689 mol at the same constants, 3.013405 kg. The corpus states the relation once and the volume twice, so this is a computed consequence rather than a second published number — and since this round the relation is *evaluated* rather than quoted, so the two compartments cannot drift apart again"
+      relation: >-
+        the oxygen partial pressure is the cabin total less the three declared shares — 5 psia less
+        9.209 and 3.0 mmHg, i.e. **246.37 mmHg** — and the mass is that pressure over the cabin volume
+        at 295 K: 94.1689 mol of gas in all, of which water vapour is 0.06036798 kg and carbon
+        dioxide 0.04807238 kg, leaving **2.87112285 kg of oxygen**. **The oxygen is the remainder, and
+        that is what the vehicle does**: the cabin pressure regulator holds *total* pressure by
+        admitting oxygen and nothing else, so whatever the other three do not occupy is oxygen. This
+        entry used to claim the whole of the 5 psia for itself, which it could only do if the other
+        three were nothing at all — and the sum of the four is what `check_cabin_pressure_closure`
+        evaluates. The subtraction is by *partial pressure* rather than by mass, which matters:
+        carbon dioxide is 44 g/mol and subtracting its mass from an oxygen-mass total over-subtracts
+        by a quarter of it, and that error was made and caught here before the value landed
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -153,9 +220,17 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.04807238
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        the one-hour average this domain's own `co2_exposure_1h` threshold declares: **3.0 mmHg**, from
+        `eclss_diode.md:735`'s nominal requirement. Over 6.7 m3 at 295 K that is 1.0926 mol =
+        **0.04807238 kg**. The *apportionment* is derived — the pressure is declared in
+        `atmosphere_model.check.partial_pressures_mmhg` and every term of the gas law is a binding — but the
+        pressure itself is the design's own criterion rather than a measurement, and it is a ceiling rather
+        than a point: the mission starts with the bed at steady state and nothing publishes the transient
+        before it
     quantum: 1.0e-6
     min_flow_per_s: 3.16e-5
     provenance:
@@ -165,9 +240,25 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.06036798
+    initial_derivation:
+      expression: "(partial_pressure_mmhg * mmhg_to_pa) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        partial_pressure_mmhg: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.h2o
+        mmhg_to_pa: 133.322387415
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.lm
+        gas_constant: 8.314462618153
+        temperature_k: domains/thermal/components.yaml:zones.lm_cabin.nominal_temperature_k
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.h2o.molar_mass_kg_per_mol
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the same ideal-gas relation as the oxygen, at the partial pressure the exchanger holds:
+        **9.209 mmHg**, the saturation vapour pressure of water at the 50 F dew point
+        `csm_ecs_study_guide.pdf` PDF p. 16 states the cooling process is run to. 9.209 mmHg over 6.7 m3 at
+        295 K is 3.3540 mol = **0.06036798 kg**. This entry owed "the fractions" for the folder's whole
+        life, on the note that "small is not a number" — and the number is the setpoint of the machine that
+        removes the vapour, which this gas's own `source` already names
     quantum: 1.0e-05
     min_flow_per_s: 1.0e-05
     provenance:
@@ -183,9 +274,27 @@ state:
     node: lm_cabin_atm
     method: stock
     unit: kg
-    initial: UNCONFIGURED
-    initial_note: >-
-      owed with the partial pressures. `atmosphere_model` declares the cabin volume, the temperature and each gas's molar mass, and the oxygen initial falls out of the 5 psia total — but nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no source in the corpus gives the fractions. The CSM's cabin is essentially pure oxygen and the LM's is too, so the other three are small; small is not a number
+    initial: 0.0
+    initial_derivation:
+      expression: "(partial_pressure_mmhg * mmhg_to_pa) * volume_m3 / (gas_constant * temperature_k) * molar_mass_kg_per_mol"
+      inputs:
+        partial_pressure_mmhg: domains/eclss/components.yaml:atmosphere_model.check.partial_pressures_mmhg.n2
+        mmhg_to_pa: 133.322387415
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.lm
+        gas_constant: 8.314462618153
+        temperature_k: domains/thermal/components.yaml:zones.lm_cabin.nominal_temperature_k
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.n2.molar_mass_kg_per_mol
+    initial_provenance:
+      basis: derived
+      relation: >-
+        **zero, and the vehicle says so about itself.** The CSM's cabin pressure regulator meters *oxygen*
+        to hold 5.0 +- 0.2 psia (`csm_ecs_study_guide.pdf` PDF p. 16) and the LM's section "stores, in gaseous
+        form, all oxygen required by the ECS" and maintains "cabin and/or suit pressurization by supplying
+        oxygen" (`lm_ecs_study_guide.pdf`); the pad charge of sea-level air is vented and purged before the
+        mission starts, so the diluent fraction decays to nothing either cabin's instruments can see. The gas
+        is modelled anyway for the reason this stock's `source` gives — "a repressurisation that adds the
+        wrong gas is a fault worth being able to express" — and the initial is the *absence* of it rather than
+        a small number, because "small" was the claim that kept this entry unset for the whole folder's life
     quantum: 1.0e-6
     min_flow_per_s: 6.4e-6
     provenance:
@@ -551,10 +660,61 @@ atmosphere_model:
       molar_mass_kg_per_mol: 0.018
       source: "crew respiration and perspiration, removed by the condensing heat exchanger"
   check:
-    total_pressure_at_5_psia: "34,474 Pa over 5.9 m3 at 295 K is 82.9 mol; at 32 g/mol that is 2.65 kg of oxygen, which is the initial load the mission starts with"
+    # **The four gases part the cabin by partial pressure, and the three that are not oxygen are
+    # declared here rather than derived from a total.** The stocks' initials owed "the fractions"
+    # for as long as the domain has existed, on the reasoning that "no source in the corpus gives"
+    # them. What follows replaces the fractions with the two pressures a source *does* give and one
+    # the vehicle's own criterion gives, and makes the oxygen the remainder — which is what the
+    # cabin pressure regulator physically does, because it holds *total* pressure by admitting
+    # oxygen and nothing else.
+    partial_pressures_mmhg:
+      h2o: 9.209
+      co2: 3.0
+      n2: 0.0
+    partial_pressure_provenance:
+      basis: historical
+      source: >-
+        9.209 mmHg is the saturation vapour pressure of water at **10 C** (1.228 kPa), which is the
+        50 F dew point the ECS's cooling process is run to. `csm_ecs_study_guide.pdf` **PDF p. 31**,
+        Section III, Pressure Suit Subsystem: "the water content of the gas in excess of a 50 F dew
+        point, condenses on the plates of the heat exchanger and is removed." **The page is about
+        the suit circuit rather than the cabin**, and the cabin's own humidity is the same ECS's
+        condensing heat exchanger and water separator doing the same job, so the figure is applied
+        to the cabin as an **inference and not as a quotation** — the field says `historical`
+        because the dew point is the document's and the arithmetic from it is water's own vapour
+        pressure curve. It is also a **conflict**, recorded rather than resolved: the LM's ECS
+        subsystem specification gives the cabin heat exchanger's own absolute humidity —
+        `lm_ecs_sub.pdf`, Primary Heat Exchanger, Performance Condition I ("two cabin fans,
+        condensing"): **0.0276 lb H2O per lb O2 at 5.0 psia O2**, which is a mole ratio of 0.0490
+        and a water partial pressure of 12.1-12.7 mmHg depending on whether the quoted 5.0 psia is
+        the oxygen's own pressure or the total. That is 3 to 3.5 mmHg above the 9.209 this model
+        carries, it is measured at the cabin heat exchanger rather than at the suit circuit, and it
+        would move the band this whole block exists to derive. Reconciling the two is a round of its
+        own and is not a substitution to be made quietly. 3.0 mmHg is the one-hour average this
+        domain's own `co2_exposure_1h` threshold declares, from `eclss_diode.md:735`. 0.0 is what
+        the LM says about itself: `lm_ecs_study_guide.pdf` **PDF p. 32** (and its summary at p. 14)
+        describes the Oxygen Supply and Cabin Pressure Control Section as storing "in gaseous form,
+        **all oxygen** required by the ECS" and maintaining "cabin and/or suit pressurization by
+        supplying **oxygen**" — the LM carries no cabin diluent, and its nitrogen appears only in
+        the sealed water-tank pressurisation circuit
+      note: >-
+        **the nitrogen is zero and that is a finding rather than a placeholder.** The CSM's regulator
+        meters oxygen to hold 5.0 +- 0.2 psia and the LM's supplies oxygen alone, so once the pad
+        charge of sea-level air is vented and purged the diluent fraction decays; both cabins are,
+        to the precision of their own instruments, pure oxygen. It is also what the ppO2 band
+        requires — the oxygen holds the total pressure less the 12.209 mmHg the water vapour and
+        carbon dioxide take, 246.37 against a 5.0 psia total — and what makes the four stocks one
+        mixture rather than four independent numbers
+    total_pressure_at_5_psia: >-
+      34,474 Pa over 5.9 m3 at 295 K is **82.92 mol**, of which 9.209 mmHg of water vapour is 2.9536
+      mol and 3.0 mmHg of carbon dioxide is 0.9621 mol. The oxygen is the remaining 79.0092 mol =
+      **2.528302 kg** and the nitrogen is none, so the four sum to the cabin's own nominal 5 psia by
+      construction. `check_cabin_pressure_closure` evaluates that sum rather than trusting this
+      sentence, and it also holds the resulting ppO2 — 246.37 mmHg — inside the band this domain's
+      own two ppO2 thresholds call habitable
     provenance:
       basis: derived
-      relation: "the ideal-gas relation applied to the published cabin volume and pressure. It is stated here so that the initial load is a computed consequence of two published figures rather than a third invented one."
+      relation: "the ideal-gas relation applied to the published cabin volume and pressure, with the oxygen as the remainder after the three declared partial pressures. It is stated here so that the initial load is a computed consequence of published figures rather than a third invented one."
 
 open_debts:
   - "The condensing heat exchanger's removal rate and the ventilation fan's flow are unpublished; both are declared unset above. Without them the humidity stock has no sink and the ventilation state has no magnitude, so the model can express a humid cabin and cannot yet dry it."

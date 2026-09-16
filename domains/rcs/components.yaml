@@ -503,7 +503,13 @@ components:
       note: >-
         one component for all forty-four because they are the same article at the same
         throttle, and forty-four near-identical entries would be forty-four places for the
-        arithmetic to differ
+        arithmetic to differ. **The 290 s is not sourced, and the one page that does state an
+        Isp disagrees with it**: `lm_propulsion_rcs_study_guide.pdf` PDF p. 90 gives 275 seconds
+        (approx) and flow rates of 0.24 + 0.12 lb/s at 100 lbf, which is 277.9 s and 0.1633 kg/s
+        against this declaration's 0.15647. That is conflict **C-26** in
+        `../integration/reconciliation/01-conflict-register.md`, recorded rather than resolved:
+        moving it moves `E-RCSP-RCS`, `mass_flow_per_thruster` and the RCS propellant budget
+        together, and the mission's RCS load is one of the tighter ones
 
   - id: pulse_generator
     kind: discrete

@@ -82,10 +82,10 @@ thresholds:
     dwell_clear_s: 60
     latched: true
     severity: WARNING
-    point_units: "mmHg, where the nominal band is 248-269"
+    point_units: "mmHg, where the nominal band is 236.02-256.71 — 4.8-5.2 psia of total pressure less the 12.209 mmHg of water vapour and carbon dioxide the cabin model declares"
     provenance:
       basis: derived
-      relation: "200 mmHg is roughly the lower bound of useful consciousness without acclimatisation, and it is 21 % below a 5 psia oxygen cabin's nominal 258.6. Expressed as a partial pressure rather than as a cabin pressure because a *diluted* cabin and a *depressurised* cabin have the same total pressure and very different consequences."
+      relation: "200 mmHg is roughly the lower bound of useful consciousness without acclimatisation, and it is 18.8 % below the mixture's own nominal 246.37 (5 psia of total pressure less the 12.209 mmHg of water vapour and carbon dioxide). Expressed as a partial pressure rather than as a cabin pressure because a *diluted* cabin and a *depressurised* cabin have the same total pressure and very different consequences — and because 258.6, the total, is a figure the oxygen in this cabin never reaches."
   - id: ppo2_fire_risk
     point: eclss.pp_o2_mmhg
     comparator: above
@@ -95,14 +95,14 @@ thresholds:
     dwell_clear_s: 120
     latched: true
     severity: WARNING
-    point_units: "mmHg, against a nominal 258.6"
+    point_units: "mmHg, against a nominal 246.37"
     provenance:
       basis: historical
       source: >-
         the Apollo 1 fire, which killed three astronauts in a 16.7 psia pure-oxygen cabin on the
-        pad. Flight cabins ran at 5 psia for exactly this reason, and 300 mmHg is 16 % above the
-        nominal — the level at which material flammability changes character. It is the one
-        threshold in the vehicle whose justification is a body count.
+        pad. Flight cabins ran at 5 psia for exactly this reason, and 300 mmHg is 22 % above the
+        mixture's own nominal 246.37 — the level at which material flammability changes character.
+        It is the one threshold in the vehicle whose justification is a body count.
 
   # --- carbon dioxide: two statistics, two channels -----------------------------------------
   - id: co2_caution
@@ -342,32 +342,45 @@ thresholds:
   - id: lm_ppo2_hypoxia
     point: eclss.lm_pp_o2_mmhg
     comparator: below
-    assert: 248
-    clear: 258
+    assert: 236.02
+    clear: 246.02
     dwell_assert_ms: 2000
     dwell_clear_s: 30
     latched: true
     severity: EMERGENCY
     provenance:
       basis: derived
-      relation: "the bottom of the 248-269 mmHg band that 4.8-5.2 psia of essentially pure oxygen gives; the CSM's band is the same because the atmosphere is"
+      relation: >-
+        the bottom of the band the cabin's own *mixture* gives: 4.8 psia is 248.23 mmHg of total
+        pressure, and the water vapour and carbon dioxide shares
+        `atmosphere_model.check.partial_pressures_mmhg` declares take 12.209 mmHg of it, so the
+        oxygen at the bottom of the band is **236.02 mmHg**. The `clear` keeps the margin the pair
+        had — 10 mmHg above its own assert
       note: >-
-        the derived band's lower edge, at the LM's own compartment. The CSM's version of this
-        threshold exists; this one is what a crew on the surface has, and the surface is where a
-        suit loop and a cabin regulator share a gas supply
+        **this said 248, and 248 was the *total* pressure band read as a partial pressure.** The
+        entry's own relation gave it away: "the bottom of the 248-269 mmHg band that 4.8-5.2 psia of
+        essentially pure oxygen gives" — and the cabin is 9.209 mmHg of water vapour and 3.0 mmHg of
+        carbon dioxide away from essentially pure, so the oxygen can never reach 248 at 4.8 psia.
+        The four-gas model and the two alarms contradicted each other by 12.2 mmHg, and nothing
+        could see it because nothing summed the four masses into a pressure. The CSM's pair is
+        apollo's own (200 and 300) and wide enough to contain the mixture either way; this domain's
+        is derived, which is why the contradiction surfaced here
 
   - id: lm_ppo2_fire_risk
     point: eclss.lm_pp_o2_mmhg
     comparator: above
-    assert: 269
-    clear: 262
+    assert: 256.71
+    clear: 249.71
     dwell_assert_ms: 2000
     dwell_clear_s: 30
     latched: true
     severity: WARNING
     provenance:
       basis: derived
-      relation: "the top of the 248-269 mmHg band; 5.2 psia of pure oxygen"
+      relation: >-
+        the top of the same band, by the same subtraction: 5.2 psia is 268.92 mmHg of total pressure
+        less the 12.209 mmHg of everything that is not oxygen, so **256.71 mmHg**. The `clear` keeps
+        the pair's 7 mmHg margin below its own assert
       note: >-
         the fire risk the Apollo 1 crew died of, at the LM's compartment. It is a *warning* rather
         than an emergency because the band's top is reached by a regulator drifting, and the

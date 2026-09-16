@@ -8864,6 +8864,15 @@ def resolve_dotted(document: Any, dotted: str) -> Any:
     return node
 
 
+R_GAS = 8.314462618153
+"""The molar gas constant, SI value, for the cabin mixture's pressure closure."""
+
+PSI_TO_PA = 6894.757293168361
+"""Pascals per psi, exact by definition."""
+
+MMHG_TO_PA = 133.322387415
+"""Pascals per mmHg, exact by definition."""
+
 G0_M_S2 = 9.80665
 """Standard gravity, for the one place a corpus statistic crosses into `g`."""
 
@@ -11879,6 +11888,147 @@ def check_propellant_stocks(root: Path, coupling: dict[str, Any], report: Report
             )
 
 
+def check_cabin_pressure_closure(root: Path, report: Report) -> None:
+    """A cabin's four gas masses are one mixture, and nothing summed them into a pressure.
+
+    `atmosphere_model.law` states the relation — `P = (sum_i n_i) R T / V` — and its `check` block
+    worked the arithmetic for the oxygen alone. The other three stocks owed their initials on the
+    note that "nitrogen, carbon dioxide and water vapour are each a *fraction* of that total, and no
+    source in the corpus gives the fractions", so the model asserted a partition and the values
+    asserted nothing: **the four numbers were never added up.**
+
+    Adding them up does two things, and the second is the one that matters:
+
+      - **the four must make the pressure the cabin is held at.** The oxygen initial claimed the
+        whole of the 5 psia, which it could only do if the other three were zero; once the water
+        vapour and carbon dioxide hold their declared shares the oxygen has to come down by exactly
+        as much, and it does — it is the remainder, because the regulator holds *total* pressure by
+        admitting oxygen;
+      - **the resulting ppO2 must be a mixture the vehicle's own alarms call habitable.** With the
+        declared shares the cabin is at 246.37 mmHg of oxygen against a total of 258.57, and the
+        domain's two ppO2 thresholds for that compartment have to bracket it. That is not a
+        formality: the LM's band was derived as "248-269 mmHg ... that 4.8-5.2 psia of essentially
+        pure oxygen gives", which is the *total* pressure band, so the pair disagreed with the
+        four-gas model by the 12.2 mmHg of everything that is not oxygen — and nothing could see it
+        because nothing evaluated the mixture.
+
+    A stock whose `initial` is `UNCONFIGURED` is left to the debt walk, as everywhere else.
+    """
+    eclss = load(root / "domains" / "eclss" / "components.yaml", report) or {}
+    model = eclss.get("atmosphere_model") or {}
+    volumes = model.get("volume_m3") or {}
+    masses = {
+        str(gas.get("id")): gas.get("molar_mass_kg_per_mol")
+        for gas in model.get("gases") or []
+        if isinstance(gas, dict)
+    }
+    vehicle = load(root / "vehicle.yaml", report) or {}
+    zones = {
+        str(z.get("id")): z
+        for z in ((vehicle.get("thermal") or {}).get("zones") or [])
+        if isinstance(z, dict)
+    }
+    states = {
+        str(state.get("node")): state
+        for state in eclss.get("state") or []
+        if isinstance(state, dict) and state.get("node")
+    }
+    thresholds = (load(root / "domains" / "eclss" / "profiles.yaml", report) or {}).get(
+        "thresholds"
+    ) or []
+
+    for cabin, zone_id in (("csm", "csm_cabin"), ("lm", "lm_cabin")):
+        zone = zones.get(zone_id)
+        volume = volumes.get(cabin)
+        if zone is None or not isinstance(volume, (int, float)):
+            continue
+        psia = zone.get("nominal_pressure_psia")
+        kelvin = zone.get("nominal_temperature_k")
+        if not isinstance(psia, (int, float)) or not isinstance(kelvin, (int, float)):
+            continue
+        # The compartment's own atmosphere state, which must exist: the stocks below are found by
+        # id prefix rather than through it, so this is the one join that says the two compartments
+        # are the ones the domain declares.
+        state = states.get("cabin_atm" if cabin == "csm" else "lm_cabin_atm")
+        if state is None:
+            continue
+        prefix = "csm_cabin" if cabin == "csm" else "lm_cabin"
+        found: dict[str, float] = {}
+        owed = False
+        for state_row in eclss.get("state") or []:
+            sid = str(state_row.get("id"))
+            if not sid.startswith(prefix + "_") or not sid.endswith("_kg"):
+                continue
+            gas = sid[len(prefix) + 1 : -3]
+            initial = state_row.get("initial")
+            if not isinstance(initial, (int, float)) or isinstance(initial, bool):
+                owed = True
+                continue
+            if gas not in masses or not isinstance(masses[gas], (int, float)):
+                report.refuse(
+                    f"domains/eclss/components.yaml:state {sid}",
+                    f"is a stock for gas {gas!r}, which `atmosphere_model.gases` does not declare",
+                )
+                continue
+            found[gas] = float(initial) / float(masses[gas])
+        if owed or not found:
+            continue
+        moles = sum(found.values())
+        if moles <= 0:
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model",
+                f"gives the {cabin} cabin no gas at all, so its pressure is zero and the law has "
+                "nothing to evaluate",
+            )
+            continue
+        pressure_pa = moles * R_GAS * float(kelvin) / float(volume)
+        declared_pa = float(psia) * PSI_TO_PA
+        # **An absolute tolerance, and the reason is the declared value's own precision.**
+        # `agrees_with_derivation` compares at the declared number's significant figures, and
+        # `5 x 6894.757293168361` is a *product of exact constants* — fifteen figures — while the
+        # stock initials that feed this sum are declared to six. Comparing at fifteen would demand
+        # that six-figure inputs reproduce a fifteen-figure target, which they cannot, and the
+        # failure would say "the mixture does not reach the pressure" about a mixture that reaches
+        # it to a tenth of a pascal. The corpus's other closures make the same choice for the same
+        # reason: `check_thermal_budget` allows a watt, `check_mission` a millisecond.
+        if abs(pressure_pa - declared_pa) > 0.1:
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model.check",
+                f"the {cabin} cabin's four gas initials come to {pressure_pa:.1f} Pa over "
+                f"{volume} m3 at {kelvin} K and the zone is held at {psia} psia = {declared_pa:.1f} Pa. "
+                "The four stocks are one mixture, so their sum is the pressure — and a mixture that "
+                "does not reach it is a cabin that cannot be at the pressure it is flown at",
+            )
+            continue
+        pp_o2 = pressure_pa * found.get("o2", 0.0) / moles / MMHG_TO_PA
+        # The two alarms that watch this compartment's ppO2, and the region between them.
+        watched = [
+            t
+            for t in thresholds
+            if isinstance(t, dict)
+            and str(t.get("point")) == f"eclss.{'pp_o2' if cabin == 'csm' else 'lm_pp_o2'}_mmhg"
+        ]
+        low = [float(t["assert"]) for t in watched if t.get("comparator") == "below"]
+        high = [float(t["assert"]) for t in watched if t.get("comparator") == "above"]
+        if not low or not high:
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model.check",
+                f"the {cabin} cabin's mixture gives a ppO2 of {pp_o2:.2f} mmHg and this domain "
+                "declares no pair of ppO2 thresholds to hold it between, so the composition is a "
+                "mixture nothing calls habitable or not",
+            )
+            continue
+        if not (max(low) < pp_o2 < min(high)):
+            report.refuse(
+                "domains/eclss/components.yaml:atmosphere_model.check",
+                f"the {cabin} cabin's four gases give a ppO2 of {pp_o2:.2f} mmHg against a habitable "
+                f"band of {max(low):g} to {min(high):g} mmHg declared by this domain's own two "
+                "thresholds. The composition and the alarms describe one cabin, so one of them is "
+                "wrong — and the band that says 248-269 was the *total* pressure band, which the "
+                "12.2 mmHg of water vapour and carbon dioxide never let the oxygen reach",
+            )
+
+
 def check_thermal_lumps(root: Path, report: Report) -> None:
     """A zone's time constant is its lump over its conductance, and the lump is data now.
 
@@ -14251,6 +14401,9 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_thermal_budget(root, report)
+    # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
+    # oxygen in it is what the compartment's own two alarms have to call habitable.
+    check_cabin_pressure_closure(root, report)
     # And the propellant: which tanks the graph carries, which it does not, and whether a carrier's
     # level is the sum of what it says it holds.
     check_propellant_stocks(root, coupling or {}, report)

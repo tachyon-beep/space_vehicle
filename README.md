@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 259 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 259 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **259** is every obligation the linter can name:
-**109** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name:
+**103** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **183** the plant
+the missing charging efficiency, the pump-speed conversion). The **177** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 183 is the linter's 109 **plus** the graph's unset edge
+`coupling.yaml` included, so its 177 is the linter's 103 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1779,9 +1779,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    16   12 %  ready now — the two classes the reference plant can advance
-    27   20 %  owes a value — the cheapest to close, and the debt count already tracks them
-     7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    18   13 %  ready now — the two classes the reference plant can advance
+    21   16 %  owes a value — the cheapest to close, and the debt count already tracks them
+    11    8 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -1790,7 +1790,7 @@ domain code the configuration deliberately does not carry, so the build order is
 missing *code* rather than missing numbers — which is the honest shape of the remaining work and was
 not visible anywhere before this view existed.
 
-The 30 % that owe an edge is the class rounds 48 to 51 kept finding, and it contains one the graph
+The eight per cent that owe an edge is the class rounds 48 to 51 kept finding, and it contains one the graph
 has been hiding since the beginning: **`zone_csm_cabin_t` has no inbound edge at all.** The cabin's
 temperature is a `lag` with nothing driving it, because `E-ZONE-ATM` was its only edge and that edge
 points *out* of the node. So the cabin has no heat input in the graph — the crew, the equipment and
@@ -8931,6 +8931,86 @@ That is the first movement in the `ready now` bucket for several rounds, and it 
 definition of done watches: **16 of 134 states are now advanceable by the reference plant against the
 1 it actually advances**, and the gap between those two numbers is the build order's own instruction
 about what to write next.
+
+## Six gas initials owed *the fractions*, and summing the four found the ppO2 band was the total
+
+Each crewed compartment has four conserved gas masses — oxygen, water vapour, carbon dioxide and
+nitrogen — and the atmosphere model states the law that joins them (`P = (sum_i n_i) R T / V`). Six
+of those eight initials were `UNCONFIGURED`, all six on the same note: *nitrogen, carbon dioxide and
+water vapour are each a fraction of that total, and no source in the corpus gives the fractions.*
+The oxygen carried the whole of the 5 psia, which it could only do if the other three were nothing.
+
+The note was true and the conclusion did not follow. A fraction does not need a source when a
+*relation* fixes it, and three relations were already in the corpus:
+
+| gas | share | where it comes from |
+|---|---:|---|
+| water vapour | 9.209 mmHg | water's saturation pressure at 10 C — the 50 F dew point `csm_ecs_study_guide.pdf` PDF p. 16 runs the cooling process to |
+| carbon dioxide | 3.0 mmHg | this domain's own `co2_exposure_1h`, from `eclss_diode.md:735` |
+| nitrogen | 0.0 mmHg | `lm_ecs_study_guide.pdf`: the LM stores *in gaseous form, all oxygen* and pressurises *by supplying oxygen*; the CSM's diluent leaves with the pad charge |
+
+**12.209 mmHg that is not oxygen — and that is what the ppO2 band was missing.** The registry's
+`eclss.pp_o2_mmhg` carried `range: [248, 269]`, reasoned as 4.8-5.2 psia of essentially pure oxygen
+at 51.71 mmHg per psi. That is the **total** pressure band. With the three shares held, 4.8 psia is
+**236.02** mmHg of oxygen and 5.2 psia is **256.71**, and the mixture sits at **246.37** mmHg against
+a 5.0 psia total of 258.57. The wrong band stood in **eight places**: four numeric declarations —
+both channels' `range` and the LM compartment's two ppO2 thresholds — plus two `points.yaml` entries,
+the CSM threshold's `point_units` and this domain's own header comment. Eight copies agreeing with
+each other and none with the mixture is exactly what a derived value does when it is copied instead
+of recomputed, and nothing could see it because nothing added the four masses up.
+
+### The four are one mixture, and the closure is now evaluated
+
+So the six initials landed — two derived from the declared partial pressures, one `chosen` with the
+threshold it comes from, the two nitrogens derived as zero — and the two oxygens became the
+**remainder** (2.528302 and 2.87112285 kg) rather than a declared mass. `check_cabin_pressure_closure`
+computes both halves:
+
+- the four initials, through the law, must reach the pressure the zone is held at. The tolerance is
+  an absolute tenth of a pascal, deliberately not `agrees_with_derivation`: `5 x 6894.757293168361`
+  is a product of exact constants and carries fifteen figures, while the initials that feed the sum
+  carry six, so comparing at the declared value's significant figures would refuse a closure that
+  agrees to a tenth of a pascal and say *the mixture does not reach the pressure* about a mixture
+  that reaches it.
+- and the resulting ppO2 must lie **strictly between the compartment's own two ppO2 thresholds**, or
+  the composition and the alarms are describing two different cabins. A compartment with no such pair
+  is refused rather than skipped: a mixture nothing calls habitable or not is not a mixture anyone
+  has decided about.
+
+### Why the subtraction is by partial pressure rather than by mass
+
+The first version of the oxygen remainder was written as *total mass less water less carbon dioxide*,
+which over-subtracts: carbon dioxide is 44 g/mol against oxygen's 32, so removing a kilogram of CO2
+from the oxygen budget takes 1.375 kg of oxygen with it. The error is a quarter of the carbon dioxide
+mass — 10 grams on this cabin, invisible against a two-and-a-half kilogram stock, and wrong. The
+subtraction is of **partial pressures** before any conversion to moles, which is what the landed
+expression does, and the mistake is recorded in the initial's own provenance rather than only here.
+
+### What closing a value revealed
+
+Landing the six values moved four states from *owes a value* to *owes an edge*: a stock with an
+initial and no rate still cannot be advanced, and the value debt had been hiding the edge debt
+behind it. They were already counted — the graph's edge walk has always reported those sensitivities
+— but the build order reads them in a different order, which is why the *owes an edge* bucket grew
+while the debt count fell.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 259 | **253** |
+| literal `UNCONFIGURED` scalars | 109 | **103** |
+| states fully configured | 107 / 134 | **113 / 134** |
+| **`ready now` in the build order** | **16** | **18** |
+| states that owe a value | 27 | **21** |
+| states that owe an edge | 7 | **11** |
+| `UNCONFIGURED scalars` the plant counts | 183 | **177** |
+| `report.refuse` call sites in the linter | 715 | **720** |
+| tests in `tests/test_vehicle_config.py` | 246 | **249** |
+
+The six that closed are the six that were owed; the four that moved into *owes an edge* were already
+debts. What the round is for is the fifth figure: **113 of 134 states are fully configured**, and the
+band the vehicle watches its oxygen with is now the band its own mixture gives.
 
 ## The invariants, and which of them are enforced
 

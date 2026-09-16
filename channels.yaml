@@ -310,7 +310,7 @@ eclss:
     precision: 0.1
     rate_hz: 0.5
     priority: P3
-    range: [248, 269]
+    range: [236.02, 256.71]
     # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
     # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
     # from the numbers alone, which is why this is declared rather than inferred.
@@ -319,7 +319,26 @@ eclss:
     event_class: alarm
     provenance:
       basis: chosen
-      reason: "eclss_diode.md:46 makes ppO2 the primary controlled variable and apollo has no such channel; a cabin-pressure channel alone cannot express a dilution or a fire risk. The band is derived, not chosen: the cabin sits at 4.8-5.2 psia of essentially pure oxygen (apollo_diode.md:88), and 5 psia is 258.6 mmHg, so the published band is 248-269. The first version of this channel carried a sea-level 140-180, which is the value a mixed atmosphere at 14.7 psia would give — the kind of error a range check would not catch and a fire-risk threshold would."
+      reason: >-
+        `eclss_diode.md:46` makes ppO2 the primary controlled variable and apollo has no such channel;
+        a cabin-pressure channel alone cannot express a dilution or a fire risk. The band is derived,
+        not chosen — and **it was derived wrong for as long as it has existed**: it read 248-269
+        because "the cabin sits at 4.8-5.2 psia of essentially pure oxygen, and 5 psia is 258.6
+        mmHg", which is the *total* pressure band. The cabin is 9.209 mmHg of water vapour and 3.0
+        mmHg of carbon dioxide away from essentially pure
+        (`atmosphere_model.check.partial_pressures_mmhg`), so 4.8 psia is 236.02 mmHg of oxygen and
+        5.2 psia is 256.71 — the mixture's own band, which `check_cabin_pressure_closure` evaluates.
+        The first version of this channel carried a sea-level 140-180 — the value a mixed atmosphere
+        at 14.7 psia gives — the kind of error a range check would not catch and a fire-risk
+        threshold would. A band on a derived quantity is only as good as the derivation behind it,
+        which is why `check_cabin_pressure_closure` recomputes this one from the gas stocks rather
+        than reading it back. The 9.209 mmHg of water vapour the band subtracts is itself a
+        conflict — a suit-circuit dew point against the LM cabin heat exchanger's own absolute
+        humidity, which reads 3 to 3.5 mmHg higher — and it is recorded as **C-25** in
+        `../integration/reconciliation/01-conflict-register.md` rather than quietly substituted,
+        because the share moves this band, the LM's two thresholds and the four-gas closure
+        together.
+
   - id: eclss.lm_cabin_temp_c
     unit: degC
     layer: measurement
@@ -428,7 +447,7 @@ eclss:
     rate_hz: 0.5
     priority: P3
     inputs: [eclss.lm_cabin_pressure_psia]
-    range: [248, 269]
+    range: [236.02, 256.71]
     # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
     # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
     # from the numbers alone, which is why this is declared rather than inferred.
@@ -437,7 +456,17 @@ eclss:
     event_class: alarm
     provenance:
       basis: derived
-      relation: "as the CSM compartment: 4.8-5.2 psia of essentially pure oxygen is 248-269 mmHg"
+      relation: >-
+        as the CSM compartment, and by the same subtraction: 4.8-5.2 psia of *total* pressure less
+        the 12.209 mmHg of water vapour and carbon dioxide the cabin model declares is **236.02 to
+        256.71 mmHg** of oxygen. It read 248-269 — the total pressure band — and **four numeric
+        declarations carried it**: this channel's `range`, the CSM's twin, and this compartment's
+        hypoxia and fire-risk thresholds. Two prose entries in `points.yaml`, the CSM threshold's
+        `point_units` and the domain file's own header comment said it too, and this entry's
+        `relation` repeated the wrong derivation. **Eight places, one wrong subtraction**, which is
+        what an un-recomputed derived value does when it is copied instead of calculated: each copy
+        is a reader that cannot disagree with the others.
+
   - id: eclss.suit_loop_flow_cfm
     unit: ft3/min
     layer: measurement

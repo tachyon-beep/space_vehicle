@@ -57,9 +57,13 @@ points:
     layer: measurement
     derivation: "the oxygen mole fraction of the cabin's total pressure"
     note: >-
-      248-269 mmHg at a 5 psia oxygen cabin, derived rather than chosen: 5 psia is 258.6 mmHg.
-      The two failure modes are opposite and only one band covers both — below 200 is hypoxic,
-      above 300 is the fire risk that killed the Apollo 1 crew on the ground.
+      236.02-256.71 mmHg, derived rather than chosen: 4.8-5.2 psia of total pressure is 248.23 to
+      268.92 mmHg, and the 12.209 mmHg of water vapour and carbon dioxide
+      `components.yaml:atmosphere_model.check.partial_pressures_mmhg` declares is not oxygen, so the
+      band is the total less that share. **This entry read 248-269 and so did the registry; both
+      were the *total* pressure band**, which the oxygen can only reach in a cabin with no diluent
+      and no water at all. The two failure modes are opposite and only one band covers both — below
+      200 is hypoxic, above 300 is the fire risk that killed the Apollo 1 crew on the ground.
   # ------------------------------------------------------------------------------------
   # The LM's three, and they were missing. The linter's producer check found them: every one
   # is a threshold's point (`lm_cabin_high`, `lm_cabin_low`, `lm_co2_caution`, `lm_ppo2_hypoxia`)
@@ -78,8 +82,8 @@ points:
     note: >-
       the LM's own cabin pressure, and the number the crew read during the descent while the CSM's
       was somebody else's vehicle. The compartment is 6.7 m3 against the CSM's 5.9, and it holds
-      the same 4.8-5.2 psia of essentially pure oxygen — so the ppO2 band is the same 248-269 mmHg
-      and the *volume* is what differs.
+      the same 4.8-5.2 psia of essentially pure oxygen — so the ppO2 band is the same
+      236.02-256.71 mmHg and the *volume* is what differs.
   - channel: eclss.lm_co2_pp_mmhg
     from: lm_cabin_co2_kg
     layer: measurement
