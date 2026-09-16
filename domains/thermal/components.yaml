@@ -410,10 +410,20 @@ components:
     provenance:
       basis: historical
       source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F"
+  # The three pumps are the one place in this domain where the electrical figures belong to
+  # `domains/power/components.yaml#loads` — the power domain owns the load inventory, and the pump
+  # and the load are one article seen from two sides. `power_load` is that link, declared rather
+  # than inferred, and it has to be declared: the names differ at *both* levels — `pump_1` against
+  # `csm_coolant_pump_1`, and `rated_w` here against `demand_w` there — so no rule could join them
+  # from the strings. Until round 50 the only statement of the identity was the sentence in
+  # `pump_1`'s own `reason`, which nothing read and which `pump_2` did not even carry, while both
+  # figures sat in both files agreeing by luck. `pump_lm` names no load because the power inventory
+  # has none: its 200 W are on no bus and in no per-vehicle total, which `check_pump_loads` reports.
   - id: pump_1
     kind: flow
     class: pump
     loop: loop_primary
+    power_load: csm_coolant_pump_1
     rated_w: 250
     inrush_w: 420
     provenance:
@@ -423,6 +433,7 @@ components:
     kind: flow
     class: pump
     loop: loop_primary
+    power_load: csm_coolant_pump_2
     rated_w: 250
     inrush_w: 420
     provenance:

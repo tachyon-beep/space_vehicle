@@ -11574,6 +11574,103 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
             )
 
 
+def check_pump_loads(root: Path, report: Report) -> None:
+    """One pump, two domains, and the link between them written in a sentence nothing read.
+
+    `domains/thermal/components.yaml` declares the coolant pumps with their electrical figures —
+    `rated_w: 250`, `inrush_w: 420` — and `pump_1`'s own `reason` says where they come from:
+
+        "its electrical figures are the power domain's csm_coolant_pump_1; the mechanical side is
+         what this domain owns"
+
+    That is a claim that two objects in two files are **one article**, and no tool read it. The power
+    domain publishes the same article as a load — `csm_coolant_pump_1`, `demand_w: 250`,
+    `inrush_w: 420` — so the same two numbers sat in both files under different names at *both*
+    levels: `pump_1` against `csm_coolant_pump_1`, and `rated_w` against `demand_w`. Nothing could
+    have joined them by accident, and `pump_2` did not state the link at all: only its twin's
+    sentence mentioned the power domain, and it named only `csm_coolant_pump_1`. The figures agreed
+    because somebody wrote them twice, which is the state this folder treats as a defect even when
+    the numbers are right.
+
+    `power_load` is the link, the same shape as `vehicle_keys` and `domain_group`: a field naming the
+    other file's object rather than a rule guessing it from the string. Three rules follow, and the
+    third is what the round found by writing them:
+
+      - the named load must exist in `domains/power/components.yaml#loads`, because a link that has
+        stopped linking reads exactly like a link that works;
+      - `rated_w` must equal the load's `demand_w`, and `inrush_w` its `inrush_w`. One article drawn
+        once — and a pump re-rated on the electrical side while the mechanical side keeps the old
+        draw is how the 420 W the flagship chain turns on becomes a figure with two values;
+      - a pump that declares electrical figures and names **no** load is a **debt**, naming the watts
+        that are on no bus. `pump_lm` is the instance, and what is owed is not its 200 W — that
+        figure is authored and marked `chosen`, like every other load in the inventory — but the fact
+        that the LM's declared 1,007 W total does not contain it and no bus feeds it.
+
+    The reverse direction is silent on purpose: a load need not be a pump, and the 22 loads that are
+    not are the inventory's business rather than this join's.
+    """
+    power = load(root / "domains" / "power" / "components.yaml", report) or {}
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    loads = {
+        str(row["id"]): row
+        for row in (power.get("loads") or [])
+        if isinstance(row, dict) and row.get("id")
+    }
+    if not loads:
+        report.debt(
+            "domains/power/components.yaml#loads",
+            "is missing or empty, so no pump's electrical figures can be held against the load the "
+            "power domain publishes for it",
+        )
+        return
+    for component in thermal.get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        # The signature of an article the power domain also carries: a rated draw and a starting
+        # transient. A figure that is unset is the unset-value walker's debt, not this join's.
+        rated, transient = component.get("rated_w"), component.get("inrush_w")
+        if isinstance(rated, bool) or not isinstance(rated, (int, float)):
+            continue
+        if isinstance(transient, bool) or not isinstance(transient, (int, float)):
+            continue
+        cid = str(component.get("id"))
+        where = f"domains/thermal/components.yaml:components.{cid}"
+        named = component.get("power_load")
+        if not named:
+            report.debt(
+                where,
+                f"declares {rated} W steady and {transient} W at start and names no `power_load`. "
+                "The power domain owns the load inventory, so an article with electrical figures and "
+                "no load there is a draw on no bus and in no per-vehicle total — and the two copies "
+                "are free to drift in the meantime",
+            )
+            continue
+        row = loads.get(str(named))
+        if row is None:
+            report.refuse(
+                f"{where}.power_load",
+                f"names {named!r}, which `domains/power/components.yaml#loads` does not declare; it "
+                f"declares {sorted(loads)}. A link that has stopped linking reads exactly like a "
+                "link that works",
+            )
+            continue
+        if float(row.get("demand_w") or 0) != float(rated):
+            report.refuse(
+                f"{where}.rated_w",
+                f"is {rated} W and the load it names, power.{named}, draws "
+                f"{row.get('demand_w')!r} W. One article, two files: a pump re-rated on the "
+                "electrical side leaves the mechanical side asserting the old draw, and this is the "
+                "figure the bus-sag chain is scaled by",
+            )
+        if float(row.get("inrush_w") or 0) != float(transient):
+            report.refuse(
+                f"{where}.inrush_w",
+                f"is {transient} W and the load it names, power.{named}, starts at "
+                f"{row.get('inrush_w')!r} W. The starting transient is the number that makes a "
+                "marginal bus drop a pump, and the two files state it twice",
+            )
+
+
 def check_metabolic_rules(
     root: Path, vehicle: dict[str, Any], mission: dict[str, Any], report: Report
 ) -> None:
@@ -12995,6 +13092,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     check_power_inventory(root, report)
     check_thermal_heat_inputs(root, report)
+    check_pump_loads(root, report)
     check_gnc_substepping(root, mission, report)
     check_mission_model(mission or {}, report)
     check_threshold_derivations(root, documents, report)

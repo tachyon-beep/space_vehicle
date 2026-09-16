@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 293 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 294 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 293 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 294 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,7 +184,7 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **293** is every obligation the linter can name,
+Two counts, and the difference is deliberate. The **294** is every obligation the linter can name,
 prose ones included — `channels.yaml`'s eight, `coupling.yaml`'s eight, `vehicle.yaml`'s **nine** and
 the eleven domains' **38** are engineering debts written as sentences (thermal time constants, loop
 transit, the throttle law, the inertia tensor, the crisis gains, the source resistance, the missing
@@ -7808,7 +7808,7 @@ Two instruments on one channel is the redundant pair, and the rule is silent abo
   inside its own operating envelope.
 
 A disagreement is a refusal and a figure that is not there is a debt — the same split the display
-contract makes. A measured channel with no `range` at all composes, at 294 debts, and the debt says
+contract makes. A measured channel with no `range` at all composes, at 295 debts, and the debt says
 the containment cannot be decided rather than that it failed.
 
 ### What the round got wrong on the way
@@ -7939,6 +7939,95 @@ string partway through. The guard caught it rather than loosening the needle, wh
 
 The plant's own figures do not move: this round adds no state, no node and no edge, so the readiness
 line and the build order are the ones round 48 left.
+
+## One pump, two domains, and the link between them written in a sentence nothing read
+
+`domains/thermal/components.yaml` declares the coolant pumps with their electrical figures, and
+`pump_1`'s own `reason` says where those figures come from:
+
+> its electrical figures are the power domain's `csm_coolant_pump_1`; the mechanical side is what
+> this domain owns
+
+That is a claim that two objects in two files are **one article**, and no tool read it. The power
+domain publishes the same article as a load:
+
+| | thermal | power |
+|---|---|---|
+| the object | `pump_1` | `csm_coolant_pump_1` |
+| the steady draw | `rated_w: 250` | `demand_w: 250` |
+| the starting transient | `inrush_w: 420` | `inrush_w: 420` |
+
+The same two numbers in two files, under different names at **both** levels — so no rule could have
+joined them even by accident, and the two agreed because somebody wrote them twice. That is the
+state this folder treats as a defect even when the numbers are right, and the corpus says so itself a
+few hundred lines away: the thermal domain's own debt note insists *"the numbers are not duplicated
+here"* while the pumps carry the loads' own watts under another name.
+
+`pump_2` did not state the link at all. Only its twin's sentence mentioned the power domain, and it
+named only `csm_coolant_pump_1` — the redundant pump's 250 W and 420 W were joined to anything by
+nothing at all.
+
+### The fix, and what writing it found
+
+`power_load` is the link, the shape `vehicle_keys` and `domain_group` already have: a field naming the
+other file's object rather than a rule guessing it from the string. `check_pump_loads` then holds
+three things:
+
+- the named load must exist in `domains/power/components.yaml#loads`, because a link that has stopped
+  linking reads exactly like a link that works;
+- `rated_w` must equal the load's `demand_w`, and `inrush_w` its `inrush_w` — one article drawn once,
+  and a pump re-rated on the electrical side while the mechanical side keeps the old number is how
+  the 420 W the flagship chain turns on becomes a figure with two values;
+- a pump that declares electrical figures and names **no** load is a **debt**, naming the watts that
+  are on no bus.
+
+And the third rule is what the round found by writing the first two: **`pump_lm` is that pump.**
+
+### The LM's pump is on no bus
+
+`domains/thermal/components.yaml` declares `pump_lm` at 200 W steady and 340 W at start. The power
+inventory has 25 loads and not one of them is an LM pump — so those watts are on no bus and in no
+per-vehicle total: the LM's declared `lm_total_demand_w` of 1,007 W is the sum of its eleven loads
+and does not contain them.
+
+What is owed there is not a figure. The 200 W is authored and marked `chosen`, like every other load
+in an inventory whose own header says no source publishes loads in watts. What is owed is the
+decision the corpus will not make for itself — which bus, and which shed class, for the LM's single
+pump — and until it is made, a fleet that sheds the LM's bus has no declaration saying the coolant
+pump is on it. It is a debt rather than a value filled in, which is why the count moved.
+
+### What the round got wrong on the way
+
+Three of the prover's cases failed first, and all three were the prover's fault rather than the
+corpus's — but only one of them was interesting. The other two changed a load's `demand_w` and
+expected the *pump* join to be the only thing that noticed; a load's demand is also a term in the
+per-vehicle sum, so the inventory's own total check fired beside it, and the case that asserted
+"exactly one refusal" was really asserting that no other rule was paying attention. The case is
+written against the refusal's own words now, and the load that must move in *silence* moves its
+`inrush_w` instead — the figure no total contains.
+
+The interesting one is the same shape as round 49's: a case that cannot distinguish "the rule fired"
+from "a different rule fired" is not testing the rule. It is the third round in a row where the
+mistake was in the fixture rather than in the corpus.
+
+And one pin was missed, which the suite caught rather than a reader: the debt count is now stated in
+**five** places in the test file alone, and the two fixtures that sit one *above* live are written
+with two different tail expressions (`out[-300:]` and `out[-400:]`), so a sweep keyed on the phrase
+moved three of the four and left the fourth asserting 294 against a corpus that says 295. The count
+is the folder's most-moved figure and its moving is mechanical; the next round would do better to
+derive those fixture expectations from the live count than to restate it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 293 | **294** — the LM pump, which no load carries |
+| pumps carrying a declared link to their load | 0 of 3 | **2 of 3**, the third being the debt |
+| `report.refuse` call sites in the linter | 664 | **667** |
+| tests in `tests/test_vehicle_config.py` | 217 | **218** |
+
+The plant's figures do not move again: this round adds a field to a component, not a state, a node or
+an edge.
 
 ## The invariants, and which of them are enforced
 
