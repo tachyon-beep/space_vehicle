@@ -9332,6 +9332,212 @@ def check_component_identity(documents: dict[str, Any], report: Report) -> None:
                 )
 
 
+# The heads under which an instrument states its figures, and the one place a unit may not live:
+# inside the key. This is a *suffix* test rather than a prefix one, and the reason is the round-48
+# mistake worth keeping: the first version of the rule matched `range_`, which matched `range_kind`
+# — the vocabulary of `range` rather than a quantity with a unit inside it — and refused all four
+# sensors for the field that says what their range means.
+INSTRUMENT_FIGURES = ("range", "precision", "resolution", "accuracy")
+
+# The dimensional map's units lowercased, because a key name is snake_case: `precision_mmhg` is the
+# key `precision` followed by `mmHg`, and the map spells that unit with a capital M. Folding is safe
+# here because the map's own keys do not collide when lowercased — there is one `V` and no `v`, one
+# `K` and no `k`, one `A` and no `a` — so the fold is reversible and the canonical spelling comes
+# back out for the refusal message.
+UNIT_SUFFIXES = {unit.lower(): unit for unit in DIMENSION}
+
+
+def unit_in_key(field: str) -> str | None:
+    """The unit inside a key name of the form `<quantity>_<unit>`, or None if there is not one.
+
+    Only the vehicle's own dimensional map can answer whether a suffix *is* a unit, because
+    `range_psia` and `range_kind` differ by one token and only one of them is a figure whose unit is
+    in its name. A unit the map does not know is a unit this cannot see, which is the limitation the
+    display contract's own unit comparison carries as well — and there it is reported as a debt when
+    it meets one.
+    """
+    for head in INSTRUMENT_FIGURES:
+        if not field.startswith(head + "_"):
+            continue
+        tail = field[len(head) + 1 :]
+        for candidate in (tail, tail.replace("_per_", "/")):
+            if candidate in UNIT_SUFFIXES:
+                return UNIT_SUFFIXES[candidate]
+    return None
+
+
+def check_instrument_channels(
+    documents: dict[str, Any], registry: dict[str, dict[str, Any]], report: Report
+) -> None:
+    """The instrument is the one link in the chain from physics to crew display that nothing joins.
+
+    A reading reaches the crew through three declarations, and until round 48 only one of the two
+    joins between them existed. `channels.yaml` states a resolution for every canonical channel and
+    the display contract's `displayed_precision` is held to it — a panel may round and may not
+    invent resolution. The other end, *what the instrument itself resolves*, was declared four times
+    in `domains/eclss/components.yaml` as `range_psia` / `precision_psia` / `range_mmhg` /
+    `precision_mmhg`: the unit inside the key, which is the shape the fault magnitudes were cured of,
+    and a field no tool read. `class: sensor` — the one word in the corpus that says *this is an
+    instrument* — was read by nothing either, so the vehicle's four instruments were four blocks of
+    prose that no channel depended on and no threshold was held against.
+
+    **The two ranges are different quantities, and the vocabulary is what keeps them apart.** The
+    channel's `range` is a *band* — the cabin's acceptable 4.8-5.2 psia, with the alarms firing
+    below it — while the instrument's is a *scale*, the span it can physically read, 0-10 psia. The
+    relation between them is therefore containment rather than equality, and it is a real physical
+    claim: an instrument whose full scale does not contain the band the vehicle calls normal
+    saturates inside its own operating envelope, and the crew read the rail rather than the cabin.
+    `range_kind` already carried exactly that distinction for the registry (`check_range_kinds`), so
+    the sensor side reuses the word `scale` instead of inventing `full_scale` — one vocabulary, and
+    the two halves can be compared rather than described.
+
+    A refusal for a disagreement, a debt for a figure that is not there to compare: the same split
+    the display contract makes one join further along. What is not available is `class: sensor` with
+    figures and no channel, because that is the state this round found the corpus in.
+
+    **Why the unit-in-key rule is scoped to instruments.** A sweep of the corpus finds 141 keys with
+    a unit in the name, and they are not the same defect. `tau_s`, `total_w`, `thrust_main_n` and
+    `nominal_kg_s` are *states*, where the unit is part of the quantity's identity — `cabin_eq_csm_k`
+    and `conductance_w_per_k` are two different quantities on one node, and `total_w` against
+    `total_k` is how the file tells them apart. An instrument's `range` and `precision` are the
+    other case: the channel registry states the same two quantities for the same physical signal
+    under unit-free names, so the two spellings are comparable and the only reason they were not
+    compared is that one of them had its unit welded into the identifier. This check refuses the
+    spelling exactly where a second declaration of the same quantity exists to disagree with.
+    """
+    for name, document in sorted(documents.items()):
+        if not name.endswith("components.yaml"):
+            continue
+        for entry in (document or {}).get("components") or []:
+            if not isinstance(entry, dict) or entry.get("class") != "sensor":
+                continue
+            where = f"{name}:components.{entry.get('id')}"
+            # The old spelling first, because it is the defect: a unit inside a key name is a
+            # quantity no field can state the unit of, so nothing can compare it to anything.
+            for field in sorted(entry):
+                unit = unit_in_key(field)
+                if unit:
+                    report.refuse(
+                        f"{where}.{field}",
+                        f"carries its unit in the key name: `{field}` is a span or a resolution "
+                        f"whose unit is `{unit}` and is inside the identifier, so no check can hold "
+                        "it against the channel's own `range` and `precision`. That is what the four "
+                        "sensors did until round 48, and why the instrument end of the reading chain "
+                        "was joined to nothing",
+                    )
+            measured = entry.get("measures")
+            if not measured:
+                report.refuse(
+                    where,
+                    "is `class: sensor` and declares no `measures`. An instrument that does not "
+                    "name the channel it instruments is a resolution nothing can be held against, "
+                    "and `class: sensor` is the one word in the corpus that says what this is",
+                )
+                continue
+            row = registry.get(str(measured))
+            if row is None:
+                report.refuse(
+                    f"{where}.measures",
+                    f"names {measured!r}, which is not a channel in `channels.yaml`. An instrument "
+                    "measures something a crew member can read, and a name that resolves to no "
+                    "channel is a link to nothing",
+                )
+                continue
+            figures = {f: entry.get(f) for f in ("range", "range_kind", "unit", "precision")}
+            missing = sorted(f for f, value in figures.items() if value is None)
+            if missing:
+                report.refuse(
+                    f"{where}.{missing[0]}",
+                    f"is not declared, and this component names `measures: {measured}`. The "
+                    "instrument's own figures are what the channel's `range` and `precision` are "
+                    "held against, so `range`, `range_kind`, `unit` and `precision` are all "
+                    f"required: {missing} {'is' if len(missing) == 1 else 'are'} not there to compare",
+                )
+                continue
+            span = figures["range"]
+            if figures["range_kind"] != "scale":
+                report.refuse(
+                    f"{where}.range_kind",
+                    f"is {figures['range_kind']!r}. An instrument's range is the full span it can "
+                    "read — a `scale` — and the check below is containment of the channel's range "
+                    "inside it. A sensor declaring a `band` would be claiming an acceptable "
+                    "operating range for a transducer, which is the channel's question and not the "
+                    "instrument's",
+                )
+                continue
+            if (
+                not isinstance(span, list)
+                or len(span) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in span)
+                or float(span[0]) >= float(span[1])
+            ):
+                report.refuse(
+                    f"{where}.range",
+                    f"is {span!r}, which is not a span with two numeric ends. An instrument's full "
+                    "scale is the interval it can read, and without both ends there is nothing to "
+                    "hold the channel's range inside",
+                )
+                continue
+            published_unit = str(row.get("unit") or "")
+            if str(figures["unit"]) != published_unit:
+                report.refuse(
+                    f"{where}.unit",
+                    f"is {figures['unit']!r}, and the channel it measures publishes in "
+                    f"{published_unit!r}. An instrument feeding a channel reads in that channel's "
+                    "unit: one reading in another is either wired to the wrong channel or has not "
+                    "been converted, and either way the range and the precision below are being "
+                    "compared in different units",
+                )
+                continue
+            published = row.get("precision")
+            own = figures["precision"]
+            if isinstance(own, bool) or not isinstance(own, (int, float)) or float(own) <= 0:
+                report.refuse(
+                    f"{where}.precision",
+                    f"is {own!r}, which is not a positive resolution",
+                )
+            elif published == "exact":
+                report.refuse(
+                    f"{where}.precision",
+                    f"is {own!r} and the channel publishes `exact`: a discrete quantity has no "
+                    "resolution to resolve, so an instrument declaring one is not measuring it",
+                )
+            elif not isinstance(published, (int, float)) or isinstance(published, bool):
+                report.debt(
+                    f"{where}.precision",
+                    f"cannot be compared with the channel's `precision`, which is {published!r} — "
+                    "neither a number nor `exact`",
+                )
+            elif float(published) < float(own):
+                report.refuse(
+                    f"{where}.precision",
+                    f"is {own!r} and the channel publishes {published!r}. The channel may round the "
+                    "instrument, exactly as the display contract rounds the channel, and it may not "
+                    "invent resolution: a figure finer than the transducer resolves is a number the "
+                    "vehicle never measured",
+                )
+            band = row.get("range")
+            if (
+                not isinstance(band, list)
+                or len(band) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in band)
+            ):
+                report.debt(
+                    f"{where}.range",
+                    f"cannot be held against the channel's `range`, which is {band!r} — not a "
+                    "numeric interval, so whether the instrument's full scale contains the range "
+                    "the vehicle calls normal cannot be decided at all",
+                )
+            elif float(band[0]) < float(span[0]) or float(band[1]) > float(span[1]):
+                report.refuse(
+                    f"{where}.range",
+                    f"is {span} and the channel it measures ranges {band}. An instrument whose "
+                    "full scale does not contain the band the vehicle calls normal saturates inside "
+                    "its own operating envelope, and at the end of that band the crew read the rail "
+                    "rather than the cabin",
+                )
+
+
 # The keys of a thermal component that are never a quantity the two files both state: identity, the
 # prose keys, and the link itself. What is deliberately *not* here is the point — `fluid`,
 # `flow_l_min`, `vehicle`, `coolant_mass_kg`, `panels`, `area_m2` and `rejection_w` are the figures
@@ -12719,6 +12925,11 @@ def main(argv: list[str] | None = None) -> int:
     check_domain_reads(documents, report)
     check_perception_model(documents, report)
     check_component_identity(documents, report)
+    # Needs the registry, which is empty when `channels.yaml` refused: without it every `measures`
+    # would be reported as naming no channel — one refusal multiplied by the number of instruments,
+    # and not the fault.
+    if channels is not None:
+        check_instrument_channels(documents, registry, report)
     check_throttle_bands(root, report)
     check_burn_capability(root, report, mission or {})
     check_ontology(documents, report)

@@ -382,11 +382,31 @@ components:
         and the LM has no equivalent, so ECL-13, ECL-14 and ECL-19 are injectable but not readable:
         on the CSM a regulator fault is a mode, and on the LM it is an inference from pressure and
         ppO2. `domains/eclss/fault_policy.yaml` carries that asymmetry in the twins' detection notes
+  # The four instruments, and the one field that says what they instrument. Until round 48 each
+  # carried `range_psia` / `precision_psia` — the unit inside the key, which is the shape the fault
+  # magnitudes were cured of — and *no* tool read either key, so the instrument was the one link in
+  # the chain from physics to crew display that nothing joined: `channels.yaml` states a resolution
+  # and the display contract is held to it, and what the instrument actually resolves was a claim
+  # in a key name. `measures` is the declared link, and the three figures beside it are stated in
+  # the registry's own vocabulary (`range`, `range_kind`, `unit`, `precision`) so the two halves can
+  # be compared rather than described.
+  #
+  # The two ranges are different quantities and the vocabulary is what keeps them apart. The
+  # channel's range is a *band* — the cabin's acceptable operating pressure, 4.8-5.2 psia, with
+  # alarms firing below it. The instrument's is a *scale* — the full span the transducer can read,
+  # 0-10 psia — and the honest relation between them is containment, not equality: an instrument
+  # whose full scale does not contain the band the vehicle calls normal saturates inside its own
+  # operating envelope. `range_kind` already carried exactly this distinction for the registry
+  # (`check_range_kinds`), which is why the sensor side reuses the word `scale` instead of
+  # inventing a second one.
   - id: cabin_pressure_sensor_1
     kind: flow
     class: sensor
-    range_psia: [0, 10]
-    precision_psia: 0.01
+    measures: eclss.cabin_pressure_psia
+    range: [0, 10]
+    range_kind: scale
+    unit: psia
+    precision: 0.01
     provenance:
       basis: apollo
       ref: "apollo_diode.md:88"
@@ -394,16 +414,22 @@ components:
   - id: cabin_pressure_sensor_2
     kind: flow
     class: sensor
-    range_psia: [0, 10]
-    precision_psia: 0.01
+    measures: eclss.cabin_pressure_psia
+    range: [0, 10]
+    range_kind: scale
+    unit: psia
+    precision: 0.01
     provenance:
       basis: chosen
       reason: "apollo's instrumentation carried redundant channels (`avionics_diode.md:390-411`'s redundant_vote is one of the only two mechanisms allowed to assign SUSPECT). Two sensors are the minimum for a disagreement to be detectable at all, and a single pressure sensor is a fault that hides its own failure."
   - id: co2_sensor
     kind: flow
     class: sensor
-    range_mmhg: [0, 20]
-    precision_mmhg: 0.1
+    measures: eclss.co2_pp_mmhg
+    range: [0, 20]
+    range_kind: scale
+    unit: mmHg
+    precision: 0.1
     provenance:
       basis: apollo
       ref: "apollo_diode.md:90"
@@ -411,8 +437,11 @@ components:
     kind: flow
     class: sensor
     vehicle: lm
-    range_psia: [0, 10]
-    precision_psia: 0.01
+    measures: eclss.lm_cabin_pressure_psia
+    range: [0, 10]
+    range_kind: scale
+    unit: psia
+    precision: 0.01
     provenance:
       basis: derived
       relation: >-

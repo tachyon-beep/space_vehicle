@@ -7727,6 +7727,126 @@ block existing.
 | engines with a declared burn budget | 0 of 3 | **2 of 3**, the third owed |
 | tests in `tests/test_vehicle_config.py` | 214 | **215** |
 
+## A sensor's figures were declared in a key that carried its unit, and the channel they feed was joined to nothing
+
+A reading reaches the crew through three declarations and two joins:
+
+    the transducer  ->  the channel in `channels.yaml`  ->  the panel in the display contract
+
+The second join exists and is enforced: `displayed_precision` is held against the registry's own
+`precision`, so a panel may round the channel and may not invent resolution. The first join did not
+exist. `domains/eclss/components.yaml` declared the vehicle's four instruments like this:
+
+```yaml
+  - id: co2_sensor
+    kind: flow
+    class: sensor
+    range_mmhg: [0, 20]
+    precision_mmhg: 0.1
+```
+
+**The unit is inside the key name** — the shape the fault magnitudes were cured of, in the round
+that found one idea carrying twenty spellings and `bias_walk_kpa_per_h: 0.05` sitting against a
+channel published in psi. And **no tool read either field**: a search for all four spellings across
+`check_vehicle.py`, `plant.py`, `faults.py`, `console.py` and `generate_help.py` returns nothing at
+all. `class: sensor` was read by nothing either — the corpus carries thirty-four class names and no
+vocabulary check among them — so the one word that says *this is an instrument* named four
+components that no channel depended on and no threshold was held against.
+
+The registry states the same two quantities for the same signals, under unit-free names:
+
+```yaml
+  - id: eclss.co2_pp_mmhg
+    unit: mmHg
+    precision: 0.1
+    range: [0, 5]
+    range_kind: band
+```
+
+So the same information had two spellings, in two files, and nothing compared them.
+
+### The two ranges are different quantities, and that is the whole difficulty
+
+The obvious join — the sensor's range equals the channel's — is wrong, and getting it wrong is how a
+round ends up refusing four correct declarations. The channel's `range` is a **band**: the cabin's
+acceptable operating pressure, 4.8-5.2 psia, with the alarms firing *below* it. The instrument's is a
+**scale**: the full span the transducer can read, 0-10 psia. `range_kind` already carried exactly
+that distinction for the registry, where it was added because "an alarm must lie outside its
+channel's range" refused 34 legitimate reserve thresholds. The sensor side reuses the word `scale`
+rather than inventing `full_scale`, and the honest relation is then **containment**: an instrument
+whose full scale does not contain the band the vehicle calls normal saturates inside its own
+operating envelope, and at the end of that band the crew read the rail rather than the cabin.
+
+### The fix
+
+`measures` is the link, and the three figures beside it are stated in the registry's own vocabulary
+so the two halves are comparable rather than merely described:
+
+| component | `measures` | unit | resolution | full scale | the channel's band |
+|---|---|---|---|---|---|
+| `cabin_pressure_sensor_1` | `eclss.cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `cabin_pressure_sensor_2` | `eclss.cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `lm_cabin_pressure_sensor` | `eclss.lm_cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `co2_sensor` | `eclss.co2_pp_mmhg` | mmHg | 0.1 | 0-20 | 0-5 |
+
+Two instruments on one channel is the redundant pair, and the rule is silent about the count.
+`check_instrument_channels` then holds five things:
+
+- a unit **welded into a key name** is refused, wherever a second declaration of the same quantity
+  exists to disagree with it — which is the boundary, because 141 keys across the domains'
+  `components.yaml` files carry a unit in the name and most of them are *states*, where the unit is the quantity's identity: `tau_s`,
+  `total_w`, and `cabin_eq_csm_k` against `conductance_w_per_k`;
+- a `class: sensor` component that names **no channel** is refused, because that is the state this
+  round found the corpus in, and one that names a channel which does not exist with it;
+- the instrument's `unit` must be the channel's — an instrument reading in another unit is either
+  wired to the wrong channel or unconverted, and the two comparisons below would then be arithmetic
+  across units;
+- the channel may **round** the instrument and may not **invent resolution**: a figure finer than
+  the transducer resolves is a number the vehicle never measured. Same rule, same words, as the
+  display contract applies one join further along;
+- the channel's range must lie **inside** the instrument's full scale, or the transducer saturates
+  inside its own operating envelope.
+
+A disagreement is a refusal and a figure that is not there is a debt — the same split the display
+contract makes. A measured channel with no `range` at all composes, at 293 debts, and the debt says
+the containment cannot be decided rather than that it failed.
+
+### What the round got wrong on the way
+
+Twice, and both are now cases in the test. The first version of the unit-in-key rule matched the
+**prefix** `range_`, which matched `range_kind` — the vocabulary of `range` rather than a unit
+inside a name — and refused all four sensors for the field that says what their range *means*. The
+rule is a suffix test against the vehicle's own dimensional map now, and it has to fold case,
+because a key name is snake_case while the map spells one of them `mmHg`. A key name is the one
+place where the corpus lowercases a unit, and the first lookup missed `precision_mmhg` for exactly
+that reason.
+
+And the first broken copy restored the old spelling by deleting `range` and `unit` together, which
+let the missing-figure rule fire first and `continue` past the rule under test: **a break that drops
+an identifier reports the hole rather than the defect.** The case moves only the *name* now and keeps
+every figure present.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 292 | **292** — the join adds none, because the corpus was already consistent |
+| sensor figures joined to a channel | 0 of 8 | **8 of 8** |
+| `report.refuse` call sites in the linter | 650 | **661** |
+| tests in `tests/test_vehicle_config.py` | 215 | **216** |
+
+The debt count not moving is the point of the round: four instruments, five rules, and not one
+disagreement to report — the chain from transducer to panel was consistent and *unchecked*, which is
+a different thing from correct.
+
+### Two figures this round measured and did not take
+
+The reconciliation README's row for the linter said it "carries 211 refusal sites across 67 classes
+of fault". Both numbers were prose no tool derived, and the first was 450 adrift; it now states the
+`report.refuse` call site count, which one command reproduces. The same table's row for
+`channels.yaml` still says 147 channels where the linter counts 148 — a drift of one that predates
+this round and whose definition is not stated, so it is named here rather than guessed at.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived
