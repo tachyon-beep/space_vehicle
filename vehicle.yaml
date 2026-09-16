@@ -632,6 +632,14 @@ thermal:
       - id: csm_avionics_bay
         limit_c: [10, 50]
         regulated: true
+        # Every zone names the state its temperature lives on, and until round 51 only the
+        # two cabins did. The check that needs the link found it by matching the zone's own
+        # words against the state ids instead, and for both cabins the word it matched was
+        # `cabin` — so each cabin's verdict was computed from a list holding *both* cabins'
+        # states, and one cabin's state could sit on the `internal` sentinel undriven while
+        # the check stayed quiet on the other's account. `temperature_state` is the link
+        # `check_cabin_equilibrium` already read for the two cabins; it is universal now.
+        temperature_state: zone_csm_avionics_t
         dwell_min_s: 30
         # A plate threshold, on `thermal.avionics_plate_c` rather than a zone channel, because the
         # avionics bay's temperature is the coldplate's — which is what makes this link one that
@@ -644,6 +652,7 @@ thermal:
       - id: csm_service_bay
         limit_c: [-20, 60]
         regulated: false
+        temperature_state: zone_csm_service_t
         provenance:
           basis: chosen
           reason: "unregulated in this model; its temperature matters through the propellant and pressurant it contains, which is where the F-09 frozen-line chain lives"
@@ -669,12 +678,14 @@ thermal:
       - id: lm_descent_bay
         limit_c: [-30, 50]
         regulated: false
+        temperature_state: zone_lm_descent_t
         provenance:
           basis: chosen
           reason: "the descent stage is exposed and unregulated; its thermal state is what the frozen-line chain needs"
       - id: radiator_loop
         limit_c: [null, null]
         regulated: false
+        temperature_state: zone_radiator_t
         provenance:
           basis: chosen
           reason: "the radiator is an observable with no command interface (simulator-design.md:158): a rejection curve, not a limit"

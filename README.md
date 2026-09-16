@@ -8029,6 +8029,88 @@ derive those fixture expectations from the live count than to restate it.
 The plant's figures do not move again: this round adds a field to a component, not a state, a node or
 an edge.
 
+## A zone's temperature state was found by matching words, and both cabins matched the same word
+
+`check_zone_nodes` exists to refuse a zone whose temperature state sits on the `internal` sentinel —
+which is not a node, so no edge can terminate on it and the zone's temperature can never be driven.
+It found that state by matching the zone's own words against the state ids, and said so in a comment:
+
+> The ids are not mechanical (`zone_csm_service_t` against a zone called `csm_service_bay`), so the
+> match is by the zone's own words.
+
+The rule was `stem.split("_")[0] in state_id`, and for both crewed cabins the stem is `cabin`. So
+each cabin's verdict was computed from a list holding **both** cabins' states:
+
+| zone | the word | the states it matched |
+|---|---|---|
+| `csm_cabin` | `cabin` | `zone_csm_cabin_t`, `zone_lm_cabin_t` |
+| `lm_cabin` | `cabin` | `zone_csm_cabin_t`, `zone_lm_cabin_t` |
+
+Which means the check could be defeated by the defect it was written for.
+`zone_csm_cabin_t` **could sit on the `internal` sentinel** and the check stayed silent, because
+`zone_lm_cabin_t` was still on a node and the list was non-empty. This is not a hypothetical: the
+isolation is in `.scratch/r51/verify.py`, and the coherent version of that edit — move the state to
+the sentinel *and* drop `cabin_zone_t` from the domain's `writes`, so no other rule is covering for
+it — made the linter **compose** before this round. The pair whose failure modes are most alike is
+the pair whose ids are least distinguishable, and the two crewed cabins are that pair.
+
+### The link was already there, on two zones out of six
+
+`temperature_state` is the declaration the check needed, and the two cabins had carried it all along
+— it is what `check_cabin_equilibrium` resolves before it can compute a rise above the coolant
+supply, and that check's own comment records the same lesson in a smaller form (*"This check used to
+find this one by convention and skip in silence when it could not"*). The other four zones declared
+nothing, so the word-match was the only mechanism they had, and it was also the only mechanism the
+cabins had **for this check**.
+
+All six zones declare it now:
+
+| zone | `temperature_state` | the node it is on |
+|---|---|---|
+| `csm_cabin` | `zone_csm_cabin_t` | `cabin_zone_t` |
+| `csm_avionics_bay` | `zone_csm_avionics_t` | `coldplate_t` |
+| `csm_service_bay` | `zone_csm_service_t` | `service_bay_zone_t` |
+| `lm_cabin` | `zone_lm_cabin_t` | `lm_cabin_zone_t` |
+| `lm_descent_bay` | `zone_lm_descent_t` | `descent_bay_zone_t` |
+| `radiator_loop` | `zone_radiator_t` | `radiator_reject` |
+
+and `check_zone_nodes` reads the field: a zone that names no state is refused, a name that resolves
+to no state is refused, and a name that resolves to a state on the sentinel is refused *for the zone
+that named it*. Four of the six ids are not the zone id plus a suffix — which is why the link is
+declared rather than derived, and why a rule over the strings had to guess.
+
+The reverse direction stays silent on purpose: `comm_amp_t`, `coolant_loop_t` and `loop_transport_t`
+are temperatures this vehicle has and no zone is about, so an unclaimed `*_t` state is not a gap.
+
+### The exemption survived, and now reads the same field
+
+A zone may legitimately have no node, so `zones_not_on_nodes` remains: a zone goes there with its
+reason, and the second direction — a zone on the list whose state has since been put on a real node
+— is still refused as a *stale exemption*. That direction read the same word-match and reads the
+declaration now, so a zone that claims an exemption while naming a state on `radiator_reject` is
+caught by the field rather than by the spelling of its id.
+
+### What the round got wrong on the way
+
+Only a fixture anchor, and the fixture caught it: the state block is `- id:` / `method: lag` /
+`node:`, and the substitution's anchor had been written from the `node:` line alone, so it matched
+nothing and the case failed loudly on `count(old) == 1` rather than passing for the wrong reason
+three lines later. That guard has now caught a stale anchor in three consecutive rounds, which is
+the argument for keeping fixtures as whole blocks and needles as exact strings.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 294 | **294** — the round adds no value and owes none |
+| zones naming their temperature state | 2 of 6 | **6 of 6** |
+| `report.refuse` call sites in the linter | 667 | **669** |
+| tests in `tests/test_vehicle_config.py` | 218 | **219** |
+
+The debt count not moving is the second time in four rounds: this is a check that was reading the
+wrong thing rather than a value that was missing, and the fix is a field the corpus already had on
+two of the six zones that needed it.
+
 ## The invariants, and which of them are enforced
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

@@ -7767,7 +7767,7 @@ def check_producers(
 
 
 def check_zone_nodes(root: Path, vehicle: dict[str, Any], report: Report) -> None:
-    """A zone's temperature lives on a node, or the zone is declared as one that has none.
+    """A zone's temperature lives on a node, and the zone **names** the state it lives on.
 
     Six zones are declared for this vehicle and all six carry a temperature state; five carry a
     *driver*. The gap was invisible because of where the states lived: **two sat on the `internal`
@@ -7779,6 +7779,20 @@ def check_zone_nodes(root: Path, vehicle: dict[str, Any], report: Report) -> Non
     A zone may legitimately have no node — `radiator_loop` is an observable rather than a
     compartment — so the rule is a declaration: the zone goes in `zones_not_on_nodes` with its
     reason. What is refused is a zone whose absence from the graph is neither.
+
+    **Until round 51 this check found the state by matching the zone's own words against the state
+    ids, and the word it matched for both crewed cabins was `cabin`.** So each cabin's verdict was
+    computed from a list holding *both* cabins' states: `zone_csm_cabin_t` could be moved to the
+    `internal` sentinel — undrivable by construction, the exact defect this check exists to refuse —
+    and the check stayed silent as long as `zone_lm_cabin_t` was still on a node. The pair whose
+    failure modes are most alike is the pair whose ids are least distinguishable, which is where a
+    word-match is worst, and the two cabins are that pair.
+
+    `temperature_state` is the link, and the two cabins had carried it all along: it is what
+    `check_cabin_equilibrium` resolves before it can compute a rise, and it was the missing half
+    here. All six zones declare it now, and the field is read rather than approximated. The reverse
+    direction — a `*_t` state no zone claims — is silent on purpose: `comm_amp_t`, `coolant_loop_t`
+    and `loop_transport_t` are temperatures this vehicle has and no zone is about.
     """
     thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
     # `vehicle` is `None` when `vehicle.yaml` will not parse, and this check takes both files —
@@ -7786,54 +7800,71 @@ def check_zone_nodes(root: Path, vehicle: dict[str, Any], report: Report) -> Non
     # checks; a cross-file one has to guard itself.
     if not isinstance(vehicle, dict) or not thermal:
         return
-    zones = {str(z.get("id")) for z in (vehicle.get("thermal") or {}).get("zones") or []}
+    zones = {
+        str(z.get("id")): z
+        for z in (vehicle.get("thermal") or {}).get("zones") or []
+        if isinstance(z, dict) and z.get("id")
+    }
     declared = thermal.get("zones_not_on_nodes") or {}
-    states = [s for s in thermal.get("state") or [] if isinstance(s, dict)]
-    # Which zone each temperature state is about. The ids are not mechanical (`zone_csm_service_t`
-    # against a zone called `csm_service_bay`), so the match is by the zone's own words.
-    for zone in sorted(zones):
-        stem = zone.replace("_bay", "").replace("_loop", "").replace("csm_", "").replace("lm_", "")
-        mine = [
-            s for s in states if stem.split("_")[0] in str(s.get("id")) and "_t" in str(s.get("id"))
-        ]
-        on_node = [s for s in mine if str(s.get("node")) != "internal"]
-        if on_node or zone in declared:
-            continue
-        report.refuse(
-            "domains/thermal/components.yaml",
-            f"gives {zone!r} a temperature state on the `internal` sentinel, which is not a node, so "
-            "no edge can drive it. Either put it on a node or declare it in `zones_not_on_nodes` "
-            "with the reason it has none",
-        )
-    for zone, why in sorted(declared.items()):
-        if zone not in zones:
+    states = {
+        str(s.get("id")): s
+        for s in thermal.get("state") or []
+        if isinstance(s, dict) and s.get("id")
+    }
+    for zone_id, zone in sorted(zones.items()):
+        if zone_id in declared:
+            continue  # an exemption, and the loop below checks it in both directions
+        where = f"vehicle.yaml#thermal.zones.{zone_id}"
+        name = zone.get("temperature_state")
+        if not name:
             report.refuse(
-                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}",
+                f"{where}.temperature_state",
+                "is not declared. A zone's temperature is a state on a node, and nothing else says "
+                "which: this check used to find it by matching the zone's words against the state "
+                "ids, which for both crewed cabins matched `cabin` and so answered each cabin with "
+                "the other's state as well. Name the state — "
+                f"domains/thermal/components.yaml declares {sorted(states)}",
+            )
+            continue
+        state = states.get(str(name))
+        if state is None:
+            report.refuse(
+                f"{where}.temperature_state",
+                f"names {name!r}, which is not a state in domains/thermal/components.yaml; it "
+                f"declares {sorted(states)}",
+            )
+            continue
+        if str(state.get("node")) == "internal":
+            report.refuse(
+                f"{where}.temperature_state",
+                f"names {name!r}, whose node is the `internal` sentinel. That is not a node, so no "
+                "edge can terminate on it and this zone's temperature can never be driven — either "
+                "put the state on a node or declare the zone in `zones_not_on_nodes` with the reason "
+                "it has none",
+            )
+    for zone_id, why in sorted(declared.items()):
+        if zone_id not in zones:
+            report.refuse(
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone_id}",
                 "is not a declared zone",
             )
             continue
         if not str(why or "").strip():
             report.refuse(
-                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}", "gives no reason"
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone_id}", "gives no reason"
             )
             continue
         # The other direction, and it was missing: a zone on the list that has since been put on a
         # node is a **stale exemption** — a reader told to expect a gap that has been closed. Round
         # 68's `check_cabin_pairing` checks both directions and this one did not, which is how the
-        # two bays' exemptions survived the round that closed them.
-        stem = zone.replace("_bay", "").replace("_loop", "").replace("csm_", "").replace("lm_", "")
-        on_node = [
-            s
-            for s in states
-            if stem.split("_")[0] in str(s.get("id"))
-            and "_t" in str(s.get("id"))
-            and str(s.get("node")) != "internal"
-        ]
-        if on_node:
+        # two bays' exemptions survived the round that closed them. The test is the zone's own
+        # declared state now rather than the words of its id.
+        state = states.get(str(zones[zone_id].get("temperature_state")))
+        if state is not None and str(state.get("node")) != "internal":
             report.refuse(
-                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone}",
-                f"is declared as having no node, and {on_node[0].get('id')!r} sits on "
-                f"{on_node[0].get('node')!r}. A stale exemption is a reader told to expect a gap "
+                f"domains/thermal/components.yaml:zones_not_on_nodes.{zone_id}",
+                f"is declared as having no node, and its own `temperature_state` {state.get('id')!r} "
+                f"sits on {state.get('node')!r}. A stale exemption is a reader told to expect a gap "
                 "that has been closed",
             )
 
