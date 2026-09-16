@@ -496,7 +496,13 @@ components:
     removal_kg_h: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
-      note: "the humidity removal rate is not published; what the vehicle publishes is the consequence, which is a cabin humidity an agent can feel rather than read. Declared unset rather than invented."
+      note: >-
+        what the vehicle publishes is the *consequence* — a cabin humidity an agent can feel rather
+        than read — and the rate that produces it is owed. `csm_ecs_study_guide.pdf` PDF p. 16 does
+        give the setpoint the exchanger holds: "the water content of the gas in excess of a **50 F dew
+        point** condenses on the plates of the heat exchanger and is removed". A dew point is a
+        partial pressure and not a rate, so it bounds the cabin's humidity without giving the rate
+        the crew's respiration and perspiration arrive at. Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
   - id: ventilation_fan
     kind: flow
     class: fan

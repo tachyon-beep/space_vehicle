@@ -319,10 +319,44 @@ capability:
       are `burn_s` fields now and the sum is checked against this figure.
 
   - engine: dps
-    total_burn_s: UNCONFIGURED
+    total_burn_s: 960
+    restarts_qualified: 20
     provenance:
-      basis: UNCONFIGURED
+      basis: historical
+      source: >-
+        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 31 (printed p. 19), "Design and Performance
+        Characteristics" for the descent engine: **Thrust 10,500 pounds**, throttling range 10:1,
+        oxidiser/fuel ratio 1.6:1, **engine life 960 seconds**, **restart capability 20 times**,
+        specific impulse 300 seconds (approx), chamber pressure 110 psi. The thrust and the
+        throttling range are what identify the block as the DPS: the ascent engine's block, two
+        pages of text later, gives 3,500 pounds and 120 psi
       note: >-
-        the DPS's equivalent is unpublished. The mission's own descent burn is 756.39 s, which is
-        the sum the check reports against this entry — so the vehicle knows what it spends on the
-        descent and does not know what the engine is rated for
+        **this entry said "the DPS's equivalent is unpublished", and the number is on printed page
+        19 of a document the manifest lists.** It also mis-stated the spend: it said the mission's
+        descent burn is 756.39 s and the sum the check reports is **786.39 s** across two burns, so
+        the one figure the note did carry was 30 s wrong. The rating fits with room to spare —
+        786.39 s of 960, and 20 restarts against the mission's two — which is the answer the block
+        exists to give. For contrast the ascent engine has 460 s and the mission's single ascent
+        burn is 434.88 s: a 5 % margin, and the tightest engine budget on the vehicle
+
+
+  - engine: aps
+    total_burn_s: 460
+    restarts_qualified: 35
+    provenance:
+      basis: historical
+      source: >-
+        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 39 (printed p. 27), "Design and Performance
+        Characteristics" for the ascent engine: **Thrust 3500 pounds**, oxidiser/fuel ratio 1.6:1,
+        **engine life 460 seconds**, **restart capability 35 times**, specific impulse 300 seconds
+        (approx), chamber pressure 120 psi, oxidiser flow rate 7 lbs/sec (approx). The same page
+        describes the valve package: a series-parallel arrangement of ball valves in fuel-oxidiser
+        pairs, all eight rotating 90 degrees on a common crankshaft, with the actuators spring-closed
+        when the solenoids de-energise — which is why an ascent commit is a single irreversible act
+      note: >-
+        **the entry this replaces was the block's own header note: "declares no budget for 2 burn(s)
+        on this vehicle's own engines (ascent on aps, rendezvous on aps)"** — and the mission has had
+        one ascent burn and no rendezvous burn on the APS for several rounds, so the debt's count was
+        stale in both directions. 460 s against the mission's 434.88 s is the tightest of the three
+        engine budgets: 94.5 % of the rating, against the SPS's 70 % and the DPS's 82 %. The
+        Apollo 11 ascent burn was 435 s, so this is the figure the real mission flew against too

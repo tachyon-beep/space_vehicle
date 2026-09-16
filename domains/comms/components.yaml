@@ -194,11 +194,15 @@ components:
       basis: UNCONFIGURED
       note: >-
         the mechanism that keeps a 9.4-degree beam on Earth while the vehicle rotates underneath
-        it, and the component F-11 fails. Both parameters are owed: no source reached gives the
-        Apollo HGA's gimbal range or rate, and the two together are what decide whether a pointing
-        error is a control problem (the gimbal has not caught up) or an attitude problem (the
-        vehicle is not where it thinks). `comm.hga_pointing_error_deg` is the observation and
-        these two are the explanation
+        it, and the component F-11 fails. Both parameters are owed: the Apollo HGA's gimbal range
+        and slew rate are what decide whether a pointing error is a control problem (the gimbal has
+        not caught up) or an attitude problem (the vehicle is not where it thinks), and
+        `comm.hga_pointing_error_deg` is the observation while these two are the explanation.
+        Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
+        What would answer it is the LM's communications experience report
+        (`Apollo Experience Report Lunar Module Communications System.pdf`, named in the manifest's
+        section 6), which is the document that would carry a steerable antenna's travel and rate —
+        and it is not acquired yet, so this entry says so rather than asserting a negative
 
 # --------------------------------------------------------------------------------------
 # State. Ten, and the split between them is the domain's argument: a link that is *sending*

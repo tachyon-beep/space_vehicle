@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 268 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 263 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 268 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 263 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **268** is every obligation the linter can name:
-**115** literal `UNCONFIGURED` scalars and **153** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **263** is every obligation the linter can name:
+**111** literal `UNCONFIGURED` scalars and **152** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **191** the plant
+the missing charging efficiency, the pump-speed conversion). The **187** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 191 is the linter's 115 **plus** the graph's unset edge
+`coupling.yaml` included, so its 187 is the linter's 111 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -8657,6 +8657,104 @@ edge sensitivities and not state fields, so this round closed two literals and t
 denied them without touching the schedule. The next largest debt is unchanged and is now named in
 the list above as the next thing the manifest sends a round after — the thermal capacities and
 conductances `thermal_diode.md:965` refuses to infer.
+
+## Four rounds of "not published" have been false, and the fix is to make the claim bounded
+
+Rounds 2, 3 and 4 each closed a debt whose note said the figure was not to be had:
+
+| round | the claim | where it was |
+|---|---|---|
+| 2 | the 100 lbf thruster's minimum firing time is unpublished | PDF p. 89 of the LM Propulsion and RCS study guide |
+| 3 | the fuel cell's reactant per joule is unpublished | one division from three published numbers, two documents |
+| 4 | the LM sublimator's rejection and water are "genuinely unpublished" | PDF p. 88 of the LM ECS subsystem specification |
+| 5 | **the DPS's total burn time is unpublished** | printed p. 19 of the study guide round 2 opened |
+
+The fourth case is this round's value finding, and it is on the same document as the first:
+
+| | descent (PDF p. 31, printed p. 19) | ascent (PDF p. 39, printed p. 27) |
+|---|---|---|
+| Thrust | 10,500 lb | 3,500 lb |
+| **Engine life** | **960 seconds** | **460 seconds** |
+| **Restart capability** | **20 times** | **35 times** |
+| Chamber pressure | 110 psi | 120 psi |
+
+The ascent block identifies itself — 3,500 lb and 120 psi against the corpus's declared
+`lm_aps.chamber_pressure_psia: 122.6` — and both land in `capability` where `check_burn_capability`
+immediately holds the mission's own burns against them:
+
+| engine | spends | rated | used |
+|---|---:|---:|---:|
+| SPS | 525.81 s | 750 s | 70 % |
+| LM descent | 786.39 s | 960 s | 82 % |
+| **LM ascent** | **434.88 s** | **460 s** | **94.5 %** |
+
+**The ascent engine has the tightest budget on the vehicle**, and the entry that owed it was the
+block's own header — *"declares no budget for 2 burn(s) on this vehicle's own engines (ascent on aps,
+rendezvous on aps)"* — which had been stale in both directions for several rounds, because the
+mission now has one ascent burn and no rendezvous burn on the APS at all. The DPS entry's note was
+wrong too: it said the descent burn is 756.39 s and the sum the check reports is 786.39 s across two
+burns, so the one figure it carried was 30 s out. Two engine debts, and both notes mis-stated the
+spend they were arguing from.
+
+The same round closed a structural one from a document already on disk: the **cabin pressure relief
+valve** cracks at **6.0 psid** outward with a **0.902 psid** reverse limit (25 inches of water),
+`csm_ecs_study_guide.pdf` PDF p. 16. The entry said "the relief valve's crack pressure is
+unpublished". Its two setpoints are the asymmetry that matters on a cabin running at 5.0 psia against
+vacuum, and it is what makes "the cabin is losing gas" and "the cabin is being pressurised from
+outside" two faults rather than one.
+
+### The rule the four cases justify
+
+**`check_unavailability_claims` refuses a `basis: UNCONFIGURED` provenance that says the figure is
+not to be had and names no document it looked in.**
+
+The shape of the failure is not carelessness. "Not published" is a negative over a library of 8,954
+titles, asserted from a handful of documents — and **nothing ever made the author write down which
+handful**, so the claim could not be checked by the person who made it, let alone by a later round.
+Round 4's entry named four documents it had searched; none of them has the figure, and the document
+that does was in the manifest. Round 5's named none at all.
+
+The rule cannot verify that a search happened, and it does not pretend to. What it does is make the
+claim **bounded**: a reader can see which documents were tried and ask whether that is all of them.
+Five entries fired, and the five took two different escapes:
+
+- **four dropped the negative**, because that is what was actually known — the folder had searched
+  seven documents, not the library. "The Apollo HGA's gimbal range and slew rate are owed" is a
+  finding; "no source reached gives them" was a sentence;
+- **all five now carry a search record** naming the seven documents this folder has acquired and
+  extracted, with what would answer each one named separately. Those seven are real — the round ran
+  the search across every extracted text before writing them — and the record is deliberately worded
+  as a bounded search rather than an exhaustive one.
+
+The unavailability phrase list and the citation pattern are both in `check_vehicle.py` beside the
+check, and the linter's message names the four rounds as the evidence. It is the cheapest structural
+fix this folder has landed and it should have been written in round 2.
+
+### What the rule does not do
+
+**It does not check that the document was opened.** An entry that names a document it never read
+satisfies it, and no mechanical rule can tell the difference — the check that matters is the one
+`.scratch/apollo/SOURCES.md` performs, which is to hold each claim against a document that has
+actually been acquired and searched. That is why the four rewrites dropped the negative rather than
+citing a document: dropping a claim you cannot support is honest, and citing one you did not open is
+the defect this rule exists to make visible.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 268 | **263** — six closed, one appeared |
+| `UNCONFIGURED scalars` the plant counts | 191 | **187** |
+| `report.refuse` call sites in the linter | 701 | **702** |
+| tests in `tests/test_vehicle_config.py` | 240 | **242** |
+| engine budgets in `capability` | 1 | **3** |
+| `UNCONFIGURED` provenances asserting an unbounded negative | 5 | **0** |
+
+The one debt that *appeared* is the check working: `mission.yaml`'s missing burn durations were
+reported for two burns while only the SPS had a rating, and with the ascent engine budgeted the
+rendezvous burn's absent duration is now counted too — `records no burn_s for 3 burn(s)` where it
+said 2. A rating that nothing is measured against is not a check; the third entry is what turns the
+ascent engine's budget into one.
 
 ## The invariants, and which of them are enforced
 

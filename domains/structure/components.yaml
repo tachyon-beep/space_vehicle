@@ -265,7 +265,13 @@ components:
     seal_leak_g_s: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
-      note: "a hatch seal's leak rate is a function of its condition and no figure is published; the published nominal cabin leak of 0.0064 g/s is the whole vehicle's, and attributing a share of it to the hatch would be inventing a number."
+      note: >-
+        a hatch seal's leak rate is a function of its condition rather than a rating, which is why
+        this is not simply a missing figure: the published nominal cabin leak of 0.0064 g/s is the
+        whole vehicle's, and attributing a share of it to the hatch would be inventing a number.
+        What would answer it is a seal qualification — a leak rate per unit length at a rated
+        differential — and the place one would be is an operations handbook rather than the ECS
+        descriptions. Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
   - id: hatch_crew_lm
     kind: discrete
     class: hatch
@@ -281,24 +287,47 @@ components:
     provenance:
       basis: UNCONFIGURED
       note: >-
-        the latch count is not published. `structure.docking_latches` is registered as a count
-        and the debt is real: without the number, `eleven of twelve engaged` cannot be
-        distinguished from `all twelve`, and the F-15 chain's docking half has nothing to be
-        partial against.
+        `structure.docking_latches` is registered as a count and the debt is real: without the
+        number, `eleven of twelve engaged` cannot be distinguished from `all twelve`, and the F-15
+        chain's docking half has nothing to be partial against. `apollo_diode.md:208` publishes the
+        channel and not the number. What would answer it is the docking interface's own drawing or
+        the LM-3 Systems Handbook — `LM-3_Systems_Handbook.pdf` and the LM-3 Apollo Operations
+        Handbooks are indexed in the library and are 21-243 MB each, so they are the next thing to
+        acquire. Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
   - id: pyro_lm_separation
     kind: discrete
     class: pyro
     device_count: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
-      note: "the number of initiators on the LM separation interface is not published; the continuity channel is registered as `structure.pyro_continuity_[n]` so the count is an argument to the channel rather than a constant in the model."
+      note: >-
+        the continuity channel is registered as `structure.pyro_continuity_[n]`, so the count is an
+        argument to the channel rather than a constant in the model — which is what makes the debt
+        survivable, not what closes it. `lm_ecs_study_guide.pdf` describes the separation
+        pyrotechnics qualitatively ("when the initiators are fired, the gas generated drives the
+        cutter blades") and gives no number; `lm_propulsion_rcs_study_guide.pdf`'s only hit is a test
+        set's part number. Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
   - id: relief_valve
     kind: discrete
     class: valve
-    crack_pressure_psid: UNCONFIGURED
+    crack_pressure_psid: 6.0
+    reverse_limit_psid: 0.902
     provenance:
-      basis: UNCONFIGURED
-      note: "the relief valve's crack pressure is unpublished. It is the component that stands between the trapped-line chain and a burst vessel, and its setpoint is what decides which of those happens."
+      basis: historical
+      source: >-
+        `csm_ecs_study_guide.pdf`, PDF p. 16, "2.3.3 CABIN PRESSURE RELIEF": "The cabin pressure
+        relief valve limits cabin pressure to a nominal value of **6.0 psia above** the sensed
+        spacecraft ambient pressure. When the cabin pressure is lower than the external ambient
+        pressure, it limits the differential pressure to a maximum value of **25 inches of water**."
+        25 inH2O x 0.0360911 psi per inch = **0.902 psid** in the reverse direction
+      note: >-
+        **this said "the relief valve's crack pressure is unpublished" and it is on PDF p. 16 of a
+        document already in the manifest.** Two setpoints, not one, and the asymmetry is the point
+        on a vehicle whose cabin runs at 5.0 psia against vacuum: the valve cracks at 6.0 psid
+        outward and holds only 0.90 psid inward, which is what `cabin_dp_psi` above is measuring and
+        what makes "the cabin is losing gas" and "the cabin is being pressurised from outside" two
+        different faults rather than one. The trapped-line chain (F-09) is the outward case, and its
+        setpoint is what decides whether the chain ends in a vented cabin or a burst line
   - id: tunnel
     kind: state
     class: volume

@@ -49,7 +49,7 @@ import collections
 import math
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1313,6 +1313,94 @@ def check_quintic_segment(where: str, coefficients: dict[str, Any], report: Repo
                     "determine all six coefficients",
                 )
                 return
+
+
+# The words with which a provenance says the figure it wants is not in the literature, and the words
+# with which it says *where it looked*. The first list is the claim; the second is what makes it a
+# claim rather than an assertion.
+UNAVAILABILITY_CLAIM = re.compile(
+    r"not published|nobody publishes|no source|not reachable|unpublished|no document"
+    r"|nothing publishes|not in the corpus|UNSPECIFIED|refuses to infer|no figure|not given",
+    re.I,
+)
+SEARCH_RECORD = re.compile(
+    r"[A-Za-z0-9_\-]+\.(?:pdf|md)\b"          # a filename, with or without a line or page
+    r"|\bNR\b|\bPSR\b|\bA11\b|\bTN D-\d+|\bSP4029\b"   # the corpus's named references
+    r"|\bTbl\b|\bTable\b|\bch\.\s*\d"                    # a table or a chapter
+    r"|\bpp?\.\s*\d",                                     # a page
+    re.I,
+)
+
+
+def check_unavailability_claims(documents: dict[str, Any], report: Report) -> None:
+    """A claim that a figure is not published has to say where it looked, and four rounds say why.
+
+    This folder's most productive defect has been **a debt that says "no source publishes this"
+    while the source sits in the manifest**:
+
+      - round 2: the 100 lbf thruster's minimum firing time, said unpublished, on PDF p. 89 of a
+        study guide the manifest lists — and the entry that denied it named a Voyager anecdote from
+        a different engine;
+      - round 3: the fuel cell's reactant per joule, said unpublished, one division away from three
+        published numbers in two documents;
+      - round 4: the LM sublimator's rejection and water consumption, said "genuinely unpublished"
+        with four documents named as searched — none of which has it, while the LM's own ECS
+        subsystem specification has both on one line of one table;
+      - round 5: the DPS's 960-second life and the ascent engine's 460, said unpublished, on printed
+        pages 19 and 27 of the same study guide round 2 opened.
+
+    Four for four, and the common shape is not carelessness: it is that **"not published" is a
+    negative over a library of 8,954 titles asserted from a handful of documents**, and nothing ever
+    made the author write down which handful. A claim with no search behind it cannot be checked by
+    the person who made it, let alone by a later round.
+
+    So the rule is the one the evidence supports and no stronger: **a provenance that says the
+    figure is not to be had must name a document it looked in.** It does not verify the search, and
+    it cannot — what it does is make the claim *bounded*: a reader can see which documents were
+    tried, and the next round can ask whether that is all of them. One that names none is refused,
+    because a universal negative with no instances is not a finding about the literature, it is a
+    sentence.
+
+    The documents the entry does *not* name are the ones this is for. `lm_propulsion_rcs_study_guide.pdf`
+    was in `.scratch/apollo/SOURCES.md` from the folder's second session.
+    """
+    for name, document in sorted(documents.items()):
+        for where, node in walk_provenance(document, name):
+            if node.get("basis") != "UNCONFIGURED":
+                continue
+            note = str(node.get("note") or node.get("reason") or "")
+            if not UNAVAILABILITY_CLAIM.search(note):
+                continue
+            if SEARCH_RECORD.search(note):
+                continue
+            report.refuse(
+                where,
+                "claims the figure is not published and names no document it looked in. \"No source "
+                "publishes this\" is a negative over a library of 8,954 titles, and four rounds of "
+                "this folder have found it false — the minimum firing time, the fuel cell's reactant "
+                "rate, the LM sublimator's capacity and both LM engine lives were all on pages of "
+                "documents the manifest already listed. Name what was searched, or do not claim it "
+                "was",
+            )
+
+
+def walk_provenance(node: Any, trail: str) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Every `provenance`-shaped mapping in a document, with the path that reaches it.
+
+    Provenance is not always under the key `provenance`: a domain's `capability` list, an edge's
+    `sensitivity` and a threshold's own block all carry the same four fields, and two of them carry
+    them one level down. So the walk looks for the *shape* — a `basis` — rather than for the name,
+    and reports the path it found it at.
+    """
+    if isinstance(node, dict):
+        if isinstance(node.get("basis"), str):
+            yield trail, node
+        for key, value in node.items():
+            yield from walk_provenance(value, f"{trail}.{key}")
+    elif isinstance(node, list):
+        for row in node:
+            label = str(row.get("id")) if isinstance(row, dict) and row.get("id") else ""
+            yield from walk_provenance(row, f"{trail}.{label}" if label else trail)
 
 
 def check_pointer_notes(docs: Iterable[tuple[str, Any]], report: Report) -> None:
@@ -13877,6 +13965,9 @@ def main(argv: list[str] | None = None) -> int:
     # A carried value says what it carries, and every run re-reads the declaration it names. It sits
     # beside the other whole-document walks because a `same_as` may point from any file to any other.
     check_same_as(documents, report)
+    # And the claims that a figure is not to be had, which are the folder's most productive defect
+    # and the only kind of declaration that can be false without naming anything.
+    check_unavailability_claims(documents, report)
     # After the documents, because a convention is held against the declarations that state it and
     # against the registry it governs — and the registry is one of them.
     check_conventions(vehicle or {}, registry, documents, report)
