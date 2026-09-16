@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 256 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 256 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **256** is every obligation the linter can name:
-**107** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **253** is every obligation the linter can name:
+**104** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **181** the plant
+the missing charging efficiency, the pump-speed conversion). The **178** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 181 is the linter's 107 **plus** the graph's unset edge
+`coupling.yaml` included, so its 178 is the linter's 104 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -9029,7 +9029,7 @@ other attitude debt points at:
 | half | where |
 |---|---|
 | the frame | section 2.0, "Configuration and Reference Station Locations", Figures 2-16 and 2-17 (PDF pp. 41-42): `X_A = 4578.805 - X_LV`, `X_A = X_E + 399.5`, the LM docking interface at `X_A = 712.0` and the CM's at `X_A = 1110.25` |
-| the values | section 3.2, "Mission J-2 Mass Property Data Tables": Table 3.2-21, the docked CSM-113/LM-11 for the D.O.I. burn, PDF p. 351 (printed p. 3.2-111), as a function of spacecraft weight |
+| the values | section 3.2, "Mission J-2 Mass Property Data Tables": Table 3.2-21, the docked CSM-113/LM-11 for the D.O.I. burn, PDF p. 351 (printed p. 3.2-115), as a function of spacecraft weight |
 
 ### A table, not a number
 
@@ -9101,6 +9101,65 @@ The headline went **up by three** and that is the round's accounting, stated rat
 prose debt was retired (it was false) and four precise ones replaced it. Four configurations' mass
 properties are worth more as four fields with a table and a page each than as one sentence saying
 nobody can have them.
+
+## Three more tables, and a page number that had been read off a rotated footer
+
+Round 9 landed the docked stack and left four configurations owed, each with a table named.
+Three of them come out of the same volume here, at the pages its own index promises:
+
+| configuration | table | frame | weight | centre of mass | IXX / IYY / IZZ (kg m²) |
+|---|---|---|---:|---:|---|
+| `csm_alone` | 3.2-22, CSM-113 circularization | Apollo | 63,508.6 lb = 28,807 kg | 23.676 m | 46,745 / 104,374 / 108,119 |
+| `lm_alone_descent` | 3.2-25, LM-11 at P.D.I. | **LM** | 33,682.2 lb = 15,278 kg | 4.729 m | 34,384 / 36,946 / 35,454 |
+| `lm_ascent_stage` | 3.2-26, LM ascent at liftoff | **LM** | 10,776.2 lb = 4,888 kg | 6.196 m | 9,055 / 4,593 / 7,462 |
+
+**The frame is the half that is easy to get wrong.** 3.2-25's X-BAR is about 186 inches and the
+docked stack's is about 1,046 — not because one vehicle is longer, but because the LM's own origin
+sits 399.5 inches along the Apollo axis. A tensor transfers between the two frames by nothing at
+all, because the book's transformation is a pure translation; a *station* does not. So
+`mass_properties.frames` is now a registry of two — `APOLLO_XA` and `LM_XE` — every table names the
+frame it is in, and `check_mass_properties` refuses one that names a frame the file does not declare.
+A reader who took the LM's X-BAR for an Apollo station would put its centre of mass 10.1 m from
+where it is.
+
+### What these tables have that the docked one did not, and what they lack
+
+The two CSM tables print the `AVERAGE` column — `(IYY + IZZ) / 2 / 10` — and it holds on all four
+rows read, to the pound (7,849.1 printed 7,849; 7,817.9 printed 7,817, so the column truncates).
+
+**The three LM tables print no such column**, so the one self-check a hand-read scan has is simply
+absent there. What stands in its place is weaker and is stated rather than dressed up: every moment
+falls monotonically down all 38 rows of 3.2-25 and all 23 of 3.2-26, and each bracketing row was
+read twice at 300 dpi. And one column of 3.2-26 is **not** monotone — IZZ runs 5,463, 5,771, 5,577,
+5,383 down the first four rows while IXX and IYY fall steadily — which is exactly the shape a
+misreading produces, so it was re-read at six times magnification before being believed. The check
+therefore treats `average_moment` as the volume's column rather than every table's: required to hold
+where it is printed, and not required to exist where it is not.
+
+### The page number was wrong, and the text layer is why it is right now
+
+Round 9 cited the docked table as "PDF p. 351 (printed p. 3.2-111)". **It is printed p. 3.2-115.**
+The number was read off the rotated fold-out's footer in a rendered image, where a 5 in that
+typeface reads as a 1 — while the same page's *text layer* has printed `3.2-115` all along, and the
+sequence is monotone across the whole run (349 → 3.2-113, 350 → 114, 351 → 115, … 362 → 126). The
+source manifest now takes the text layer as the authority for a page number and the rendered image
+as the authority for the table's contents, which is the division of labour that would have prevented
+this: **an acquired figure carries a page, and the page has to be as verified as the figure.**
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 256 | **253** |
+| literal `UNCONFIGURED` scalars | 107 | **104** |
+| `UNCONFIGURED scalars` the plant counts | 181 | **178** |
+| `report.refuse` call sites in the linter | 738 | **740** |
+| tests in `tests/test_vehicle_config.py` | 251 | **253** |
+
+One configuration is still owed and it is the one no table covers: `csm_lm_ascent_docked` is the CSM
+docked to an ascent stage, which is neither 3.2-21 (the whole LM attached) nor 3.2-27 (the LM alone).
+Both halves are now in the file, so what it waits for is the parallel-axis composition about a common
+point — arithmetic with a stated rule rather than a document nobody has.
 
 ## The invariants, and which of them are enforced
 

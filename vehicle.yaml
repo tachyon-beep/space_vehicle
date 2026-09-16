@@ -368,8 +368,8 @@ configurations:
 
 # --------------------------------------------------------------------------------------
 mass_properties:
-  frame:
-    id: APOLLO_XA
+  frames:
+  - id: APOLLO_XA
     definition: >-
       the Operational Data Book's Apollo coordinates. X_A = 0.0 at launch-vehicle station
       4578.805 in (X_A = 4578.805 - X_LV), increasing along the stack from the LM's descent
@@ -392,6 +392,20 @@ mass_properties:
         at 66,787.4 lb, i.e. between the two docking interfaces and moving toward the CM as the
         service module's propellant is burned, which is where a stack with the LM forward and
         the SPS aft puts its centre of mass
+  - id: LM_XE
+    definition: >-
+      the LM's own coordinates, X_E. Its origin is at X_A = 399.5 by the transformation above
+      (X_A = X_E + 399.5), and it **shares the Apollo axes** — the Operational Data Book
+      transforms between the two by a translation and nothing else — so a tensor expressed in
+      X_E is the same tensor in the body frame, and only the station of the centre of mass
+      needs the offset
+    provenance:
+      basis: historical
+      source: "as APOLLO_XA: ODB Vol III section 2.0, Figure 2-16, PDF p. 41, whose own transformation list reads '1) APOLLO TO LAUNCH VEHICLE: X_LV = X_A + 2756.555' and '2) LUNAR MODULE TO LAUNCH VEHICLE: X_LV = X_E + 3156.055'"
+      note: >-
+        the two LM tables below are in this frame, which is why they need no rotation; a reader
+        who took their X-BAR figures for Apollo stations would put the LM's centre of mass 399.5
+        inches away from where it is
   body_axes: >-
     `frames`' `BODY` frame **is** this frame: +X is the thrust axis and the tensor below is
     expressed in it, so the axes `attitude_q` and `body_rate` are integrated in are the axes
@@ -400,9 +414,10 @@ mass_properties:
   tables:
     - id: ODB_3_2_21
       configuration: csm_lm_docked
+      frame: APOLLO_XA
       title: "CSM-113/LM-11 (docked) mass properties, in Apollo coordinates, as a function of spacecraft weight, for the D.O.I. SM/SPS burn"
       document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
-      pages: "PDF p. 351 (printed p. 3.2-111), continued at PDF p. 352 (printed p. 3.2-113)"
+      pages: "PDF p. 351 (printed p. 3.2-115), continued at PDF p. 352 (printed p. 3.2-116)"
       columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2) | PITCH, YAW, ROLL (DEGREES) | AVERAGE (MOMENT)"
       span: "62,787.4 to 102,787.4 lb — 1,000-lb steps, with 100-lb steps from 100,787.4 lb up"
       note: >-
@@ -438,6 +453,116 @@ mass_properties:
           pxz_slug_ft2: -4617
           pyz_slug_ft2: 1150
           average_moment: 56202
+    - id: ODB_3_2_22
+      configuration: csm_alone
+      frame: APOLLO_XA
+      title: "CSM-113 mass properties, in Apollo coordinates, as a function of CSM weight for the Circularization I SM/SPS burn"
+      document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
+      pages: "PDF p. 353 (printed p. 3.2-117)"
+      columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2)"
+      note: >-
+        the two rows bracketing `csm_alone` at 28,807 kg = 63,508.6 lb, read from the rendered
+        page at 300 dpi. **This table prints the AVERAGE column too** — `(IYY + IZZ) / 2 / 10` — and
+        it holds on both rows, which is what makes the pair checkable
+      rows:
+        - id: w63918_3
+          weight_lb: 63918.3
+          x_bar_in: 932.26
+          y_bar_in: 4.95
+          z_bar_in: 4.78
+          ixx_slug_ft2: 34691
+          iyy_slug_ft2: 77198
+          izz_slug_ft2: 79784
+          pxy_slug_ft2: -2147
+          pxz_slug_ft2: 403
+          pyz_slug_ft2: 2188
+          average_moment: 7849
+        - id: w62918_0
+          weight_lb: 62918.0
+          x_bar_in: 931.98
+          y_bar_in: 4.98
+          z_bar_in: 4.68
+          ixx_slug_ft2: 34170
+          iyy_slug_ft2: 76671
+          izz_slug_ft2: 79687
+          pxy_slug_ft2: -2141
+          pxz_slug_ft2: 379
+          pyz_slug_ft2: 2046
+          average_moment: 7817
+
+    - id: ODB_3_2_25
+      configuration: lm_alone_descent
+      frame: LM_XE
+      title: "LM-11 mass properties, in LM coordinates, as a function of LM weight for the P.D.I. DPS burn"
+      document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
+      pages: "PDF p. 359 (printed p. 3.2-123)"
+      columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2)"
+      note: >-
+        the two rows bracketing `lm_alone_descent` at 15,278 kg = 33,682.2 lb, in **LM
+        coordinates** — the frame above — and this table carries **no AVERAGE column**, so the
+        identity that checks the other two cannot check this one. What stands in its place is the
+        sequence: all three moments fall monotonically down the 38 rows of the table, and both of
+        these were read twice at 300 dpi
+      rows:
+        - id: w33975_4
+          weight_lb: 33975.4
+          x_bar_in: 186.05
+          y_bar_in: 0.49
+          z_bar_in: -0.43
+          ixx_slug_ft2: 25545
+          iyy_slug_ft2: 27373
+          izz_slug_ft2: 26231
+          pxy_slug_ft2: 65
+          pxz_slug_ft2: 800
+          pyz_slug_ft2: 174
+        - id: w33450_6
+          weight_lb: 33450.6
+          x_bar_in: 186.26
+          y_bar_in: 0.49
+          z_bar_in: -0.44
+          ixx_slug_ft2: 25215
+          iyy_slug_ft2: 27153
+          izz_slug_ft2: 26085
+          pxy_slug_ft2: 64
+          pxz_slug_ft2: 800
+          pyz_slug_ft2: 175
+
+    - id: ODB_3_2_26
+      configuration: lm_ascent_stage
+      frame: LM_XE
+      title: "LM-11 ascent stage mass properties, in LM coordinates, as a function of weight for the lunar liftoff APS burn"
+      document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
+      pages: "PDF p. 361 (printed p. 3.2-125)"
+      columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2)"
+      note: >-
+        the two rows bracketing `lm_ascent_stage` at 4,888 kg = 10,776.2 lb, in LM coordinates.
+        **IZZ is not monotone across this table** (5,463 then 5,771 then 5,577 then 5,383 down the
+        first four rows) while IXX and IYY fall steadily, which is the one column shape that a
+        misreading would produce and a real stage need not — so it was re-read at six times
+        magnification and the figures stand as printed
+      rows:
+        - id: w10863_3
+          weight_lb: 10863.3
+          x_bar_in: 243.78
+          y_bar_in: 0.08
+          z_bar_in: 2.78
+          ixx_slug_ft2: 6746
+          iyy_slug_ft2: 3393
+          izz_slug_ft2: 5463
+          pxy_slug_ft2: 67
+          pxz_slug_ft2: 176
+          pyz_slug_ft2: -25
+        - id: w10632_7
+          weight_lb: 10632.7
+          x_bar_in: 244.16
+          y_bar_in: 0.08
+          z_bar_in: 2.85
+          ixx_slug_ft2: 6567
+          iyy_slug_ft2: 3378
+          izz_slug_ft2: 5571
+          pxy_slug_ft2: 67
+          pxz_slug_ft2: 173
+          pyz_slug_ft2: -25
   configurations:
     - id: csm_lm_docked
       table: ODB_3_2_21
@@ -530,39 +655,277 @@ mass_properties:
 # --------------------------------------------------------------------------------------
     - id: csm_alone
       table: ODB_3_2_22
-      properties: UNCONFIGURED
-      note: >-
-        owed to ODB Vol III **Table 3.2-22**, "CSM-113 mass properties, in Apollo coordinates, as
-        a function of CSM weight for the Circularization I SM/SPS burn" — the CSM's own table, in
-        the same section and at the same weight parameter as the docked one. It is owed rather
-        than read off Table 3.2-21 because the CSM alone is a different vehicle: the docked
-        table's rows carry the LM, and a row may not be read across tables
+      weight_lb:
+        value: 63508.56
+        derivation:
+          expression: "mass_kg / lb_to_kg"
+          inputs:
+            mass_kg: vehicle.yaml:configurations.csm_alone.mass_kg
+            lb_to_kg: 0.45359237
+      x_bar_m:
+        value: 23.67649
+        derivation:
+          expression: "(x_low + (weight_lb - w_low) * (x_high - x_low) / (w_high - w_low)) * in_to_m"
+          inputs:
+            x_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.x_bar_in
+            x_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.x_bar_in
+            w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+            w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+            weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+            in_to_m: 0.0254
+      inertia_kg_m2:
+        ixx:
+          value: 46745.3
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.ixx_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.ixx_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        iyy:
+          value: 104373.8
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.iyy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.iyy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        izz:
+          value: 108118.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.izz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.izz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxy:
+          value: -2907.6
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pxy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pxy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxz:
+          value: 533.1
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pxz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pxz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pyz:
+          value: 2887.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pyz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pyz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
     - id: lm_alone_descent
       table: ODB_3_2_25
-      properties: UNCONFIGURED
-      note: >-
-        owed to ODB Vol III **Table 3.2-25**, "LM-11 mass properties, in LM coordinates, as a
-        function of LM weight for the P.D.I. DPS burn". **LM coordinates rather than Apollo's**:
-        the LM's own frame has its origin at X_E = 0.0, which is X_A = 399.5 by the
-        transformation this file declares, and it shares the axes — so the tensor transfers
-        without a rotation and the centre of mass transfers by an offset
+      weight_lb:
+        value: 33682.22
+        derivation:
+          expression: "mass_kg / lb_to_kg"
+          inputs:
+            mass_kg: vehicle.yaml:configurations.lm_alone_descent.mass_kg
+            lb_to_kg: 0.45359237
+      x_bar_m:
+        value: 4.72865
+        derivation:
+          expression: "(x_low + (weight_lb - w_low) * (x_high - x_low) / (w_high - w_low)) * in_to_m"
+          inputs:
+            x_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.x_bar_in
+            x_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.x_bar_in
+            w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+            w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+            weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+            in_to_m: 0.0254
+      inertia_kg_m2:
+        ixx:
+          value: 34384.4
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.ixx_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.ixx_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        iyy:
+          value: 36946.2
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.iyy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.iyy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        izz:
+          value: 35453.9
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.izz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.izz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxy:
+          value: 87.4
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.pxy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.pxy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxz:
+          value: 1084.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.pxz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.pxz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pyz:
+          value: 236.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.pyz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.pyz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33450_6.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_25.rows.w33975_4.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_alone_descent.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
     - id: lm_ascent_stage
       table: ODB_3_2_26
-      properties: UNCONFIGURED
-      note: >-
-        owed to ODB Vol III **Table 3.2-26**, "LM-11 ascent stage mass properties, in LM
-        coordinates, as a function of weight for the lunar liftoff APS burn" — the ascent
-        stage's own table, which is what this configuration is
+      weight_lb:
+        value: 10776.20
+        derivation:
+          expression: "mass_kg / lb_to_kg"
+          inputs:
+            mass_kg: vehicle.yaml:configurations.lm_ascent_stage.mass_kg
+            lb_to_kg: 0.45359237
+      x_bar_m:
+        value: 6.19566
+        derivation:
+          expression: "(x_low + (weight_lb - w_low) * (x_high - x_low) / (w_high - w_low)) * in_to_m"
+          inputs:
+            x_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.x_bar_in
+            x_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.x_bar_in
+            w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+            w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+            weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+            in_to_m: 0.0254
+      inertia_kg_m2:
+        ixx:
+          value: 9054.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.ixx_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.ixx_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        iyy:
+          value: 4592.6
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.iyy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.iyy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        izz:
+          value: 7462.1
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.izz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.izz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxy:
+          value: 90.8
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.pxy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.pxy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxz:
+          value: 237.1
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.pxz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.pxz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pyz:
+          value: -33.9
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.pyz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.pyz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10632_7.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_26.rows.w10863_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.lm_ascent_stage.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
     - id: csm_lm_ascent_docked
       table: ODB_3_2_22 + ODB_3_2_26
       properties: UNCONFIGURED
       note: >-
-        owed as **arithmetic over two acquired tables**, because no table is the CSM docked to an
-        ascent stage: Table 3.2-21 is the CSM with the whole LM-11 attached and Table 3.2-27 is
-        the LM alone. This configuration is the CSM's mass properties plus the ascent stage's at
-        the same epoch, from Table 3.2-22 and Table 3.2-26 — both in the library, neither yet
-        read — and the composition is exact only if both are expressed about the same point,
-        which is what the frame above makes possible
+        owed as **arithmetic over two tables this file now carries**, because no table is the CSM
+        docked to an ascent stage: Table 3.2-21 is the CSM with the whole LM-11 attached and
+        Table 3.2-27 is the LM alone. Both halves are declared above — `csm_alone`'s tensor from
+        Table 3.2-22 in Apollo coordinates and `lm_ascent_stage`'s from Table 3.2-26 in LM
+        coordinates — so what is owed is the composition: a common point (the two are 1,046.4 and
+        (243.8 + 399.5) inches along the same axis, so the offset is known) and the parallel-axis
+        term that moves each tensor from its own centre of mass to the pair's. That is arithmetic
+        with a stated rule, not a missing document
 
 # --------------------------------------------------------------------------------------
 # Propulsion. Loads are flight-measured. The linter flies each engine's burns in phase order

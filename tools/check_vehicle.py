@@ -12062,13 +12062,23 @@ def check_mass_properties(root: Path, report: Report) -> None:
         # Absent is a different failure from empty, and `check_vehicle_sections` reports it.
         return
     documents = load_documents(root, vehicle, None, None, None)
-    frame = block.get("frame")
-    if not isinstance(frame, dict) or not frame.get("definition"):
+    frames = {
+        str(f.get("id")): f
+        for f in block.get("frames") or []
+        if isinstance(f, dict) and f.get("id")
+    }
+    if not frames:
         report.refuse(
-            "vehicle.yaml:mass_properties.frame",
-            "declares no frame definition, so every station and every tensor below is a number "
-            "against nothing — which is exactly the state this block exists to end",
+            "vehicle.yaml:mass_properties.frames",
+            "declares no frame, so every station and every tensor below is a number against "
+            "nothing — which is exactly the state this block exists to end",
         )
+    for frame_id, frame in frames.items():
+        if not frame.get("definition"):
+            report.refuse(
+                f"vehicle.yaml:mass_properties.frames {frame_id}",
+                "declares no definition, so a table in this frame is a table against nothing",
+            )
     tables = {
         str(t.get("id")): t
         for t in block.get("tables") or []
@@ -12085,12 +12095,25 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 "variation is the value; one row is a number, not a table",
             )
             continue
+        if str(table.get("frame") or "") not in frames:
+            report.refuse(
+                f"vehicle.yaml:mass_properties.tables.{table_id}.frame",
+                f"names {table.get('frame')!r}, which is not a frame this block declares. A "
+                "tensor whose frame is unnamed is a tensor nothing can rotate or offset",
+            )
         for index, row in enumerate(rows):
             where = f"vehicle.yaml:mass_properties.tables.{table_id}.rows[{index}]"
             average = row.get("average_moment")
             iyy, izz = row.get("iyy_slug_ft2"), row.get("izz_slug_ft2")
-            if not all(isinstance(v, (int, float)) for v in (average, iyy, izz)):
-                report.refuse(where, "does not carry `average_moment`, `iyy` and `izz` together")
+            if not all(isinstance(v, (int, float)) for v in (iyy, izz)):
+                report.refuse(where, "does not carry `iyy` and `izz`")
+                continue
+            if average is None:
+                # **The column is not in every table.** The two LM tables print no AVERAGE, so
+                # requiring it would refuse a faithful transcription for being faithful. What the
+                # column buys where it exists is a self-check on a hand-read scan; where it does
+                # not exist the transcription has the monotonicity of the whole column and a
+                # second read, and `SOURCES.md` says so.
                 continue
             expected = (iyy + izz) / 2 / 10
             if abs(average - expected) > 1.0:
