@@ -129,18 +129,59 @@ capability:
         of it will be attitude control rather than translation, so the figure prices an
         emergency translation, not an available budget
   minimum_firing_time:
-    value: UNCONFIGURED
+    value: 0.01
     unit: s
     provenance:
-      basis: UNCONFIGURED
+      basis: historical
+      source: >-
+        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 89, printed p. 77, "pulse mode operation":
+        "In pulse mode operation the total command 'on' time may be as low as 10 milliseconds and
+        propellant transients make up the whole run. Engine thrust is just beginning to rise when
+        the shutdown command is given and only a very small amount of propellant will be injected
+        into the combustion chamber. Under these conditions of 'minimum impulse' the full 100
+        pounds of thrust will not be achieved and engine operation will be comparatively
+        inefficient." The same page and the "Design and Performance Characteristics" block on PDF
+        p. 90 together give the minimum on time, both life limits, the restart capability and the
+        build-up and tailoff stages. What they do not give is a thrust-versus-time curve: Figure 54
+        is a graph, and a value read off a graph is not a citation
       note: >-
-        the qualified minimum firing time, `t_min_on`. The only figure in the corpus is
-        rcs_dode.md:91's Voyager anecdote — a 0.2 lbf thruster reliable at 4 ms and unreliable
-        below it — and its own text says that is thruster-specific rather than a universal 4 ms
-        rule. Adopting it would be adopting a number from a different engine and calling it
-        configuration. What the domain does instead is bound the consequence: zero mean error,
-        unbounded phase error, and RCS-11's silent non-firing. The debt is named, its effect is
-        described, and neither is a default
+        the qualified minimum firing time, `t_min_on`, and it is the same constant the pulse
+        generator's floor (`state.pulse_width.t_min_on_s`) and the valve's minimum dwell
+        (`state.thruster_valve.dwell.min_on_s`) are two further copies of — both carry `same_as`
+        pointing here, which is what stops the three drifting apart. **The round that landed this
+        corrected a claim rather than a value**: the entry this replaces said "the only figure in
+        the corpus is rcs_dode.md:91's Voyager anecdote" and left the constant unset, and the
+        thruster's own qualification block had been in the manifest since the folder began. The
+        Voyager figure is a different engine and is still refused; this is the 100 lbf thruster's
+        own number. What the page also bounds is the *impulse* of a minimum pulse — the full 100
+        pounds is not achieved in 10 ms — so `vehicle.yaml#propulsion.rcs_*.minimum_impulse_bit_ns`
+        stays owed with a ceiling of 445 N * 10 ms = 4.45 N*s rather than with no bound at all
+
+  engine_life:
+    steady_s: 500
+    pulse_s: 500
+    total_s: 1000
+    restarts: 10000
+    unit: "s, s, s, count"
+    provenance:
+      basis: historical
+      source: >-
+        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 90, "Design and Performance Characteristics":
+        "Engine life (steady state) 500 seconds / Engine life (pulse mode) 500 seconds / Engine life
+        (total) 1000 seconds / Restart capability 10,000 times". The same block gives thrust 100
+        pounds, O/F 2.0:1, specific impulse 275 seconds (approx), chamber pressure 95 psi, oxidiser
+        0.24 lb/s and fuel 0.12 lb/s, expansion ratio 40:1 and weight 6 lb
+      note: >-
+        declared here rather than in `domains/propulsion/` because these are the *thruster's*
+        qualifications and all forty-four are the same article. The two life limits are separate
+        numbers rather than one: 500 s of steady-state operation and 500 s of pulse-mode operation
+        are different duty, and a total of 1,000 s is their sum rather than a third allowance. What
+        spends them is the mission's own firing time, which is not declared yet — the RCS budget is
+        an open debt in this file — so this block is a rating with no counter today and says so
+        rather than pretending to be checked. The Isp in the block is **275 s (approx)** against
+        the 290 s this domain declares for the same thruster; the two figures come from different
+        documents, the flow rates on this page corroborate 275-278 s, and which is right is a
+        decision for the conflict register rather than a value to change here
 
 # --------------------------------------------------------------------------------------
 # State. Twelve, of which only two advance a coupling node — the rest are the service.
@@ -176,8 +217,11 @@ state:
           thrusters on an isolated branch are not commanded closed — they are unfeedable, and the
           valve map says so for each of them
     dwell:
-      min_on_s: UNCONFIGURED
-      min_off_s: UNCONFIGURED
+      min_on_s: 0.01
+      min_off_s: 0.05
+      same_as:
+        min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
+        min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
     provenance:
       basis: apollo
       ref: "apollo_diode.md:149"
@@ -194,19 +238,35 @@ state:
     node: rcs_thrust
     method: dynamics
     unit: "map[thruster_id,N]"
-    tau_rise_s: UNCONFIGURED
-    tau_fall_s: UNCONFIGURED
+    tau_rise_s: 0.04
+    tau_fall_s: 0.05
     provenance:
-      basis: derived
+      basis: historical
+      source: >-
+        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 89, printed p. 77. Build-up: the propellant
+        valves take "about 7 milliseconds to reach full opening", propellants "reach the chamber
+        about 12 milliseconds after the 'open' command", and "combustion build-up to stable burning
+        is achieved at about 40 milliseconds". Tailoff: on shutdown the valves reach "the full
+        closed position 5 milliseconds later", flow "starts decreasing about 4 milliseconds
+        following the shutdown command and is zero about 9 milliseconds later", the trapped head
+        volume makes the "total thrust tail off lasting about 50 milliseconds", and "thrust drops
+        from 100 lbs. to 20 lbs. in the first 10 milliseconds ... the remaining decay from 20 lbs.
+        to 0 lbs. takes 40 milliseconds"
       relation: "F(t) = 445 N * rise(t; tau_rise) falling with tau_fall; amplitudes from vehicle.yaml#propulsion.rcs_*.thrust_n"
       note: >-
         rcs_dode.md:869 is explicit that "physical valve opening and thrust buildup are separate
-        hardware-configured quantities and must appear in the timing model" — and they are not
-        in it, because nobody publishes a 100 lbf MMH/N2O4 thruster's rise and tailoff. Both
-        are on the same state on purpose: a thruster whose rise is fast and whose fall is slow
-        delivers more impulse than its commanded width says, and a model with one time constant
-        cannot express that asymmetry, which is exactly the asymmetry a total-impulse gauge
-        would misread. The steady-state amplitude is derived; only the two times are owed
+        hardware-configured quantities and must appear in the timing model", and they are in it
+        now. **The two numbers are the published stage times read as the time constants of the
+        first-order model this state declares**, and the difference matters: the guide describes a
+        build-up that is *zero* until about 12 ms and stable at about 40 ms, which is a dead time
+        followed by a rise, and one exponential cannot express a dead time. So tau_rise = 40 ms is
+        the published build-up time standing in for a curve this model does not have, and the 12 ms
+        transport delay is **not represented** — recorded here rather than folded into the constant,
+        because a curve fit would be a number no source gives. The asymmetry rcs_dode.md asks for is
+        intact: 40 ms rising and 50 ms falling is what makes a minimum-width pulse deliver less
+        impulse than its width times full thrust. Both are on the same state on purpose, and the
+        7/12/40 and 5/4/10/50 millisecond stages are in the source string above so that a later
+        round can replace the first-order reading without re-opening the document
 
   - id: pulse_residual
     node: internal
@@ -235,16 +295,23 @@ state:
     node: internal
     method: algebraic
     unit: "map[thruster_id,us]"
-    t_min_on_s: UNCONFIGURED
+    t_min_on_s: 0.01
+    same_as:
+      t_min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
     provenance:
       basis: derived
       relation: "t_i = quantize(I_acc / F_eff, dt_q), subject to t_i >= t_min_on (rcs_dode.md:816-820)"
       note: >-
         the last width the pulse generator committed to, published per pulse so that "the valve
         was commanded" becomes "the valve was commanded *for this long*". The quantization
-        step is derived (the plant's microsecond grid); the floor is not, and the floor is the
-        interlock — a width below it is refused rather than truncated, because a truncated
-        width is a pulse whose delivered impulse nobody can predict
+        step is derived (the plant's microsecond grid); the floor is the thruster's qualified
+        minimum firing time, carried here with `same_as` rather than written a second time, and
+        the floor is the interlock — a width below it is refused rather than truncated, because a
+        truncated width is a pulse whose delivered impulse nobody can predict. **Both this field and
+        the valve's `dwell.min_on_s` are the same constant as `capability.minimum_firing_time`, and
+        the three were declared in one file for as long as the domain has existed with nothing
+        joining them**: the note on `thruster_valve` said "the two dwell values are the pulse
+        generator's `t_min_on` and `t_min_off`", which is a sentence rather than a link
 
   - id: impulse_total
     node: internal

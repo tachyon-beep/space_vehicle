@@ -11056,6 +11056,117 @@ def check_argument_vocabularies(
                         )
 
 
+def check_same_as(documents: dict[str, Any], report: Report) -> None:
+    """A field that is another declaration's value says so, and is held against it on every run.
+
+    This folder has found the same defect in four different domains: **one quantity declared twice,
+    in two places that never met.** An absorber's rating on the article and on the counter; a pump's
+    watts in `vehicle.yaml` and in a domain's load entry; a valve's valve count in two vehicle
+    blocks; and now a thruster's minimum firing time in three fields of one file. Each time the fix
+    has been the same shape — find the link that was sitting there and make something read it — and
+    each time the link was found ad hoc, by a check written for that pair.
+
+    `same_as` is the general form. A mapping that declares a value and knows it is a copy of
+    another declaration's value carries a `same_as` mapping beside it, keyed by the field it
+    constrains, and this walk holds every one of them against what it names:
+
+    ```yaml
+        dwell:
+          min_on_s: 0.01
+          min_off_s: 0.05
+          same_as:
+            min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
+            min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
+    ```
+
+    It is deliberately not a list of pairs in this file. The round that joined the absorber's three
+    ratings wrote its own lesson down: *"a hand-written list of what to compare is the bug"* — the
+    list had two entries and the corpus had three. A key that declares its own link cannot be
+    forgotten by the next author, and a fourth copy of anything is joined the moment it is written.
+
+    Three refusals, and one deliberate silence. A `same_as` naming a field its own mapping does not
+    declare is refused, because the link then holds nothing. A source that does not resolve is
+    refused, because "the name is gone" and "the value is unset" are different answers and only the
+    second is a debt. A disagreement is refused with both numbers. And **an unset value on either
+    side is left alone**: absence is the debt walk's business and disagreement is this rule's, which
+    is the split `check_burn_capability` already makes for the same reason.
+    """
+    def walk(node: Any, trail: str) -> None:
+        if isinstance(node, dict):
+            links = node.get("same_as")
+            if isinstance(links, dict):
+                for field, source in sorted(links.items()):
+                    where = f"{trail}.same_as.{field}"
+                    if field not in node:
+                        report.refuse(
+                            where,
+                            f"names {field!r}, which the mapping it sits in does not declare, so "
+                            "the link holds nothing",
+                        )
+                        continue
+                    text = str(source)
+                    if ":" not in text:
+                        report.refuse(
+                            where,
+                            f"is {text!r}, which is neither a number nor a source. A source names "
+                            "its document, in the `<file>.yaml:<dotted.path>` form `derives_from` "
+                            "uses",
+                        )
+                        continue
+                    filename, dotted = text.split(":", 1)
+                    if filename not in documents:
+                        report.refuse(
+                            where,
+                            f"names {filename!r}, and the documents this check can resolve are "
+                            f"{sorted(documents)}",
+                        )
+                        continue
+                    target = resolve_dotted(documents[filename], dotted)
+                    if target is None:
+                        report.refuse(
+                            where,
+                            f"names {text!r}, which resolves to nothing. A carried value whose "
+                            "source is gone is a value nothing can disagree with",
+                        )
+                        continue
+                    if isinstance(target, dict) and "value" in target:
+                        # A `capability`-style entry keeps its number under `value`, so a path may
+                        # land either on the number or on the block that holds it. Both are the
+                        # declaration; the second is the one an author writes by accident.
+                        target = target["value"]
+                    stated = node[field]
+                    if "UNCONFIGURED" in (target, stated):
+                        continue
+                    if isinstance(target, bool) != isinstance(stated, bool) or not isinstance(
+                        stated, (int, float, bool, str)
+                    ):
+                        report.refuse(
+                            where,
+                            f"carries {stated!r}, and a carried value has to be a scalar to be "
+                            "compared with the declaration it copies",
+                        )
+                        continue
+                    if stated != target:
+                        report.refuse(
+                            where,
+                            f"declares {field} as {stated!r} while {text!r} is {target!r}. One "
+                            "quantity in two places with nothing joining them is the defect this "
+                            "key exists to remove",
+                        )
+            for key, value in node.items():
+                if key != "same_as":
+                    walk(value, f"{trail}.{key}")
+        elif isinstance(node, list):
+            for row in node:
+                if isinstance(row, dict) and "id" in row:
+                    walk(row, f"{trail}.{row['id']}")
+                else:
+                    walk(row, trail)
+
+    for name, document in sorted(documents.items()):
+        walk(document, name)
+
+
 def check_provenance_derivations(
     root: Path, documents: dict[str, Any], report: Report
 ) -> None:
@@ -13716,6 +13827,9 @@ def main(argv: list[str] | None = None) -> int:
     # First, because a boolean key is a key no walk below can read: this reports it by name
     # before anything assumes the shape it is about to be handed.
     check_boolean_words(documents, report)
+    # A carried value says what it carries, and every run re-reads the declaration it names. It sits
+    # beside the other whole-document walks because a `same_as` may point from any file to any other.
+    check_same_as(documents, report)
     # After the documents, because a convention is held against the declarations that state it and
     # against the registry it governs — and the registry is one of them.
     check_conventions(vehicle or {}, registry, documents, report)

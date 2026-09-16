@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 290 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 283 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 290 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 283 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **290** is every obligation the linter can name:
-**133** literal `UNCONFIGURED` scalars and **157** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **283** is every obligation the linter can name:
+**126** literal `UNCONFIGURED` scalars and **157** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **215** the plant
+the missing charging efficiency, the pump-speed conversion). The **208** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 215 is the linter's 133 **plus** the graph's unset edge
+`coupling.yaml` included, so its 208 is the linter's 126 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -325,16 +325,22 @@ sixteen thousand lines and its central claim is architectural (`:9`): **expose R
 trusted attitude-and-wrench execution service, not as a remote thruster-firing bus.** It declares
 13 states, 11 thresholds, 9 verbs, 11 faults, and three things in it are worth reading:
 
-- **The vehicle's one unpublished constant, bounded instead of guessed.** No source reached gives
-  a minimum firing time for the 100 lbf thruster — the only figure in the corpus is a Voyager
-  anecdote its own text flags as hardware-specific. `rcs_dode.md:800-825`'s residual accumulator
-  is what makes that survivable: unexecuted impulse stays in `r_i` until it exceeds the qualified
-  threshold, so the **mean** delivered impulse is preserved whatever the constant is and the error
-  is unbounded in *phase* rather than in magnitude. RCS-11 is the case that is not benign — the
-  accumulator grows, every pulse is refused as illegally short, and the thruster stops complying
-  with no valve fault, no switch disagreement and no health conclusion. It is why
-  `rcs.thruster_[n]_residual_ns` is a published channel: without it, an unknown constant produces
-  a silent failure instead of a bounded one.
+- **The constant the folder called unpublished is published, and the residual bounds what is
+  left.** This paragraph used to say that no source gives a minimum firing time for the 100 lbf
+  thruster — and the thruster's own qualification block has been in the manifest since the folder
+  began: `lm_propulsion_rcs_study_guide.pdf` PDF p. 89 says "in pulse mode operation the total
+  command 'on' time may be as low as 10 milliseconds". So `t_min_on` is 10 ms, the two life limits
+  are 500 s each with a 1,000 s total and 10,000 restarts, and the rise and tailoff are 40 ms and
+  50 ms. What the same page says next is what the residual accumulator is still for: "the full 100
+  pounds of thrust will not be achieved" in a minimum pulse, so the **impulse** of that pulse is
+  not 445 N x 10 ms and no source gives the curve that would compute it. `rcs_dode.md:800-825`'s
+  accumulator carries unexecuted impulse in `r_i` until it exceeds the qualified threshold, so the
+  **mean** delivered impulse is preserved whatever the bit is and the error is unbounded in *phase*
+  rather than in magnitude. RCS-11 is the case that is not benign — the accumulator grows, every
+  pulse is refused as illegally short, and the thruster stops complying with no valve fault, no
+  switch disagreement and no health conclusion. It is why `rcs.thruster_[n]_residual_ns` is a
+  published channel: without it, an unknown constant produces a silent failure instead of a
+  bounded one.
 - **Two questions apollo's RCS channels cannot answer.** apollo's seven points all say what the
   thrusters are *doing*. They cannot say whether the vehicle can still do what it is about to be
   asked, which is what `rcs_dode.md:722-727` requires be published — the allocation residual, the
@@ -1569,7 +1575,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 79 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 82 of the 134 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1761,9 +1767,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     15   11 %  ready now — the two classes the reference plant can advance
-    33   25 %  owes a value — the cheapest to close, and the debt count already tracks them
+    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
      7    5 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    79   59 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    82   61 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -8302,6 +8308,120 @@ need it to make its point.
 The debt count falling is the point rather than a side effect: four of the 294 were obligations the
 vehicle had already met, and a count that includes answered questions is a count nobody can plan
 against. The 290 that remain are all still owed, and the next round starts sourcing them.
+
+## The thruster's minimum firing time was published all along, and the same constant was declared three times
+
+The RCS paragraph in this file said, for as long as the domain has existed:
+
+> **The vehicle's one unpublished constant, bounded instead of guessed.** No source reached gives a
+> minimum firing time for the 100 lbf thruster — the only figure in the corpus is a Voyager anecdote
+> its own text flags as hardware-specific.
+
+`domains/rcs/components.yaml#capability.minimum_firing_time` said the same thing in its own
+`provenance`, with `basis: UNCONFIGURED`, and so did the two states that need the number. **It is
+published, in a document `.scratch/apollo/SOURCES.md` lists, on a page the extraction note in that
+same file tells you how to read:**
+
+> In pulse mode operation the total command "on" time may be as low as 10 milliseconds and
+> propellant transients make up the whole run. Engine thrust is just beginning to rise when the
+> shutdown command is given and only a very small amount of propellant will be injected into the
+> combustion chamber. Under these conditions of "minimum impulse" the full 100 pounds of thrust will
+> not be achieved and engine operation will be comparatively inefficient.
+
+`lm_propulsion_rcs_study_guide.pdf`, PDF p. 89, printed p. 77. The same page gives the build-up
+(valves full open at 7 ms, propellant to the chamber at 12 ms, stable combustion at 40 ms) and the
+tailoff (valves closed at 5 ms, flow zero 9 ms later, 100 → 20 lbf in 10 ms and 20 → 0 in the next
+40, "total thrust tail off lasting about 50 milliseconds"), and p. 90's Design and Performance
+Characteristics block gives the life limits: **500 s steady state, 500 s pulse mode, 1,000 s total,
+10,000 restarts**, with Isp **275 s (approx)** against the 290 s this domain declares.
+
+### The second half: one constant, three fields, nothing joining them
+
+Landing the number exposed the shape underneath it. `t_min_on` was declared three times **inside one
+file**:
+
+| field | what it is | read by |
+|---|---|---|
+| `capability.minimum_firing_time.value` | the qualification | the debt walk, as `UNCONFIGURED` |
+| `state.thruster_valve.dwell.min_on_s` | the valve's minimum dwell | the debt walk |
+| `state.pulse_width.t_min_on_s` | the pulse generator's floor | the debt walk |
+
+and the note on `thruster_valve` had said so in prose the whole time: *"the two dwell values are the
+pulse generator's `t_min_on` and `t_min_off` (rcs_dode.md:801-804)"*. A sentence is not a link, and
+all three sat unset together, so nothing could disagree with anything. `t_min_off` was worse: it was
+declared **nowhere at all**, and the same page publishes it as the tailoff.
+
+This folder has now found that shape four times — an absorber's rating on the article and on the
+counter, a pump's watts in two files, a valve count in two vehicle blocks, and this — and each time
+the fix has been an ad-hoc check written for that pair. The round that joined the absorber's three
+ratings wrote its own lesson down: **"a hand-written list of what to compare is the bug"**, because
+the list had two entries and the corpus had three.
+
+### `same_as`: the general form of the link
+
+A mapping that declares a value it knows is a copy of another declaration's value now carries a
+`same_as` map beside it, keyed by the field it constrains:
+
+```yaml
+    dwell:
+      min_on_s: 0.01
+      min_off_s: 0.05
+      same_as:
+        min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
+        min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
+```
+
+`check_same_as` walks every document, resolves every link with the same `resolve_dotted` the
+`derivation` machinery uses — which already steps `id`-keyed sequences, so a link can point into
+`state.` by name — and refuses four things: a link whose source does not resolve, a link naming a
+field its own mapping does not declare, a non-scalar on either side, and a disagreement, reported
+with both numbers. **An `UNCONFIGURED` on either side is deliberately left alone**, because absence
+is the debt walk's business and disagreement is this rule's — the same split `check_burn_capability`
+already makes.
+
+The key is self-declaring on purpose. A fourth copy of any quantity is joined the moment it is
+written, and no list in `check_vehicle.py` has to be updated by somebody who remembers to.
+
+### What the round did *not* do, and says so
+
+`vehicle.yaml#propulsion.rcs_*.minimum_impulse_bit_ns` is **still owed**, and the round narrowed it
+rather than filling it. The guide says a minimum pulse "will not" achieve the full 100 lbf and gives
+no thrust-versus-time curve — Figure 54 is a graph, and a value read off a graph is not a citation —
+so the bit is below 445 N × 10 ms = 4.45 N·s and its value needs a curve nobody has. Deriving it from
+the new `tau_rise_s` would have meant integrating a first-order rise that the same page contradicts:
+the guide has thrust at *zero* until about 12 ms, which is a dead time, and one exponential cannot
+express it. So the model's limitation is recorded in `thruster_thrust`'s own provenance instead of
+being folded into a constant, and the two bits stay `UNCONFIGURED` with a ceiling where they had no
+bound at all.
+
+**And the class this round belongs to is not closed.** Every `basis: UNCONFIGURED` provenance in the
+folder asserts, in prose, that the figure is not published; 23 of the 43 make that claim explicitly,
+and **none of them records what was searched**. That is why this one survived: "unpublished" was a
+sentence nobody could check, next to a manifest that answered it. The mechanical form of the fix is a
+`searched:` field naming the documents looked at, and it needs an honest record per claim rather than
+a rule — so it is the next round's finding, named here rather than half-done.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 290 | **283** — seven literals, all from the one specification block |
+| states that owe a value | 33 | **30** — the valve, the thrust and the pulse width now declare theirs |
+| states that owe a rule | 79 | **82** — the same three, correctly reclassified |
+| states fully configured | 101 / 134 | **104 / 134** |
+| `UNCONFIGURED scalars` the plant counts | 215 | **208** |
+| `report.refuse` call sites in the linter | 691 | **697** |
+| tests in `tests/test_vehicle_config.py` | 232 | **236** |
+
+The refuse-site count in the *previous* round's table read 691 where the committed file held 693:
+that count was taken before the round's last two refusals landed, and the table was written from it.
+Corrected here rather than in place, because a round log is a record of what a round said.
+
+
+The three states moving from *owes a value* to *owes a rule* is the more honest classification
+rather than a regression: a valve, a thrust and a pulse width were never waiting on a figure the
+corpus could not supply. They were waiting on `domains/rcs/`'s code, and the figure they were
+blocked on turned out to have been on page 77 the whole time.
 
 ## The invariants, and which of them are enforced
 

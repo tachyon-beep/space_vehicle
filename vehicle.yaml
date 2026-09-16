@@ -421,7 +421,7 @@ propulsion:
     minimum_impulse_bit_ns: UNCONFIGURED
     provenance:
       basis: historical
-      source: "NR: 16 x 100 lbf in 4 quads; load 1,340 lb = 608 kg from A11 Tbl 8-XI. A minimum impulse bit is genuinely not published: a search of the mission report, the summary report and both news references returned zero hits for any impulse-bit or minimum-firing figure"
+      source: "NR: 16 x 100 lbf in 4 quads; load 1,340 lb = 608 kg from A11 Tbl 8-XI. The minimum impulse *bit* is not published: a search of the mission report, the summary report and both news references returned zero hits for any impulse-bit figure. The minimum firing *time* is published — 10 ms, `domains/rcs/components.yaml#capability.minimum_firing_time` — and it bounds the bit from above rather than giving it, because a minimum pulse does not achieve the full 100 lbf and no source gives the curve that would integrate it"
   rcs_cm:
     name: "Command Module reaction control"
     thrusters: 12

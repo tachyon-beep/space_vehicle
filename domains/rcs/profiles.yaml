@@ -143,10 +143,12 @@ thresholds:
         not publish what excessive means. The threshold cannot be filled from any source reached,
         and it is the *rate* rather than the total that matters: 1.7e6 N*s is the SM's whole
         capacity, but by the time a fleet has spent it the diagnosis is over. What would set this
-        number is a duty cycle the thruster is qualified for, which is the same unpublished
-        constant as `components.yaml#capability.minimum_firing_time`. Left unset rather than
-        guessed, because a use-rate alarm with an invented limit either never fires or fires on
-        every rendezvous
+        number is a duty cycle the thruster is qualified for. The *qualification* is published now
+        — `components.yaml#capability.engine_life` gives 500 s of steady-state life, 500 s of pulse
+        life and a 1,000 s total — and what is still missing is how fast those 500 s may be spent,
+        which is a duty-cycle rule rather than a hardware constant and is not in the same block.
+        Left unset rather than guessed, because a use-rate alarm with an invented limit either
+        never fires or fires on every rendezvous
 
   # --- the service's own health limits -----------------------------------------------------
   - id: rcs_propellant_uncertainty_high

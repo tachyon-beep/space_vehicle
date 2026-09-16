@@ -431,9 +431,9 @@ faults:
       basis: derived
       relation: >-
         the failure mode of `rcs_dode.md:807-825`'s accumulator when `t_min_on` exceeds the
-        requested widths, combined with this vehicle's UNCONFIGURED
+        requested widths, at this vehicle's 10 ms
         `capability.minimum_firing_time`. It is derived rather than historical because the corpus
-        supplies the mechanism and the vehicle supplies the missing constant
+        supplies the mechanism and `lm_propulsion_rcs_study_guide.pdf` p. 89 supplies the limit
       note: >-
         this is the fault that justifies publishing `rcs.thruster_[n]_residual_ns`. Every other
         channel in the domain could be replaced by an inference from something else; this one
