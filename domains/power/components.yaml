@@ -49,13 +49,57 @@ state:
     method: algebraic
     node: fuel_cell
     unit: W
+    # The field the arithmetic produces, named by the state's own id — the fourth state to use that
+    # spelling. What the cell generates *is* what the bus draws, so the state is its own subject.
+    fuel_cell_power_w: 1723
     note: >-
       The cell's output is a function of reactant availability and load, solved to
       consistency each tick rather than integrated. The reactant draw is exact
-      stoichiometry charged to the O2 and H2 stocks, so the electricity is not free.
+      stoichiometry charged to the O2 and H2 stocks, so the electricity is not free. **At steady
+      state the output is the load**: the cells generate what the bus draws, and the margin a crew
+      watches is the *capacity* headroom — three 1,420 W modules against this figure — which is what
+      `power.load_margin_w` means by margin. The modules are activated before launch and the
+      converter regulates around what they are already making, so at MET 0 there is no charge or
+      discharge term to add
     provenance:
-      basis: chosen
-      reason: "the cell's output is determined by reactant availability and load within a tick, so it is solved rather than integrated; no source models a cell on a timescale this plant resolves"
+      basis: derived
+      computes: fuel_cell_power_w
+      derivation:
+        # **The relation was the note above, and its own words are the finding**: "a function of
+        # reactant availability and *load*". `bus_a_load_w`, which round 50 landed, is the load — so
+        # the sum is named here rather than the field, because a state whose rule is "the other
+        # state's value" is still a sum of fourteen declarations with a name in front of it, and
+        # naming them keeps the inventory as the one home.
+        expression: >-
+          csm_sband_transceiver + csm_sband_power_amplifier + csm_suit_fan + csm_cabin_fan +
+          csm_co2_scrubber + csm_imu + csm_guidance_computer + csm_instrumentation +
+          csm_coolant_pump_1 + csm_coolant_pump_2 + csm_heaters + csm_rcs_heaters +
+          csm_comm_heaters + csm_lighting
+        inputs:
+          csm_sband_transceiver: domains/power/components.yaml:loads.csm_sband_transceiver.demand_w
+          csm_sband_power_amplifier: domains/power/components.yaml:loads.csm_sband_power_amplifier.demand_w
+          csm_suit_fan: domains/power/components.yaml:loads.csm_suit_fan.demand_w
+          csm_cabin_fan: domains/power/components.yaml:loads.csm_cabin_fan.demand_w
+          csm_co2_scrubber: domains/power/components.yaml:loads.csm_co2_scrubber.demand_w
+          csm_imu: domains/power/components.yaml:loads.csm_imu.demand_w
+          csm_guidance_computer: domains/power/components.yaml:loads.csm_guidance_computer.demand_w
+          csm_instrumentation: domains/power/components.yaml:loads.csm_instrumentation.demand_w
+          csm_coolant_pump_1: domains/power/components.yaml:loads.csm_coolant_pump_1.demand_w
+          csm_coolant_pump_2: domains/power/components.yaml:loads.csm_coolant_pump_2.demand_w
+          csm_heaters: domains/power/components.yaml:loads.csm_heaters.demand_w
+          csm_rcs_heaters: domains/power/components.yaml:loads.csm_rcs_heaters.demand_w
+          csm_comm_heaters: domains/power/components.yaml:loads.csm_comm_heaters.demand_w
+          csm_lighting: domains/power/components.yaml:loads.csm_lighting.demand_w
+      relation: >-
+        the cell generates what the bus draws, so this state and `bus_a_load_w` are **one quantity
+        read in two directions** — the second time this corpus says that about a pair, after round
+        44's `radiator_rejection_w` and `loop_primary_load_w`. The direction is what a reader should
+        notice: a *load* is what is connected and a *generation* is what has to come from somewhere,
+        and a fleet that reads the second as available headroom has misread it — the headroom is
+        `components.fc_[n].rated_w` three times over against this figure. The reactant chain is
+        charged against this number (`fc_o2_draw_kg_s` is 8.8619e-8 kg O2 per joule of it), so the
+        electricity is not free, and the stoichiometry is what makes the sum above a *power* rather
+        than a placement
 
   - id: source_converter_v
     method: lag

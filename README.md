@@ -71,9 +71,9 @@ Current state: **composes, with 261 declared debts.** A debt is reported and is 
 always there and previously invisible — the eleven `UNCONFIGURED` scalars in the two files nothing
 walked (round 46), a `debt:` key inside a block no tool read, three debts that were being counted
 twice. A number that goes *up* because the instrument got better is not a regression, and the line
-that carries the real movement is beside it: **19 → 31 of the 139 states advance in a real tick**,
-the build order's ready-now bucket went 25 → 40, and the states that owe a *rule* — the only class
-that is code rather than data — went 79 → 62. What falls is progress; what rises has to say why.
+that carries the real movement is beside it: **19 → 32 of the 139 states advance in a real tick**,
+the build order's ready-now bucket went 25 → 41, and the states that owe a *rule* — the only class
+that is code rather than data — went 79 → 61. What falls is progress; what rises has to say why.
 
 The count also moved *down* twice in that window for the right reason: **C-25 and C-26** were put to
 the operator and closed, and C-26 re-derived the RCS chain rather than recording a disagreement — see
@@ -198,7 +198,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **31** of the 139 states against the build order's **40** ready — the second
+a real tick advances **32** of the 139 states against the build order's **41** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1615,7 +1615,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 62 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 61 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1806,10 +1806,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 139 states, by what blocks them:
 
-    40   29 %  ready now — the classes the reference plant can advance
+    41   29 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    62   45 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    61   44 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -15504,6 +15504,59 @@ already written as prose.** The rule layer is down to 62 — from 79 at the star
 the plant now advances 31 of 139 states against the build order's 40 ready. The gap between those two
 numbers is the four states whose rules are declared and whose *readings* are other states' values,
 which is the class `unmet_reading` counts.
+
+## The cell's output is the load, read the other way
+
+`fuel_cell_power_w` had said what it was since the domain landed: *"the cell's output is a function of
+reactant availability and **load**, solved to consistency each tick rather than integrated."* Round 50
+made the load a state, so the relation its own note describes is arithmetic now:
+
+```
+csm_sband_transceiver + csm_sband_power_amplifier + csm_suit_fan + csm_cabin_fan + csm_co2_scrubber
++ csm_imu + csm_guidance_computer + csm_instrumentation + csm_coolant_pump_1 + csm_coolant_pump_2
++ csm_heaters + csm_rcs_heaters + csm_comm_heaters + csm_lighting
+```
+
+That is the same fourteen `demand_w` fields `bus_a_load_w` sums, which makes them **one quantity read
+in two directions** — the second pair in this corpus after round 44's `radiator_rejection_w` and
+`loop_primary_load_w`, and the pair says the same thing about the class: a state whose rule is another
+declaration's value is not a state with no rule, it is a relation with two ends.
+
+**The direction is what a reader has to notice**, and it is why this is not a duplicate. A *load* is
+what is connected; a *generation* is what has to come from somewhere. A fleet that reads the second
+as available headroom has misread it — the headroom is `components.fc_[n].rated_w` three times over
+against this figure, which is what `power.load_margin_w` means by margin, and a margin computed as
+generation-minus-load would be zero by construction. The reactant chain is charged against this
+number (`fc_o2_draw_kg_s` is 8.8619e-8 kg O2 per joule of it), so the electricity is not free and the
+stoichiometry is what makes the sum above a *power* rather than a placement.
+
+### Named, and not landed, with the reason
+
+Three of the sentinel's remaining `algebraic` states were examined and left, and the reasons are the
+round's real work:
+
+| state | why it cannot be derived yet |
+|---|---|
+| `bus_a_v` | the nodal solve needs a **source internal resistance** that is owed with a *bound* (1.25e-3 V per W, from the undervoltage ladder's 1.5 V sag limit). A bound is not a value, and the folder's law is that an undecidable case is a debt rather than a plausible number |
+| `sample_age` | the age of the oldest sample in the pipeline. The obvious constant — the 2× slowest publish period the profile threshold uses — is a *limit*, not a reading, and a state that is its own alarm threshold would alarm at MET 0 |
+| `heater_bank_duty` | a commanded fraction, and the corpus declares two banks with different ratings. Picking one is the template-instantiation decision (`channels.yaml#open_debts`, ~17 keyed-state projections) rather than a derivation |
+
+The first of those is the one that matters: **`coolant_flow_kg_s` is *ready* and gapped only on
+`bus_a_v`**, so the whole thermal chain is waiting behind one owed resistance.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order | 40 ready · 25 value · 12 edge · 62 rule | **41** · 25 · 12 · **61** |
+| states a tick advances | 31 of 139 | **32** of 139 |
+| `report.refuse` call sites | 779 | 779 |
+| tests in `tests/test_vehicle_config.py` | 300 | **301** |
+
+**One state, and the rule layer is down to 61 — from 79 at the start of this session.** The plant
+advances 32 of 139 against the build order's 41 ready, and the nine-state gap is still exactly the
+`unmet_reading` class plus `source_converter_v`'s owed time constant.
 
 ## The invariants, and which of them are enforced
 
