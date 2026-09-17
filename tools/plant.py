@@ -222,6 +222,10 @@ class World:
     # Every YAML document a declared `derivation` may name, so an `algebraic` state's own arithmetic
     # can be evaluated at a tick. Loaded once, with the world.
     documents: dict[str, Any] = field(default_factory=dict)
+    # channel id -> the state (or node) it is read from, from the domains' `points.yaml`. The frame's
+    # `values` is declared `map[channel_id, ...]` and this is the registry that says which state each
+    # channel id is.
+    points: dict[str, str] = field(default_factory=dict)
 
     def states_on(self, node: str) -> list[State]:
         return [s for s in self.states if s.node == node]
@@ -349,6 +353,15 @@ def load_world(root: Path) -> World:
             if candidate.is_file():
                 documents[f"domains/{directory.name}/{name}.yaml"] = load_yaml(candidate)
 
+    points: dict[str, str] = {}
+    for directory in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        candidate = directory / "points.yaml"
+        if not candidate.is_file():
+            continue
+        for row in (load_yaml(candidate).get("points") or []):
+            if isinstance(row, dict) and row.get("channel") and row.get("from"):
+                points[str(row["channel"])] = str(row["from"])
+
     channels: dict[str, dict[str, Any]] = {}
     for section, rows in channels_doc.items():
         if not isinstance(rows, list) or section in {"open_debts", "crew_positions"}:
@@ -376,6 +389,7 @@ def load_world(root: Path) -> World:
         internal_order=internal_order,
         channels=channels,
         documents=documents,
+        points=points,
         frame_fields=[
             str((f or {}).get("name"))
             for f in (presentation.get("frame") or {}).get("fields") or []
@@ -805,6 +819,32 @@ def emit_frame(
     either produces a frame or does not — and it is the one part of the file surface the vehicle
     side owns outright, so it is the part worth proving from this side of the window.
     """
+    # **`values` is `map[channel_id, ...]` and it was the plant's node-keyed map.** The registry
+    # declares which state each channel is read from, so the frame is built from it: a channel whose
+    # source has no value this tick is *omitted* rather than filled with something plausible, which is
+    # what makes the map a reading rather than a rumour.
+    published: dict[str, Any] = {}
+    by_state = {state.id: state for state in world.states}
+    for channel, source in sorted(world.points.items()):
+        state = by_state.get(source)
+        if state is not None:
+            # **A channel is its source only when the two are the same quantity.** `points.yaml`'s
+            # `derivation` is *prose* — "the CO2 partial pressure from the mass and the volume" — and
+            # prose cannot be evaluated, so a channel whose unit differs from its source state's is
+            # **omitted rather than filled with the state's number**: publishing 0.042 kg under
+            # `eclss.co2_pp_mmhg` is a reading a fleet would act on and a quantity it is not. The
+            # units are the registry's own, so this is a comparison of two declarations rather than a
+            # guess about a sentence.
+            row = world.channels.get(channel) or {}
+            if str(row.get("unit") or "").strip().lower() != str(state.unit or "").strip().lower():
+                continue
+            value = state_level(values, state)
+        else:
+            value = values.get(source)
+        if value is None:
+            continue
+        published[channel] = value
+
     provided = {
         "schema": "aurora.capsule.telemetry.v1",
         "seq": seq,
@@ -816,7 +856,7 @@ def emit_frame(
         "state_revision": state_revision,
         "vehicle": vehicle,
         "phase": phase,
-        "values": values,
+        "values": published,
         "quality": quality,
         "injected": False,
     }
@@ -1176,6 +1216,11 @@ def state_level(values: dict[str, Any], state: State) -> Any:
     """
     if state.id in values:
         return values[state.id]
+    if state.node == "internal":
+        # The sentinel's states live in a sub-map keyed by state id, so a node-key fallback would
+        # hand back the whole map — which is what the first channel-keyed frame did, publishing
+        # `avionics.clock_offset_ms` as six accumulators at once.
+        return (values.get("internal") or {}).get(state.id)
     return values.get(state.node)
 
 
