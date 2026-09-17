@@ -52,6 +52,15 @@ reads: [o2_csm, o2_lm, absorber_capacity_csm, absorber_capacity_lm, crew_state,
 writes: [cabin_atm, lm_cabin_atm, cabin_regulator, cabin_o2_supply_csm,
          cabin_o2_supply_lm, co2_removal_csm, co2_removal_lm]
 
+# Two states on the `internal` sentinel, so their order is a declaration rather than the alphabet's:
+# both are published and neither drives the other, and the sentinel is advanced after every node.
+internal_order: [suit_loop_flow_cfm, o2_supply_pressure_psi]
+internal_order_note: >-
+  **nothing at all**: the suit circuit's flow and the oxygen supply tank's pressure are published
+  quantities with no edge between them and no shared input, so the order is a declaration rather than
+  a finding. What it is not is the alphabet's — `o2_supply_pressure_psi` sorts before
+  `suit_loop_flow_cfm`, and a tiebreak that decides is a tiebreak that can be wrong later
+
 # --------------------------------------------------------------------------------------
 # State. Four conserved gases per compartment, one commanded regulator, and three derived
 # quantities. The quanta are set by the smallest flow each stock must represent, and the
@@ -362,6 +371,45 @@ state:
       basis: apollo
       ref: "apollo_diode.md:95"
       note: "apollo publishes cabin_regulator_state as primary/emergency/isolated with an 'unexpected mode' event. The dwell is one second each way because the regulator is a valve with a mechanical transit and a fleet must not be able to chatter it by re-commanding every tick."
+  # The supply tank's working pressure, which is what `eclss.o2_supply_pressure_psi` publishes. It is
+  # a *pressure* and the corpus had only a *mass*: round 30 found the channel reading `o2_csm` — the
+  # shared oxygen stock, in kilograms — under a psi name, and the honest answer was not a conversion
+  # but this state. What it still owes is named below rather than papered over.
+  - id: o2_supply_pressure_psi
+    node: internal
+    method: lag
+    unit: psi
+    initial: 900
+    initial_provenance:
+      basis: historical
+      source: >-
+        `csm_ecs_study_guide.pdf` **PDF p. 12**, printed p. 2-1, section II. §2.2.1 "High Pressure O2
+        Distribution": "Downstream of the S/M O2 shut-off valve the **high pressure (900 psig)**
+        oxygen is supplied in parallel to the surge tank and backup tank in the LH equipment bay, and
+        to the PLSS supply valve and the S/M supply regulator". §2.1 on the same page is what stands
+        behind it: "the oxygen is stored in **two cryogenic tanks in the service module (S/M)**.
+        Heaters within the tanks change the oxygen from a liquid to a gaseous state, for distribution
+        to the using equipment." The channel's own 750-950 psi band brackets this working pressure,
+        which is why the starting value is the published one rather than a chosen figure
+    tau_s: UNCONFIGURED
+    note: >-
+      the time constant is owed, and it is the line's rather than the tank's: a heated cryogenic tank
+      holds its delivery pressure for as long as there is liquid to boil, so what a first-order lag
+      represents here is the response to a demand step
+    provenance:
+      basis: UNCONFIGURED
+      note: >-
+        **what the pressure does as the tank empties is not published.** The state is declared because
+        the *channel* is: `eclss.o2_supply_pressure_psi` is apollo's 750-950 psi indication with a
+        low-pressure event and a >5 psi/min fall, four declared faults perturb it, and until this
+        round it read `o2_csm` — a mass in kilograms — under a pressure's name. A cryogenic tank with
+        heaters holds its delivery pressure until the liquid is gone and then falls, so the relation
+        between this state and `o2_csm` is a heater-and-regulator model rather than a gas law.
+        **Searched:** `csm_ecs_study_guide.pdf` end to end — PDF p. 12 is everything it says about
+        the supply (the two tanks, the 900 psig working pressure, the surge tank's 3.7 lb, the inlet
+        restrictors' 8.2 lb/hr at 900 psig) — and `mission_e_consumables.txt`. What would close it: a
+        tank or heater analysis for the S/M cryogenic tanks, or a pressure-versus-contents curve, and
+        the *driver* is owed with it, because no edge can reach the sentinel
   - id: suit_loop_flow_cfm
     node: internal
     method: lag
@@ -731,7 +779,7 @@ atmosphere_model:
       relation: "the ideal-gas relation applied to the published cabin volume and pressure, with the oxygen as the remainder after the three declared partial pressures. It is stated here so that the initial load is a computed consequence of published figures rather than a third invented one."
 
 open_debts:
-  - "**`eclss.o2_supply_pressure_psi` has no producer, and the reason is structural rather than missing.** The channel is the cryogenic supply tank's pressure, in apollo's 750-950 psi band, and four declared faults list it among the channels they perturb — so it is watched, and the frame now omits it rather than publishing the oxygen *mass* under a pressure's name. A pressure is not a function of a mass: it needs the tank's volume and the oxygen's storage temperature, and this vehicle has no supply tank at all — no volume, no cryogenic temperature, no fill level, only `o2_csm` in kilograms. Two shapes would close it and the choice is a design decision rather than a lookup: **either a tank model** (a stored volume and a storage temperature, which would make the pressure an inference from the stock the way the cabin's own pressure is an inference from its four gases), **or a sensed state** with its own lag — the real vehicle had pressure transducers on the cryo tanks, and `layer: measurement` is what this channel claims. What would size either: the ECS study guide's cryogenic storage description (`csm_ecs_study_guide.pdf`, in the source library) or the OCS report's tank data. Recorded here rather than in the point row because where it lives is a *state*, and this is the file states live in."
+  - "**The oxygen supply tank has a pressure now, and its *rule* is what is owed.** Round 30 found `eclss.o2_supply_pressure_psi` — apollo's 750-950 psi indication, with a low-pressure event and a >5 psi/min fall, perturbed by four declared faults — reading `o2_csm`, the shared oxygen *stock*, in kilograms, because the vehicle had no supply tank at all. Round 32 gave it one: `state o2_supply_pressure_psi`, a lag on the sentinel whose 900 psig starting value is `csm_ecs_study_guide.pdf` **PDF p. 12**'s own working pressure, so the channel is published rather than omitted. **What is still owed is how it moves**: a heated cryogenic tank holds its delivery pressure until the liquid is gone and then falls, so the relation between this state and `o2_csm` is a heater-and-regulator model rather than a gas law — and the *driver* is owed with it, because no edge can reach the sentinel. **Searched:** the ECS study guide end to end (PDF p. 12 is everything it says about the supply: the two cryogenic tanks in the S/M, the 900 psig working pressure, the surge tank's 3.7 lb, the inlet restrictors' 8.2 lb/hr at 900 psig) and `mission_e_consumables.txt`. What would close it: a tank or heater analysis for the S/M cryogenic tanks, or a pressure-versus-contents curve."
   - "The condensing heat exchanger's removal rate and the ventilation fan's flow are unpublished; both are declared unset above. Without them the humidity stock has no sink and the ventilation state has no magnitude, so the model can express a humid cabin and cannot yet dry it."
   - "The suit loop is modelled as a single flow channel rather than as a circuit with the PLSS, because apollo publishes suit_loop_flow_cfm and nothing about the portable life support's own consumables. EVA is therefore a phase whose atmosphere consequences are not yet modelled."
   - "**The cabin leak is declared per cabin now, and one of the two is borrowed.** Round 67 split

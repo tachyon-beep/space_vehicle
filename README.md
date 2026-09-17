@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 259 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -175,10 +175,10 @@ because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 259 declared debts
-and every one of them named. **109 of the 134 states are fully configured and 25 carry a debt**, and
-a real tick advances **19** of the 134 states against the build order's **27** ready — the second
+**All eleven domains have landed** — 148 channels, 135 states over 57 scheduled nodes, 142
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
+and every one of them named. **109 of the 135 states are fully configured and 26 carry a debt**, and
+a real tick advances **19** of the 135 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -189,14 +189,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **259** is every obligation the linter can name:
-**111** literal `UNCONFIGURED` scalars and **148** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
+**113** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **185** the plant
+the missing charging efficiency, the pump-speed conversion). The **187** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 185 is the linter's 111 **plus** the graph's unset edge
+`coupling.yaml` included, so its 187 is the linter's 113 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -258,7 +258,7 @@ are the vehicle's only two-step verbs (C-16: a burn is interruptible, so requiri
 one adds a delay rather than a safety).
 
 `domains/eclss/` is the one where a fault has minutes rather than hours.
-It declares 16 states, 20 thresholds, 6 verbs, 21 faults — four conserved gases in each of
+It declares 17 states, 20 thresholds, 6 verbs, 21 faults — four conserved gases in each of
 **two** compartments. Three things in it are worth reading:
 
 - **The atmosphere is modelled as gas masses, not as a pressure.** Pressure is `nRT/V`, so a
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 68 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 68 of the 135 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1784,12 +1784,12 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-134 states, by what blocks them:
+135 states, by what blocks them:
 
     27   20 %  ready now — the classes the reference plant can advance
-    25   19 %  owes a value — the cheapest to close, and the debt count already tracks them
+    26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
     14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    68   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    68   50 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -10047,6 +10047,72 @@ The debt count rises by one because eight hidden obligations are now one visible
 moves: 19 of 134 states still advance, the build order is still 27 · 25 · 14 · 68, `--strict` still
 exits 2, and the vehicle's reconciliation is still **owed** — the difference is that the ledger says
 so, and that the frame no longer publishes a residual that is a tank of propellant.
+
+## The oxygen supply had no tank, and the ECS guide has it on one page
+
+`eclss.o2_supply_pressure_psi` is the channel Apollo's own band is written for — 750-950 psi, a
+low-pressure event, a >5 psi/min fall — four declared faults perturb it, and its note says what it is
+for: *"the channel that corroborates a leak: the tank falls while the cabin pressure is held by the
+regulator."* And it read `o2_csm`, the shared oxygen **stock**, in kilograms. Round 30 omitted it
+rather than publishing 279 kg under a pressure's name, and named the choice the vehicle owed: a tank
+model or a sensed state.
+
+**The document answers it in one page.** `csm_ecs_study_guide.pdf` **PDF p. 12** (printed p. 2-1,
+section II) says the supply is *"two cryogenic tanks in the service module (S/M). Heaters within the
+tanks change the oxygen from a liquid to a gaseous state"*, and that downstream of the S/M shut-off
+valve *"the **high pressure (900 psig)** oxygen is supplied in parallel to the surge tank and backup
+tank in the LH equipment bay, and to the PLSS supply valve and the S/M supply regulator"*. The same
+page gives the surge tank's 3.7 lb, the inlet restrictors' 8.2 lb/hr at 900 psig, and the pressure
+transducer whose signal *"shares the indicator used for displaying O2 supply tank #1 pressure"* — so
+the quantity is **sensed**, on the real vehicle, and the channel's `layer: measurement` was right all
+along.
+
+### What landed
+
+`state o2_supply_pressure_psi` — a lag on the sentinel, `unit: psi`, **`initial: 900`** with its
+`initial_provenance` carrying the document and the page in the field, and the channel re-pointed at
+it. The frame now publishes `eclss.o2_supply_pressure_psi: 900.0` at tick 0, inside the channel's own
+band, instead of omitting it; the four faults that perturb the channel now perturb a number that
+exists; and the channel is oxygen's **observation** in `domains/consumables/components.yaml#ledgers`,
+which is what a sensed pressure is — so the ledger triple's observation term is now real.
+
+**And what it still owes is declared rather than implied.** A heated cryogenic tank holds its delivery
+pressure until the liquid is gone and then falls, so the relation between this state and `o2_csm` is a
+heater-and-regulator model rather than a gas law: the state carries `tau_s: UNCONFIGURED`, a
+`provenance.basis` of `UNCONFIGURED`, and a note recording the search — the ECS guide end to end and
+`mission_e_consumables.txt` — with what would close it (a tank or heater analysis, or a
+pressure-versus-contents curve). The debt entry that said the channel had *no producer* is rewritten:
+it has one, and what is owed is how it moves.
+
+### The choices made, on the record
+
+- **Sensed state, not an inferred one.** The document settles round 30's open question: the vehicle
+  had cryogenic tanks whose *pressure* was transduced and displayed. A tank model would have made the
+  pressure an inference from the stock, and the gas law is the wrong relation for a tank that is
+  boiling its contents on purpose.
+- **`lag` on the sentinel**, which is where the corpus keeps a published quantity no edge can drive
+  yet (`pressurant_pressure_psi` is the precedent). Its `internal_order` is declared with a note
+  saying the order means **nothing at all** — neither state reads the other — because the alphabet
+  would otherwise have decided it, and `o2_supply_pressure_psi` sorts before `suit_loop_flow_cfm`.
+- **900 psig as the starting value**, not a chosen number: the channel's own band brackets it, and the
+  figure is the document's working pressure for exactly this line.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 259 | **262** |
+| `UNCONFIGURED` scalars (linter / plant) | 111 / 185 | **113 / 187** |
+| world | 134 states | **135 states** |
+| build order | 27 · 25 · 14 · 68 | **27 · 26 · 14 · 68** |
+| channels read from a state | 134 (63 same-unit, 71 derived) | **135 (64 same-unit, 71 derived)** |
+| channels read from a node needing arithmetic | 7 (6 with a derivation) | **6 (6 with a derivation)** |
+| values a frame carries at tick 0 | 23 | **24** |
+| tests in `tests/test_vehicle_config.py` | 274 | **275** |
+
+The debt count rises by three — the state's time constant, its provenance basis, and the prose
+obligation for its rule — and every one of the three is a thing the vehicle now *says* it owes rather
+than a gap a reader had to notice. A real tick still advances 19 states and `--strict` still exits 2.
 
 ## The invariants, and which of them are enforced
 

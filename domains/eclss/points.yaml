@@ -177,16 +177,16 @@ points:
       relation rather than a coincidence: one mixture, two compartments, one law.
 
   - channel: eclss.o2_supply_pressure_psi
-    from: o2_csm
+    from: o2_supply_pressure_psi
     layer: measurement
     derivation: >-
-      **owed, and deliberately not written as arithmetic.** The channel is the cryogenic supply
-      tank's pressure and its source is a *mass* stock (`o2_csm`, in kilograms), so this is not a
-      conversion: a pressure is not a function of the mass alone. It needs the tank's volume and the
-      oxygen's storage temperature — and the vehicle models neither, because it has no supply tank
-      at all. `domains/eclss/components.yaml#open_debts` carries the obligation and what would close
-      it. Until then the frame **omits** the channel rather than publishing 279 kg under a psi name.
-    note: "apollo's 750-950 psi with a low-pressure event and a >5 psi/min fall. It is the channel that corroborates a leak: the tank falls while the cabin pressure is held by the regulator, and reading the two together is how a leak is distinguished from a regulator fault."
+      the supply tank's own pressure state, published directly: the channel is psi and so is the
+      state, so there is no conversion to write. **It was not always a state**: until round 32 this
+      row read `o2_csm` — the shared oxygen *stock*, in kilograms — and the frame published a mass
+      under a pressure's name, because a pressure is not a function of a mass. What the state owes
+      (its time constant and its driver) is in `domains/eclss/components.yaml`, and its 900 psig
+      starting value is `csm_ecs_study_guide.pdf` PDF p. 12's own working pressure.
+    note: "apollo's 750-950 psi with a low-pressure event and a >5 psi/min fall. It is the channel that corroborates a leak: the tank falls while the cabin pressure is held by the regulator, and reading the two together is how a leak is distinguished from a regulator fault. This is also the *observation* of oxygen's ledger triple (`domains/consumables/components.yaml#ledgers`), which is what a sensed pressure is."
   - channel: eclss.suit_loop_flow_cfm
     from: suit_loop_flow_cfm
     layer: measurement
