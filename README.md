@@ -9161,6 +9161,63 @@ docked to an ascent stage, which is neither 3.2-21 (the whole LM attached) nor 3
 Both halves are now in the file, so what it waits for is the parallel-axis composition about a common
 point — arithmetic with a stated rule rather than a document nobody has.
 
+## The frame offset between two vehicles is a property of the configuration
+
+Round 10 added a second frame to `mass_properties` — the LM's own — and gave it an offset from
+Apollo's: `X_A = X_E + 399.5`, from Figure 2-16's transformation list. **That figure is the launch
+configuration**, where the LM sits in the adapter below the CSM. The docked configuration is
+Figure 2-17, and there the two docking interfaces are mated, which its own numbers say twice over:
+
+| | Figure 2-16 (launch) | Figure 2-17 (docked) |
+|---|---|---|
+| the LM's docking interface, `X_E = 312.5` | `X_A = 712.0` | `X_A = 1110.25` |
+| relation | `X_A = X_E + 399.5` | `X_A = X_E + 797.75` |
+| check | `X_LV = X_A + 2756.555` | `X_A = 4578.805 - X_LV` gives `X_A = 1110.25`, which is the station the same figure gives the **CM's** docking interface |
+
+Both figures are right about different vehicles, and the difference is **398.25 inches = 10.1 m**.
+So the offset is not a property of the frames at all: it is a property of the configuration, and
+`LM_XE` now carries one offset per configuration with the figure each comes from. A table in that
+frame must say which reading it uses, or why none applies — `check_mass_properties` refuses one
+that does not, and that refusal is what would have caught this when it was written.
+
+### And the two tables still do not add up to the third
+
+With the offset settled, the last configuration's composition looks like arithmetic the file could
+do: `csm_alone` plus `lm_ascent_stage` is exactly what `csm_lm_ascent_docked` is *defined* as. So
+the round tried it against the one case that can be checked — composing `csm_alone` with
+`lm_alone_descent`, whose masses sum to `csm_lm_docked`'s 44,085 kg, and comparing with what
+Table 3.2-21 tabulates at that weight:
+
+| | composed | Table 3.2-21 | miss |
+|---|---:|---:|---:|
+| centre of mass, `X_A` at the launch offset | 20.63 m | 26.58 m | **−22.4 %** |
+| centre of mass, at the docked offset | 24.13 m | 26.58 m | **−9.2 %** |
+| `IYY` | 914,693 kg m² | 760,263 kg m² | +20.3 % |
+
+**Both readings miss, so the offset is not what is wrong.** The tables are indexed by *weight*, and
+at one weight the reference mission's two vehicles are not at the states their own tables are
+referenced to: the docked row's CSM has burned propellant the CSM-alone table's has not. A composed
+tensor would therefore be the tensor of this corpus's construction — two reference states added —
+rather than of any vehicle the book tabulates, and the corpus declines to carry a number that
+plausible for a reason it can name. `csm_lm_ascent_docked` stays owed, and what it is owed to is now
+**an epoch rather than a document**: the CSM and ascent stage tabulated together at their own epoch,
+which the volume does not have.
+
+That is the round's shape, and it is the folder's own rule arriving at its flagship values: a value
+that looks obtainable gets derived, and a derivation that does not reproduce the one checkable case
+gets refused rather than landed.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | 253 |
+| `report.refuse` call sites in the linter | 740 | **742** |
+| tests in `tests/test_vehicle_config.py` | 253 | **255** |
+
+No debt closed, and that is the honest accounting: the round found that the value it went to land
+would have been wrong, and spent itself making the corpus say why.
+
 ## The invariants, and which of them are enforced
 
 

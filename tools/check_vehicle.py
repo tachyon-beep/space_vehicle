@@ -12079,6 +12079,18 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 f"vehicle.yaml:mass_properties.frames {frame_id}",
                 "declares no definition, so a table in this frame is a table against nothing",
             )
+        # **A frame whose offset to the body frame depends on the configuration has to be read
+        # with one.** The LM's does: the two figures that state it differ by 398.25 inches because
+        # one is the LM in the launch adapter and the other is the LM mated to the CSM, and a
+        # table that used the wrong one would be 10 m out at every station.
+        offsets = frame.get("offsets")
+        if isinstance(offsets, list):
+            names = [str(o.get("configuration")) for o in offsets if isinstance(o, dict)]
+            if len(set(names)) != len(names) or any(not n or n == "None" for n in names):
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.frames {frame_id}.offsets",
+                    f"declares {names}, which is not one offset per configuration",
+                )
     tables = {
         str(t.get("id")): t
         for t in block.get("tables") or []
@@ -12100,6 +12112,18 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 f"vehicle.yaml:mass_properties.tables.{table_id}.frame",
                 f"names {table.get('frame')!r}, which is not a frame this block declares. A "
                 "tensor whose frame is unnamed is a tensor nothing can rotate or offset",
+            )
+        elif isinstance(frames[str(table.get("frame"))].get("offsets"), list) and not (
+            table.get("offset_configuration") or table.get("offset_not_applicable")
+        ):
+            # The frame's offset is configuration-dependent, so the table must say which
+            # configuration it is read in — or, for a vehicle tabulated on its own, say that no
+            # offset applies to it at all.
+            report.refuse(
+                f"vehicle.yaml:mass_properties.tables.{table_id}",
+                f"is in {table.get('frame')}, whose offset to the body frame depends on the "
+                "configuration, and the table names neither the configuration it is read in "
+                "nor a reason no offset applies. A station 10 metres wrong is still a number",
             )
         for index, row in enumerate(rows):
             where = f"vehicle.yaml:mass_properties.tables.{table_id}.rows[{index}]"
