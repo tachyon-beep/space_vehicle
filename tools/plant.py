@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 258 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 259 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -399,7 +399,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 258 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 259 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -860,6 +860,17 @@ def emit_frame(
         if isinstance(value, (int, float)) and not isinstance(value, bool)
     }
     for channel, point in sorted(world.points.items()):
+        if "[" in channel:
+            # **A channel id carrying a placeholder is a *family*, not a channel.** The registry
+            # declares `res.ledger_[resource]_kg` for every resource at once, and the frame's `values`
+            # is `map[channel_id, ...]` — so publishing this row's number under that name tells a
+            # fleet nothing it can bind: `res.ledger_[resource]_kg: 18508.0` is the propellant mass
+            # under a name that also claims to be the water, the oxygen and the RCS ledger. What can
+            # be published is the instantiations, and instantiating a template is the registry's own
+            # open debt ("each registry entry naming the values its placeholders take"). Until then
+            # the family is omitted, and two channels that were being filled from the *observed*
+            # stock — the ledger and the residual — stop being published as if they were readings.
+            continue
         source = point.get("from")
         if not isinstance(source, str):
             # `thermal.zone_[id]_t_c` names its four states as a *list*, because the template covers

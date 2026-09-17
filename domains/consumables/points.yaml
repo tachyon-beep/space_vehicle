@@ -53,30 +53,49 @@ points:
   - channel: "res.ledger_[resource]_kg"
     from: prop_main_kg
     layer: estimate
-    derivation: "the accounting model's own prediction: opening balance, plus production, minus every charged draw, minus declared loss"
+    derivation: >-
+      **owed, and this row is not it.** The ledger is the accounting model's own prediction —
+      opening balance, plus production, minus every charged draw, minus declared loss — and the
+      vehicle has no state for it: `from` names the *observed* stock because that is the only number
+      consumables holds. `domains/consumables/components.yaml#ledgers` names one ledger channel per
+      resource, no point row publishes any of them, and this row is the family they resolve against.
     note: >-
       Published as its own channel because the residual is only evidence if both of its terms
       are visible. An agent that sees a residual without the ledger cannot tell whether the
-      tank is lower than expected or the expectation is wrong.
+      tank is lower than expected or the expectation is wrong. **What the frame carried until this
+      round was the observation under this name**, which made the pair one number wearing two names.
   - channel: "res.recon_[resource]_kg"
     from: prop_main_kg
     layer: estimate
-    derivation: "observed minus ledger"
+    derivation: >-
+      **owed, and this row is not it.** The residual is `observed minus ledger`, and neither term
+      exists as a state: `from` names the observed stock, so a residual computed here would be
+      structurally zero — and what the frame published instead was the observed mass, 18,508 kg of
+      propellant under a residual's name. A fleet reading it would see a bookkeeping error the size
+      of the tank.
     note: >-
       The residual, published as evidence and never reconciled silently. It is how a slow leak
       first becomes visible — the leak is far below any sensor's precision long before it is
       above any threshold, and the ledger is the only thing with the resolution to notice.
-      A `RECONCILIATION_MISMATCH` event fires when it exceeds the resource's tolerance.
+      A `RECONCILIATION_MISMATCH` event fires when it exceeds the resource's tolerance. **That
+      instrument does not exist yet**: `domains/consumables/components.yaml#ledgers` carries the
+      debt and the shape of what would close it.
   - channel: "res.status_[resource]"
     from: prop_main_kg
     layer: service
-    derivation: "the resource's state machine position: NORMAL, WATCH, RESTRICTED, CRITICAL, EXHAUSTED, UNKNOWN or UNCONFIGURED"
+    derivation: >-
+      the resource's state machine position: NORMAL, WATCH, RESTRICTED, CRITICAL, EXHAUSTED, UNKNOWN
+      or UNCONFIGURED. **Owed with the ledger triple above**, and for the same reason: the position
+      is a function of the quantity left against the resource's thresholds *and* of the residual,
+      and `from` names the observed stock because that is the only number this domain holds. A
+      status computed from a mass is a band comparison, not a state machine.
     note: >-
       `UNCONFIGURED` is the fail-safe state, and it is the corpus's own idea
       (`consumables_diode.md:284`): a missing limit or missing evidence must not resolve to a
       fabricated typical value. It is the same rule as `thermal_diode.md:31`, arrived at
       independently in a different domain, which is the strongest evidence in the corpus that
-      the rule is right.
+      the rule is right. It is also why this row is not filled from the stock: the enum's first
+      useful value is `UNKNOWN`, and the vehicle has nothing to be unknown *about*.
   - channel: res.time_to_limit_s
     from: prop_main_kg
     layer: estimate

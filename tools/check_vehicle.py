@@ -4166,6 +4166,7 @@ def check_domain(
     components_elsewhere: set[str] | None = None,
     declared_phases: set[str] | None = None,
     all_verbs: dict[str, str] | None = None,
+    published_channels: set[str] | None = None,
 ) -> None:
     """One `domains/<name>/`, checked against the vocabulary, the graph and the plant contract.
 
@@ -5821,6 +5822,7 @@ def check_domain(
     # already free to be wrong; all fifteen happen to be right today, which is exactly the
     # condition under which the sixteenth is added wrong.
     # --------------------------------------------------------------------------------------
+    unpublished_ledgers: list[str] = []
     for row in components.get("ledgers") or []:
         if not isinstance(row, dict):
             continue
@@ -5845,6 +5847,31 @@ def check_domain(
                     "residual \u2014 and a name that resolves to nothing is a reconciliation a "
                     "fleet cannot read",
                 )
+            elif published_channels is not None and str(cid) not in published_channels:
+                # **Matched by a template is not published.** `res.ledger_main_propellant_kg` is a
+                # *concrete* name and the registry declares the *family*
+                # `res.ledger_[resource]_kg`; `ChannelIndex`'s wildcard matches one against the
+                # other, so the refusal above has been passing on eight names that no point row
+                # publishes. That is the registry's own recorded debt ("each registry entry naming
+                # the values its placeholders take") arriving where it does the most damage: the
+                # ledger and the residual are the vehicle's only instrument for *the tank disagrees
+                # with the bookkeeping*, and a fleet reading the family's row gets the observed
+                # mass under a residual's name. Reported as one debt rather than eight refusals,
+                # because what is owed is one model rather than eight numbers — see below.
+                unpublished_ledgers.append(str(cid))
+    if unpublished_ledgers:
+        report.debt(
+            f"{where}:ledgers",
+            f"names {len(unpublished_ledgers)} channel(s) that no point row publishes: "
+            + ", ".join(sorted(unpublished_ledgers))
+            + ". Each is matched by a registry *template*, which is why the resolution above "
+            "accepts it. What the vehicle owes is the model behind them — **a ledger accumulator "
+            "per resource** (opening balance plus production less every charged draw less declared "
+            "loss, and `consumers:` already declares the draws) **and an `algebraic` residual** "
+            "over it and the observation — because until it exists the triple is three names for "
+            "one number: the two `res.*_[resource]_*` rows that do publish read the *observed* "
+            "stock, so the residual they fill is the quantity it is supposed to be computed from",
+        )
         # A third rule was written and removed, and the reason is worth keeping because it is a
         # property of the *registry* rather than of this check: `res.recon_[resource]_kg` declares
         # its inputs as `res.[resource]_kg` and `res.ledger_[resource]_kg` — **template forms** —
@@ -6595,9 +6622,21 @@ def check_domains(
     # *ECLSS* lithium-hydroxide element, which is the normal shape of a cross-domain fault rather
     # than an error, so the vehicle's components and states are collected before the loop too.
     components_elsewhere: set[str] = set()
+    # **The channel ids some point row publishes, exactly** — not the registry's templates. A
+    # `ledgers` entry names concrete instances (`res.ledger_main_propellant_kg`), the registry
+    # declares the *family* (`res.ledger_[resource]_kg`), and `ChannelIndex` matches one against the
+    # other, so the ledger check has been resolving names that nothing publishes. This set is what
+    # tells the two apart; see the ledgers rule in `check_domain`.
+    published_channels: set[str] = set()
     policies: dict[str, dict[str, Any]] = {}
     if domains_dir.is_dir():
         for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            points = load(path / "points.yaml", Report()) or {}
+            published_channels |= {
+                str(row["channel"])
+                for row in points.get("points") or []
+                if isinstance(row, dict) and row.get("channel")
+            }
             profiles = load(path / "profiles.yaml", report) or {}
             thresholds_by_domain[path.name] = {
                 str(t.get("id")) for t in profiles.get("thresholds") or [] if t.get("id")
@@ -6654,6 +6693,7 @@ def check_domains(
                 components_elsewhere,
                 declared_phases,
                 all_verbs,
+                published_channels,
             )
     check_outbound_extremes(root, report, policies)
     # ----------------------------------------------------------------------------------

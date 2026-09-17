@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 258 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 259 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 258 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 259 declared debts
 and every one of them named. **109 of the 134 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 134 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **258** is every obligation the linter can name:
-**111** literal `UNCONFIGURED` scalars and **147** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **259** is every obligation the linter can name:
+**111** literal `UNCONFIGURED` scalars and **148** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **185** the plant
@@ -9984,6 +9984,69 @@ The debt count rose by one because the missing supply-tank pressure is now a sen
 would close it, and the frame carries one value fewer because the seventh channel is omitted rather
 than filled with a mass. The rest of the registry is untouched: 19 of 134 states still advance, the
 build order is still 27 · 25 · 14 · 68, and `--strict` still exits 2.
+
+## The residual was the observation, and eight ledger names were published by nothing
+
+`consumables/components.yaml#ledgers` declares one **triple per resource** — a ledger channel, an
+observation and their residual — with concrete names: `res.ledger_main_propellant_kg`,
+`res.recon_main_propellant_kg`, and so on for oxygen, water and RCS propellant. Its own note says why
+the triple is the instrument: *"the residual is published as evidence and never reconciled silently.
+It is how a slow leak first becomes visible — the leak is far below any sensor's precision long before
+it is above any threshold."* Apollo 13's signature is a quantity indication that disagrees with the
+bookkeeping.
+
+The registry declares the **family** `res.ledger_[resource]_kg`, and `domains/consumables/points.yaml`
+publishes it as **one row reading `prop_main_kg`** — the observed stock. `ChannelIndex`'s wildcard
+matches a concrete name against the family, so `check_domain`'s rule that every ledger channel must be
+registered has been resolving eight names — four ledgers and four residuals — that **no point row
+publishes**. Only the four observations exist. And the two rows that *do* publish carry the unit of
+the thing they read, so the unit test passed them and the frame said:
+
+```
+res.ledger_[resource]_kg: 18508.0
+res.recon_[resource]_kg: 18508.0
+```
+
+**A residual of 18,508 kg is not a residual.** It is the propellant mass under a name that claims to
+be `observed minus ledger`, on a channel whose note says a mismatch is evidence. A fleet reading the
+pair would see a bookkeeping error the size of the tank; the leak the pair exists to find is
+structurally invisible, because both terms are the same number. And the name is unusable besides:
+`values` is `map[channel_id, ...]`, and this is a family that also claims to be the water, the oxygen
+and the RCS ledger at once.
+
+### What the round changed
+
+- **The check asks the publisher rather than the pattern.** `check_domains` now collects the channel
+  ids some point row publishes *exactly*, and `check_domain`'s ledger rule compares against that set
+  as well as against the registry. Eight names fail it, and they are reported as **one debt** rather
+  than eight refusals: what is owed is one model, and the debt says what it is — a ledger accumulator
+  per resource (opening balance plus production less every charged draw less declared loss, and
+  `consumers:` already declares the draws) and an `algebraic` residual over it and the observation.
+  The registry's own open debt ("each registry entry naming the values its placeholders take") is why
+  the resolution rule above it has been passing, and that is stated where the debt is raised.
+- **The emitter omits a channel id that carries a placeholder.** A family is not a channel id, so it
+  is not a key in a `map[channel_id, ...]` — which is also what takes the two false readings out of
+  the frame, since both were published under exactly such a name. A test asserts that **no key in any
+  frame carries a placeholder**, at t=0 and after a tick, and that the observations the pair was
+  standing in for are still published.
+- **The two rows say what they are.** Their `derivation` prose now reads *owed, and this row is not
+  it*: the ledger has no state, the residual's two terms are the same number, and the frame carried
+  the observation under both names until this round. The obligation lives in the check, which names
+  the eight channels from the block rather than from a list.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 258 | **259** |
+| ledger channels published by nothing | 8, invisible | **8, one named debt** |
+| values a frame carries at tick 0 | 25 | **23** |
+| tests in `tests/test_vehicle_config.py` | 272 | **274** |
+
+The debt count rises by one because eight hidden obligations are now one visible one. Nothing else
+moves: 19 of 134 states still advance, the build order is still 27 · 25 · 14 · 68, `--strict` still
+exits 2, and the vehicle's reconciliation is still **owed** — the difference is that the ledger says
+so, and that the frame no longer publishes a residual that is a tank of propellant.
 
 ## The invariants, and which of them are enforced
 
