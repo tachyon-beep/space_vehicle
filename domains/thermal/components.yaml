@@ -58,11 +58,13 @@ writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_tran
 # can target it and the rules that would move these states are domain code — so this is a
 # decision about the rules rather than a consequence of them, and it is declared so the
 # frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
-internal_order: [heater_bank_duty, comm_amp_t]
+internal_order: [heater_bank_duty, comm_amp_t, avionics_bay_heat_w]
 internal_order_note: >-
   the heater is a decision and the amplifier's temperature is what the decision is about;
   nothing on this sentinel feeds the other within a tick, and the order says which is read
-  first when a rule eventually reads both.
+  first when a rule eventually reads both. The avionics bay's heat rate is here and not on a
+  coupling node for the reason its own entry gives: a heat rate is the wrong thing to land on a
+  lag's node, and the figure's reader is the loop's collected load rather than a temperature.
 
 state:
   - id: cabin_heat_csm_w
@@ -223,6 +225,42 @@ state:
           lm_landing_radar: domains/power/components.yaml:loads.lm_landing_radar.demand_w
           lm_rcs_heaters: domains/power/components.yaml:loads.lm_rcs_heaters.demand_w
       relation: "the landing radar at 120 W and the descent stage's RCS heaters at 60, which is all `heat_inputs.lm_descent_bay` assigns"
+  - id: avionics_bay_heat_w
+    node: internal
+    method: algebraic
+    unit: W
+    total_w: 360
+    provenance:
+      basis: derived
+      computes: total_w
+      derivation:
+        expression: "csm_imu + csm_guidance_computer + csm_instrumentation"
+        inputs:
+          csm_imu: domains/power/components.yaml:loads.csm_imu.demand_w
+          csm_guidance_computer: domains/power/components.yaml:loads.csm_guidance_computer.demand_w
+          csm_instrumentation: domains/power/components.yaml:loads.csm_instrumentation.demand_w
+      relation: >-
+        the sum of the `demand_w` of the three loads `heat_inputs.csm_avionics_bay` assigns: the IMU,
+        the guidance computer and the instrumentation, 360 W. Algebraic because the rate follows
+        which loads are on rather than accumulating — a load that is shed stops heating in the same
+        tick
+      note: >-
+        **the fifth heat rate, and the one the zone's own debt named.** `csm_avionics_bay` was the
+        only heated zone with no state carrying its load, which left the loop's collected load —
+        a sum over `heat_inputs` — short its avionics term, and left `E-PLATE-CRITICAL`'s 360 W
+        somewhere in the prose of four files.
+
+        **On the sentinel rather than a coupling node, and that is a decision rather than a
+        shortcut.** The bay's temperature is `zone_csm_avionics_t`, whose node is `coldplate_t` and
+        whose driver is `E-STRUCT-PLATE` — a temperature per configuration. A heat-rate edge landing
+        on that node would have to be denominated in K per W to be integrable, and the plant's
+        canonical-driver rule (first contributor by id, `plant.md` §6) would make it the lag's
+        driver, relaxing a kelvin state toward a watt. The cabins' idiom — an equilibrium state
+        between the heat and the sink — is the shape that would avoid it, and the sink here is the
+        *configuration's* plate temperature, which arrives as an edge sensitivity rather than as a
+        state, so the equilibrium cannot be derived until that lookup lands. Until then this state's
+        reader is the loop's collected load, and putting it on the sentinel says so: no edge can
+        reach the sentinel, so nothing here is pretending to drive a temperature.
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t

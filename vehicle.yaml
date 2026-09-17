@@ -1276,13 +1276,15 @@ thermal:
         # avionics bay's temperature is the coldplate's — which is what makes this link one that
         # had to be declared rather than derived from a channel name.
         implemented_by: [avionics_plate_high]
-        # **The one heated zone with no heat-rate state, and it is owed rather than overlooked.**
-        # `heat_inputs.csm_avionics_bay` assigns the IMU, the guidance computer and the
-        # instrumentation — 360 W — and no state sums them, while the cabin, the service bay and the
-        # descent bay each have one. There is no `heat_state` line here rather than a wrong one:
-        # the state does not exist, `check_thermal_heat_inputs` reports the debt by name, and the
-        # loop's collected load is the figure that cannot be assembled without it.
+        # **The last heated zone to get a heat-rate state, and the reason it was last is a graph
+        # question rather than a figure.** `heat_inputs.csm_avionics_bay` assigns the IMU, the
+        # guidance computer and the instrumentation — 360 W — and `avionics_bay_heat_w` sums them
+        # now. It sits on the `internal` sentinel: an edge carrying watts into this zone's node
+        # would become its lag's canonical driver and relax a kelvin state toward a watt, and the
+        # equilibrium state that would avoid that needs the structure plate's temperature as a
+        # *value*, which arrives today as an edge sensitivity rather than as a state.
         cooled_by: loop_primary
+        heat_state: avionics_bay_heat_w
         provenance:
           basis: apollo
           ref: "apollo_diode.md:105"

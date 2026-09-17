@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 263 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 262 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -400,7 +400,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 263 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 262 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1937,6 +1937,22 @@ def build_order(world: World) -> dict[str, list[State]]:
             # thirteen states.
             # ------------------------------------------------------------------------------
             preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
+            # **Declared arithmetic first, sentinel or not.** This test used to sit below the
+            # sentinel routing, and the routing `continue`s — so the one rule that asks "is the
+            # rule already in the configuration?" was unreachable for every state on the sentinel.
+            # `avionics_bay_heat_w`, the fifth heat rate, is what exposed it: its arithmetic is a
+            # `derivation` over three dotted paths, the linter re-derives it, the plant evaluates it
+            # in a real tick — and the worklist filed it under "owes a rule: domain code" and sent
+            # an implementer to write a rule that exists. The sentinel means "advanced with its
+            # domain", which is a statement about *where the driver comes from*, not about whether
+            # one is declared; a state whose inputs are all named has nothing left to write.
+            if state.method == "algebraic":
+                derivation = state.spec.get("derivation") or (
+                    state.spec.get("provenance") or {}
+                ).get("derivation")
+                if derivation is not None:
+                    ready.append(state)
+                    continue
             if state.node == "internal":
                 # Advanced with its domain, so its driver is code rather than an edge. This is the
                 # same distinction `check_domain` draws for `internal_order`.
@@ -1969,17 +1985,6 @@ def build_order(world: World) -> dict[str, list[State]]:
             # the edge. Without this the build order called four states ready that `advance` refuses
             # by name, which is precisely the disagreement this function's docstring says cannot
             # happen.
-            # **An `algebraic` state whose arithmetic the corpus declares is ready.** Thirteen of
-            # them carry a `derivation` over named inputs, the linter evaluates every one, and
-            # round 20 taught the plant to evaluate them too — so the worklist must stop sending an
-            # implementer to write code for a relation that is already a declaration.
-            if state.method == "algebraic":
-                derivation = state.spec.get("derivation") or (
-                    state.spec.get("provenance") or {}
-                ).get("derivation")
-                if derivation is not None:
-                    ready.append(state)
-                    continue
             if state.method == "lag" and incoming:
                 node_map = {name: dict(node) for name, node in world.nodes.items()}
                 ok, _ = lag_driver_basis(

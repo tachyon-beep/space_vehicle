@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 263 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -175,10 +175,10 @@ because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 135 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 263 declared debts
-and every one of them named. **110 of the 135 states are fully configured and 25 carry a debt**, and
-a real tick advances **19** of the 135 states against the build order's **27** ready — the second
+**All eleven domains have landed** — 148 channels, 136 states over 57 scheduled nodes, 142
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
+and every one of them named. **111 of the 136 states are fully configured and 25 carry a debt**, and
+a real tick advances **20** of the 136 states against the build order's **28** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **263** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **151** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **186** the plant
@@ -224,7 +224,7 @@ things in it are worth reading rather than skimming:
   observable, because such a fault cannot be diagnosed.
 
 `domains/thermal/` pays the debt `thermal_diode.md:965` created when it refused to infer a
-single TCS constant. It declares 20 states, 17 thresholds, 5 verbs, 11 faults — and the
+single TCS constant. It declares 21 states, 17 thresholds, 5 verbs, 11 faults — and the
 parameters are **derived** wherever a published geometry plus a standard material property
 determines them, with the relation stated so the linter can disagree:
 
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 69 of the 135 states need code. (This said *before the
+`internal` sentinel counted among them, so 69 of the 136 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1784,10 +1784,10 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-135 states, by what blocks them:
+136 states, by what blocks them:
 
-    27   20 %  ready now — the classes the reference plant can advance
-    25   19 %  owes a value — the cheapest to close, and the debt count already tracks them
+    28   21 %  ready now — the classes the reference plant can advance
+    25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     69   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -10634,6 +10634,80 @@ by accident.
 Nothing in the vehicle moved: 263 debts, 135 states, 57 nodes, 79 edges, 148 channels, `--strict` still
 exits 2. What moved is a paragraph one directory away that had been describing a smaller, different
 tool for many rounds.
+
+## The worklist's rule about declared arithmetic was unreachable on the sentinel
+
+Two findings in one round, because the second is what the first exposed.
+
+### The avionics bay's heat rate, the last ingredient
+
+`csm_avionics_bay` was the one heated zone whose load no state carried: `heat_inputs` assigns the IMU,
+the guidance computer and the instrumentation — 360 W — and the loop's collected load, which the
+heat-balance debt calls "a sum over `heat_inputs`", was short its avionics term. `avionics_bay_heat_w`
+sums them now, the same relation the other four heat rates are:
+
+```yaml
+expression: "csm_imu + csm_guidance_computer + csm_instrumentation"
+```
+
+It sits on the **`internal` sentinel**, and that is a decision rather than a shortcut. The bay's
+temperature is `zone_csm_avionics_t`, whose node is `coldplate_t` and whose driver is
+`E-STRUCT-PLATE` — a temperature per configuration. A heat-rate edge landing on that node would have
+to be denominated in K per W to be integrable, and the plant's canonical-driver rule (first
+contributor by id, `plant.md` §6) would make it the lag's driver, relaxing a *kelvin* state toward a
+*watt*. The cabins' idiom — an equilibrium state between the heat and the sink — is the shape that
+avoids it, and the sink here is the configuration's plate temperature, which arrives as an edge
+*sensitivity* rather than as a state, so the equilibrium cannot be derived until that lookup lands. So
+the state's reader is the loop's collected load, and the sentinel says so: no edge can reach it, so
+nothing here is pretending to drive a temperature.
+
+Landing it closed the debt the previous round counted — **263 → 262** — and it takes a real tick from
+**19 of 135 to 20 of 136 states**.
+
+### The rule that could not be reached
+
+The round's second finding is in `plant.py`'s `build_order`, and it is this folder's oldest shape
+again: *a check that cannot run is not a check that passed*.
+
+The classifier has one rule about arithmetic — **an `algebraic` state whose `derivation` the corpus
+declares is ready**, because round 20 taught the plant to evaluate it — and it sat *below* the
+sentinel routing, which `continue`s:
+
+```python
+if state.node == "internal":
+    blocking_rule.append(state)   # advanced with its domain: its driver is code
+    continue
+...
+if state.method == "algebraic":
+    if <a derivation is declared>:
+        ready.append(state)       # unreachable for anything on the sentinel
+```
+
+The sentinel routing was written first and correctly — for the fifty-odd sentinel states whose rule
+genuinely is domain code (`computer_mode`, `heater_bank_duty`, `attitude_error`, …). Nothing on the
+sentinel had a declared rule until this round, so the ordering never mattered. The moment
+`avionics_bay_heat_w` landed, the worklist filed a state whose arithmetic is three dotted paths under
+**"owes a rule: domain code"** and sent an implementer to write a rule that exists.
+
+The fix is one move: **ask whether the rule is declared before asking where the driver comes from.**
+The sentinel means *advanced with its domain*, which is a statement about where a driver comes from,
+not about whether one is declared. The negative is in the test: strip the derivation from a copy and
+the state goes back to owing a rule, because then there is code to write.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 263 | **262** |
+| states | 135 | **136** |
+| states fully configured | 110 / 135 | **111 / 136** |
+| a real tick | 19 of 135 | **20 of 136** |
+| build order | 27 ready · 25 value · 14 edge · 69 rule | **28** · 25 · 14 · **69** |
+| tests in `tests/test_vehicle_config.py` | 287 | **288** |
+
+The `rule` bucket did not move, which is the point: the state never belonged in it. What moved is one
+debt closed, one state advanced, one wrong instruction to the next implementer removed — and the
+worklist's own rule is now reachable from every state it applies to.
 
 ## The invariants, and which of them are enforced
 
