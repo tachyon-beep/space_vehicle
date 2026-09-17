@@ -50,6 +50,15 @@ writes: [crew_state, alert_state]
 # --------------------------------------------------------------------------------------
 # State.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [switch_panel, breaker_panel]
+internal_order_note: >-
+  the two panels a crew position can throw: switches before breakers, because a breaker is
+  opened in response to what a switch did.
+
 state:
   - id: switch_panel
     node: internal

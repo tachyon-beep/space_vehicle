@@ -42,6 +42,16 @@ writes: [structure_config]
 # irreversible transition with no arming requirement is a transition a single misread line can
 # fire, which is precisely what `apollo_diode.md:167-170` says a two-step arm/commit is for.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [relief_valve_state, hatch_state, docking_latch_state, arm_state, cabin_dp_psi, structural_leak_g_s]
+internal_order_note: >-
+  the mechanisms before the quantities they explain: a valve, a hatch and a latch each change
+  what the cabin's differential pressure and leak are, and the arm is last of the mechanisms
+  because nothing else depends on it.
+
 state:
   - id: lm_separation_state
     node: structure_config

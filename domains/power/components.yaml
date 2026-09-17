@@ -34,6 +34,16 @@ writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
 # parameters are owed. The linter refuses a `lag` with no time constant, a `stock` with no
 # quantum, and a latched `discrete` with no hysteresis.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [lcl_tripped, bus_a_load_w, battery_thermal_state]
+internal_order_note: >-
+  the trip state is a latch, the load is what the latch leaves connected, and the battery's
+  temperature is what the surviving load does to the pack — the same chain the power
+  inventory's relationships describe, in the order they act.
+
 state:
   - id: fuel_cell_power_w
     method: algebraic

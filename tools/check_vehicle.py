@@ -6439,13 +6439,23 @@ def check_domain(
                 "frozen lexicographic tiebreak alone decides which advances first — the outcome "
                 "`state_order` exists to prevent on a node",
             )
+        elif not components.get("internal_order_note"):
+            # **A list is a decision too, and round 19 found nine of them undeclared.** The note was
+            # required only of `independent`, on the reasoning that a list speaks for itself. It
+            # does not: an order is a claim about which state has to be advanced first, and a
+            # reader cannot tell a considered order from the alphabet with a different name. The
+            # nine declarations this round landed all carry one, and each says whether the order is
+            # physics (the throttle before the chamber pressure) or the command surface (the modes
+            # a command sets before the accumulators that count them).
+            report.refuse(
+                iwhere,
+                "is declared without an `internal_order_note`. An order is a claim about which "
+                "state has to advance first — physics, the command surface, or nothing at all — and "
+                "a claim that is not written down is indistinguishable from the frozen tiebreak "
+                "under another name",
+            )
         elif order == "independent":
-            if not components.get("internal_order_note"):
-                report.refuse(
-                    iwhere,
-                    "declares its `internal` order independent without a reason. Independence is a "
-                    "claim about the physics and it needs to be on the record",
-                )
+            pass
         elif not isinstance(order, list):
             report.refuse(iwhere, f"is {order!r}, which is neither a list nor 'independent'")
         elif sorted(str(s) for s in order) != on_sentinel:

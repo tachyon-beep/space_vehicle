@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 255 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 255 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 246 declared debts
 and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
 a real tick advances **0** of the 134 states against the build order's **14** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **255** is every obligation the linter can name:
-**101** literal `UNCONFIGURED` scalars and **154** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **246** is every obligation the linter can name:
+**101** literal `UNCONFIGURED` scalars and **145** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **175** the plant
@@ -9500,6 +9500,53 @@ them newly visible.
 | `ready now` in the build order | 18 | **14** |
 | `owes an edge` | 12 | **16** |
 | tests in `tests/test_vehicle_config.py` | 260 | **261** |
+
+## Nine domains let the alphabet decide what advances first
+
+No edge can target the `internal` sentinel — it is not a coupling node — so the states on it (every
+mode, latch and accumulator the command surface writes, **54 of the 134**) are advanced after the
+whole schedule, and within a domain the order is `internal_order`'s business. Nine domains had none,
+so the frozen lexicographic tiebreak decided, and the linter reported **nine debts naming 54 states**.
+
+The declarations are landed, and each one says *which kind of decision it is* rather than listing a
+permutation:
+
+| domain | states | what the order is |
+|---|---:|---|
+| `propulsion` | 6 | physics: the throttle, then the chamber pressure it produces, then the feed pressure, then the pressurant; the two registers last |
+| `gnc` | 6 | the platform's chain: bias → alignment → covariance → radar → integrity verdict → manoeuvre |
+| `avionics` | 11 | fault containment: mode and time first (every verdict is stamped against them), then the ages, the votes, the tracking state, and the accumulators that count it |
+| `rcs` | 11 | the control chain: mode → authority → error → deadband → allocation → pulse width → what was delivered |
+| `structure` | 6 | the mechanisms before the quantities they explain |
+| `comms` | 7 | the link chain: mode → antenna → carrier lock → rate, then what the chain costs |
+| `power` | 3 | the trip latch, the load it leaves connected, the pack temperature that load produces |
+| `crew` | 2 | switches before breakers |
+| `thermal` | 2 | the heater decision, then the amplifier it is about |
+
+**Nothing on the sentinel advances today** — the rules that would move these states are domain code
+— so the declaration is a decision about the rules rather than a consequence of them, and each note
+says so. That is the honest instrument for this debt: not a derivation, but a *choice on the record*,
+which is the difference between an order and the alphabet renamed.
+
+### The refusal the round adds, and the one it did not
+
+`internal_order_note` was required only of `internal_order: independent`, on the reasoning that a
+list speaks for itself. **It does not.** An order is a claim about which state has to advance first,
+and a reader cannot tell a considered order from the frozen tiebreak under another name — so the
+linter now refuses *any* `internal_order` without a note, and the nine declarations carry one.
+
+Two tests moved rather than being weakened: the plant's tiebreak path is now exercised by *removing*
+a declaration from a copy (it must still advance the corpus and still name the domain it decided
+for), and the corpus test asserts the nine declarations instead of the nine debts.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 255 | **246** |
+| prose obligations | 154 | **145** |
+| domains with an undeclared sentinel order | 9 | **0** |
+| tests in `tests/test_vehicle_config.py` | 261 | **263** |
 
 ## The invariants, and which of them are enforced
 

@@ -54,6 +54,16 @@ writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_tran
 # universal conservation assertion applied to a thermal margin is a category error
 # (simulator-design.md:248).
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [heater_bank_duty, comm_amp_t]
+internal_order_note: >-
+  the heater is a decision and the amplifier's temperature is what the decision is about;
+  nothing on this sentinel feeds the other within a tick, and the order says which is read
+  first when a rule eventually reads both.
+
 state:
   - id: cabin_heat_csm_w
     node: cabin_heat_csm

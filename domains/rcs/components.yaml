@@ -186,6 +186,17 @@ capability:
 # --------------------------------------------------------------------------------------
 # State. Twelve, of which only two advance a coupling node — the rest are the service.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [mode, safety_state, authority_margin, attitude_error, deadband_latch, allocation_status, pulse_width, pulse_residual, propellant_estimate, feed_pressure, impulse_total]
+internal_order_note: >-
+  the control chain: the mode selects the authority, the authority bounds what the error may
+  be, the error against the deadband decides whether a pulse is owed, the allocation decides
+  which jets, the pulse width what they fire, and the residual and totals book what was
+  delivered.
+
 state:
 
   - id: thruster_valve

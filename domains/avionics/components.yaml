@@ -319,6 +319,17 @@ diagnostics:
 # --------------------------------------------------------------------------------------
 # State.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [computer_mode, time_health, clock_offset, frame_sync, sample_age, innovation_window, redundancy_vote, sensor_health, actuator_tracking, sensor_bus_errors, bias_accumulator]
+internal_order_note: >-
+  the fault-containment chain: mode and time first, because every verdict below is stamped
+  against them; then the frame and sample ages that the verdicts are computed from; then the
+  votes and health verdicts; then the tracking state; and the two accumulators last, because
+  they count what the chain produced.
+
 state:
 
   - id: instrumentation_power

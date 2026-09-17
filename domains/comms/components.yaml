@@ -208,6 +208,16 @@ components:
 # State. Ten, and the split between them is the domain's argument: a link that is *sending*
 # badly, a link that is *not sending*, and a link that is *not supposed to be*.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [comm_mode, antenna_selection, carrier_lock, telemetry_rate, blackout, frame_loss, recorder]
+internal_order_note: >-
+  the link chain: the mode selects the antenna, the antenna decides whether the carrier locks,
+  the lock decides the rate, and the blackout state, the frame-loss counter and the recorder
+  are what the chain costs — the two counters last because they count the states above them.
+
 state:
 
   - id: link_snr

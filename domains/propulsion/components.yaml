@@ -40,6 +40,16 @@ natural_rate_hz: 10
 reads: [prop_main, pressurant_he, nav_state, structure_config, guidance, command_executive]
 writes: [engine_main, thrust_main]
 
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [dps_throttle_pct, chamber_pressure_pct, feed_pressure_pct, pressurant_pressure_psi, accumulated_dv_m_s, sps_burn_count]
+internal_order_note: >-
+  the order the physics runs in: the throttle is set, the chamber pressure follows from it, the
+  feed pressure from the chamber, and the pressurant from the feed. The two registers come last
+  because they record what the burn did rather than feeding it.
+
 state:
   - id: sps_state
     node: engine_main

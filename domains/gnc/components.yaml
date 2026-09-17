@@ -220,6 +220,16 @@ components:
 # State. Twelve, and the split is the domain's whole content: four are the truth, four are the
 # estimate, two are the platform, and two are ladders.
 # --------------------------------------------------------------------------------------
+# The order these states advance in. **Nothing on the sentinel advances today** — no edge
+# can target it and the rules that would move these states are domain code — so this is a
+# decision about the rules rather than a consequence of them, and it is declared so the
+# frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
+internal_order: [gyro_bias, imu_alignment, nav_covariance, radar, nav_integrity, maneuver_state]
+internal_order_note: >-
+  the platform's own chain: the bias drifts, the alignment is what the bias is known to, the
+  covariance is what the alignment is worth, the radar refines it, the integrity verdict is
+  read off the covariance, and the manoeuvre state is what the verdict permits.
+
 state:
 
   - id: orbital_state
