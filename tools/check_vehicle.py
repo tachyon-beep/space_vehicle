@@ -2256,13 +2256,21 @@ def check_coupling(
     # An edge that drives a state has to say *which* state, whenever the node carries more than one
     # it could drive.
     #
-    # Ten of the vehicle's 41 nodes hold more than one state, and the plant resolves a state's
+    # Ten of the vehicle's 58 nodes hold more than one state, and the plant resolves a state's
     # drivers by node — so on `cabin_atm`, which holds four gas masses, `csm_cabin_o2_kg`,
     # `csm_cabin_n2_kg`, `csm_cabin_co2_kg` and `csm_cabin_h2o_kg` were all handed the same three
     # edges: the oxygen supply, the crew's CO2 production and a pressure/temperature relation. Every
     # gas integrated every other gas's flux. The discrete and dynamics nodes are harmless — those
     # methods do not consume `incoming` — so the rule counts only the methods that do, which makes
     # it four nodes and nine edges rather than ten and a guess.
+    #
+    # **The node count in that sentence was stale until the round that gave it a reader.** It named
+    # a schedule four revisions old — the order this rule was written against, not the one the
+    # vehicle has — and nothing had ever compared the two, which is why it sat there through every
+    # landing that changed the schedule. It is a live figure rather than a quotation: the sentence
+    # describes the vehicle this file is checking, so it is the derived number now and
+    # `check_tool_docstrings` refuses it if it drifts again. The "ten" beside it is a different
+    # quantity and is left to the rule itself, which computes it.
     #
     # The field is required rather than inferred because the inference is exactly what was wrong:
     # "the only state on this node" is true today and stops being true the moment a second state
@@ -15341,7 +15349,7 @@ def check_readme_figures(
 
       - the front table described `plant.md` as having **six** integrator classes when it has had
         seven since the first transport delay landed, called `coupling.yaml`'s cycles **six** when
-        it declares eight, and gave the tick order as **39 nodes** when it is 57;
+        it declares eight, and gave the tick order for a schedule the linter derives differently;
       - the ten per-domain paragraphs stated their own state, threshold, verb and fault counts, and
         **nine of the ten had drifted**: power's states read 9 against 13 and its thresholds 13
         against 17, thermal's states 11 against 20 and its thresholds 18 against 17, structure 8/11
@@ -15700,8 +15708,28 @@ FAULT_DOCSTRING_FIGURES = (
     (r"(\d+) of the (\d+) seed on", ((0, "conditional"), (1, "declared"))),
 )
 
+# The size of the tick order, in the two forms a writer reaches for. **`plant.md` and the tools are
+# not the README, and that is the whole rule this pattern exists to make checkable**: the README is
+# a round log, so a figure in it is usually a *quotation of what a past round found* — a sentence
+# about a sentence — and a reader that refused those would be refusing the record. `plant.md` is the
+# contract a plant is built against and the tools are the things that run, so a figure in either is
+# a claim about the vehicle **now**, and three files were carrying three *different* numbers for one
+# schedule, none of them the one the linter derives. The figures themselves are in the round's
+# README section rather than here, because this pattern matches them: a comment that quotes three
+# stale counts to explain the check is three refusals from the check it is explaining. That is a
+# real limitation of a text-scoped reader and it is the reason the round log is where the numbers
+# live.
+#
+# `(\d+)` rather than `([A-Za-z0-9]+)`: the README's own reader has a word table because its prose
+# spells numbers out, and none of the figures here ever was. A spelled-out size would slip past
+# this, which is named as the gap it is rather than papered over with a table that would make the
+# rule look wider than it is.
+NODE_COUNT_FIGURES = re.compile(r"\b(\d+)-node tick order\b|\b(\d+) nodes?\b")
 
-def check_tool_docstrings(root: Path, documents: dict[str, Any], report: Report) -> None:
+
+def check_tool_docstrings(
+    root: Path, documents: dict[str, Any], schedule: list[str], report: Report
+) -> None:
     """A figure in a tool's own docstring is a declaration, and it needs a reader like any other.
 
     `tools/plant.py` solved this by *removing* its figures and pointing at `--readiness`, on the
@@ -15711,6 +15739,17 @@ def check_tool_docstrings(root: Path, documents: dict[str, Any], report: Report)
     without a reader would be to schedule the same round again, so the numbers stay and this check
     derives all three from `domains/*/fault_policy.yaml` — with the same predicate the scheduler
     uses, `hazard is None` for the conditional half, so the docstring and `--list` cannot disagree.
+
+    **And the same reasoning one figure over, which is the round that added the second half.** The
+    node counts in these files were three numbers that had never met: `tools/plant.py`'s docstring,
+    `plant.md` §2 and a comment in this file each stated a different size for the one schedule the
+    linter derives, and all three were smaller than it. `faults.py`'s figures were at least *about*
+    the same quantity in the same era — these had drifted apart from each other, which is the
+    stronger form of the defect: a reader who trusted any one of them would have had a different
+    vehicle from a reader who trusted another. So `plant.md` and every `tools/*.py` are walked for a
+    node count, the count comes from the schedule the rest of the run already derived — never from a
+    second counter, which would be one more declaration to drift — and a file that states no count is
+    left alone, because a figure nobody states cannot be wrong.
     """
     faults_doc = root / "tools" / "faults.py"
     if not faults_doc.is_file():
@@ -15755,6 +15794,30 @@ def check_tool_docstrings(root: Path, documents: dict[str, Any], report: Report)
                     "tools/faults.py:docstring",
                     f"states {stated} {key} faults while `domains/*/fault_policy.yaml` declares "
                     f"{live[key]}",
+                )
+
+    # ---- the schedule's size, wherever a tool or the contract states it ----------------------
+    #
+    # `schedule` is the list `derive_schedule` returned for this run, so the figure a file states is
+    # held against the same order `--order` prints and the plant walks. A file that names no count
+    # is silent rather than wrong and is skipped: this refuses a disagreeing figure, not an absent
+    # one, because there is no rule that a tool must talk about the schedule at all.
+    derived = len(schedule)
+    for path in sorted([root / "plant.md", *(root / "tools").glob("*.py")]):
+        if not path.is_file():
+            continue
+        name = path.relative_to(root).as_posix()
+        for match in NODE_COUNT_FIGURES.finditer(path.read_text()):
+            stated = int(match.group(1) or match.group(2))
+            if stated != derived:
+                report.refuse(
+                    f"{name}",
+                    f"states {match.group(0)!r}, and the schedule the linter derives for this "
+                    f"vehicle is {derived} nodes. `plant.md` and `tools/` state what the vehicle "
+                    "*is* — unlike the README, which is a round log and quotes a past round's "
+                    "figures on purpose — so a count here that no tool reads is a count that has "
+                    "already drifted. Quote the figure as a quotation if it is history, or state "
+                    "the derived one",
                 )
 
 
@@ -16005,7 +16068,7 @@ def main(argv: list[str] | None = None) -> int:
     # states about the files above is held against the files above, so it wants the schedule the
     # rest of this function derived before it can check the node count the front table gives.
     check_readme_figures(root, documents, registry, schedule, report)
-    check_tool_docstrings(root, documents, report)
+    check_tool_docstrings(root, documents, schedule, report)
     # The debts themselves, held against the declarations they are about: an entry that says it is
     # answered, or that names a coupling edge which has stopped owing, is counted above by the
     # walks that count every `open_debts` entry and is refused here.

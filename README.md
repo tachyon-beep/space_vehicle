@@ -15168,13 +15168,13 @@ folder's oldest trap (*a key written twice in one mapping*) arriving in the roun
 about a different one, and the fixture now rewrites the block it means instead of adding one beside
 it.
 
-**And the round found the same shape one file over, which it did not fix and is naming instead.**
+**And the round found the same shape one file over, which it did not fix and named instead.**
 `check_tool_docstrings` reads `tools/faults.py`'s docstring and nothing else, so `tools/plant.py`'s
-own docstring — *"the schedule is derivable — 39 nodes"*, written when there were 39 — has been
-wrong since the schedule grew, and `plant.md` §2's "the derived order is 40 nodes" with it. Neither
-is read by anything, which is why neither moved. It is a round of its own because the fix has to be
-a reader rather than a correction: the README's historical sections quote figures like these on
-purpose, so the check needs to be scoped to the sentence that claims to be current.
+own docstring — *"the schedule is derivable — 39 nodes"* — had been wrong since the schedule grew,
+and `plant.md` §2's tick-order sentence with it. Neither was read by anything, which is why neither
+moved. **The next round took it**, because the fix had to be a reader rather than a correction: the
+README's historical sections quote figures like these on purpose, so the check needed to be scoped to
+the files that claim to describe the vehicle now. That is the section below.
 
 ### The figures that moved
 
@@ -15191,6 +15191,72 @@ purpose, so the check needs to be scoped to the sentence that claims to be curre
 closed no debt. What it closed is a hole between two readers — the state that a planted `derivation`
 made *ready* goes back to owing the rule nobody has written, and the four spellings of "where a
 state's arithmetic lives" are one.
+
+## One schedule, four sizes, and no two of them in the same file
+
+The tick order is the vehicle's schedule: 58 nodes, derived from `coupling.yaml` on every run and
+printed by `--order`. Four places in the folder state how big it is, and before this round **no two
+of them agreed** — and not one of them was right:
+
+| where it is written | it said | what it is |
+|---|---:|---|
+| `tools/plant.py`, module docstring | **39 nodes** | the schedule of its own round, "from `coupling.yaml`'s edges minus its declared back-edges" |
+| `plant.md` §2, the scheduling section | **40 nodes** | the contract a plant is built against |
+| `tools/check_vehicle.py`, the `advances` rule | **41 nodes** | a comment about how many nodes carry more than one state |
+| `tools/check_vehicle.py`, `check_readme_figures`'s own docstring | **39 nodes** against 57 | the round that built the README reader, quoting what it found |
+| the derived schedule | **58 nodes** | `derive_schedule`, `--order`, the plant's own walk |
+
+Three files, three numbers, and the one reader that could have caught it — `check_tool_docstrings` —
+reads `tools/faults.py`'s docstring and nothing else. `faults.py`'s figures had at least been *about*
+one quantity in one era; these had drifted apart from **each other**, which is the stronger form of
+the same defect: a reader who believed the docstring was building against a vehicle four schedules
+old, and a reader who believed the contract was building against a different one again.
+
+### Why the README is not in the walk
+
+This is the whole rule, and getting it wrong is what makes such a check useless or unbearable. The
+README is a *round log*: a figure in it is usually a quotation of what a past round found, and this
+file quotes an old tick-order figure twice on purpose — once in the changelog-row test's argument and
+once in the reconciliation's own row. A reader that refused those would be refusing the record, and
+the fix for a refusal would be to delete the history.
+
+`plant.md` and `tools/` are the opposite: `plant.md` is the contract a plant is built against and the
+tools are the things that run, so a figure in either is a claim about the vehicle **now**. That is
+the scope, stated in one line of the check: `plant.md` plus `tools/*.py`, held against the schedule
+the run already derived — never against a second counter, which would be one more declaration to
+drift. A file that states no count is left alone, because a figure nobody states cannot be wrong.
+
+### The mistake this round made, which the check caught on itself
+
+The first version of the check explained the finding in a comment beside it, quoting all three stale
+figures — and the pattern matched its own explanation: the linter refused `tools/check_vehicle.py`
+three times, for three numbers the comment was quoting as history. That is the reader doing exactly
+what it was written to do, and it left two ways out. The figures could be split so no contiguous
+`N nodes` survived, which is unreadable; or the numbers could live where the record already lives.
+They are here. `NODE_COUNT_FIGURES`'s comment says so, and the round log is now the only place in
+the folder that quotes them.
+
+Two gaps are named rather than papered over. A **spelled-out** size — "fifty-eight nodes" — would
+slip past, because the pattern takes digits; the README's own reader has a word table because its
+prose spells numbers out, and none of these four ever did. And the **`N`-node tick order** form is
+checked in `plant.md` and `tools/` by this rule while the README's front table is checked by
+`check_readme_figures`, so the two readers cover the same claim in the two places it is written
+without either pretending to cover the other.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| `report.refuse` call sites in the linter | 773 | **774** |
+| node counts that agree with the derived schedule | 1 of 4 | **4 of 4** |
+| states · nodes · edges | 139 · 58 · 80 | 139 · 58 · 80 |
+| build order · a real tick | 33 · 25 · 13 · 68 · 25 of 139 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 292 | **293** |
+
+**The vehicle did not change; three descriptions of it did.** This round closes no debt and advances
+no state, and that is the honest shape of it: the schedule was always 58, and what was missing was
+anyone reading the three sentences that disagreed about it.
 
 ## The invariants, and which of them are enforced
 

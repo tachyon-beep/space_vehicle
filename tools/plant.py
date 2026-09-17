@@ -19,7 +19,7 @@ Why that is worth writing rather than asserting
 "Ready to implement" is a claim, and a claim about a 34-file configuration is worth exactly as
 much as the evidence behind it. The evidence here is mechanical:
 
-  - **the schedule is derivable** — 39 nodes, from `coupling.yaml`'s edges minus its declared
+  - **the schedule is derivable** — 58 nodes, from `coupling.yaml`'s edges minus its declared
     back-edges, with `check_vehicle.derive_schedule` doing the derivation so the plant and the
     linter cannot disagree about the order;
   - **the states are instantiable** — each with a method, a unit and the parameters its method
