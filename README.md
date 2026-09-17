@@ -177,7 +177,11 @@ pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
-and every one of them named. Every figure in this sentence is derived by the tools and asserted
+and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, which
+is the figure `test_the_readme_status_matches_the_tools` did not pin until this round: the sentence
+above said "every figure in this sentence is derived by the tools and asserted against this file",
+and the one figure the definition of done actually watches — how many states the plant can advance —
+was neither stated here nor asserted anywhere. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
 recurring finding arriving at its own status section. That completes the design's spike many times over (`simulator-design.md:113`
@@ -9382,6 +9386,26 @@ behind it.
 | `owes an edge` | 11 | **12** |
 | `report.refuse` call sites in the linter | 745 | 745 |
 | tests in `tests/test_vehicle_config.py` | 259 | **260** |
+
+## The one figure the objective watches had no reader
+
+The status paragraph says *"every figure in this sentence is derived by the tools and asserted
+against this file"*, and it was not true of the figure that matters most: **how many of the 134
+states the plant can actually advance.** `tools/plant.py --readiness` has printed it since the round
+that built the reference plant, the definition of done names it (*"`--build-order`'s ready-now bucket
+agreeing with what a real tick does"*), and nothing in this file stated it and nothing asserted it —
+so it could move, and it did, twice, without a line changing anywhere.
+
+It is now part of the sentence and part of the pinned set:
+**114 of the 134 states are fully configured and 20 carry a debt.** The test reads both counts out of
+the plant's own output and holds the sentence to them, which is the same treatment every other figure
+in that paragraph gets. That is this folder's oldest finding arriving at the last place it had not
+been looked for: **not a declaration no tool reads, but a tool's output no declaration carries.**
+
+| figure | before | after |
+|---|---|---|
+| `states fully configured` | stated nowhere | **114 of 134** |
+| tests in `tests/test_vehicle_config.py` | 260 | 260 |
 
 ## The invariants, and which of them are enforced
 
