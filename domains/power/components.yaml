@@ -315,10 +315,53 @@ state:
     method: algebraic
     node: internal
     unit: W
-    note: sum of the enabled loads, recomputed every tick rather than tracked
+    # The field the arithmetic produces, named by the state's own id — the third state in the corpus
+    # to use that spelling, and the sum is what the state *is*.
+    bus_a_load_w: 1723
+    note: >-
+      sum of the enabled loads, recomputed every tick rather than tracked. **The 1,723 W is the CSM's
+      whole connected load, both buses, and that is a decision the graph had already made**: every
+      electrical edge terminates on `bus_a`, and the tie runs `bus_b -> bus_tie -> bus_a`, so the two
+      buses are one electrical system and the current the cells supply is the vehicle's total draw.
+      It is not the 598 W of loads that name `csm_bus_a`: a bus-A-only sum would leave the pumps, the
+      heaters and the lighting fed from nowhere, and `power.bus_a_current_a` — the channel this state
+      feeds — would read 21 A where apollo publishes 10-120 A at a 40 A continuous rating
+      (`apollo_diode.md:75`, `electrical_diode.md:251`)
     provenance:
-      basis: chosen
-      reason: "a derived sum recomputed each tick, never tracked: tracking it would make the electrical network stateful and reintroduce the integration the algebraic class exists to avoid"
+      basis: derived
+      computes: bus_a_load_w
+      derivation:
+        # **The relation was a sentence in the note above and every ingredient was declared.** The
+        # fourteen `demand_w` fields are the power domain's own inventory, and their sum is
+        # `load_budget.csm_total_demand_w`, which `check_power_inventory` has held against them since
+        # the round that wrote it. So this is not a new number: it is the *state* the electrical solve
+        # reads, where before the sum existed only as a check on the inventory.
+        expression: >-
+          csm_sband_transceiver + csm_sband_power_amplifier + csm_suit_fan + csm_cabin_fan +
+          csm_co2_scrubber + csm_imu + csm_guidance_computer + csm_instrumentation +
+          csm_coolant_pump_1 + csm_coolant_pump_2 + csm_heaters + csm_rcs_heaters +
+          csm_comm_heaters + csm_lighting
+        inputs:
+          csm_sband_transceiver: domains/power/components.yaml:loads.csm_sband_transceiver.demand_w
+          csm_sband_power_amplifier: domains/power/components.yaml:loads.csm_sband_power_amplifier.demand_w
+          csm_suit_fan: domains/power/components.yaml:loads.csm_suit_fan.demand_w
+          csm_cabin_fan: domains/power/components.yaml:loads.csm_cabin_fan.demand_w
+          csm_co2_scrubber: domains/power/components.yaml:loads.csm_co2_scrubber.demand_w
+          csm_imu: domains/power/components.yaml:loads.csm_imu.demand_w
+          csm_guidance_computer: domains/power/components.yaml:loads.csm_guidance_computer.demand_w
+          csm_instrumentation: domains/power/components.yaml:loads.csm_instrumentation.demand_w
+          csm_coolant_pump_1: domains/power/components.yaml:loads.csm_coolant_pump_1.demand_w
+          csm_coolant_pump_2: domains/power/components.yaml:loads.csm_coolant_pump_2.demand_w
+          csm_heaters: domains/power/components.yaml:loads.csm_heaters.demand_w
+          csm_rcs_heaters: domains/power/components.yaml:loads.csm_rcs_heaters.demand_w
+          csm_comm_heaters: domains/power/components.yaml:loads.csm_comm_heaters.demand_w
+          csm_lighting: domains/power/components.yaml:loads.csm_lighting.demand_w
+      relation: >-
+        the sum of every CSM load's declared `demand_w`, which is the same fourteen fields
+        `load_budget.csm_total_demand_w` states a total for and `check_power_inventory` sums. A load
+        that a fault disables, or that the shed ladder opens, leaves the state on the next tick
+        because the state is recomputed rather than tracked — which is what its own reason says the
+        class exists for
 # --------------------------------------------------------------------------------------
 # Components. `kind` follows coupling.yaml's node kinds; the electrical network's members are
 # sources, storage, distribution and protection.

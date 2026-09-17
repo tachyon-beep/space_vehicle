@@ -71,9 +71,9 @@ Current state: **composes, with 261 declared debts.** A debt is reported and is 
 always there and previously invisible — the eleven `UNCONFIGURED` scalars in the two files nothing
 walked (round 46), a `debt:` key inside a block no tool read, three debts that were being counted
 twice. A number that goes *up* because the instrument got better is not a regression, and the line
-that carries the real movement is beside it: **19 → 29 of the 139 states advance in a real tick**,
-the build order's ready-now bucket went 25 → 38, and the states that owe a *rule* — the only class
-that is code rather than data — went 79 → 64. What falls is progress; what rises has to say why.
+that carries the real movement is beside it: **19 → 31 of the 139 states advance in a real tick**,
+the build order's ready-now bucket went 25 → 40, and the states that owe a *rule* — the only class
+that is code rather than data — went 79 → 62. What falls is progress; what rises has to say why.
 
 The count also moved *down* twice in that window for the right reason: **C-25 and C-26** were put to
 the operator and closed, and C-26 re-derived the RCS chain rather than recording a disagreement — see
@@ -198,7 +198,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **29** of the 139 states against the build order's **38** ready — the second
+a real tick advances **31** of the 139 states against the build order's **40** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1615,7 +1615,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 64 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 62 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1806,10 +1806,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 139 states, by what blocks them:
 
-    38   27 %  ready now — the classes the reference plant can advance
+    40   29 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    64   46 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    62   45 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -15432,6 +15432,78 @@ vehicle, so the seventh integrator now has an implementation and a state that ex
 worklist had to be told, because it was still filing that state under *owes a rule: domain code* for
 a rule that was never missing. `ready` now admits **three** methods plus the arithmetic case, and
 `dynamics` is the one class left — four states.
+
+## Two states whose relation was a sentence, and one of them was a citation
+
+The rule layer's cheapest group is the `algebraic` states whose inputs already exist, and two of them
+had a *relation* that no tool could read:
+
+| state | what it declared | what the relation was |
+|---|---|---|
+| `power.bus_a_load_w` | `basis: chosen`, and a note reading "sum of the enabled loads, recomputed every tick rather than tracked" | the CSM's connected load — **1,723 W**, which `load_budget.csm_total_demand_w` already stated and `check_power_inventory` already summed |
+| `structure.cabin_dp_psi` | `basis: apollo`, `ref: apollo_diode.md:206`, and a note saying it "is a read of the ECLSS compartment, expressed in the units a structural limit is stated in" | one conversion of the compartment's own pressure — and the pressure became arithmetic in round 47 |
+
+Both are arithmetic now, and neither adds a number to the corpus.
+
+### The load, and the scope decision the graph had already made
+
+`power.bus_a_current_a` is `load_w / voltage_v` and `power.lcl_[n]_current_a` is the load's own
+current, so the domain has needed a *state* holding the bus load since the registry was written. The
+sum itself was never missing — the fourteen `demand_w` fields are declared and their total is checked
+— so this round promoted a check to the state the electrical solve will read.
+
+**What had to be decided is which loads, and the answer was in the graph.** Every electrical edge
+terminates on `bus_a`, and the tie runs `bus_b -> bus_tie -> bus_a`, so the two buses are one
+electrical system and the current the cells supply is the whole vehicle's draw. The state is
+therefore the **fourteen** CSM loads, not the seven that name `csm_bus_a`: a bus-A-only sum would
+leave the pumps, the heaters and the lighting fed from nowhere, and `power.bus_a_current_a` would read
+21 A where apollo publishes 10–120 A against a 40 A continuous rating (`apollo_diode.md:75`,
+`electrical_diode.md:251`). The note says so, because the next reader will ask.
+
+### The differential, and a `ref:` where a relation belonged
+
+`cabin_dp_psi` carried a citation and a sentence. The sentence was the relation — *"a read of the
+ECLSS compartment, expressed in the units a structural limit is stated in"* — and nothing joined it
+to the compartment: the state was a constant 5.0 psi in the plant while the cabin it describes could
+leak. It is `csm_cabin_pressure_pa / pascals_per_psi` now, so the structural chain's input moves with
+the cabin, and `structure`'s `reads:` has declared `cabin_atm` all along — the dependency this creates
+is one the graph and the scheduler already carry.
+
+**The CSM's compartment is the one read, and that is a decision rather than an oversight.** The
+channel carries no vehicle qualifier, the LM's differential has no channel, and nothing in the corpus
+gives one. Inventing an LM differential is not this round's business, so the relation says which
+compartment it means and the debt stays named.
+
+### The mistake the round made, and what caught it
+
+Both derivations are fine; the **test fixture** was not. `test_a_computation_says_which_field_it_produces`
+breaks each state's `derivation.expression` by walking the state's block and replacing the first line
+beginning `expression: ` — which is right for every state that writes its expression on one line, and
+wrong for a state whose expression is a `>-` block: `bus_a_load_w`'s is, because a sum of fourteen
+terms does not fit on one, and the walk found `expression:` inside a *different* key. The fixture then
+failed to parse, and the case reported **116 refusals** instead of the one it was testing.
+
+The fix is the same edit without the assumption: parse the state, set the field, dump it back. And the
+two later mutations in that test had been doing exact string replacement on a file the helper had
+already rewritten — so they silently matched nothing, and the case passed against an *unbroken*
+corpus. **A fixture that edits text is a fixture that stops editing when the text moves**, and this
+one had two such edits in the same test.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order | 38 ready · 25 value · 12 edge · 64 rule | **40** · 25 · 12 · **62** |
+| states a tick advances | 29 of 139 | **31** of 139 |
+| `report.refuse` call sites | 779 | 779 |
+| tests in `tests/test_vehicle_config.py` | 298 | **300** |
+
+**Two states, both of them `algebraic` on the sentinel, and both of them a relation the corpus had
+already written as prose.** The rule layer is down to 62 — from 79 at the start of this session — and
+the plant now advances 31 of 139 states against the build order's 40 ready. The gap between those two
+numbers is the four states whose rules are declared and whose *readings* are other states' values,
+which is the class `unmet_reading` counts.
 
 ## The invariants, and which of them are enforced
 

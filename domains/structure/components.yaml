@@ -235,10 +235,31 @@ state:
     node: internal
     method: algebraic
     unit: psi
+    # The field the arithmetic produces, named by the state's own id: the relation is a read and a
+    # conversion, so there is no parameter of the state to name instead.
+    cabin_dp_psi: 5.0
     provenance:
-      basis: apollo
-      ref: "apollo_diode.md:206"
-      note: "the differential across the pressure vessel: cabin pressure against vacuum. It is a read of the ECLSS compartment, expressed in the units a structural limit is stated in."
+      basis: derived
+      computes: cabin_dp_psi
+      derivation:
+        # **One conversion, and the reading is the state the ECLSS domain now computes.** This was a
+        # `ref:` to `apollo_diode.md:206` and a sentence saying the differential "is a read of the
+        # ECLSS compartment, expressed in the units a structural limit is stated in" — which is a
+        # *relation* wearing a citation's clothes, and now it is arithmetic over the compartment's own
+        # pressure. The structure domain already declares `cabin_atm` in its `reads:`, so the
+        # dependency this creates is one the graph and the scheduler already carry.
+        expression: "pressure_pa / pascals_per_psi"
+        inputs:
+          pressure_pa: csm_cabin_pressure_pa
+          pascals_per_psi: 6894.757293168361
+      relation: >-
+        apollo_diode.md:206 publishes the differential across the pressure vessel, and against vacuum
+        it is the compartment's own absolute pressure: one conversion and no arithmetic of its own.
+        The channel is separate from `eclss.cabin_pressure_psia` on purpose — the same number is a
+        life-support quantity to one reader and a load on a vessel to another — and that separation is
+        what this state is for. The **CSM's** compartment is the one read: the channel carries no
+        vehicle qualifier and the LM's own differential has no channel, which is named in the
+        structure domain's debts rather than invented here
   - id: structural_leak_g_s
     node: internal
     method: algebraic
