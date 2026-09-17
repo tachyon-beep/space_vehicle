@@ -15,11 +15,11 @@ attached, so that a plant can be built against them and a run can be interpreted
 | `plant.md` | The core contract: what `step()` is, the seven integrator classes, determinism, the event queue, and what the plant may never do. |
 | `vehicle.yaml` | Globals: the frame registry and the four scalar conventions, environment, configurations and their mass closure, propulsion, consumable loads, thermal zones, antennas. |
 | `mission.yaml` | The profile: eight phases summing to 192.0 h, the ten-posture execution machine, the freshness manifest, the derived lunar occultation, MET epoch, crew, the Δv budget, objectives, the three scenario postures. |
-| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, seven declared cycles and the fifteen failure chains. The linter derives the 57-node tick order from it. |
+| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, seven declared cycles and the fifteen failure chains. The linter derives the 58-node tick order from it. |
 | `presentation.yaml` | The vehicle's side of the frozen window: the epistemic mapping, the six files, the frame envelope, the mirror and its bound, the ring's cadence classes, and which of `diode_probe.py`'s twelve checks the configuration satisfies. |
 | `channels.yaml` | The point dictionary: 148 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound, plus the registry's own `coverage` block. |
 | `domains/<name>/` | One landed subsystem: `components` · `points` · `profiles` · `commands` · `fault_policy`. |
-| `tools/check_vehicle.py` | The linter. `--order` prints the derived 57-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
+| `tools/check_vehicle.py` | The linter. `--order` prints the derived 58-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
 | `tools/generate_help.py` | Emits the vehicle's `HELP.md` from the command registries — §8's only place a verb name may appear, so it is generated rather than written. |
 | `tools/plant.py` | A **reference plant**: loads the world from the configuration, builds the tick order, emits a frame, and runs until it reaches something it cannot compute — where it names what is missing instead of guessing. `--readiness` prints the build order. |
 
@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -175,10 +175,10 @@ because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 138 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
-and every one of them named. **113 of the 138 states are fully configured and 25 carry a debt**, and
-a real tick advances **22** of the 138 states against the build order's **30** ready — the second
+**All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
+and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
+a real tick advances **25** of the 139 states against the build order's **33** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **186** the plant
@@ -224,7 +224,7 @@ things in it are worth reading rather than skimming:
   observable, because such a fault cannot be diagnosed.
 
 `domains/thermal/` pays the debt `thermal_diode.md:965` created when it refused to infer a
-single TCS constant. It declares 23 states, 17 thresholds, 5 verbs, 11 faults — and the
+single TCS constant. It declares 24 states, 17 thresholds, 5 verbs, 11 faults — and the
 parameters are **derived** wherever a published geometry plus a standard material property
 determines them, with the relation stated so the linter can disagree:
 
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 69 of the 138 states need code. (This said *before the
+`internal` sentinel counted among them, so 68 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1784,12 +1784,12 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-138 states, by what blocks them:
+139 states, by what blocks them:
 
-    30   22 %  ready now — the classes the reference plant can advance
+    33   24 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
-    14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    69   50 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    13    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    68   49 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -10342,7 +10342,7 @@ fourth's guard *reads* like applicability, and that is what made it the interest
 **The failure chains were silent in two files at once.** Delete the block and the check returns; the
 linter's summary line prints *"0 failure chains"* instead of 15, for a reader that does not exist; and
 the README's front table still says *"the fifteen failure chains"* — a figure with no reader, in the row
-whose "declared cycles" and "57-node tick order" clauses both already had one. Two statements about one
+whose "declared cycles" and node-count clauses both already had one. Two statements about one
 list, neither checked, is the same silence arriving in the file that describes the file.
 
 This folder has the sentence already, written when `point_units` was the case:
@@ -10941,6 +10941,4168 @@ What is still owed on this loop is the **other half of the balance**: `thermal.c
 `radiator_inlet_c − rejection_w / (m_dot * c_p)`, and `radiator_rejection_w`'s rule — ε σ A T⁴ minus
 the absorbed environmental load — is still domain code, so the return stays a prose row with one
 `owed` sentence rather than two.
+
+## The radiator had no temperature, so the loop's other half could not be computed
+
+Round 43 gave the loop's *rise* arithmetic. The *drop* needed something the model did not have, and
+`--readiness` had been saying so for rounds:
+
+```
+thermal  zone_radiator_t  edge E-ENV-RAD  E-ENV-RAD drives a lag in 'K' from `environment_heat`,
+                                         which is denominated in 'W'.
+```
+
+A lag relaxes toward a driver **in its own quantity**, and `E-ENV-RAD` delivered watts. So the panel's
+surface temperature had no rule at all, `radiator_rejection_w` (whose law is ε σ A T⁴ minus the
+absorbed load) had no T to be a function of, and `thermal.coolant_return_c` — the station the loop
+comes back through — could not be computed. Three declarations, one missing quantity.
+
+### The equilibrium, from the corpus's own law read backwards
+
+`radiator_model` states the law; it can be solved for temperature:
+
+```yaml
+radiator_eq_t:
+  expression: "((environment_heat_w + load_w) / (emissivity * stefan_boltzmann * area_effective_m2)) ** 0.25"
+```
+
+(2,477 + 1,723) ÷ (0.85 × 5.670374419e-8 × 8.1) = 1.0758e10, and its fourth root is **322.06 K**. The
+corpus's own design point checks it in the other direction: 2,588 W rejected at 285 K over the same
+emissivity and the same effective area is 2,575 W — the figure `radiator_model.csm` was sized from —
+so the equilibrium and the rating are one relation read two ways.
+
+Three things then follow, and each is a declaration rather than a patch:
+
+- a **node**, `radiator_eq`, and a driver edge of the right quantity — `E-RAD-EQ`, `K per K` = 1.0,
+  which is the shape the cabins' equilibrium edges already have. That retires the dimensional error
+  and with it a debt: the headline goes **262 → 261**;
+- **`radiator_rejection_w`'s derivation** — the same law at the equilibrium temperature, 4,200.13 −
+  2,477 = **1,723.13 W**. Which is the loop's collected load, and has to be: at equilibrium a
+  radiator passes exactly what it receives, so the state and `loop_primary_load_w` are one relation
+  read in two directions rather than two figures that happen to agree;
+- **`thermal.radiator_rejection_w`'s channel row** computes the law at the *live* surface temperature
+  instead, and **`thermal.coolant_return_c`** computes
+  `supply + (load_w − rejection_w) / (m_dot * c_p)` inline — because the panel's warm-up is a fact
+  about the *instantaneous* rejection, and a channel that read the equilibrium state could not show
+  it.
+
+### The panel's start had to move with it, and that is the round's second finding
+
+`zone_radiator_t` started at **285 K** — `radiator_model.csm.radiating_temperature_k`, the
+temperature the radiator's own 2,588 W rating is written at, with its relation arguing that "a panel
+that began anywhere else would start outside the relation that sized it". That is the *design*
+condition, and it is not an equilibrium for the environment this corpus declares: with 2,477 W
+absorbed and 1,723 W of loop load, the panel's law puts it at **322.06 K**, so it would warm for its
+300 s time constant and the coolant return would sit at ~25 °C for the first minutes — above its own
+`[5, 15]` band and over its own `>20 °C` warning.
+
+`test_no_published_frame_value_sits_outside_its_channel_s_band` is what caught it, and the choice was
+between weakening that invariant and fixing the initial. The initial moved: it is now
+`radiator_eq_t.total_k` — the equilibrium, by `initial_source`, so the two cannot drift — and the
+reason is not that a cold panel in full sun is impossible. It is **F-13's own condition**, one
+attitude change away, and the evaporator/isolation chain exists for it. It is simply not MET 0: the
+vehicle begins in the attitude its environment state describes, and a model whose first five minutes
+trip its own alarm before anything has happened is a model whose initial condition disagrees with its
+own environment. Reaching the cold-panel case needs the environment to be a function of attitude —
+`radiator_model.environment`'s lunar terms are still `UNCONFIGURED`, which is the debt that closes
+this — rather than a change to the state's start.
+
+With that, the loop closes from the first tick:
+
+| | at MET 0 + 1 tick |
+|---|---:|
+| panel surface | 322.06 K |
+| rejection | 1,723.1 W |
+| `thermal.radiator_inlet_c` | 26.06 °C |
+| `thermal.coolant_return_c` | **7.2 °C** |
+
+The return equals the supply, which is the physics rather than a coincidence: a radiator that settles
+at the temperature its load implies passes exactly that load, so a closed loop returns what it was
+given. Both coolant temperatures are readings now, where one was a gap and the other a sentence.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states a first tick advances | 0 | 1 |
+| states the tick reaches | 79 | **134** |
+| the first-tick report | one line, "the first thing it cannot compute" | a header, two counts, **44 named debts**, and the nine domains the alphabet ordered |
+| readers of `internal_order` that *order* anything | 0 — the linter required and validated it, and nothing used it | 1, the plant's `sentinel_states()` |
+| `declared debts` | 289 | **289** — this round closed none and added none; it made nine already-reported ones *decidable* |
+| `internal_order` domains owed | 9 | 9 |
+| build-order buckets | 15 / 33 / 7 / 79 | unchanged |
+| `UNCONFIGURED` scalars | 215 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 201 | **204** |
+
+**The 15 ready states and the 1 that advances are different questions**, and a reader comparing them
+will otherwise think one is wrong. `--build-order` asks whether a state's *own* declaration is
+complete; the tick asks whether the whole graph got there. Fifteen states are ready in the first
+sense and one advances, because a state can be perfectly declared and still read a node whose
+producer could not compute. That is the same distinction as `usable` against `declared`, one layer
+up, and it now has two figures in one report rather than one figure doing both jobs.
+
+## One box, two domains, and the sentence three lines below the field that broke it
+
+`domains/avionics/components.yaml` and `domains/gnc/components.yaml` both declared a component with
+the id `imu`. Nothing compared them, and **`imu` is the vehicle's only component id that two domains
+both declare** — so this is one instance rather than a family, and the instance had three things
+wrong at once, each of which hid the others:
+
+| | `domains/avionics/` | `domains/gnc/` |
+|---|---|---|
+| `class` | `inertial_reference` | `inertial_platform` |
+| figures | `alignment_error_deg: UNCONFIGURED` | `drift_deg_per_h`, `alignment_budget_deg` — both `UNCONFIGURED` |
+| read by | **nothing at all** | two thresholds' `derives_from` |
+| provenance | `apollo`, with a ref | `UNCONFIGURED`, no ref |
+
+**One box had two class names**, and no check reads a component's `class` against a vocabulary — the
+linter only ever compares it to literals (`== "loop"`, `== "engine"`, `in ("radiator",
+"evaporator")`), and 21 of the vehicle's 35 classes are compared to nothing. So neither name could be
+wrong, and the corpus carried two names for one instrument with no reader that noticed.
+
+**The instrument's unknowns were counted three ways.** `alignment_error_deg`, `drift_deg_per_h` and
+`alignment_budget_deg` are three fields in two files for one platform, and the debt walk reports
+every unset value it reaches, so the vehicle reported one IMU's missing figures as three separate
+obligations under two different domains.
+
+**And the avionics copy was read by nothing, while its own file said it should not exist.** No
+threshold, no derivation, no fault named `components.imu.alignment_error_deg`. Three lines below the
+field, that file's `open_debts` carried this sentence:
+
+> The IMU's drift rate and alignment budget. `domains/gnc/` has landed and carries them as its own
+> debt … Both domains are waiting on the same two unpublished instrument constants, **which is why
+> they are recorded once — in the domain that owns the instrument**.
+
+The prose and the field contradicted each other in the same file, three lines apart, and no tool read
+either. That is this folder's oldest finding with a new sharpness: it is not that the declaration had
+drifted from a tool, it is that **the file wrote down the rule and then broke it, and both halves
+were inert.**
+
+### The fix
+
+One object, one statement of what it owes. The avionics entry keeps its place — the instrument layer
+really does contain the platform, and its power channel `avionics.imu_power` is this domain's — and
+loses the figure, because the two constants are gnc's and are declared there:
+
+- `class: inertial_reference` → **`inertial_platform`**, agreeing with the domain that owns the
+  instrument and with the `imu_platform` state on gnc's `imu` node.
+- `alignment_error_deg: UNCONFIGURED` → **deleted**. It is not a constant at all: the alignment
+  *error* is the observable of `imu_platform` and `imu_alignment`, which the plant integrates and
+  which `gnc.imu_alignment_error_deg` publishes. The constant the vehicle owes is the *budget*, and
+  gnc declares it. A state declared as a component field is an unknown counted twice **and** a
+  category error.
+- The note now says what the entry claims and where the two figures live, instead of naming a third
+  one.
+
+**The count went from 289 to 288** — a duplicate subtracted rather than a question answered — **and the unset scalars from 215 to 214.** Both moves are subtractions of a
+duplicate rather than an answer to a question: nothing was learned about the IMU, one of its three
+recorded unknowns was the same unknown written down a second time in a file that said it was
+recorded once. Round 74 removed this inflation from `assert`/`clear` in one file and the
+`derives_from` rule removed it across files for a threshold's limit; this is the same instrument
+applied to a component that two domains both claim.
+
+### The refusal
+
+`check_component_identity` is the fifth of the intersection joins, and it is the one that compares
+`class` — which the other four deliberately exclude. That is not an inconsistency: `check_comms`,
+`check_thermal` and `check_electrical` compare a domain's view against a *vehicle-level* bill of
+materials, which has no class to state, so `class` sits in their structural sets because it can only
+ever be one-sided. Two domains describing one box are each saying what it *is*, and that is the claim
+that had drifted. `COMPONENT_STRUCTURAL` therefore holds identity, the declared link and the prose,
+and **not** `class` or `kind` — the same reasoning `ZONE_STRUCTURAL` uses when it omits `regulated`
+and `volume_m3` because two views of one zone have to agree about them.
+
+A refusal rather than a debt, because both readings have a fix and neither is missing information:
+either the two entries are one object and must agree, or the id is doing two jobs and one of them
+needs a name of its own. What is not available is carrying both.
+
+Breaking copies in `.scratch/r37/` shows the rule is about the id rather than about `imu`, and that
+it is not order-dependent: the second class name is refused from either side, a *figure* both views
+state and disagree about is refused (proving it reaches past the label), two views that agree about a
+shared figure are silent, and a second duplicated id with its own disagreement is refused on that
+disagreement.
+
+**What the rule cannot see is worth stating, because the second half of this fix rests on it.** A
+field only one side carries is invisible to an intersection by construction — the same limitation
+`ZONE_STRUCTURAL` records in its own comment, which is why that comment says a one-sided field "needs
+its own reader". `alignment_error_deg` was exactly that: gnc never declared it, so no comparison
+between the two copies could ever have found it. The deletion is held by the corpus assertions in
+`test_one_component_id_in_two_domains_must_be_one_object`, not by the refusal, and the honest
+statement of the rule's reach is that it catches a drifted *agreement* rather than an unread
+*addition*.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **288** — a duplicate subtracted, not a question answered |
+| `UNCONFIGURED` scalars | 215 | **214** |
+| component ids declared by two domains | 1 (`imu`) | 1 (`imu`) — still, and now agreeing |
+| tests in `tests/test_vehicle_config.py` | 204 | **205** |
+| linters' checks | — | one more: the fifth intersection join |
+| states, nodes, edges, build-order buckets | 134 / 57 / 79, 15-33-7-79 | unchanged |
+
+## The crew's error model summed to one only by counting the error its own note forbids
+
+`display_contract.wrongness` is the vehicle's statement of how a crew report can be *wrong* — the one
+sensor that "can be wrong without being broken", which is `simulator-design.md`:385-386's whole reason
+for treating three people as an instrument. It declares four kinds with a weight each:
+
+| kind | weight | what the model said about it |
+|---|---|---|
+| `misheard` | 0.4 | a number transposed or a decimal shifted |
+| `misattributed` | 0.3 | the right observation attached to the wrong source |
+| `forgot` | 0.2 | an observation made and not mentioned until asked, or not at all |
+| `wrong_module` | 0.1 | "a *perception-bound violation* and must be impossible by construction" |
+
+**No tool read any of it, and the arithmetic did not survive being read.** `0.4 + 0.3 + 0.2 + 0.1` is
+`0.9999999999999999` in binary floating point, and the only reason it is anywhere near one is the
+`0.1` attached to `wrong_module` — the kind the same note says this vehicle cannot produce. **The
+three kinds that can fire summed to 0.9.** So the model was not a distribution over anything: a
+sampler either drew the forbidden mode one time in ten, which is the leak the note exists to forbid,
+or it drew the other three and left a tenth of the mass unallocated. Which of those the corpus meant
+was written nowhere, because nothing had ever read the numbers — the field is the vehicle's
+specification for the GM, so it needs no *consumer*, but a specification nobody validates is a
+paragraph, and this one was also wrong.
+
+**The citation was wrong too, and it is the one claim here that can be settled outright.** The
+`source` read:
+
+> `crew_diode.md`'s four failure modes for the crew instrument — forgot, misheard, misattributed,
+> wrong module — with weights chosen so that a fleet meets the common ones first.
+
+None of those four names appears anywhere in `crew_diode.md`. They are in
+`integration/simulator-design.md`:362-371, in the crew-as-instrument table whose "Failure mode" row
+reads *"forgot, misheard, misattributed, wrong module"* against the instrument's *"noise, bias,
+saturation, dropout"* — and the paragraph under that table is where the crew's `human_channels` come
+from. **The corpus's other four citations of that document all carry line numbers; this one named a
+different document and no line at all.**
+
+### The fix
+
+One declared distribution over the modes this vehicle can produce:
+
+- `misheard` 0.4445, `misattributed` 0.3333, `forgot` 0.2222 — the corpus's own 0.4/0.3/0.2, which is
+  4:3:2, renormalised to the three that can fire and given to four places, with the largest taking
+  the rounding so the three make **exactly** `1.0` rather than `0.9999`.
+- `wrong_module` keeps its place among the kinds, because it is the source's fourth mode and a
+  reader needs to see it named, and loses its weight: it carries `seedable: false`.
+- The note now says which half of the model is chosen (the weights — the source lists the modes and
+  says nothing about frequency) and shows the arithmetic.
+- The `source` names `simulator-design.md`:362-371, and the record of the mis-citation moved into a
+  `note`, so the citation field names one document and the history sits beside it.
+
+### The refusal
+
+`check_perception_model`, with three clauses and one declared tolerance:
+
+- **every kind says whether this vehicle can produce it**, because a reader cannot tell a mode that
+  fires from one the design makes unreachable, and the two need opposite things from a sampler;
+- **the seedable weights sum to one**, within `1e-3` — a tenth of a percent, which accepts a rounded
+  `0.9999` and refuses `0.9`, `0.99` and `1.2`;
+- **a kind declared unseedable carries no weight**, and a kind is named once, and a `seeded` model
+  has at least one seedable kind.
+
+**The tolerance is a stated constant because the first version derived it and got it wrong**, and
+that mistake is worth recording: it counted decimal places with `repr()`, which gives the shortest
+round-trip form — so `0.4` counted as one place and the allowance came out at **0.3**, ten times the
+gap it was written to catch. The broken copy summed to `0.9` and passed. How many places a figure was
+*written* at is not recoverable from the float it parsed into, which is why the constant is declared
+rather than computed.
+
+### What the round found and did not fix
+
+The same block has three more declarations read by nothing, and they are the next rounds' work rather
+than this one's:
+
+| declaration | what it says | read by |
+|---|---|---|
+| `decision_outputs.values` | `[NONE, ADVISORY_ONLY, CREW_ACTION_REQUIRED, REQUEST_SAFE_ACTION]` | nothing — and it is the same four-value vocabulary as the `unit` string of the `cw.decision_output_[alert]` channel in `channels.yaml`, declared a second time under a second name |
+| `cannot_see` (×7 stations) | the channels a station cannot see | nothing — and it is **identical, station by station, to `channels.yaml#crew_positions[].not_perceivable`**, which the panel join does not use either; that join holds what a panel *shows* to `perceivable` and never asks the negative half |
+| `human_channels` (×7 stations) | the observations no instrument has — "a bang, a hiss, a smell" | nothing, and it is `simulator-design.md`:369-371's coverage row written out per station |
+
+The `linter`'s own comment about this block says it is *"two hundred and three lines"*; the part any
+tool reads is the panel half — `shows`, `displayed_precision`, `units`. That the model half was
+unread is the round's finding; that three more declarations in it are unread is the round's evidence
+that the block was written as a *description* and has only ever been checked as a display list.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — the round touched no `UNCONFIGURED` scalar |
+| `UNCONFIGURED` scalars | 214 | unchanged |
+| `wrongness` kinds | 4 weighted, summing to 1 only with the forbidden one | 4 declared, 3 seedable, weights summing to exactly 1 |
+| readers of `wrongness` | 0 | 1 — `check_perception_model` |
+| tests in `tests/test_vehicle_config.py` | 205 | **206** |
+
+## The join that holds an argument to what it names is triggered by the argument's name
+
+`check_argument_vocabularies` binds an enum argument's values to the objects it names. The trigger is
+the argument's own name — an argument called `frame` names a frame, one called `pump` names pumps —
+so the join reaches every argument whose name happens to say what it names, and is silent on every
+other one. **Its own docstring said so**, and named four it left unchecked:
+
+> What the rule does *not* reach is an argument whose name matches no class and which declares
+> nothing: `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker` and
+> `set_bus_tie.tie` name components in their domains and are unchecked, because nothing about the
+> word `bank` says it means a `heater`. Declaring `names: component` on them is what fixes that.
+
+That paragraph was the only thing that knew. It was correct, it was four rounds old, and no reader
+acted on it — which is this folder's oldest finding arriving in the one place it had not yet been
+looked for: **prose in a tool's own docstring, describing a gap in that tool.**
+
+**Measuring it instead of describing it found seven, not four.** Three were in no list anywhere:
+
+| argument | what it offers | why nothing saw it |
+|---|---|---|
+| `ask_crew.position` | all seven crew stations | the name `position` matches no component class |
+| `set_display_mode.position` | **five** of the seven | the same name, and the subset is deliberate — a tunnel and a suit have no panel to set the mode of |
+| `request_imu_alignment.target` | three of `vehicle.yaml#frames`' five | the name is `target` |
+
+The third is the sharpest, because the same vocabulary is already held to the same authority one verb
+away: `load_state_vector.frame` **is** checked, and `request_imu_alignment.target` is not, purely
+because one argument is called `frame` and the other is called `target`. That is precisely the
+mis-citation the `frame` rule was written for — `rcs`'s two verbs offering `inertial_earth` beside
+`EARTH_J2000`, *"a second vocabulary for the same frame is a second vehicle"* — arriving again one
+argument name over.
+
+### The fix
+
+Seven declarations, and nothing invented: four are the docstring's own prescription (`names:
+component`) and three name vocabularies the vehicle already declares.
+
+- `set_heater.bank`, `set_battery_contactor.battery`, `set_breaker.breaker`, `set_bus_tie.tie` →
+  `names: component`.
+- `ask_crew.position`, `set_display_mode.position` → `names: crew_station`, a fourth vocabulary whose
+  authority is `channels.yaml#crew_positions[].id`. It joins `frame` as a vocabulary rather than an
+  object, which is why the closed set is now four and not two.
+- `request_imu_alignment.target` → `names: frame`.
+
+**The test is membership and not equality**, and the distinction is load-bearing here rather than
+theoretical: `set_display_mode` offers five of the seven stations *on purpose*, because a tunnel and
+a suit have no panel, and an equality rule would refuse a correct declaration. So does
+`request_imu_alignment.target`, which offers three of the five frames — you do not align to `BODY`.
+A station the registry does not declare is refused on either argument; a declared station the verb
+chooses not to offer is not.
+
+### The debt, which is the half that finds the next one
+
+Holding the seven is a list; finding the eighth is a rule. So an argument that declares no `names:`,
+whose name matches no class in its domain, and whose values are **all** drawn from a vocabulary the
+vehicle declares is now reported as a **debt** — naming the vocabulary and saying what to declare.
+
+A debt rather than a refusal, because an argument whose values happen to look like a vocabulary is a
+question to answer rather than a fault to repair — and the report is silent on the corpus the moment
+the seven are declared, which is what makes it a rule rather than a paragraph.
+
+**And the debt is also the argument for why the declaration is the fix rather than the inference.**
+An argument's values stop looking like a vocabulary the moment one of them is outside it, so an
+inferred rule goes quiet exactly when the argument becomes wrong. The test holds that too: with
+`names: frame` dropped *and* `EARTH_FIXED` added, the corpus composes and nothing is said, because
+the argument no longer looks like anything. Only the declaration makes the check able to fire.
+
+### What the round found and did not fix
+
+`set_display_mode(position=tunnel)` composes, and a tunnel has no panel. The rule that would refuse it
+needs to know which stations have displays, which is a fact about
+`domains/crew/components.yaml#display_contract` — so it needs a declared link from the verb to the
+display contract, the way `names:` links an argument to a vocabulary. The five-value list is the
+corpus's curation today and nothing holds it there; that is the next round's work rather than a
+refusal invented for it here.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — seven declarations and no value: a vocabulary name is not a scalar |
+| `UNCONFIGURED` scalars | 214 | unchanged |
+| arguments declaring `names:` | 2 | **9** |
+| vocabularies `names:` can resolve | 3 (`component`, `vehicle_entry`, `frame`) | 4, with `crew_station` |
+| the docstring's own count of unchecked arguments | 4 | 0 — and it was 7 |
+| tests in `tests/test_vehicle_config.py` | 206 | **207** |
+
+## The trajectory check computed four elements and compared three
+
+`check_vehicle.py` re-derives the translunar trajectory on every run. It reads six of
+`mission.yaml#initial_state.osculating_elements` and holds four of them to the arithmetic that
+produces them: `eccentricity` against `1 - r_p/a`, `speed_at_cutoff_m_s` against vis-viva,
+`semi_major_axis_km` against Kepler's equation solved by bisection, and `arrival_at_moon_h` against
+the phase ladder. **Four more elements are produced by that same arithmetic and were read by nothing
+at all**: `radius_at_cutoff_km`, `apogee_km`, `transfer_period_h` and `inclination_deg`.
+
+So the note the tool printed on every run said:
+
+```
+re-derived: a = 254,545 km, e = 0.974216, apogee 502,527 km, cutoff 10949.8 m/s, arriving at 73 h
+```
+
+and the file it was reporting on declared `apogee_km: 502526`. `a(1+e)` is **502,526.81172**; every
+other element in that block is a rounding of its own relation, and this one was a **truncation**, one
+kilometre low. **A number a tool computes and prints, without comparing it to the declaration it was
+computed to check, is a declaration that has already drifted** — the folder's oldest finding arriving
+in the one direction it had not been looked for. Not a declaration no tool reads: a declaration a
+tool computes *and then prints*, beside a wrong one, every run, for as long as both existed.
+
+### The fix, and the precision rule that could not express it
+
+Four comparisons, all through `agrees_with_derivation` — the corpus's own rule, so each element is
+held at the precision it is written to rather than to a tolerance invented for this check:
+
+| element | declared | relation | verdict |
+|---|---|---|---|
+| `radius_at_cutoff_km` | 6,563.2 | `6378.137 + (183.7 + 186.5)/2` = 6,563.237 | the correct rounding |
+| `transfer_period_h` | 355.02 | `2π√(a³/μ)` = 355.0221 | the correct rounding |
+| `apogee_km` | **502526** | `a(1+e)` = 502,526.81172 | **a truncation** |
+| `inclination_deg` | 32.521 | the parking orbit's 32.521 | equal — and this one is an equality, not a derivation, because `determination.inclination` says the element *is* the parking orbit's plane |
+
+The apogee becomes `502526.81`, and **why it is written to two places rather than as a whole number
+is the interesting half**. `significant_figures` reads precision off a float's `repr`, and
+`repr(502526.0)` is `'502526.0'` — so a six-figure quantity counts as *seven*. At seven figures the
+relation's own value must round to 502,526.8, which means **neither the truncated 502526 nor the
+correctly rounded 502527 satisfies `a(1+e)`**: the element written without a decimal point was the
+one the corpus's precision rule could not express.
+
+**The obvious fix is wrong, and the corpus disproves it.** Dropping the trailing `.0` makes `502526`
+count as six digits and both values work — and it also makes `structure`'s `below: 2.0000`, which is
+five digits written, count as *one*, because a float cannot tell `2.0` from `2.0000`. There is no
+rule that reads precision off the parsed value and is right at both ends; the honest statement of
+that is now in `significant_figures`' docstring rather than in a tolerance, and the element is
+written in the form the rule can read.
+
+### What the round got wrong on the way
+
+- **The first version reported absence as well as disagreement.** An `UNCONFIGURED` element is
+  already a debt with its own path from the pass that walks every unset scalar, so the new rule's
+  "is unset, and it is Kepler's third law" was a second sentence about the same missing value: the
+  fixture took the count from 288 to **290** for one missing figure. That is the inflation round 74
+  removed from `assert`/`clear` and the `derives_from` rule removed across files, arriving at a third
+  door. The rule now owns disagreement and leaves absence to the walk.
+- **An anchor matched two spaces of a four-space indent.** The apogee's comment block went in at the
+  wrong depth, `mission.yaml` stopped parsing, and the linter reported **0 mission phases** and 76
+  refusals — a configuration error that looked like a vehicle with nothing in it. `old = "  apogee_km:
+  502526"` matched the tail of `"    apogee_km: 502526"`, which is the trap AGENTS.md records for
+  inserting next to a block scalar, arriving through indentation instead.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — no value added or removed |
+| elements the trajectory check compares | 4 of 8 | **8 of 8** |
+| `apogee_km` | 502526 (a truncation) | **502526.81** (the rounding) |
+| tests in `tests/test_vehicle_config.py` | 207 | **208** |
+
+## The §7 check compared exact keys, and a published truth hid behind its own template
+
+`points.yaml#not_published` is where the vehicle says by name which truths it withholds, and the
+rule that gives the section teeth is: **a withheld truth that is also a registered channel is truth
+on the wire.** That is the §7 boundary, and the check for it compared the withheld name to the
+registry's own keys.
+
+The registry declares **templates**. `res.recon_[resource]_kg` is a key; `res.recon_o2_kg` is not —
+it is an *instance* of one, published by `domains/consumables/points.yaml` and carried on the wire.
+So a domain could declare that instance withheld and nothing said a word:
+
+```yaml
+not_published:
+  - channel: res.recon_o2_kg
+    why: ...
+```
+
+composed, and the linter reported 288 debts. **A truth on the wire, declared hidden, and the one
+check whose whole purpose is to refuse exactly that was silent** — because it asked whether the name
+was a registry key instead of whether the registry answered for it.
+
+### Why it compared exact keys, and why that could not stay
+
+It was not an oversight. The index compiles `[id]` to `.+?`, which is unbounded, so
+`thermal.zone_[id]_true_t_c` — the hidden truth this corpus really does withhold, one placeholder
+away from the published `thermal.zone_[id]_t_c` — **resolves against the published template**. That
+is a false positive, and the comment beside the check said so, and said the weakness was "recorded
+rather than depended on". The corpus wrote the same paragraph a second time in `channels.yaml`'s own
+debt list and a third time in `ChannelIndex`'s docstring.
+
+**So the two directions of one asymmetry were both live**: the check that must resolve refused to
+(the leak, silent), and every other check that must be exact used the wildcard (a phantom
+registered). Fixing the leak by resolving everything would have refused the vehicle as it stands,
+because the sibling template is a correct declaration.
+
+### The fix: a template is a family, a name is a name
+
+The two cases are different questions and now get different instruments:
+
+- **a withheld name that is itself a template** (`[...]` in it) is a *declaration of a family*, and
+  a family one placeholder away from a published one is a second family rather than a collision —
+  so it is compared to the registry's own keys, exactly as before;
+- **a withheld name that is concrete** is a name, and a name is on the wire if **any** registered
+  entry answers for it, templates included. The wildcard is not a weakness in this case; it is the
+  resolution `ChannelIndex.row()` exists to perform.
+
+The refusal now names the entry that answered — *"declared withheld and is a registered channel —
+`res.recon_[resource]_kg` answers for it"* — which is what makes the reasoning reviewable rather
+than a bare refusal.
+
+**The rule errs toward refusing, and that is the right direction for this boundary.** A concrete
+name that is not an instance of anything still resolves through the wildcard, so withholding
+`res.recon_unobtainium_kg` is refused as though it were published. The corpus has no such entry, and
+a domain that withholds a name it cannot have is making a claim about the vehicle either way.
+
+### What the round did not close, and why it is a decision rather than a patch
+
+The phantom direction is untouched and the round's verifier asserts that it still composes: a
+threshold watching `thermal.zone_1_true_t_c` — a zone that does not exist — is accepted, because the
+wildcard answers for it. Closing that needs each registry entry to name the values its placeholders
+take, which is what all three copies of the record say.
+
+**What this round adds to that decision is the measurement it rests on.** There are **25 templated
+channels**, and the corpus names almost no concrete instances of any of them: with the channel-valued
+fields harvested (`channel`, `point`, `perturbs`, `from`, `inputs`, `not_published`), the only
+template with instances in use is `res.recon_[resource]_kg`, with four. Everything else is consumed
+*as a template* — a threshold watches `thermal.zone_[id]_t_c`, not a zone. So the instantiations
+cannot be recovered from use; they would be **25 fresh enumerations**, and several are vocabularies
+nothing else declares (what are the alert ids? the event names?). That is why the record calls it a
+decision about the registry's shape, and it is now a decision with a size attached.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — the rule reads the corpus, it does not add to it |
+| directions of this asymmetry still open | 2 | **1** |
+| templated channels whose instances are declared | 0 of 25 | 0 of 25 — measured, not changed |
+| tests in `tests/test_vehicle_config.py` | 208 | **209** |
+
+## The loop that re-derives a value's arithmetic named two field names, and the third was unchecked
+
+`check_vehicle.py` re-derives a state's declared arithmetic on every run: a state that says
+`computation: "1 / 8"` and a value must agree, and `rederive()` refuses when they do not. The loop
+that decided *which* fields to check named them:
+
+```python
+        for field in ("nominal_kg_s", "total_w"):
+            if state.get(field) is None:
+                continue
+            rederive(..., state.get(field), (state.get("provenance") or {}).get("computation"), ...)
+```
+
+and the comment beside it said the point was that *"a derived value states its arithmetic" stays one
+rule*. **A list of two field names is not a rule, it is a list** — and it is the defect this folder
+has removed from four joins, arriving inside the mechanism that exists to remove it.
+
+Two more names had appeared and the list had not:
+
+| field | covered by |
+|---|---|
+| `total_w` | this loop **and** `check_thermal_heat_inputs` — the same rule applied twice |
+| `nominal_kg_s` | this loop |
+| `total_k` | a third hand-written `rederive` call, in the cabin-equilibrium check |
+| **`ratio_of_o2_draw`** | **nothing** |
+
+So `power.fc_h2_draw_kg_s` — `computation: "1 / 8"`, the cell reaction's 8:1 mass ratio — could be
+changed to `computation: "1 + 1"` with `ratio_of_o2_draw` still 0.125, and **the vehicle composed at
+288 debts, with the arithmetic and the value disagreeing in silence.** And because `total_w` was
+checked twice, one wrong computation was refused **twice**: the corpus reported one broken
+computation as two refusals, which is the inflation round 74 removed from `assert`/`clear` arriving
+from the opposite direction.
+
+### The fix
+
+`provenance.computes` names the field the computation produces, so the association between an
+arithmetic and its subject is a declaration rather than a guess in the linter:
+
+```yaml
+    provenance:
+      basis: derived
+      computes: ratio_of_o2_draw
+      computation: "1 / 8"
+```
+
+The three hand-written sites collapse to the one loop, which now walks every state whose provenance
+declares a computation, resolves `computes`, and re-derives *that* field. **Twelve computations
+across four field names, one rule.** The refusal carries the field —
+`state fc_h2_draw_kg_s.ratio_of_o2_draw` — because the rule knows it now, and a state may carry four
+numeric fields.
+
+Two new refusals, both about the mechanism rather than the arithmetic:
+
+- a state declaring a `computation` with **no** `computes` is refused, because an arithmetic that
+  derives nothing is prose wearing an operator — and the message says why a list in the linter is
+  not the answer: *"naming the fields in the linter instead is a list that is right until somebody
+  adds a fourth name, which is what `ratio_of_o2_draw` and `total_k` each found out"*;
+- a `computes` naming a field the state does not carry **as a number** is refused, because the
+  comparison would have nothing to compare.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **288** — a coverage hole closed, not a value answered |
+| computations re-derived | 11 of 12 | **12 of 12** |
+| places the rule was written | 3 | 1 |
+| refusals for one wrong `total_w` | 2 | 1 |
+| tests in `tests/test_vehicle_config.py` | 209 | **210** |
+
+## A debt written in a key nobody reads is not a debt
+
+`domains/consumables/components.yaml#ontology` is seven behaviours the corpus's catalog names — Stock,
+Rate/capacity, Buffer, Inventory, Entitlement, Margin, Opportunity — each with the model it means and
+a sentence saying **where it is modelled on this vehicle**. It is the block a reader reaches for to
+answer "what kind of resource is this", and it was read by no tool.
+
+The consequence was not the seven sentences, which are true. It was the one **key nobody had
+declared**. The Buffer entry — the recorder's data storage, which `apollo_diode.md:898-903` makes
+operational rather than incidental, because behind the Moon telemetry is stored and replayed — carried
+its obligation in a field named `debt`:
+
+```yaml
+  - behaviour: Buffer
+    model: "finite capacity with occupancy, ingress, egress and drops"
+    on_this_vehicle: UNCONFIGURED
+    debt: >-
+      the recorder's data storage is a real Buffer on this vehicle and it is not yet modelled ...
+      It needs a node in coupling.yaml and a producer in the comms domain, neither of which
+      exists yet.
+```
+
+**`debt:` as a key appears exactly once in the whole corpus.** So:
+
+| what a reader gets | before | after |
+|---|---|---|
+| `--debts` for the entry | *"ontology[2].on_this_vehicle: is UNCONFIGURED"* — no reason | the entry **and** the obligation |
+| the count | one obligation where there are two | both |
+| the sentence naming what would close it | a paragraph in a file no tool opens | a debt, fatal under `--strict` |
+
+That is the folder's own law, stated in `check_vehicle.py` twelve hundred lines up about the domain
+`open_debts` lists: *"A debt is a value that is needed and unset wherever it is written, and the whole
+point of the count is that it is fatal under `--strict`; a paragraph in a file that no tool opens is
+not a debt, it is a comment with better manners."* The comment then records that this asymmetry had
+been found **three** times. This is the fourth, in the same file as the third.
+
+### The fix
+
+Two halves, and the second is the one that stops the next invented key:
+
+- the obligation moves into `domains/consumables/components.yaml#open_debts` — the idiom the linter
+  counts, `--debts` prints, and `--strict` fails on. The domain had **no** `open_debts` list at all
+  before this round, which is part of how the sentence ended up somewhere else;
+- `check_ontology` reads the block. It is a **closed key set** — `behaviour`, `model`,
+  `on_this_vehicle`, `provenance` — plus the three statements every entry owes, one behaviour named
+  once, a `check_basis` provenance, and the `Stock` behaviour `apollo_diode.md:836-847` is about.
+
+**Adding `debt` to the key set instead would have been the wrong fix**, and the refusal says why: an
+obligation belongs in `open_debts`, "where the linter counts it, `--debts` prints it and `--strict`
+fails on it; a field in a block nothing reads is a paragraph rather than a debt". A second name for
+an obligation is the failure `channels.yaml` opens by describing — *"the corpus's worst structural
+failure is that eight documents name the same object eight ways"*.
+
+### What is still unread
+
+`domains/propulsion/components.yaml#thrust_curve` is the other block no tool names: three operating
+segments with `coefficients: UNCONFIGURED` twice and a `null` for the band the engine is not designed
+to run in. **Its owed values are counted** — `--debts` reports all three — so it is the lesser
+instance: the *shape* claim ("monotone within each operating segment; zero outside the operating
+band") has no reader, but nothing about it is invisible. Giving it one is the next round's work
+rather than this one's, and it is recorded here with the measurement rather than left to be
+rediscovered.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 288 | **289** — an obligation that was always there, counted |
+| keys named `debt` in the corpus | 1 | **0** |
+| whole blocks named by no tool | 2 | **1** (`thrust_curve`, whose debts are counted) |
+| tests in `tests/test_vehicle_config.py` | 210 | **211** |
+
+## An engine declared able to run in a band it declares it cannot run in
+
+`domains/propulsion/components.yaml#components.dps` carried both halves of the contradiction in
+adjacent fields:
+
+```yaml
+    operating_band_pct: [10.5, 92.5]
+    non_operating_band_pct: [65, 92.5]
+```
+
+The operating band **contains** the non-operating one. A fleet asking whether 75 % is commandable got
+`yes` from the first field and `no` from the second — and **neither field was read by any tool.**
+
+**The entry's own source, three lines below them, is what settles it:**
+
+> the DPS experience report: 9,710 lbf operating maximum and 1,050 lbf minimum, 10:1 range, **with
+> 65-92.5 % a NON-OPERATING region**
+
+The corpus quoted the sentence and contradicted it in the same breath. That is this folder's
+recurring shape — a declaration that disagrees with the evidence sitting inside it — with the
+evidence *in the entry that is wrong*.
+
+And `thrust_curve`, the block that states the truth as three segments, was the last block in the
+corpus that no tool named — recorded as such by the round before this one.
+
+### The fix
+
+`operating_band_pct` becomes the two intervals it is, and the dead band stays where it was:
+
+```yaml
+    operating_band_pct:
+      - [10.5, 65]
+      - [92.5, 100]
+    non_operating_band_pct:
+      - [65, 92.5]
+```
+
+and each `thrust_curve` segment declares `operating:` — so **the curve and the bands are held
+against each other** rather than each against a reader. That is what gives the block a reader, and
+`check_throttle_bands` is three rules:
+
+- a band is a pair of numbers with its low end below its high end, the operating bands are ordered
+  and disjoint, and **no non-operating band may overlap an operating one**;
+- the segments **tile the throttle scale** — contiguous, in order, no gap and no overlap — and each
+  segment's `operating:` flag must agree with which band its own interval falls in;
+- a segment the engine does not run in declares `coefficients: null`, because there is no law to
+  owe; a segment it does run in declares a law or `UNCONFIGURED`, and **`null` there is a hole
+  wearing the same spelling as an answer**.
+
+**The flag is a declaration rather than an inference from the `model` prose**, for the reason
+`names:` and `vehicle_keys` are: one segment's prose says "non-operating" and another's says
+"operating maximum", and a rule that pattern-matched those words would be reading English rather
+than the corpus.
+
+### What the round got wrong on the way
+
+The first version of the check parsed a segment's `band_pct` with the *band-list* parser — the one
+for `operating_band_pct`, which expects a list of intervals — and so refused **all three segments of
+the corpus** for being a pair of numbers. The two shapes differ (`[[10.5, 65], [92.5, 100]]` against
+`[10.5, 65]`) and the check now parses them separately, which is also why a bare pair in the *band*
+field is refused by name: **that shape is what let the contradiction be invisible.**
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **289** — the round corrected a claim and added no unset value |
+| whole blocks named by no tool | 1 | **0** — `thrust_curve` has a reader |
+| operating bands on the DPS | 1 interval, containing the dead band | **2**, and the dead band beside them |
+| curve segments declaring their operating state | 0 of 3 | **3 of 3** |
+| tests in `tests/test_vehicle_config.py` | 211 | **212** |
+
+## A computation restates its inputs, so it cannot disagree with them
+
+`state.environment_heat_w` declared `total_w: 2477.0` with `computation: '1361 * 0.2 * 9.1'` — and
+the three figures it multiplies are declared beside it:
+
+```yaml
+radiator_model:
+  environment:
+    solar_flux_w_m2: 1361
+    absorptivity: 0.2
+    projected_area_m2: 9.1
+    solar_load_w_at_bad_attitude: 2477
+```
+
+a block that exists so the flux, the absorptivity and the area have **one home**. No tool named any
+of the four, and the computation did not read them either: moving `solar_flux_w_m2` from **1361 to
+1400 composed**, because the expression multiplies its own copy. The block was decorative and the
+figure had two homes.
+
+**The corpus already had the stronger form and used it elsewhere** — a `derivation` of an
+`expression` over named `inputs`, each a number or a `"<file>.yaml:<dotted.path>"` source, evaluated
+by `check_declared_derivation`, the same function an edge's `sensitivity` and a consumer's
+`rate_kg_s` are held by. The two forms answer different questions: `computation` says *"here is the
+arithmetic"*, `derivation` says *"here is the arithmetic **and where each number comes from**"*.
+
+### The fix
+
+All **twelve** provenance computations became derivations, and each one now reads its declarations:
+
+| value | what it now reads |
+|---|---|
+| `environment_heat_w` | `radiator_model.environment`'s flux, absorptivity and area |
+| `cabin_heat_csm_w`, `cabin_heat_lm_w`, `service_bay_heat_w`, `descent_bay_heat_w` | the `demand_w` of every load `heat_inputs` assigns, in `domains/power/` |
+| `cabin_eq_csm_k`, `cabin_eq_lm_k` | the loop's `supply_c`, the cabin's heat total, the zone's `conductance_w_per_k` |
+| `cabin_o2_supply_csm_kg_s`, `cabin_o2_supply_lm_kg_s` | the leak rate, the crew size and the metabolic O2 rate |
+| `co2_removal_csm_kg_s`, `co2_removal_lm_kg_s` | the crew size and the metabolic CO2 rate |
+| `fc_h2_draw_kg_s` | `E-H2-FC`'s own sensitivity |
+
+Move any of them and the load refuses, naming the source and the value it resolved to. **They are
+also the reader for three clusters of declarations that had none**: the environment figures, the
+metabolic rates, and the loop conductance.
+
+And `provenance.computation` is now **refused by name** — *"restates its inputs rather than naming
+them … Write a `derivation` of an `expression` over named `inputs`"* — so the weak form cannot come
+back. The other two users of `rederive` are untouched: an edge's `sums_to_h` block and
+`mission.yaml`'s tick arithmetic are blocks whose inputs are numbers on their face.
+
+### The defect the round's own fixtures found
+
+Breaking a copy to test the above produced **102 refusals for one broken file**, and the first was
+`components.yaml: does not parse`. Two things were wrong in the loader, and both are about the one
+kind of message where the location *is* the whole content:
+
+- **`load()` reported `path.name`.** `components.yaml` is declared by all **eleven** domains and so
+  is `profiles.yaml`, so a parse error in `domains/power/components.yaml` sent a reader to one of
+  eleven files with nothing saying which. The four structural refusals — absent, unparseable, a
+  duplicate key, a key absorbed into the block scalar above it — now use `label()`, which spells a
+  domain file the way every other message in the linter does;
+- **the same file was refused five times.** `load` is called once per pass and the pass that owns
+  the real report sees a broken file more than once, so one unparseable file produced five identical
+  lines. `Report.refuse` now drops an exact duplicate: **102 refusals became 98, and the parse error
+  became one line.** That is the inflation round 74 removed from `assert`/`clear` and round 43 from
+  a missing value, arriving through the loader.
+
+**Debts are deliberately not deduped.** The count is the headline, and a debt repeated is a question
+about the walk rather than an error to swallow — the opposite of a refusal, where two identical
+lines carry exactly as much information as one.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **289** — the round changes how values are computed, not what is unset |
+| provenance computations | 12 | **0** — all twelve are derivations |
+| refusals for one unparseable domain file | 102 | **98**, and one line for the parse |
+| files a structural refusal could mean | 11 | **1** |
+| tests in `tests/test_vehicle_config.py` | 212 | **214** |
+
+## A budget, the figures that spend it, and nothing joining the two
+
+`domains/propulsion/components.yaml#capability` declared the SPS's burn budget, and its own note says
+exactly why the figure is there:
+
+> The SPS's 750 s of total burn capability is a budget the mission spends, and Apollo 11 spent
+> 531.9 s of it. **That makes "can we fix this with a burn" a question with a number behind it**
+> rather than a question with an attitude behind it, which is the whole reason the figure is here.
+
+**No tool read it.** And the block's *name* is what made that hard to see: `capability` appears eight
+times in the linter and in both other tools, every one of them the diode's `capability.snapshot` — so
+a sweep over the tools' own vocabulary reported the block as read. The name was the camouflage.
+
+What it had to be spent against was not a field either. The mission's burn **durations** were clauses
+inside `delta_v_budget`'s provenance:
+
+> A11 Tbl 7-II: LOI-1 2,917.4 ft/s **over 357.53 s**, the SPS's largest single burn …
+
+So a budget existed, the figures that spend it existed, and **nothing joined them**. The durations
+are `burn_s` fields now:
+
+| burn | engine | `burn_s` | its source says |
+|---|---|---|---|
+| `loi_1` | sps | 357.53 | "2,917.4 ft/s over 357.53 s" |
+| `loi_2` | sps | 16.88 | "159.3 ft/s over 16.88 s" |
+| `tei` | sps | 151.4 | "3,279.0 ft/s actual against 3,283.2 planned, over 151.4 s" |
+| `doi` | lm_dps | 30 | "76.4 ft/s over 30 s" |
+| `powered_descent` | lm_dps | 756.39 | "6,775 ft/s over 756.39 s" |
+| `ascent` | lm_aps | 434.88 | "6,070.1 ft/s over 434.88 s" |
+
+**The three SPS burns sum to 525.81 s of the 750**, and Apollo 11's own total is 531.9 s — the 6.09 s
+between them being the two midcourse corrections, whose durations no source reached publishes.
+
+### The fix
+
+The block becomes a list of engines with their budgets — `- engine: sps` / `total_burn_s: 750` /
+`restarts_qualified: 50` — so the engine is a **component id** rather than a prefix of a key name,
+and `check_burn_capability` joins it to the mission with three rules:
+
+- the burns on an engine **must fit inside its declared budget**, summed by the engine the burn
+  names — a mission that spends more than it has is a mission whose last burn is the one that runs
+  out;
+- a burn on one of **this vehicle's engines** with no capability entry is a **debt** naming the
+  seconds it flies, because the rating is unpublished rather than wrong: `lm_aps` is the case, and
+  its 434.88 s ascent burn is flown against nothing;
+- a burn on an engine that is **not a component of this domain** is none of the block's business —
+  the TLI burn names `external_sivb`, the S-IVB stage that flew the translunar injection and stayed
+  behind.
+
+**The join reads `vehicle_keys` rather than guessing.** The domain names its engines `sps`, `dps`
+and `aps`; the mission names them `sps`, `lm_dps` and `lm_aps`. The component's own `vehicle_keys`
+is the declared link between the two spellings, which is what that field is for — and it is also
+what tells the S-IVB apart from the vehicle's own engines, because no component claims it.
+
+### What the round got wrong on the way
+
+The first version of the coverage rule **refused both edges of the same distinction**: it refused
+`external_sivb` for having no budget (a stage this vehicle does not have does not need one) and it
+refused `lm_aps` too, where the truth is that the rating is *unpublished* — a missing value, which
+this corpus reports as a debt rather than as a fault. The rule is now "a debt where the engine is
+ours and unrated, silence where it is not ours at all", and the difference is the whole point of the
+block existing.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 289 | **292** — two owed budgets and two unmeasured burns |
+| `UNCONFIGURED` scalars | 214 | **215** — the DPS entry's own `basis` |
+| burn durations declared as fields | 0 | **6** |
+| engines with a declared burn budget | 0 of 3 | **2 of 3**, the third owed |
+| tests in `tests/test_vehicle_config.py` | 214 | **215** |
+
+## A sensor's figures were declared in a key that carried its unit, and the channel they feed was joined to nothing
+
+A reading reaches the crew through three declarations and two joins:
+
+    the transducer  ->  the channel in `channels.yaml`  ->  the panel in the display contract
+
+The second join exists and is enforced: `displayed_precision` is held against the registry's own
+`precision`, so a panel may round the channel and may not invent resolution. The first join did not
+exist. `domains/eclss/components.yaml` declared the vehicle's four instruments like this:
+
+```yaml
+  - id: co2_sensor
+    kind: flow
+    class: sensor
+    range_mmhg: [0, 20]
+    precision_mmhg: 0.1
+```
+
+**The unit is inside the key name** — the shape the fault magnitudes were cured of, in the round
+that found one idea carrying twenty spellings and `bias_walk_kpa_per_h: 0.05` sitting against a
+channel published in psi. And **no tool read either field**: a search for all four spellings across
+`check_vehicle.py`, `plant.py`, `faults.py`, `console.py` and `generate_help.py` returns nothing at
+all. `class: sensor` was read by nothing either — the corpus carries thirty-four class names and no
+vocabulary check among them — so the one word that says *this is an instrument* named four
+components that no channel depended on and no threshold was held against.
+
+The registry states the same two quantities for the same signals, under unit-free names:
+
+```yaml
+  - id: eclss.co2_pp_mmhg
+    unit: mmHg
+    precision: 0.1
+    range: [0, 5]
+    range_kind: band
+```
+
+So the same information had two spellings, in two files, and nothing compared them.
+
+### The two ranges are different quantities, and that is the whole difficulty
+
+The obvious join — the sensor's range equals the channel's — is wrong, and getting it wrong is how a
+round ends up refusing four correct declarations. The channel's `range` is a **band**: the cabin's
+acceptable operating pressure, 4.8-5.2 psia, with the alarms firing *below* it. The instrument's is a
+**scale**: the full span the transducer can read, 0-10 psia. `range_kind` already carried exactly
+that distinction for the registry, where it was added because "an alarm must lie outside its
+channel's range" refused 34 legitimate reserve thresholds. The sensor side reuses the word `scale`
+rather than inventing `full_scale`, and the honest relation is then **containment**: an instrument
+whose full scale does not contain the band the vehicle calls normal saturates inside its own
+operating envelope, and at the end of that band the crew read the rail rather than the cabin.
+
+### The fix
+
+`measures` is the link, and the three figures beside it are stated in the registry's own vocabulary
+so the two halves are comparable rather than merely described:
+
+| component | `measures` | unit | resolution | full scale | the channel's band |
+|---|---|---|---|---|---|
+| `cabin_pressure_sensor_1` | `eclss.cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `cabin_pressure_sensor_2` | `eclss.cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `lm_cabin_pressure_sensor` | `eclss.lm_cabin_pressure_psia` | psia | 0.01 | 0-10 | 4.8-5.2 |
+| `co2_sensor` | `eclss.co2_pp_mmhg` | mmHg | 0.1 | 0-20 | 0-5 |
+
+Two instruments on one channel is the redundant pair, and the rule is silent about the count.
+`check_instrument_channels` then holds five things:
+
+- a unit **welded into a key name** is refused, wherever a second declaration of the same quantity
+  exists to disagree with it — which is the boundary, because 141 keys across the domains'
+  `components.yaml` files carry a unit in the name and most of them are *states*, where the unit is the quantity's identity: `tau_s`,
+  `total_w`, and `cabin_eq_csm_k` against `conductance_w_per_k`;
+- a `class: sensor` component that names **no channel** is refused, because that is the state this
+  round found the corpus in, and one that names a channel which does not exist with it;
+- the instrument's `unit` must be the channel's — an instrument reading in another unit is either
+  wired to the wrong channel or unconverted, and the two comparisons below would then be arithmetic
+  across units;
+- the channel may **round** the instrument and may not **invent resolution**: a figure finer than
+  the transducer resolves is a number the vehicle never measured. Same rule, same words, as the
+  display contract applies one join further along;
+- the channel's range must lie **inside** the instrument's full scale, or the transducer saturates
+  inside its own operating envelope.
+
+A disagreement is a refusal and a figure that is not there is a debt — the same split the display
+contract makes. A measured channel with no `range` at all composes, at 295 debts, and the debt says
+the containment cannot be decided rather than that it failed.
+
+### What the round got wrong on the way
+
+Twice, and both are now cases in the test. The first version of the unit-in-key rule matched the
+**prefix** `range_`, which matched `range_kind` — the vocabulary of `range` rather than a unit
+inside a name — and refused all four sensors for the field that says what their range *means*. The
+rule is a suffix test against the vehicle's own dimensional map now, and it has to fold case,
+because a key name is snake_case while the map spells one of them `mmHg`. A key name is the one
+place where the corpus lowercases a unit, and the first lookup missed `precision_mmhg` for exactly
+that reason.
+
+And the first broken copy restored the old spelling by deleting `range` and `unit` together, which
+let the missing-figure rule fire first and `continue` past the rule under test: **a break that drops
+an identifier reports the hole rather than the defect.** The case moves only the *name* now and keeps
+every figure present.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 292 | **292** — the join adds none, because the corpus was already consistent |
+| sensor figures joined to a channel | 0 of 8 | **8 of 8** |
+| `report.refuse` call sites in the linter | 650 | **661** |
+| tests in `tests/test_vehicle_config.py` | 215 | **216** |
+
+The debt count not moving is the point of the round: four instruments, five rules, and not one
+disagreement to report — the chain from transducer to panel was consistent and *unchecked*, which is
+a different thing from correct.
+
+### Two figures this round measured and did not take
+
+The reconciliation README's row for the linter said it "carries 211 refusal sites across 67 classes
+of fault". Both numbers were prose no tool derived, and the first was 450 adrift; it now states the
+`report.refuse` call site count, which one command reproduces. The same table's row for
+`channels.yaml` still says 147 channels where the linter counts 148 — a drift of one that predates
+this round and whose definition is not stated, so it is named here rather than guessed at.
+
+## A rating declared three times and joined twice, and a debt that existed only in the sentence promising it
+
+Three declarations of one quantity, one chain, and the chain's two end links missing:
+
+    the article            ->  the counter              ->  the published figure
+    eclss.rated_man_hours      coupling.exhausted_at      vehicle.yaml.*_man_hours
+    (read by nothing)          (read)                     (read, via exhausted_at_source)
+
+`domains/eclss/components.yaml` declares three absorbers, each a `kind: stock` that names the
+counter it feeds and states its rating beside it:
+
+```yaml
+  - id: csm_lioh_element
+    kind: stock
+    class: absorber
+    node: absorber_capacity_csm
+    rated_man_hours: 72
+```
+
+The same two figures are published in `vehicle.yaml#consumables.co2_removal`, and `coupling.yaml`'s
+counters declare `exhausted_at` **with** an `exhausted_at_source` naming the published field — so
+`check_initial_sources` already held the counter to the figure it came from, and the threshold and
+the plant both read the counter. What nothing read was the copy on the article:
+
+| field | declarations | read by |
+|---|---|---|
+| `vehicle.yaml#consumables.co2_removal.*_man_hours` | 3 | `exhausted_at_source`, resolved and compared |
+| `coupling.yaml` `exhausted_at` | 2 | the threshold, the plant, and the check above |
+| `domains/eclss/components.yaml` `rated_man_hours` | 3 | **nothing** — the word appeared in no file under `tools/` |
+
+The file's own comment above those components had already said it, in the round that found the shared
+counter: *"The two ratings that would have exposed the shared counter were written right here the
+whole time."* They were written there, and they were read nowhere.
+
+### The comment that counted the copies and missed one
+
+The check that joins the other two copies says, in its own comment, that both ratings "are
+`vehicle.yaml#consumables.co2_removal`'s published ratings **written a second time**". That is this
+folder's oldest lesson arriving in the comment of the check written to catch it: **a hand-written
+list of what to compare is the bug**, and this one was a list of *two* where the corpus had three.
+The join needs no new field, because the component already names its counter and the counter is
+already held to the published figure — so the third copy is joined by the link that was sitting
+there: a component declaring `rated_man_hours` and naming a `node` is held against that node's
+`exhausted_at`, and a disagreement is refused. The reverse direction — a counter with a rating that
+no component is the article of — is a **debt**, for the reason the comms join gives one: a gap in
+the modelling rather than a contradiction between two files. It fires zero times today, and it exists
+so that deleting an article leaves a debt naming the counter rather than a capacity that quietly
+stopped being anybody's.
+
+### The half that came out of a note rather than a field
+
+The `absorber_capacity_lm` node explains why the LM's secondary cartridge and its six spares are not
+added to `exhausted_at`:
+
+> the 78 + 6 x 41 = 324 man-hours that are physically aboard are declared in `vehicle.yaml` and
+> modelled nowhere — **a debt, named in `open_debts`** rather than silently added to `exhausted_at`,
+> because a counter that started at 365 man-hours would be a vehicle whose crew can never run out of
+> LiOH
+
+`coupling.yaml#open_debts` held nine entries and none of them was that one. So the 324 man-hours were
+recorded **nowhere but in the sentence promising the record** — which is worse than an unset field,
+because a reader who meets the promise stops looking. The entry is written now, and it owes a
+decision rather than a number: either a cartridge-swap verb and a counter the 324 man-hours load
+into, or a sentence saying the spares are out of scope for this mission.
+
+### What the round got wrong on the way
+
+Two things, and the first is the same defect as the finding. The last case in the new test replaced
+`node: UNCONFIGURED` with `node: UNCONFIGURED` — a substitution whose old and new strings are equal.
+It satisfied the fixture's own guard (`count(old) == 1`), it composed, and it **tested nothing**: a
+check that cannot fail is not a check that passed, arriving in the fixture written to prove a check
+can fail. It is the plausible mistake now — wiring the spare to the only LM counter there is — which
+the rule refuses.
+
+And moving the count pins is order-dependent, which cost a pass. The script replaced `291 -> 292`
+first, which *created* a second occurrence of `292` in the test file, and the next replacement's
+uniqueness assertion fired on it. The pins are one below live (a fixture that removes an obligation)
+and one above (fixtures that add one), so they do not move independently; two of them became the same
+string partway through. The guard caught it rather than loosening the needle, which is what it is for.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 292 | **293** — the entry the note promised |
+| `domains/eclss` ratings a rule reads | 0 of 3 | **2 of 3**, the third's counter is the debt saying so |
+| `open_debts` entries in `coupling.yaml` | 9 | **10** |
+| `report.refuse` call sites in the linter | 661 | **664** |
+| tests in `tests/test_vehicle_config.py` | 216 | **217** |
+
+The plant's own figures do not move: this round adds no state, no node and no edge, so the readiness
+line and the build order are the ones round 48 left.
+
+## One pump, two domains, and the link between them written in a sentence nothing read
+
+`domains/thermal/components.yaml` declares the coolant pumps with their electrical figures, and
+`pump_1`'s own `reason` says where those figures come from:
+
+> its electrical figures are the power domain's `csm_coolant_pump_1`; the mechanical side is what
+> this domain owns
+
+That is a claim that two objects in two files are **one article**, and no tool read it. The power
+domain publishes the same article as a load:
+
+| | thermal | power |
+|---|---|---|
+| the object | `pump_1` | `csm_coolant_pump_1` |
+| the steady draw | `rated_w: 250` | `demand_w: 250` |
+| the starting transient | `inrush_w: 420` | `inrush_w: 420` |
+
+The same two numbers in two files, under different names at **both** levels — so no rule could have
+joined them even by accident, and the two agreed because somebody wrote them twice. That is the
+state this folder treats as a defect even when the numbers are right, and the corpus says so itself a
+few hundred lines away: the thermal domain's own debt note insists *"the numbers are not duplicated
+here"* while the pumps carry the loads' own watts under another name.
+
+`pump_2` did not state the link at all. Only its twin's sentence mentioned the power domain, and it
+named only `csm_coolant_pump_1` — the redundant pump's 250 W and 420 W were joined to anything by
+nothing at all.
+
+### The fix, and what writing it found
+
+`power_load` is the link, the shape `vehicle_keys` and `domain_group` already have: a field naming the
+other file's object rather than a rule guessing it from the string. `check_pump_loads` then holds
+three things:
+
+- the named load must exist in `domains/power/components.yaml#loads`, because a link that has stopped
+  linking reads exactly like a link that works;
+- `rated_w` must equal the load's `demand_w`, and `inrush_w` its `inrush_w` — one article drawn once,
+  and a pump re-rated on the electrical side while the mechanical side keeps the old number is how
+  the 420 W the flagship chain turns on becomes a figure with two values;
+- a pump that declares electrical figures and names **no** load is a **debt**, naming the watts that
+  are on no bus.
+
+And the third rule is what the round found by writing the first two: **`pump_lm` is that pump.**
+
+### The LM's pump is on no bus
+
+`domains/thermal/components.yaml` declares `pump_lm` at 200 W steady and 340 W at start. The power
+inventory has 25 loads and not one of them is an LM pump — so those watts are on no bus and in no
+per-vehicle total: the LM's declared `lm_total_demand_w` of 1,007 W is the sum of its eleven loads
+and does not contain them.
+
+What is owed there is not a figure. The 200 W is authored and marked `chosen`, like every other load
+in an inventory whose own header says no source publishes loads in watts. What is owed is the
+decision the corpus will not make for itself — which bus, and which shed class, for the LM's single
+pump — and until it is made, a fleet that sheds the LM's bus has no declaration saying the coolant
+pump is on it. It is a debt rather than a value filled in, which is why the count moved.
+
+### What the round got wrong on the way
+
+Three of the prover's cases failed first, and all three were the prover's fault rather than the
+corpus's — but only one of them was interesting. The other two changed a load's `demand_w` and
+expected the *pump* join to be the only thing that noticed; a load's demand is also a term in the
+per-vehicle sum, so the inventory's own total check fired beside it, and the case that asserted
+"exactly one refusal" was really asserting that no other rule was paying attention. The case is
+written against the refusal's own words now, and the load that must move in *silence* moves its
+`inrush_w` instead — the figure no total contains.
+
+The interesting one is the same shape as round 49's: a case that cannot distinguish "the rule fired"
+from "a different rule fired" is not testing the rule. It is the third round in a row where the
+mistake was in the fixture rather than in the corpus.
+
+And one pin was missed, which the suite caught rather than a reader: the debt count is now stated in
+**five** places in the test file alone, and the two fixtures that sit one *above* live are written
+with two different tail expressions (`out[-300:]` and `out[-400:]`), so a sweep keyed on the phrase
+moved three of the four and left the fourth asserting 294 against a corpus that says 295. The count
+is the folder's most-moved figure and its moving is mechanical; the next round would do better to
+derive those fixture expectations from the live count than to restate it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 293 | **294** — the LM pump, which no load carries |
+| pumps carrying a declared link to their load | 0 of 3 | **2 of 3**, the third being the debt |
+| `report.refuse` call sites in the linter | 664 | **667** |
+| tests in `tests/test_vehicle_config.py` | 217 | **218** |
+
+The plant's figures do not move again: this round adds a field to a component, not a state, a node or
+an edge.
+
+## A zone's temperature state was found by matching words, and both cabins matched the same word
+
+`check_zone_nodes` exists to refuse a zone whose temperature state sits on the `internal` sentinel —
+which is not a node, so no edge can terminate on it and the zone's temperature can never be driven.
+It found that state by matching the zone's own words against the state ids, and said so in a comment:
+
+> The ids are not mechanical (`zone_csm_service_t` against a zone called `csm_service_bay`), so the
+> match is by the zone's own words.
+
+The rule was `stem.split("_")[0] in state_id`, and for both crewed cabins the stem is `cabin`. So
+each cabin's verdict was computed from a list holding **both** cabins' states:
+
+| zone | the word | the states it matched |
+|---|---|---|
+| `csm_cabin` | `cabin` | `zone_csm_cabin_t`, `zone_lm_cabin_t` |
+| `lm_cabin` | `cabin` | `zone_csm_cabin_t`, `zone_lm_cabin_t` |
+
+Which means the check could be defeated by the defect it was written for.
+`zone_csm_cabin_t` **could sit on the `internal` sentinel** and the check stayed silent, because
+`zone_lm_cabin_t` was still on a node and the list was non-empty. This is not a hypothetical: the
+isolation is in `.scratch/r51/verify.py`, and the coherent version of that edit — move the state to
+the sentinel *and* drop `cabin_zone_t` from the domain's `writes`, so no other rule is covering for
+it — made the linter **compose** before this round. The pair whose failure modes are most alike is
+the pair whose ids are least distinguishable, and the two crewed cabins are that pair.
+
+### The link was already there, on two zones out of six
+
+`temperature_state` is the declaration the check needed, and the two cabins had carried it all along
+— it is what `check_cabin_equilibrium` resolves before it can compute a rise above the coolant
+supply, and that check's own comment records the same lesson in a smaller form (*"This check used to
+find this one by convention and skip in silence when it could not"*). The other four zones declared
+nothing, so the word-match was the only mechanism they had, and it was also the only mechanism the
+cabins had **for this check**.
+
+All six zones declare it now:
+
+| zone | `temperature_state` | the node it is on |
+|---|---|---|
+| `csm_cabin` | `zone_csm_cabin_t` | `cabin_zone_t` |
+| `csm_avionics_bay` | `zone_csm_avionics_t` | `coldplate_t` |
+| `csm_service_bay` | `zone_csm_service_t` | `service_bay_zone_t` |
+| `lm_cabin` | `zone_lm_cabin_t` | `lm_cabin_zone_t` |
+| `lm_descent_bay` | `zone_lm_descent_t` | `descent_bay_zone_t` |
+| `radiator_loop` | `zone_radiator_t` | `radiator_reject` |
+
+and `check_zone_nodes` reads the field: a zone that names no state is refused, a name that resolves
+to no state is refused, and a name that resolves to a state on the sentinel is refused *for the zone
+that named it*. Four of the six ids are not the zone id plus a suffix — which is why the link is
+declared rather than derived, and why a rule over the strings had to guess.
+
+The reverse direction stays silent on purpose: `comm_amp_t`, `coolant_loop_t` and `loop_transport_t`
+are temperatures this vehicle has and no zone is about, so an unclaimed `*_t` state is not a gap.
+
+### The exemption survived, and now reads the same field
+
+A zone may legitimately have no node, so `zones_not_on_nodes` remains: a zone goes there with its
+reason, and the second direction — a zone on the list whose state has since been put on a real node
+— is still refused as a *stale exemption*. That direction read the same word-match and reads the
+declaration now, so a zone that claims an exemption while naming a state on `radiator_reject` is
+caught by the field rather than by the spelling of its id.
+
+### What the round got wrong on the way
+
+Only a fixture anchor, and the fixture caught it: the state block is `- id:` / `method: lag` /
+`node:`, and the substitution's anchor had been written from the `node:` line alone, so it matched
+nothing and the case failed loudly on `count(old) == 1` rather than passing for the wrong reason
+three lines later. That guard has now caught a stale anchor in three consecutive rounds, which is
+the argument for keeping fixtures as whole blocks and needles as exact strings.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 294 | **294** — the round adds no value and owes none |
+| zones naming their temperature state | 2 of 6 | **6 of 6** |
+| `report.refuse` call sites in the linter | 667 | **669** |
+| tests in `tests/test_vehicle_config.py` | 218 | **219** |
+
+The debt count not moving is the second time in four rounds: this is a check that was reading the
+wrong thing rather than a value that was missing, and the fix is a field the corpus already had on
+two of the six zones that needed it.
+
+## The status board's own figures had no reader, and all ten per-domain clauses had drifted
+
+`test_the_readme_status_matches_the_tools` was written three rounds ago because three rounds of
+structural work had moved the state, node and debt counts while the README kept the old ones. It
+worked. It pinned the *totals* — channels, states, scheduled nodes, debts, the four build-order
+buckets — and every one of them has been right since. **What it could not do was read a figure it
+had not been told about**, and there were twenty of those, in three shapes: three in the front
+table, ten in the per-domain paragraphs, and seven in declarations that are not status figures at
+all — two in `tools/plant.py`, three in `tools/faults.py` and two in `channels.yaml`'s own census of
+its `range_kind` field.
+
+The first shape is the front table, which describes the folder to a reader who has just opened it.
+It called `plant.md`'s integrator classes **six** — a number the file itself corrected to seven
+when the first transport delay landed, because a delay is not a lag — called `coupling.yaml`'s
+cycles **six** against eight, and gave the tick order as **39 nodes** against the linter's 57. The
+third is the worst of the three: `plant.md:71` makes the total order a deliverable and the schedule
+was printed by `--order` on every run, so the figure was one command away from anybody who doubted
+it, and it was wrong by eighteen.
+
+The second shape is the per-domain paragraphs, and here the count is exact: **ten clauses, ten
+wrong.**
+
+| domain | states | thresholds | verbs | faults | what the domain declares |
+|---|---:|---:|---:|---:|---|
+| power | 9 → **13** | 13 → **17** | 5 | 12 | 13 / 17 / 5 / 12 |
+| thermal | 11 → **20** | 18 → **17** | 5 | 11 | 20 / 17 / 5 / 11 |
+| structure | 8 → **10** | 11 → **9** | 6 | 11 | 10 / 9 / 6 / 11 |
+| eclss | 12 → **16** | 13 → **20** | 6 | 11 → **21** | 16 / 20 / 6 / 21 |
+| propulsion | 10 | 11 → **12** | 6 | 11 | 10 / 12 / 6 / 11 |
+| rcs | 13 | 10 → **11** | 9 | 11 | 13 / 11 / 9 / 11 |
+| crew | 5 → **7** | 9 | 4 | 7 | 7 / 9 / 4 / 7 |
+| avionics | 13 | 11 → **13** | 4 | 11 | 13 / 13 / 4 / 11 |
+| comms | 10 | 10 → **9** | 5 | 11 | 10 / 9 / 5 / 11 |
+| gnc | 12 | 7 → **9** | 5 | 11 | 12 / 9 / 5 / 11 |
+| consumables | *none stated* | | | | 10 / 16 / 3 / 11 |
+
+The verbs column is right in all ten, which is the tell rather than a comfort: a verb is a verb
+because a `commands.yaml` has an entry for it, and the count was written when the domain landed and
+never re-read. States grew as states were added — thermal's from eleven to twenty as six zones and
+their equilibria arrived, eclss's from twelve to sixteen when the LM cabin gained its own four gases
+and structure's from eight to ten when `configuration` and `arm_state` landed — and no sentence
+moved. **Nine of the ten paragraphs also stated a landing ordinal** — "is the fourth", "is the
+eleventh and last" — and those were a claim about the order the domains were written in that no file
+records and that contradicts the order the paragraphs themselves appear in (rcs is called the
+eighth and is the seventh paragraph; crew is called the seventh and is the eighth). They are gone.
+An ordinal that nothing derives is not history, it is a figure with no reader wearing a word.
+
+The third shape is in two tools' own docstrings and one registry census. `tools/faults.py` said the
+vehicle has **118** declared faults, of which **58** seed on a hazard and **60** are conditional;
+the domains declare **128**, **66** and **62** — ten domains landed faults after the sentence was
+written and the sentence never moved. `tools/plant.py` said **294** declared debts in two places.
+And `channels.yaml`'s own entry arguing that the `range_kind` assignments are derived gave the
+census as **57 channels, 43 `band`, 14 `scale`** against a registry carrying **58** and **44**.
+
+### What was done about it
+
+Every figure now has a reader in `tools/check_vehicle.py`, which is where a defect has to be refused
+rather than mentioned:
+
+- **`check_readme_figures`** derives the method count from `METHODS`, the cycle count from
+  `coupling.yaml`, the node count from the schedule the linter itself just derived, and each
+  domain's states, points, thresholds, verbs and faults from that domain's five files. It refuses a
+  figure that disagrees, a domain whose paragraph carries **two** different clauses (one domain
+  contradicting itself is the defect the single clause form exists to prevent), and a domain whose
+  paragraph carries **none** — because a claim nobody can read is the next round's finding, and
+  consumables had been stating no counts at all.
+- **The clause form is fixed**: `N states, [N points, ]N thresholds, N verbs, N faults`, in digits,
+  in one order, so that it can be parsed rather than admired. Prose wrapping is *not* a claim, so the
+  reader flattens whitespace before matching: the first version refused every domain in the file
+  because the clauses were hard-wrapped at 100 columns, which is a check failing for a reason that is
+  not the defect.
+- **`check_tool_docstrings`** holds `faults.py`'s three figures against `domains/*/fault_policy.yaml`
+  with the predicate the scheduler uses (`hazard is None` for the conditional half), so the docstring
+  and `--list` cannot disagree. `plant.py` had met this and solved it by removing its figures
+  entirely, on the reasoning that "a figure written into this docstring has no reader"; these stay,
+  because the size of the fault corpus and its split is worth a reader knowing, and a reader is now
+  cheap.
+- **`check_range_kind_census`** sits beside `check_range_kinds`, which reads the assignments
+  themselves, and counts the registry against the sentence that describes it.
+
+### Four declarations that had answered themselves, and one that was never true
+
+The drift was not only arithmetic. Reading the `open_debts` lists for the shape this folder keeps
+finding — *a debt that was answered and left standing* — turned up four declarations that disagreed
+with other declarations about the same thing:
+
+| declaration | what it said | what was true |
+|---|---|---|
+| `mission.yaml` phase `descent` | "names no configuration holding `['csm']`, so a crew member whose default station is there cannot be placed" | `also_present: [csm_alone]` places her, and `plant.py --crew` had been placing her since the field landed |
+| `mission.yaml` phase `surface` | the same | the same |
+| `mission.yaml:open_debts` | "the lunar occultation comms blackout is **modelled** and no longer a debt" | answered, still counted, and its second half restated the per-phase *sequence* debt three entries above it — one obligation declared twice in one list and counted twice |
+| `mission.yaml:open_debts` | "`transition_evidence` … **Resolved against the vehicle rather than left open**" | recorded in full in this file's own round log, still counted |
+| `coupling.yaml:cycle C-RAD-COOL` | "a genuine algebraic loop … solved to consistency within the tick" | its two members chain `water_cooling -> radiator_reject -> coolant_supply_t`: a **path**, not a loop |
+
+**The first two are the sharpest, because two tools disagreed about one field and each was
+internally consistent.** `tools/plant.py --crew` builds a phase's crew-holding set from
+`configurations` **joined with** `also_present`, which is exactly what the field is for: during
+`descent` and `surface` the phase is about the LM and the CSM is waiting in lunar orbit with the CM
+pilot alone aboard it. The linter's crew check read `configurations` alone, so it went on reporting
+two debts naming the CSM as missing — debts the vehicle had already answered, which is worse than
+debts it had not, because the count is the headline and the entry names the wrong thing. The check
+now reads the same two keys, and `test_the_linter_and_the_plant_read_one_crew_placement_declaration`
+holds them together: with the declaration removed the linter must report the phase and the plant must
+report the same person unplaced, and with it present neither may say anything.
+
+`C-RAD-COOL` was the more interesting failure. **The closure check needs a `back-edge` to walk back
+to, so it skips a cycle that declares none — and an algebraic loop declares none by definition**,
+because there is no delay to carry. So the one cycle that could not be closure-checked was the one
+that was not a cycle, and the absence of a back-edge read as a property of the loop rather than as
+the reason the check did not run. That is `review-findings.md`'s *a check that cannot run is not a
+check that passed* arriving at the check that exists to police cycles. There are now two rules: the
+existing one for a back-edge that does not close, and a new one that a cycle entry with no back-edge
+must still have members that close on each other — tested by reconstructing `C-RAD-COOL` verbatim,
+because building the fixture by corrupting a *working* loop removes a back-edge from the schedule as
+well and gets refused for that instead. The first version of that test did exactly that and asserted
+on the wrong refusal.
+
+### Five debts about one edge that had stopped owing, and the key nobody read
+
+`E-GNC-RCS` carries `1.0 mode per mode`, `basis: derived`, from the `guidance` service node — it has
+since the round that promoted `guidance` off the `internal` sentinel — and its own note ends "and
+this edge is now closed without them". Five `open_debts` entries across four files said the
+opposite:
+
+- `vehicle.yaml` and `domains/rcs/components.yaml`: the forty-four thrust directions are owed "so
+  without them **E-GNC-RCS has no sensitivity**".
+- `domains/gnc/components.yaml`: the plume keep-out shares one unknown with "what stops **E-GNC-RCS
+  being a scalar** — its sensitivity is a matrix".
+- `coupling.yaml`, twice: naming it in the inertia-and-centre-of-mass debt, and "**E-GNC-RCS is not a
+  scalar under any form**" in the `regimes` debt — in the same sentence that said the edge had been
+  "closed outright".
+
+The geometry *is* owed. It is owed to `E-RCS-DYN` and to the allocator in `domains/rcs/`, which is
+what the edge's own note says: a matrix is not a missing sensitivity on *this* edge, it is the
+content of a different one. So the two `coupling.yaml` entries and the three domain debts were
+corrected, the `regimes` entry lost a clause that argued both sides of its own sentence, and
+`check_debts_are_still_owed` refuses both shapes: an entry that says its own obligation is met
+(`no longer a debt`, `Resolved against`, `closed outright`), and an entry that names a coupling edge
+as owing a sensitivity the edge carries.
+
+**That second rule did not fire the first time it was run, and the reason is the round's own
+finding.** It read `edge["note"]`, and an edge's long note lives *inside* `sensitivity:` — the split
+is not a convention anybody chose, the short note sits beside `from`/`to`/`kind` and the argument for
+the value went one level down. `E-GNC-RCS`'s "is now closed without them" is at `sensitivity.note`,
+so the rule stayed silent on the one edge it was written for. `edge_prose` now reads both keys and
+deliberately not `relation`, which is full of "the closed loop" and "the contactor is closed" —
+English where `is closed` means a circuit rather than an obligation.
+
+And the blunt rule earned its keep immediately by refusing the paragraph this round had just
+written: the corrected `coupling.yaml` debt explained that `E-GNC-RCS` "was named here too and does
+not belong", and a list of what the vehicle still owes has no business naming an edge whose own prose
+says it is closed. The escape is to not write the id, which is the right burden — the debt did not
+need it to make its point.
+
+### What the round got wrong on the way
+
+- **The path-cycle fixture corrupted a working loop.** Setting `back_edge: null` on `C-WATER-BUDGET`
+  and re-pointing its members at a path also removes the back-edge from the *schedule*, so the
+  undeclared-cycle refusal fired first and the case failed asserting on the wrong message. The fix is
+  to reconstruct the defect rather than adapt one: `C-RAD-COOL` is inserted verbatim, which is also
+  the honest fixture, because the defect is a cycle entry whose members are a path and nothing else.
+- **The reader refused every domain in the file on its first run**, because it matched clauses
+  against hard-wrapped prose. A line break is not a claim.
+- **`check_readme_figures` broke 200 fixtures at once**, because `copy_definition` copies the YAML and
+  `domains/` and the linter now reads three more declarations — the status board, the method table,
+  and one tool's docstring. That is the same defect the helper's own docstring records about the
+  domains, arriving in the helper that records it, and the fix is the same: the fixture copies what
+  the linter reads.
+- **A region cut at the wrong mention.** The first version ended a domain's paragraph at *any*
+  mention of any domain, so `gnc`'s ended four lines in — at `domains/rcs/`, named in passing in
+  "both of which are `domains/rcs/`'s" — and the reader then reported that `gnc` states no figures
+  while the figures sat eleven lines below the cut. The anchor is now the backtick at the start of a
+  line, which is what distinguishes a paragraph heading from a mention.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 294 | **290** — two false `also_present` debts and two answered entries |
+| figures a tool now refuses to see stale | 0 | **18** — 3 front-table, 10 per-domain clauses, 3 in `faults.py`'s docstring, 1 registry census, 1 method-table heading |
+| declared cycles | 8 | **7** — `C-RAD-COOL` named a path |
+| per-domain clauses stating a landing ordinal | 9 | **0** |
+| `report.refuse` call sites in the linter | 669 | **691** |
+| tests in `tests/test_vehicle_config.py` | 219 | **232** |
+
+The debt count falling is the point rather than a side effect: four of the 294 were obligations the
+vehicle had already met, and a count that includes answered questions is a count nobody can plan
+against. The 290 that remain are all still owed, and the next round starts sourcing them.
+
+## The thruster's minimum firing time was published all along, and the same constant was declared three times
+
+The RCS paragraph in this file said, for as long as the domain has existed:
+
+> **The vehicle's one unpublished constant, bounded instead of guessed.** No source reached gives a
+> minimum firing time for the 100 lbf thruster — the only figure in the corpus is a Voyager anecdote
+> its own text flags as hardware-specific.
+
+`domains/rcs/components.yaml#capability.minimum_firing_time` said the same thing in its own
+`provenance`, with `basis: UNCONFIGURED`, and so did the two states that need the number. **It is
+published, in a document `.scratch/apollo/SOURCES.md` lists, on a page the extraction note in that
+same file tells you how to read:**
+
+> In pulse mode operation the total command "on" time may be as low as 10 milliseconds and
+> propellant transients make up the whole run. Engine thrust is just beginning to rise when the
+> shutdown command is given and only a very small amount of propellant will be injected into the
+> combustion chamber. Under these conditions of "minimum impulse" the full 100 pounds of thrust will
+> not be achieved and engine operation will be comparatively inefficient.
+
+`lm_propulsion_rcs_study_guide.pdf`, PDF p. 89, printed p. 77. The same page gives the build-up
+(valves full open at 7 ms, propellant to the chamber at 12 ms, stable combustion at 40 ms) and the
+tailoff (valves closed at 5 ms, flow zero 9 ms later, 100 → 20 lbf in 10 ms and 20 → 0 in the next
+40, "total thrust tail off lasting about 50 milliseconds"), and p. 90's Design and Performance
+Characteristics block gives the life limits: **500 s steady state, 500 s pulse mode, 1,000 s total,
+10,000 restarts**, with Isp **275 s (approx)** against the 290 s this domain declares.
+
+### The second half: one constant, three fields, nothing joining them
+
+Landing the number exposed the shape underneath it. `t_min_on` was declared three times **inside one
+file**:
+
+| field | what it is | read by |
+|---|---|---|
+| `capability.minimum_firing_time.value` | the qualification | the debt walk, as `UNCONFIGURED` |
+| `state.thruster_valve.dwell.min_on_s` | the valve's minimum dwell | the debt walk |
+| `state.pulse_width.t_min_on_s` | the pulse generator's floor | the debt walk |
+
+and the note on `thruster_valve` had said so in prose the whole time: *"the two dwell values are the
+pulse generator's `t_min_on` and `t_min_off` (rcs_dode.md:801-804)"*. A sentence is not a link, and
+all three sat unset together, so nothing could disagree with anything. `t_min_off` was worse: it was
+declared **nowhere at all**, and the same page publishes it as the tailoff.
+
+This folder has now found that shape four times — an absorber's rating on the article and on the
+counter, a pump's watts in two files, a valve count in two vehicle blocks, and this — and each time
+the fix has been an ad-hoc check written for that pair. The round that joined the absorber's three
+ratings wrote its own lesson down: **"a hand-written list of what to compare is the bug"**, because
+the list had two entries and the corpus had three.
+
+### `same_as`: the general form of the link
+
+A mapping that declares a value it knows is a copy of another declaration's value now carries a
+`same_as` map beside it, keyed by the field it constrains:
+
+```yaml
+    dwell:
+      min_on_s: 0.01
+      min_off_s: 0.05
+      same_as:
+        min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
+        min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
+```
+
+`check_same_as` walks every document, resolves every link with the same `resolve_dotted` the
+`derivation` machinery uses — which already steps `id`-keyed sequences, so a link can point into
+`state.` by name — and refuses four things: a link whose source does not resolve, a link naming a
+field its own mapping does not declare, a non-scalar on either side, and a disagreement, reported
+with both numbers. **An `UNCONFIGURED` on either side is deliberately left alone**, because absence
+is the debt walk's business and disagreement is this rule's — the same split `check_burn_capability`
+already makes.
+
+The key is self-declaring on purpose. A fourth copy of any quantity is joined the moment it is
+written, and no list in `check_vehicle.py` has to be updated by somebody who remembers to.
+
+### What the round did *not* do, and says so
+
+`vehicle.yaml#propulsion.rcs_*.minimum_impulse_bit_ns` is **still owed**, and the round narrowed it
+rather than filling it. The guide says a minimum pulse "will not" achieve the full 100 lbf and gives
+no thrust-versus-time curve — Figure 54 is a graph, and a value read off a graph is not a citation —
+so the bit is below 445 N × 10 ms = 4.45 N·s and its value needs a curve nobody has. Deriving it from
+the new `tau_rise_s` would have meant integrating a first-order rise that the same page contradicts:
+the guide has thrust at *zero* until about 12 ms, which is a dead time, and one exponential cannot
+express it. So the model's limitation is recorded in `thruster_thrust`'s own provenance instead of
+being folded into a constant, and the two bits stay `UNCONFIGURED` with a ceiling where they had no
+bound at all.
+
+**And the class this round belongs to is not closed.** Every `basis: UNCONFIGURED` provenance in the
+folder asserts, in prose, that the figure is not published; 23 of the 43 make that claim explicitly,
+and **none of them records what was searched**. That is why this one survived: "unpublished" was a
+sentence nobody could check, next to a manifest that answered it. The mechanical form of the fix is a
+`searched:` field naming the documents looked at, and it needs an honest record per claim rather than
+a rule — so it is the next round's finding, named here rather than half-done.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 290 | **283** — seven literals, all from the one specification block |
+| states that owe a value | 33 | **30** — the valve, the thrust and the pulse width now declare theirs |
+| states that owe a rule | 79 | **82** — the same three, correctly reclassified |
+| states fully configured | 101 / 134 | **104 / 134** |
+| `UNCONFIGURED scalars` the plant counts | 215 | **208** |
+| `report.refuse` call sites in the linter | 691 | **697** |
+| tests in `tests/test_vehicle_config.py` | 232 | **236** |
+
+The refuse-site count in the *previous* round's table read 691 where the committed file held 693:
+that count was taken before the round's last two refusals landed, and the table was written from it.
+Corrected here rather than in place, because a round log is a record of what a round said.
+
+
+The three states moving from *owes a value* to *owes a rule* is the more honest classification
+rather than a regression: a valve, a thrust and a pulse width were never waiting on a figure the
+corpus could not supply. They were waiting on `domains/rcs/`'s code, and the figure they were
+blocked on turned out to have been on page 77 the whole time.
+
+## The electrochemistry no source publishes was one division, and the corpus had all three numbers
+
+`coupling.yaml#edge E-FC-DRAW-O2` carried the strongest "this cannot be known" claim in the folder:
+
+> **UNCONFIGURED and staying that way**, because the one number that would close it is not published:
+> a real cell runs near 0.7-0.9 V rather than at the 1.229 V Gibbs voltage, so the true draw is
+> 1.4-1.8x the floor … What the derivation buys is a bound and a single named owe: the value lies in
+> [6.747e-08, 1.105e-07] kg/J, the floor is exact, and **the only missing scalar is the cell voltage
+> under load** — `vehicle.yaml#electrical` carries a standby sustain flow and no operating point.
+
+Three other files said the same thing: `fc_o2_draw_kg_s`'s provenance, the `fc_o2_draw` node's note,
+and `vehicle.yaml:open_debts`, which ended *"A kg-per-kWh reactant figure is NOT published"*. And
+the missing scalar was in `vehicle.yaml` — **as a band**:
+
+```yaml
+  fuel_cells:
+    power_w_each: 1420
+    bus_v: [27, 31]          # 29 +- 2, which is the rating
+```
+
+`ApolloTrainingElectricalPowerSystemStudyGuide.pdf` PDF p. 14, "DC system":
+
+> The three fuel cell modules are activated prior to launch. **Each is rated at 29 ± 2 VDC** and can
+> normally produce up to **1420 watts**.
+
+Read from the rendered page, because the text layer renders the sign as a plus and the figure as
+`{420` — the same document, page and failure mode as the battery charger in round 2. PDF p. 38 gives
+the other half: *"the primary loop is comprised of the H₂ exhaust side of each of the **31 cells**"*.
+And the reactant rate was already in the manifest: `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf`
+PDF p. 16, CSM EPS assumptions 1 and 2 — *"EPS hydrogen consumption rate = **.00257 × I_FC** (lb/hr)"*,
+*"EPS oxygen consumption rate = **7.936 ×** hydrogen consumption rate"*.
+
+So the per-joule figure was three published numbers and a division:
+
+```
+per_joule_kg = 0.00257 lb/hr per A  ×  0.45359237 / 3600  /  29 V  /  0.126
+             = 8.8619e-08 kg O2 per joule           (0.3190 kg O2 per kWh)
+```
+
+The corpus's own bound, [6.747e-08, 1.105e-07], is the per-cell thermodynamic relation over a
+0.75–1.229 V cell — and the derived value sits inside it. The rated ± 2 V narrows that bound to
+8.36e-08 … 9.59e-08, so the published tolerance is *tighter* than the thermodynamic one the folder
+had been reasoning with.
+
+### Twelve obligations, one declaration, and no new refusal
+
+| what closed | where it lived |
+|---|---|
+| `per_joule_kg` and its `provenance.basis` | `domains/power/components.yaml#state fc_o2_draw_kg_s` |
+| `E-FC-DRAW-O2`, `E-FC-DRAW-H2`, `E-FC-HEAT` | `coupling.yaml`, the three edges' sensitivities |
+| `rate_kg_s` and `provenance.basis` on all three | `domains/consumables/components.yaml#consumers` |
+| "Fuel-cell reactant consumption per kWh: not published" | `vehicle.yaml:open_debts` |
+
+**All twelve were closed by declarations, not by a new check.** The linter gained no refusal this
+round: `check_provenance_derivations`, `check_edge_derivations` and the consumers' own arithmetic
+check already existed and already re-evaluated a `derivation` on every run. What was missing was the
+*declaration*, and the round's finding is that the folder had spent four files' worth of prose
+arguing that a division was unknowable.
+
+The three edges carry the state's figure rather than restating it — `E-FC-DRAW-O2`'s derivation is
+the single input `per_joule_kg` — so the chain is one number in four places and the linter holds
+every link. `E-FC-HEAT` is the enthalpy balance the debt's own sentence described: per mole of
+oxygen the reaction releases 571,660 J and delivers `4·F·V_cell` electrically, so the heat is the
+difference, **0.58336 W per watt of electrical output** — which at the module's 1,420 W rating is
+828 W into the coolant loop, the hottest input the flagship thermal cycle has.
+
+### The 8:1 that was 7.9365
+
+Landing the chain exposed a live contradiction that had been in the corpus since the ratio was
+written. `E-H2-FC` declared:
+
+```yaml
+value: 0.125
+relation: "… a H2:O2 ratio of 0.1260 = 1/7.937 — the 8:1 the cell's own stoichiometry fixes …"
+```
+
+The value was the rounded 8:1 and the relation computed 0.1260 from the molar masses two lines away,
+and `fc_h2_draw_kg_s.ratio_of_o2_draw` derived *from* the 0.125. **Two declarations in two files
+disagreed by 0.8 %, in the number every oxygen budget in the mission is denominated in.** The exact
+stoichiometry of 2 H₂ + O₂ → 2 H₂O is 2 × 0.002016 / 0.032 = **0.126**, i.e. 7.9365 kg of oxygen per
+kilogram of hydrogen — and the Mission E analysis's own 7.936, from an independent mass balance, is
+what settles it. The ratio is now derived from the molar masses, which have one home in the fuel
+cell block, so it cannot drift again.
+
+Two smaller corrections came with it. The hydrogen draw is the *measurement* of the pair and the
+oxygen draw is over the stoichiometry, not the other way round — which is why an 0.8 % error in the
+ratio moved the oxygen figure. And the consumers ledger's water entry, which had said 0.45 kg of
+water per kilogram of *reactants* until a previous round fixed the edge and left the copy, is now
+`E-FC-WATER`'s 1.126 kg per kilogram of oxygen applied to the derived draw.
+
+### What the round did not do
+
+- **The `searched` field is still owed for the other 22 unavailability claims.** This round is the
+  second in a row where a claim that a figure "is not published" turned out to be false, and the
+  mechanical fix is unchanged: a `basis: UNCONFIGURED` provenance that asserts unavailability should
+  name what was searched. It needs an honest record per claim rather than a rule, and it is named
+  here for the third time rather than half-done.
+- **`E-FC-BUS`'s and `E-TIE-BUSA`'s source resistance is untouched.** It is the same *file* and a
+  different quantity, bounded rather than determined, and `--debts` still names it.
+- **The 275 s / 290 s RCS Isp conflict from round 2 is still open.** It belongs in the conflict
+  register and not in a field.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 283 | **271** — twelve, all from one operating point |
+| edges with a sensitivity | 65 / 79 | **68 / 79** |
+| states fully configured | 104 / 134 | **105 / 134** |
+| states that owe a value | 30 | **29** |
+| states that owe an edge | 7 | **6** |
+| states that owe a rule | 82 | **84** |
+| `UNCONFIGURED scalars` the plant counts | 208 | **194** |
+| `report.refuse` call sites in the linter | 699 | **699** — the round adds no check, only declarations |
+| tests in `tests/test_vehicle_config.py` | 236 | **239** |
+
+The three states moving *value → rule* is the same correction round 2 made for the RCS cluster, and
+for the same reason: a state was counted as blocked by a number, and the number was published. The
+refusal count not moving is this round's point — the folder's existing derivations were sufficient
+to hold the chain, and the missing piece was the declaration they had nothing to hold.
+
+## The LM sublimator was never unpublished, and landing its capacity split the budget it landed in
+
+The live "does not compose" list carried this, and had for the folder's whole life:
+
+> **LM sublimator rejection and water consumption.** Genuinely unpublished, and it is half of the
+> thermal water budget.
+
+The entry it describes named four documents as having been searched — `TN D-6724`, `NR` ch. 6,
+`A11`, `SP4029`. None of them has it. **The LM's own ECS subsystem specification has both figures on
+one line of one table**, PDF p. 88, "Item 209 SUBLIMATOR", Spec. no. SVHS 2405:
+
+| Variable Conditions | Startup and Suit Integ. | Low Load | For Proof | Max. Normal Heat Load |
+|---|---:|---:|---:|---:|
+| Coolant inlet temp. (°F) | 86 | 65 | 38 | 100 |
+| Heat load (Btu/hr) | 9,500 | 5,860 | 1,845 | **12,450** |
+| Evaporant flow (lb/min) | 0.15 | 0.09 | 0.02 | **0.19** |
+
+Read from the rendered page, because the text layer interleaves the two header rows and drops the
+decimal points out of the flow column — it prints `0.15` once and loses `0.09`, `0.02` and `0.19`
+entirely. The capacity is the max normal heat load, **3,649 W**; the water is the same row's
+0.19 lb/min, **5.171 kg/h**; and both are declared in `domains/thermal/components.yaml#sublimator_lm`
+*and* `vehicle.yaml#thermal.radiators`, held equal by the `vehicle_keys` join that already existed
+rather than by a new one.
+
+The pair also cross-checks the vehicle's water-rejection constant from outside. 12,450 Btu/hr over
+11.4 lb/hr implies an effective latent heat of **1,092 Btu/lb = 2.540e6 J/kg**, against the 2.45e6
+J/kg `E-RAD-WATER` carries — 3.7 % apart, and the page explains why: the sublimator runs in
+evaporative, sublimation or **mixed** mode depending on the heat flux, and sublimation's latent heat
+(~1,220 Btu/lb) is higher than vaporisation's (~1,050). So the LM's own figure is carried and the
+cycle's constant stays the CSM's.
+
+### The finding underneath: the demands were per vehicle and the capacities were not
+
+`load_budget` had split its demands by vehicle since it was written — `csm_total_demand_w` and
+`lm_total_demand_w` — and summed its **capacities** into one number:
+
+```yaml
+  csm_total_demand_w: 1723
+  lm_total_demand_w: 1007
+  total_rejection_capacity_w: 4933     # 2,588 W of radiator plus 2,345 W of evaporator
+```
+
+and the relation beside that total argues *"against a 1,723 W CSM demand"*. With the LM's sublimator
+unset the total was merely incomplete. The moment its capacity was published it became **two
+vehicles' rejection under a one-vehicle sentence** — 4,933 would have become 8,582 and the block
+would have claimed the CSM had five times the margin it has.
+
+So the totals are per vehicle, and `check_thermal_budget` is a **partition in both directions**
+rather than a sum:
+
+- a part whose vehicle's total does not reach it is refused — the closure it always was;
+- a part that declares no `vehicle` is refused rather than added to whichever total is nearest,
+  because a watt in the wrong vehicle's budget is a margin nobody has;
+- a declared total with no parts is refused, so a total cannot outlive the hardware it counts.
+
+The partition key is the `vehicle:` field, which is not new vocabulary: `check_spacecraft_vocabulary`
+already walks every document for `vehicle:` string keys and holds them against
+`vehicle.yaml#spacecraft`, so adding it to the three thermal articles made them members of a set the
+corpus already validates. An `UNCONFIGURED` part is left to the debt walk — absence is the walk's
+business and disagreement is this rule's, the split `check_burn_capability` makes too.
+
+### Three more claims in the same list that were false
+
+Reading that list for entries this round had answered turned up three more. **The inertia tensor's
+entry said the axis datum "lives in the CSM/LM Operational Data Book, which is not reachable"** — it
+is reachable, it is 966 pages, and `.scratch/apollo/SOURCES.md` §1 maps it page by page; the Mission E
+consumables volume's Table XIV alone gives weight, CG and the full tensor for five configurations.
+That debt is an extraction, not an absence. **The impulse-bit entry said the minimum firing time is
+"not published anywhere reachable"** — it is 10 ms, on PDF p. 89 of the LM Propulsion and RCS study
+guide, and round 2 landed it; what stays owed is the impulse of a minimum pulse, now with a ceiling
+of 4.45 N·s. **And the fuel-cell entry said the per-kWh figure could not be closed exactly** — round 3
+closed it by one division.
+
+All four bullets are corrected in place rather than deleted, because the wrong claim is the reason
+each debt survived and a reader who meets the correction learns what the debt actually wanted.
+
+### What the round did not do
+
+The `searched:` field is still owed, and this round makes it **three rounds running** that a claim
+of "not published" has turned out false. 22 `basis: UNCONFIGURED` provenances still assert
+unavailability and none records what was searched; the sublimator's named four documents that do not
+have the figure while the document that does sat in the manifest unopened. The mechanical fix is
+unchanged and needs an honest record per claim rather than a rule.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 271 | **268** |
+| `UNCONFIGURED scalars` the plant counts | 194 | **191** |
+| `report.refuse` call sites in the linter | 699 | **701** |
+| tests in `tests/test_vehicle_config.py` | 239 | **240** |
+| thermal articles declaring their vehicle | 0 of 3 | **3 of 3** |
+| rejection totals in `load_budget` | 1 | **2**, one per vehicle |
+
+Debts, states advancing and edges usable are otherwise unmoved: the sublimator's two fields are not
+edge sensitivities and not state fields, so this round closed two literals and the prose entry that
+denied them without touching the schedule. The next largest debt is unchanged and is now named in
+the list above as the next thing the manifest sends a round after — the thermal capacities and
+conductances `thermal_diode.md:965` refuses to infer.
+
+## Four rounds of "not published" have been false, and the fix is to make the claim bounded
+
+Rounds 2, 3 and 4 each closed a debt whose note said the figure was not to be had:
+
+| round | the claim | where it was |
+|---|---|---|
+| 2 | the 100 lbf thruster's minimum firing time is unpublished | PDF p. 89 of the LM Propulsion and RCS study guide |
+| 3 | the fuel cell's reactant per joule is unpublished | one division from three published numbers, two documents |
+| 4 | the LM sublimator's rejection and water are "genuinely unpublished" | PDF p. 88 of the LM ECS subsystem specification |
+| 5 | **the DPS's total burn time is unpublished** | printed p. 19 of the study guide round 2 opened |
+
+The fourth case is this round's value finding, and it is on the same document as the first:
+
+| | descent (PDF p. 31, printed p. 19) | ascent (PDF p. 39, printed p. 27) |
+|---|---|---|
+| Thrust | 10,500 lb | 3,500 lb |
+| **Engine life** | **960 seconds** | **460 seconds** |
+| **Restart capability** | **20 times** | **35 times** |
+| Chamber pressure | 110 psi | 120 psi |
+
+The ascent block identifies itself — 3,500 lb and 120 psi against the corpus's declared
+`lm_aps.chamber_pressure_psia: 122.6` — and both land in `capability` where `check_burn_capability`
+immediately holds the mission's own burns against them:
+
+| engine | spends | rated | used |
+|---|---:|---:|---:|
+| SPS | 525.81 s | 750 s | 70 % |
+| LM descent | 786.39 s | 960 s | 82 % |
+| **LM ascent** | **434.88 s** | **460 s** | **94.5 %** |
+
+**The ascent engine has the tightest budget on the vehicle**, and the entry that owed it was the
+block's own header — *"declares no budget for 2 burn(s) on this vehicle's own engines (ascent on aps,
+rendezvous on aps)"* — which had been stale in both directions for several rounds, because the
+mission now has one ascent burn and no rendezvous burn on the APS at all. The DPS entry's note was
+wrong too: it said the descent burn is 756.39 s and the sum the check reports is 786.39 s across two
+burns, so the one figure it carried was 30 s out. Two engine debts, and both notes mis-stated the
+spend they were arguing from.
+
+The same round closed a structural one from a document already on disk: the **cabin pressure relief
+valve** cracks at **6.0 psid** outward with a **0.902 psid** reverse limit (25 inches of water),
+`csm_ecs_study_guide.pdf` PDF p. 16. The entry said "the relief valve's crack pressure is
+unpublished". Its two setpoints are the asymmetry that matters on a cabin running at 5.0 psia against
+vacuum, and it is what makes "the cabin is losing gas" and "the cabin is being pressurised from
+outside" two faults rather than one.
+
+### The rule the four cases justify
+
+**`check_unavailability_claims` refuses a `basis: UNCONFIGURED` provenance that says the figure is
+not to be had and names no document it looked in.**
+
+The shape of the failure is not carelessness. "Not published" is a negative over a library of 8,954
+titles, asserted from a handful of documents — and **nothing ever made the author write down which
+handful**, so the claim could not be checked by the person who made it, let alone by a later round.
+Round 4's entry named four documents it had searched; none of them has the figure, and the document
+that does was in the manifest. Round 5's named none at all.
+
+The rule cannot verify that a search happened, and it does not pretend to. What it does is make the
+claim **bounded**: a reader can see which documents were tried and ask whether that is all of them.
+Five entries fired, and the five took two different escapes:
+
+- **four dropped the negative**, because that is what was actually known — the folder had searched
+  seven documents, not the library. "The Apollo HGA's gimbal range and slew rate are owed" is a
+  finding; "no source reached gives them" was a sentence;
+- **all five now carry a search record** naming the seven documents this folder has acquired and
+  extracted, with what would answer each one named separately. Those seven are real — the round ran
+  the search across every extracted text before writing them — and the record is deliberately worded
+  as a bounded search rather than an exhaustive one.
+
+The unavailability phrase list and the citation pattern are both in `check_vehicle.py` beside the
+check, and the linter's message names the four rounds as the evidence. It is the cheapest structural
+fix this folder has landed and it should have been written in round 2.
+
+### What the rule does not do
+
+**It does not check that the document was opened.** An entry that names a document it never read
+satisfies it, and no mechanical rule can tell the difference — the check that matters is the one
+`.scratch/apollo/SOURCES.md` performs, which is to hold each claim against a document that has
+actually been acquired and searched. That is why the four rewrites dropped the negative rather than
+citing a document: dropping a claim you cannot support is honest, and citing one you did not open is
+the defect this rule exists to make visible.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 268 | **263** — six closed, one appeared |
+| `UNCONFIGURED scalars` the plant counts | 191 | **187** |
+| `report.refuse` call sites in the linter | 701 | **702** |
+| tests in `tests/test_vehicle_config.py` | 240 | **242** |
+| engine budgets in `capability` | 1 | **3** |
+| `UNCONFIGURED` provenances asserting an unbounded negative | 5 | **0** |
+
+The one debt that *appeared* is the check working: `mission.yaml`'s missing burn durations were
+reported for two burns while only the SPS had a rating, and with the ascent engine budgeted the
+rendezvous burn's absent duration is now counted too — `records no burn_s for 3 burn(s)` where it
+said 2. A rating that nothing is measured against is not a check; the third entry is what turns the
+ascent engine's budget into one.
+
+## The lump every thermal time constant divides by was a sentence, and the field for it was read by nothing
+
+Every `lag` zone in `domains/thermal/components.yaml` computes `tau = C/G` with `C = m × c_p`, and
+**the mass was written in prose in all of them**:
+
+| zone | what the relation said | what was declared |
+|---|---|---|
+| `zone_csm_cabin_t` | "C = 400 kg aluminium-equivalent × 900 J/kg-K" | `conductance_w_per_k: 125` only |
+| `zone_lm_cabin_t` | "as the CSM cabin" | the same |
+| `zone_csm_avionics_t` | "C = 60 kg aluminium-equivalent" | nothing |
+| `zone_csm_service_t` | nothing — a `chosen` time constant | `lumped_mass_kg: UNCONFIGURED` |
+| `zone_lm_descent_t` | nothing — a `chosen` time constant | `lumped_mass_kg: UNCONFIGURED` |
+| `zone_radiator_t` | a bracket, 625 s from its own lump and 300 s chosen | nothing |
+
+So the field was declared **exactly where the corpus could not fill it and omitted where it could**,
+and it appeared in no file under `tools/` at all. The instrument is the same question as ever — what
+reads this, and what does it disagree with — and the answer for `lumped_mass_kg` was: the debt walk,
+and nothing else.
+
+### The mass is not a second statement of the time constant
+
+It is the input that turns the constant into a **conductance**, which is what two edges need in K per
+W. The comment above `zone_csm_service_t` had said so since the zone was written:
+
+> `C = m x c_p` and `G = C / tau`, so ONE number closes the edge above: the lumped mass. The
+> propellant is the mass and the tank wall is the path, which is what the state's own reason says;
+> what is owed is that mass, not the conductance, because `tau` is already declared.
+
+Nothing evaluated it. So the round did three things:
+
+- **the three zones whose lump is stated declare it** — `lumped_mass_kg`, `specific_heat_j_per_kg_k`
+  and `conductance_w_per_k` — and their `tau_s` is `derived` from the three, re-evaluated every run
+  by the same `check_declared_derivation` the fuel cell's reactant chain uses. Three time constants
+  stopped being prose;
+- **`E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM` carry the division** `tau / (m × c_p)` with every input
+  named, so each edge now says *which* scalar closes it rather than that a conductance is owed;
+- **`check_thermal_lumps` reads the three fields**, refusing a mass with no heat capacity or path, a
+  path or capacity with no mass at all, and — the one that matters — a `tau_s` that disagrees with
+  `m × c_p / G`.
+
+The radiator is deliberately outside it. Its relation gives a *bracket* — 625 s from its own lump and
+a linearised conductance, chosen at 300 s because the linearisation overstates damping at the cold
+end — so its time constant is a judgement rather than a division, and declaring a lump for it would
+assert a relation the corpus overrode on purpose.
+
+### And the debt count fell by two for a reason that is not a value
+
+`E-BAY-HEAT-CSM` and `E-BAY-HEAT-LM` were counted as debts in their own right *and* their input was
+counted where it lives — two entries for one unknown. `check_declared_derivation` states the rule
+against it in its own comment: **"the obligation is counted where the quantity lives, and this is a use
+of it rather than a second unknown."** The edge walk counted it anyway.
+
+The skip is not a hole, and the round proved both directions rather than asserting them: a derivation
+whose inputs are all numbers **resolves**, and `check_declared_derivation` then refuses it for
+"stating a derivation and carrying nothing to hold it against". So an edge with a derivation is either
+refused outright or its input is owed and already counted; what the skip leaves is exactly the edge
+that owes a value of its own. Two debts left the headline and no obligation did.
+
+### What the round did not do
+
+**The two bay masses are still owed, and the round says who by.** `lmo-510-1070_lm-3_thermal_analysis_6.pdf`
+— the document the manifest named for exactly this — has been downloaded, extracted (314 pages) and
+read, and it does **not** carry them: it is a temperature-prediction memo whose appendices hold
+mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*, and its
+capacitance data is in the document it cites as reference 5, `LM0-510-1036` "Revised Thermal Nodal
+Diagrams for LM-3", dated 17 December 1968, which is not in the library by that name. Each of the two
+provenances now names it, so the debt is one field wide with a named source rather than a conductance
+of unknown origin.
+
+What the same memo *did* yield, for a later round: the LM's blanket effective emittance is **0.01** for
+both stages (PDF p. 37), its launch condition is 65–75 °F cabin with both skins at 70 °F (p. 11), the
+D-mission analysed timeline runs to p. 13, and the solar/IR node inputs are on pp. 14–21 as scanned
+`Btu/sec` tables whose OCR is unusable and which need the render path. None of that is landed here
+because none of it is what the bays owe.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 263 | **261** — two double-counts removed, no obligation lost |
+| `UNCONFIGURED scalars` the plant counts | 187 | **185** |
+| `report.refuse` call sites in the linter | 702 | **706** |
+| tests in `tests/test_vehicle_config.py` | 242 | **244** |
+| zones declaring their thermal lump | 0 of 6 | **3 of 6**, with the other three named |
+| `lumped_mass_kg` readers in `tools/` | 0 | **1** |
+
+States advancing and edges usable are unmoved: the two bay edges still owe their value, and what
+changed is that each now names the single scalar that closes it.
+
+## Two propellant stocks owed an initial because nothing said which tank they were — and asking showed a third of the propellant was in no tank
+
+`domains/consumables/components.yaml#state prop_main_kg` had owed its `initial` since the domain
+landed, and its `initial_note` gave the reason:
+
+> owed with the tank split. `prop_main` is one node feeding three engines whose loads
+> `vehicle.yaml#propulsion` declares separately (SPS 18,508 kg, LM descent 8,248, LM ascent 2,376),
+> so a single initial for the node would be a choice about which tank it *is* rather than a figure
+> anything publishes.
+
+**The choice had already been made, one file over.** The only edge out of the node derives its rate
+from a named engine:
+
+```yaml
+  - id: E-PROP-ENG
+    from: prop_main
+    to: thrust_main
+    sensitivity:
+      derivation:
+        expression: 1 / (isp_s * 9.80665)
+        inputs:
+          isp_s: vehicle.yaml:propulsion.sps.isp_s
+```
+
+so the tank `prop_main` is, is the SPS's. What was missing was a declaration of it rather than a
+figure. `prop_rcs` is the same question with a different answer: three RCS loads against one node,
+and the RCS domain models **all forty-four thrusters as one article** (`thruster_100lbf`,
+`vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]`), so the one node is the right lump rather than a
+convenience — a fleet that has spent the SM's propellant has spent the vehicle's.
+
+### And the question found the other half
+
+Asking *which tanks the graph carries* is what turned it up: `vehicle.yaml#propulsion` declares six
+loaded tanks and the graph had stocks for four of them.
+
+| tank | load | carried by |
+|---|---:|---|
+| `sps` | 18,508 kg | `prop_main` |
+| `rcs_sm` | 608 kg | `prop_rcs` |
+| `rcs_cm` | 112 kg | `prop_rcs` |
+| `rcs_lm` | 288 kg | `prop_rcs` |
+| `lm_dps` | 8,248 kg | **nothing** |
+| `lm_aps` | 2,376 kg | **nothing** |
+
+**10,624 kg — a third of the vehicle's propellant — was in the mass closure and in the Δv budget and
+in no stock at all**, and nothing compared the two lists. So the nodes declare `carries:`, the two
+the graph does not carry are named in `vehicle.yaml#propulsion.not_on_a_coupling_stock` with their
+reason, and `check_propellant_stocks` refuses four things:
+
+- a loaded tank carried by no stock **and** named nowhere — an engine in the mass closure the plant
+  has no propellant for;
+- a `carries` entry that is not a loaded tank of this vehicle, or that two stocks both claim;
+- a `not_on_a_coupling_stock` entry that names no engine, gives no reason, or is carried anyway;
+- **a carrier's `initial` that is not the sum of its `carries` list**, which is the reader the two
+  derived initials have.
+
+The last one is why the round is not merely bookkeeping: `prop_main_kg.initial` is `derived` from
+`vehicle.yaml:propulsion.sps.mass_kg` and `prop_rcs_kg.initial` from the three RCS loads summed, and
+a stock whose level drifts from the list it declares is now refused by name.
+
+### Why the LM's two tanks are declared off the graph rather than given stocks
+
+Not because they are unmodelled — `check_propulsion` flies the mission sequentially through every
+tank in phase order, and `mission.yaml#delta_v_budget` is where that lives. A coupling stock for them
+would need a drain edge into `thrust_main` per engine, and `E-PROP-ENG` states one engine's flow:
+one edge cannot be three engines' drain. So the choice is a stock per engine with three edges into
+`thrust_main`, or the accounting — and the accounting is where the mission's Δv already is. The
+declaration makes that a decision on the record instead of an omission nobody could see.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | **259** |
+| states fully configured | 105 / 134 | **107 / 134** |
+| **`ready now` in the build order** | **15** | **16** |
+| states that owe a value | 29 | **27** |
+| states that owe an edge | 6 | **7** |
+| `UNCONFIGURED scalars` the plant counts | 185 | **183** |
+| `report.refuse` call sites in the linter | 706 | **715** |
+| tests in `tests/test_vehicle_config.py` | 244 | **246** |
+
+That is the first movement in the `ready now` bucket for several rounds, and it is the figure the
+definition of done watches: **16 of 134 states are now advanceable by the reference plant against the
+1 it actually advances**, and the gap between those two numbers is the build order's own instruction
+about what to write next.
+
+## Six gas initials owed *the fractions*, and summing the four found the ppO2 band was the total
+
+Each crewed compartment has four conserved gas masses — oxygen, water vapour, carbon dioxide and
+nitrogen — and the atmosphere model states the law that joins them (`P = (sum_i n_i) R T / V`). Six
+of those eight initials were `UNCONFIGURED`, all six on the same note: *nitrogen, carbon dioxide and
+water vapour are each a fraction of that total, and no source in the corpus gives the fractions.*
+The oxygen carried the whole of the 5 psia, which it could only do if the other three were nothing.
+
+The note was true and the conclusion did not follow. A fraction does not need a source when a
+*relation* fixes it, and three relations were already in the corpus:
+
+| gas | share | where it comes from |
+|---|---:|---|
+| water vapour | 9.209 mmHg | water's saturation pressure at 10 C — the 50 F dew point `csm_ecs_study_guide.pdf` PDF p. 16 runs the cooling process to |
+| carbon dioxide | 3.0 mmHg | this domain's own `co2_exposure_1h`, from `eclss_diode.md:735` |
+| nitrogen | 0.0 mmHg | `lm_ecs_study_guide.pdf`: the LM stores *in gaseous form, all oxygen* and pressurises *by supplying oxygen*; the CSM's diluent leaves with the pad charge |
+
+**12.209 mmHg that is not oxygen — and that is what the ppO2 band was missing.** The registry's
+`eclss.pp_o2_mmhg` carried `range: [248, 269]`, reasoned as 4.8-5.2 psia of essentially pure oxygen
+at 51.71 mmHg per psi. That is the **total** pressure band. With the three shares held, 4.8 psia is
+**236.02** mmHg of oxygen and 5.2 psia is **256.71**, and the mixture sits at **246.37** mmHg against
+a 5.0 psia total of 258.57. The wrong band stood in **eight places**: four numeric declarations —
+both channels' `range` and the LM compartment's two ppO2 thresholds — plus two `points.yaml` entries,
+the CSM threshold's `point_units` and this domain's own header comment. Eight copies agreeing with
+each other and none with the mixture is exactly what a derived value does when it is copied instead
+of recomputed, and nothing could see it because nothing added the four masses up.
+
+### The four are one mixture, and the closure is now evaluated
+
+So the six initials landed — two derived from the declared partial pressures, one `chosen` with the
+threshold it comes from, the two nitrogens derived as zero — and the two oxygens became the
+**remainder** (2.528302 and 2.87112285 kg) rather than a declared mass. `check_cabin_pressure_closure`
+computes both halves:
+
+- the four initials, through the law, must reach the pressure the zone is held at. The tolerance is
+  an absolute tenth of a pascal, deliberately not `agrees_with_derivation`: `5 x 6894.757293168361`
+  is a product of exact constants and carries fifteen figures, while the initials that feed the sum
+  carry six, so comparing at the declared value's significant figures would refuse a closure that
+  agrees to a tenth of a pascal and say *the mixture does not reach the pressure* about a mixture
+  that reaches it.
+- and the resulting ppO2 must lie **strictly between the compartment's own two ppO2 thresholds**, or
+  the composition and the alarms are describing two different cabins. A compartment with no such pair
+  is refused rather than skipped: a mixture nothing calls habitable or not is not a mixture anyone
+  has decided about.
+
+### Why the subtraction is by partial pressure rather than by mass
+
+The first version of the oxygen remainder was written as *total mass less water less carbon dioxide*,
+which over-subtracts: carbon dioxide is 44 g/mol against oxygen's 32, so removing a kilogram of CO2
+from the oxygen budget takes 1.375 kg of oxygen with it. The error is a quarter of the carbon dioxide
+mass — 10 grams on this cabin, invisible against a two-and-a-half kilogram stock, and wrong. The
+subtraction is of **partial pressures** before any conversion to moles, which is what the landed
+expression does, and the mistake is recorded in the initial's own provenance rather than only here.
+
+### What closing a value revealed
+
+Landing the six values moved four states from *owes a value* to *owes an edge*: a stock with an
+initial and no rate still cannot be advanced, and the value debt had been hiding the edge debt
+behind it. They were already counted — the graph's edge walk has always reported those sensitivities
+— but the build order reads them in a different order, which is why the *owes an edge* bucket grew
+while the debt count fell.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 259 | **253** |
+| literal `UNCONFIGURED` scalars | 109 | **103** |
+| states fully configured | 107 / 134 | **113 / 134** |
+| **`ready now` in the build order** | **16** | **18** |
+| states that owe a value | 27 | **21** |
+| states that owe an edge | 7 | **11** |
+| `UNCONFIGURED scalars` the plant counts | 183 | **177** |
+| `report.refuse` call sites in the linter | 715 | **720** |
+| tests in `tests/test_vehicle_config.py` | 246 | **249** |
+
+The six that closed are the six that were owed; the four that moved into *owes an edge* were already
+debts. What the round is for is the fifth figure: **113 of 134 states are fully configured**, and the
+band the vehicle watches its oxygen with is now the band its own mixture gives.
+
+## The inertia tensor was "not reachable", and the book that has it was in the library
+
+The debt has been in `vehicle.yaml#open_debts` since the folder had one, and it is the one every
+other attitude debt points at:
+
+> Inertia tensor and centre of mass per configuration. The Apollo 11 mission report tabulates c.g.
+> and inertia per mission phase, but the axis datum lives in the CSM/LM Operational Data Book
+> (SNA-8-D-027), **which is not reachable**, so the tabulated values cannot be converted to
+> physical offsets.
+
+**It is reachable.** `ODB-Vol3-MassProperties.pdf` has been in the library — and in this folder's own
+`.scratch/apollo/` — since the round that read Table XIV out of it for the propellant loads. It has
+967 pages, and it carries both halves of what the debt said was missing:
+
+| half | where |
+|---|---|
+| the frame | section 2.0, "Configuration and Reference Station Locations", Figures 2-16 and 2-17 (PDF pp. 41-42): `X_A = 4578.805 - X_LV`, `X_A = X_E + 399.5`, the LM docking interface at `X_A = 712.0` and the CM's at `X_A = 1110.25` |
+| the values | section 3.2, "Mission J-2 Mass Property Data Tables": Table 3.2-21, the docked CSM-113/LM-11 for the D.O.I. burn, PDF p. 351 (printed p. 3.2-115), as a function of spacecraft weight |
+
+### A table, not a number
+
+The tables are keyed by **spacecraft weight** rather than by configuration, because one row is one
+whole vehicle at one weight. So `vehicle.yaml#mass_properties` carries the **two rows that bracket
+this vehicle's docked configuration** — 97,787.4 lb and 96,787.4 lb — and derives the centre of mass
+and the six inertia components from them by interpolation, each as a named-input `derivation` the
+linter evaluates. The variation is the data; the interpolated number is the consequence.
+
+| | at 97,787.4 lb | at 96,787.4 lb | this vehicle at 97,190.8 lb |
+|---|---:|---:|---:|
+| centre of mass, X_A (in) | 1045.71 | 1046.93 | **1046.438** = 26.5795 m |
+| IXX (slug-ft²) | 59,378 | 58,853 | **59,064.8** = 80,081 kg m² |
+| IYY | 562,820 | 559,336 | **560,741** = 760,263 kg m² |
+| IZZ | 567,758 | 564,711 | **565,940** = 767,312 kg m² |
+| PXY / PXZ / PYZ | -11,020 / -4,822 / 1,295 | -11,009 / -4,617 / 1,150 | **-14,932 / -6,372 / 1,638 kg m²** |
+
+The tensor passes the sanity it should: the transverse moments are about ten times the roll moment,
+which is what a long slender stack looks like, and its centre of mass moves from `X_A = 1041.07` in at
+the heaviest row to `X_A = 1110.52` in at the lightest — between the two docking interfaces, moving
+toward the CM as the service module's propellant is burned.
+
+### How a rotated scan is checked
+
+The table is a fold-out, rotated ninety degrees, with a text layer that prints `Z | ee | N | Q`. It
+was read from the rendered page at 300 dpi, and **what makes that reading checkable is the table's
+own arithmetic**: every row carries an `AVERAGE` column, and it is `(IYY + IZZ) / 2 / 10`. No
+plausible misreading of a scan preserves that identity in a row whose two moments were transcribed
+wrong, so `check_mass_properties` refuses a row where it does not hold — which is the only reason a
+hand-read table can be carried in a corpus whose whole discipline is that a number with no reader
+does not have to be plausible.
+
+It refuses three more things: an interpolation whose rows do not bracket the configuration's weight
+(the book says nothing outside its own span), a tensor that violates the triangle inequality (no mass
+distribution does), and a configuration with neither values nor a named table.
+
+### What is still owed, and why it is now four walkable debts
+
+The single prose debt became four `UNCONFIGURED` scalars, each naming the table that answers it:
+`csm_alone` to Table 3.2-22, `lm_alone_descent` to 3.2-25, `lm_ascent_stage` to 3.2-26, and
+`csm_lm_ascent_docked` to the arithmetic over 3.2-22 and 3.2-26 — because **no table is the CSM
+docked to an ascent stage**, and saying so is more useful than a paragraph that says all four are
+missing. And the tensor alone does not close `E-RCS-DYN`: its sensitivity is an angular acceleration
+per newton, which needs the thrusters' lever arms, and those are the separate debt they always were.
+
+### The edit that the corpus caught
+
+Landing the block moved `configurations` and `mass_properties` apart with an anchor that had no blank
+line after it, and the four configurations' `mass_breakdown` blocks were deleted with it. Nothing
+about the tensor noticed. **`max_explainable_acceleration_g` did**: it is computed from the engine set
+crossed with the configuration set, and with only one configuration still carrying a breakdown the
+ceiling fell from the LM ascent engine's 0.32479 g to the SPS on the docked stack at 0.21092 g — so
+`uncommanded_acceleration`'s assertion stopped agreeing with its own derivation and the linter
+refused. That statistic is computed rather than quoted for exactly this reason, and this is the first
+time it has caught something the author did not.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | **256** |
+| literal `UNCONFIGURED` scalars | 103 | **107** |
+| prose obligations | 150 | **149** |
+| `UNCONFIGURED scalars` the plant counts | 177 | **181** |
+| `report.refuse` call sites in the linter | 720 | **738** |
+| tests in `tests/test_vehicle_config.py` | 249 | **251** |
+
+The headline went **up by three** and that is the round's accounting, stated rather than smoothed: one
+prose debt was retired (it was false) and four precise ones replaced it. Four configurations' mass
+properties are worth more as four fields with a table and a page each than as one sentence saying
+nobody can have them.
+
+## Three more tables, and a page number that had been read off a rotated footer
+
+Round 9 landed the docked stack and left four configurations owed, each with a table named.
+Three of them come out of the same volume here, at the pages its own index promises:
+
+| configuration | table | frame | weight | centre of mass | IXX / IYY / IZZ (kg m²) |
+|---|---|---|---:|---:|---|
+| `csm_alone` | 3.2-22, CSM-113 circularization | Apollo | 63,508.6 lb = 28,807 kg | 23.676 m | 46,745 / 104,374 / 108,119 |
+| `lm_alone_descent` | 3.2-25, LM-11 at P.D.I. | **LM** | 33,682.2 lb = 15,278 kg | 4.729 m | 34,384 / 36,946 / 35,454 |
+| `lm_ascent_stage` | 3.2-26, LM ascent at liftoff | **LM** | 10,776.2 lb = 4,888 kg | 6.196 m | 9,055 / 4,593 / 7,462 |
+
+**The frame is the half that is easy to get wrong.** 3.2-25's X-BAR is about 186 inches and the
+docked stack's is about 1,046 — not because one vehicle is longer, but because the LM's own origin
+sits 399.5 inches along the Apollo axis. A tensor transfers between the two frames by nothing at
+all, because the book's transformation is a pure translation; a *station* does not. So
+`mass_properties.frames` is now a registry of two — `APOLLO_XA` and `LM_XE` — every table names the
+frame it is in, and `check_mass_properties` refuses one that names a frame the file does not declare.
+A reader who took the LM's X-BAR for an Apollo station would put its centre of mass 10.1 m from
+where it is.
+
+### What these tables have that the docked one did not, and what they lack
+
+The two CSM tables print the `AVERAGE` column — `(IYY + IZZ) / 2 / 10` — and it holds on all four
+rows read, to the pound (7,849.1 printed 7,849; 7,817.9 printed 7,817, so the column truncates).
+
+**The three LM tables print no such column**, so the one self-check a hand-read scan has is simply
+absent there. What stands in its place is weaker and is stated rather than dressed up: every moment
+falls monotonically down all 38 rows of 3.2-25 and all 23 of 3.2-26, and each bracketing row was
+read twice at 300 dpi. And one column of 3.2-26 is **not** monotone — IZZ runs 5,463, 5,771, 5,577,
+5,383 down the first four rows while IXX and IYY fall steadily — which is exactly the shape a
+misreading produces, so it was re-read at six times magnification before being believed. The check
+therefore treats `average_moment` as the volume's column rather than every table's: required to hold
+where it is printed, and not required to exist where it is not.
+
+### The page number was wrong, and the text layer is why it is right now
+
+Round 9 cited the docked table as "PDF p. 351 (printed p. 3.2-111)". **It is printed p. 3.2-115.**
+The number was read off the rotated fold-out's footer in a rendered image, where a 5 in that
+typeface reads as a 1 — while the same page's *text layer* has printed `3.2-115` all along, and the
+sequence is monotone across the whole run (349 → 3.2-113, 350 → 114, 351 → 115, … 362 → 126). The
+source manifest now takes the text layer as the authority for a page number and the rendered image
+as the authority for the table's contents, which is the division of labour that would have prevented
+this: **an acquired figure carries a page, and the page has to be as verified as the figure.**
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 256 | **253** |
+| literal `UNCONFIGURED` scalars | 107 | **104** |
+| `UNCONFIGURED scalars` the plant counts | 181 | **178** |
+| `report.refuse` call sites in the linter | 738 | **740** |
+| tests in `tests/test_vehicle_config.py` | 251 | **253** |
+
+One configuration is still owed and it is the one no table covers: `csm_lm_ascent_docked` is the CSM
+docked to an ascent stage, which is neither 3.2-21 (the whole LM attached) nor 3.2-27 (the LM alone).
+Both halves are now in the file, so what it waits for is the parallel-axis composition about a common
+point — arithmetic with a stated rule rather than a document nobody has.
+
+## The frame offset between two vehicles is a property of the configuration
+
+Round 10 added a second frame to `mass_properties` — the LM's own — and gave it an offset from
+Apollo's: `X_A = X_E + 399.5`, from Figure 2-16's transformation list. **That figure is the launch
+configuration**, where the LM sits in the adapter below the CSM. The docked configuration is
+Figure 2-17, and there the two docking interfaces are mated, which its own numbers say twice over:
+
+| | Figure 2-16 (launch) | Figure 2-17 (docked) |
+|---|---|---|
+| the LM's docking interface, `X_E = 312.5` | `X_A = 712.0` | `X_A = 1110.25` |
+| relation | `X_A = X_E + 399.5` | `X_A = X_E + 797.75` |
+| check | `X_LV = X_A + 2756.555` | `X_A = 4578.805 - X_LV` gives `X_A = 1110.25`, which is the station the same figure gives the **CM's** docking interface |
+
+Both figures are right about different vehicles, and the difference is **398.25 inches = 10.1 m**.
+So the offset is not a property of the frames at all: it is a property of the configuration, and
+`LM_XE` now carries one offset per configuration with the figure each comes from. A table in that
+frame must say which reading it uses, or why none applies — `check_mass_properties` refuses one
+that does not, and that refusal is what would have caught this when it was written.
+
+### And the two tables still do not add up to the third
+
+With the offset settled, the last configuration's composition looks like arithmetic the file could
+do: `csm_alone` plus `lm_ascent_stage` is exactly what `csm_lm_ascent_docked` is *defined* as. So
+the round tried it against the one case that can be checked — composing `csm_alone` with
+`lm_alone_descent`, whose masses sum to `csm_lm_docked`'s 44,085 kg, and comparing with what
+Table 3.2-21 tabulates at that weight:
+
+| | composed | Table 3.2-21 | miss |
+|---|---:|---:|---:|
+| centre of mass, `X_A` at the launch offset | 20.63 m | 26.58 m | **−22.4 %** |
+| centre of mass, at the docked offset | 24.13 m | 26.58 m | **−9.2 %** |
+| `IYY` | 914,693 kg m² | 760,263 kg m² | +20.3 % |
+
+**Both readings miss, so the offset is not what is wrong.** The tables are indexed by *weight*, and
+at one weight the reference mission's two vehicles are not at the states their own tables are
+referenced to: the docked row's CSM has burned propellant the CSM-alone table's has not. A composed
+tensor would therefore be the tensor of this corpus's construction — two reference states added —
+rather than of any vehicle the book tabulates, and the corpus declines to carry a number that
+plausible for a reason it can name. `csm_lm_ascent_docked` stays owed, and what it is owed to is now
+**an epoch rather than a document**: the CSM and ascent stage tabulated together at their own epoch,
+which the volume does not have.
+
+That is the round's shape, and it is the folder's own rule arriving at its flagship values: a value
+that looks obtainable gets derived, and a derivation that does not reproduce the one checkable case
+gets refused rather than landed.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | 253 |
+| `report.refuse` call sites in the linter | 740 | **742** |
+| tests in `tests/test_vehicle_config.py` | 253 | **255** |
+
+No debt closed, and that is the honest accounting: the round found that the value it went to land
+would have been wrong, and spent itself making the corpus say why.
+
+## The transfer was sized to an average, and the Moon at the epoch is 10,351 km farther out
+
+Four rounds of prose said the same sentence: *the transfer plane is fixed by where the Moon is at
+MET 73 h, and no document contains an ephemeris at that epoch.* That is the one datum the archive
+cannot hold — the mission epoch is in 2026 — and it is one query away:
+
+```
+https://ssd.jpl.nasa.gov/api/horizons.api
+  ?format=text&COMMAND='301'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'
+  &CENTER='500@399'&START_TIME='2026-09-15 03:13:45'&STOP_TIME='2026-09-15 03:14:45'
+  &STEP_SIZE='1 m'&VEC_TABLE='2'&REF_PLANE='FRAME'&REF_SYSTEM='J2000'
+  &OUT_UNITS='KM-S'&VEC_LABELS='YES'&CSV_FORMAT='YES'
+```
+
+DE441, geocentric, ICRF/J2000, at `met_epoch_utc + 73.0 h`, and the whole query is recorded in
+`mission.yaml#initial_state.lunar_ephemeris_at_arrival` rather than the numbers alone:
+
+| | |
+|---|---|
+| position | (−299,474.3417, −220,328.0455, −132,662.8339) km |
+| velocity | (0.6085621, −0.7087855, −0.3437141) km/s |
+| distance | **394,751.5123 km** |
+
+**The corpus had solved its transfer to 384,400 km — the Moon's mean distance — and the Moon is not
+there.** The design constraint is "reach the Moon at 73.0 h", and the semi-major axis that satisfies
+it is a function of the radius it has to reach:
+
+| | sized to the mean | sized to the epoch |
+|---|---:|---:|
+| arrival radius | 384,400.0 km | **394,751.5 km** |
+| semi-major axis | 254,545 km | **278,906 km** (+9.6 %) |
+| eccentricity | 0.974216 | **0.976468** |
+| apogee | 502,526.8 km | **551,248.8 km** |
+| transfer period | 355.02 h | **407.19 h** |
+| cutoff speed | 10,949.8 m/s | **10,956.1 m/s** |
+| TLI Δv from the parking orbit | 3,156.7 m/s | **3,163.0 m/s** |
+
+`check_trajectory` carried `r_arrival = 384400.0` as a literal. It now reads the ephemeris, and
+**refuses to run without it** — a check that would silently fall back to a mean is the defect this
+round is about, so an absent `distance_km` is a refusal and not a default. The published
+post-injection speed is now 96.2 m/s short of the Hohmann minimum at the epoch (93.8 against the
+mean), which strengthens C-24 rather than changing it.
+
+### And the debt said three elements were owed when it was two
+
+The block also listed `true_anomaly_at_cutoff` as an unknown. **It is not one.** The eccentricity is
+defined as `1 - r_p/a` with `r_p` the radius at cutoff, so the cutoff *is* the transfer's perigee and
+the true anomaly there is zero by the model's own construction — the finite burn's 346.87 s arc
+refines where the burn ends, not the element. It is now a declared `0.0` with that reasoning, and
+the linter refuses a non-zero one.
+
+What is genuinely left is the plane: a plane with the parking orbit's inclination that contains the
+Moon's position has **exactly two solutions**, mirror images about the Earth-Moon line, and the
+argument of perigee follows from which one is chosen. The ephemeris carries the Moon's *velocity* as
+well, which is what a free-return discriminator needs — so what remains is arithmetic with a stated
+rule rather than a datum nobody has.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | 253 |
+| `report.refuse` call sites in the linter | 742 | **744** |
+| tests in `tests/test_vehicle_config.py` | 255 | **257** |
+
+The debt count is unchanged and the reason is worth stating: the round closed one owed *element* and
+re-opened nothing, but that element was counted in prose, and prose obligations are counted per
+paragraph rather than per element. What moved is the trajectory itself, which was nine per cent wrong
+in its semi-major axis.
+
+## Eight claims of "not published" whose whole search was the contract
+
+The folder's most productive defect has been a debt that says *no source publishes this* while the
+source sits in the manifest. Round 5 built `check_unavailability_claims` for it, and the rule it
+enforces is the one the evidence supports: **a provenance that says the figure is not to be had must
+name a document it looked in.** What it accepted as a document was any filename — including the
+diode corpus, which is the specification the vehicle has to *satisfy*, not the library it is sourced
+*from*. A negative over 8,954 archive titles cannot be established by reading the contract.
+
+So the rule is narrowed: a search record has to name something in the archive — an acquired
+document, the manifest, or one of the corpus's own references (`A11`, `PSR`, `NR`, a table, a page).
+**Eight entries failed the narrowed rule**, and they are the same defect eight times:
+
+| entry | what it claimed | what the archive had |
+|---|---|---|
+| `consumables.pressurant_he_kg` | "the helium load and its regulated flow are not published for either vehicle" | **it is published**: ODB Vol III Table 3.2-10, MISSION J-2, in the text layer |
+| `E-BUS-BAT.sensitivity` | the converter's efficiency floor, contract-only | the EPS study guide: the rating, the bus tiers, no transfer function |
+| `eclss.ventilation_fan` | the cabin fan's flow | the ECS subsystem spec: the *suit* circuit's 12 cfm, a motor speed with no flow |
+| `eclss.lm_water_separator` | the LM separator's removal rate | item 109's own table: drum speed, no condensate rate |
+| `power.battery_usable_j_j` | no derate curve exists | the EPS guide and the ODB: neither has a capacity/temperature table |
+| `propulsion.pressurant_pressure_psi` | the regulator's transfer function | the ODB: storage pressures, no dynamics |
+| `structure.pressure_vessel_csm` | the CM vessel's proof and burst pressures | the ODB, whole: not there |
+| `structure.tunnel` | the docking tunnel's volume | the ODB, whole: the word "tunnel" does not appear |
+
+Seven of the eight are still owed and seven now say where they were looked for, which is what makes
+the next round able to ask whether that is enough. **The eighth is a value.**
+
+### The helium charge was there, with the pressures beside it
+
+```
+Helium - SPS Bottles    3600 psia   70 F    87.6 lb   87.6 lb earth launch weight
+Helium - Fuel Tanks      178 psia   70 F     5.4 lb
+Helium - SM/RCS A-D     4150 psia   70 F     6.0 lb
+Helium - CM/RCS A,B     4150 psia   70 F     1.0 lb
+Nitrogen - SM           2500 psia   85 F     1.3 lb
+```
+
+The stock takes the **SPS bottles' 87.6 lb = 39.73469 kg** — the charge whose destination is this
+node's only edge, `E-PROP-PRESS` into `prop_main`; the other three helium loads the same table
+publishes go to the reactant tanks and the two RCS systems, which are other stocks or none. The
+table's *pressures* are what `vehicle.yaml#propulsion.sps.pressurant` already declared (3,600 psia
+regulated to 186) — so the corpus had the pressure from one place and denied the mass beside it for a
+hundred rounds. And the **LM's charge is published too**, in its own table ("LM-II — Helium &
+Nitrogen": APS 6.6 + 6.6 lb, RCS 1.05 + 1.05, DPS supercritical 51.2, DPS ambient 1.1), for a
+vehicle this corpus gives no helium stock to.
+
+The regulated **flow** stays owed and is a different quantity: the table has storage pressures and no
+mass flow, and the displacement ratio this stock feeds is `E-PROP-PRESS`'s own `UNCONFIGURED`
+sensitivity.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | **251** |
+| literal `UNCONFIGURED` scalars | 104 | **102** |
+| `UNCONFIGURED scalars` the plant counts | 178 | **176** |
+| `report.refuse` call sites in the linter | 744 | **745** |
+| tests in `tests/test_vehicle_config.py` | 257 | **259** |
+
+## The battery's dead zone was coarser than the smallest load it feeds
+
+`battery_charge_j.min_flow_per_s` was owed with a note that named the wrong field — *"every load's
+`rated_w`"*, where `rated_w` is a **source** field in that domain and no load carries it — and the
+value was derivable all along. The node's one edge runs to `bus_a`, and the smallest load on that bus
+is the S-band transceiver at **36 W**, so the smallest flow this stock must represent is **36 J/s**.
+It is now a `min_flow_derivation` over the load budget's own `demand_w`, evaluated by the linter on
+every run: a derived field with no evaluator is a number with a note.
+
+**Landing it exposed why the field matters.** The declared quantum was **1 J**, and at the vehicle's
+50 Hz tick the smallest flow over one tick is `36 x 0.02 = 0.72 J` — so the dead zone was *coarser
+than the smallest load*, and `plant.md` §4's rule refuses exactly that. The linter said so the moment
+`min_flow_per_s` stopped being a debt, and the quantum is now **0.1 J**, seven times finer than the
+smallest flow and still coarse enough to keep the fixed point cheap.
+
+Two smaller things the round found on the way, both recorded rather than smoothed: the note's field
+name (`rated_w` → `demand_w`, which a reader would have gone looking for and not found), and the
+build order moving `battery_charge_j` from *owes a value* to *owes an edge* — because the charge's
+rate driver is still a coupling with no sensitivity, and closing a value does not close the edge
+behind it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 251 | **250** |
+| literal `UNCONFIGURED` scalars | 102 | **101** |
+| `UNCONFIGURED scalars` the plant counts | 176 | **175** |
+| `owes a value` in the build order | 21 | **20** |
+| `owes an edge` | 11 | **12** |
+| `report.refuse` call sites in the linter | 745 | 745 |
+| tests in `tests/test_vehicle_config.py` | 259 | **260** |
+
+## The one figure the objective watches had no reader
+
+The status paragraph says *"every figure in this sentence is derived by the tools and asserted
+against this file"*, and it was not true of the figure that matters most: **how many of the 134
+states the plant can actually advance.** `tools/plant.py --readiness` has printed it since the round
+that built the reference plant, the definition of done names it (*"`--build-order`'s ready-now bucket
+agreeing with what a real tick does"*), and nothing in this file stated it and nothing asserted it —
+so it could move, and it did, twice, without a line changing anywhere.
+
+It is now part of the sentence and part of the pinned set:
+**114 of the 134 states are fully configured and 20 carry a debt.** The test reads both counts out of
+the plant's own output and holds the sentence to them, which is the same treatment every other figure
+in that paragraph gets. That is this folder's oldest finding arriving at the last place it had not
+been looked for: **not a declaration no tool reads, but a tool's output no declaration carries.**
+
+| figure | before | after |
+|---|---|---|
+| `states fully configured` | stated nowhere | **114 of 134** |
+| tests in `tests/test_vehicle_config.py` | 260 | 260 |
+
+## The definition of done's second figure: 18 ready, 2 advanced
+
+The objective's second completion criterion is *"`--build-order`'s 'ready now' bucket agreeing with
+what a real tick does"*, and it opens by stating the gap as **15 versus 1**. Both numbers are printed
+by `tools/plant.py` — the bucket by `--build-order`, the tick by `--readiness`, which runs §9's step 4
+for real against `initial_values` — and until this round **no declaration carried either of them**:
+the status paragraph claimed every figure in it was derived and asserted, and the two figures that
+measure the remaining work were neither stated nor asserted.
+
+They are now, and the gap has a composition:
+
+```
+   18   13 %  ready now — the two classes the reference plant can advance
+    2 of 134 states advanced, 132 could not
+  of the 132, 43 are the debt and 89 are states that read one
+```
+
+**The build order counts a state ready when its own declaration is complete; a tick cannot advance
+it unless its driver was produced in the same pass.** Thirty of the eighteen's difference is that
+distinction plus the sentinel: a state with every field filled and an edge whose sensitivity is owed
+is "ready now" to a worklist and still cannot move. The 43 root gaps are the domain-code layer
+(`algebraic`, `discrete`, `dynamics`, `delay` and `hazard` states whose rule the configuration
+deliberately does not carry), and the other 89 are states that read one of them — which is why the
+count that matters for the fourth phase is 43 and not 132.
+
+The two figures are held to the README by `test_the_readme_status_matches_the_tools` now, beside the
+configured-state count, so the next round's movement shows up as a number rather than as prose. This
+is round 15's finding generalised: **the tool already computed the answer; what was missing was a
+declaration that carries it.**
+
+| figure | before | after |
+|---|---|---|
+| `states advanced` by a real tick | stated nowhere | **2 of 134** |
+| `ready now` in the build order, held against it | stated nowhere | **18** |
+| tests in `tests/test_vehicle_config.py` | 260 | 260 |
+
+## Both states a real tick could advance were dimensional errors
+
+Round 17 put the tick's figure in the status paragraph: **2 of 134 states advanced**. Round 18 asked
+what those two were, and the answer is the reason this round exists —
+
+```
+  crew     crew_workload   lag  enum-level  -> 14.0        (relaxed toward `water_potable`)
+  propulsion thrust_main_n lag  N           -> 18508.0     (relaxed toward `prop_main`)
+```
+
+The plant's lag branch is `relax toward values[source]`: it reads the driver node's value and moves
+the state toward it, applying **neither the edge's declared unit nor its scale**. So a crew workload —
+an `enum-level` — was relaxed toward fourteen kilograms of water, and a thrust in newtons toward
+eighteen and a half tonnes of propellant. Neither is a crash; both are plausible numbers, which is
+exactly the defect class the corpus's rules are written against.
+
+**The rule that was missing is the lag-side analogue of `stock_flux_basis`** — one function,
+`lag_driver_basis`, called by the linter *and* the plant so the debt and the refusal cannot come
+apart. A lag's driver must be the state's own quantity: the source node denominated in it, the
+edge's unit the identity between the two ends, and its scale 1, because a scale the integrator does
+not apply is a scale that is not in the model. Five edges fail it:
+
+| edge | declared | drives | why it cannot be integrated |
+|---|---|---|---|
+| `E-CREW-WATER` | `kg/h per crew` | `crew_workload`, an `enum-level` | a rate where a level belongs |
+| `E-PROP-ENG` | `kg/s per N` | `thrust_main_n`, in N | thrust per unit flow, stated backwards |
+| `E-FC-HEAT` | `W per W` | a zone temperature | heat relaxed into kelvin |
+| `E-ENV-RAD` | `W per W` | `zone_radiator_t` | the same |
+| `E-BUS-PUMP` | `kg/s per V`, 0.0009 | `coolant_flow_kg_s` | a scale nothing applies |
+
+They are **debts rather than refusals** because the corpus can be completed two ways — declare an
+identity driver, or give the plant the rule that applies a scale — and a blanket refusal would have
+to choose. What the plant does is refuse each by name at the tick, so the two states that advanced
+wrongly now advance not at all, and the tick's own figure says so:
+
+```
+    0 of 134 states advanced, 134 could not
+  of the 134, 46 are the debt and 88 are states that read one
+```
+
+**The headline went up by five and the tick went down by two, and both are improvements.** The two
+states were the reference plant's entire claim to be able to advance anything; they are now named
+obligations instead of silent errors, and the remaining work is the same 46 root rules with five of
+them newly visible.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 250 | **255** |
+| prose obligations | 149 | **154** |
+| states advanced by a real tick | 2 | **0** |
+| root gaps (the debt, as against states that read one) | 43 | **46** |
+| `ready now` in the build order | 18 | **14** |
+| `owes an edge` | 12 | **16** |
+| tests in `tests/test_vehicle_config.py` | 260 | **261** |
+
+## Nine domains let the alphabet decide what advances first
+
+No edge can target the `internal` sentinel — it is not a coupling node — so the states on it (every
+mode, latch and accumulator the command surface writes, **54 of the 134**) are advanced after the
+whole schedule, and within a domain the order is `internal_order`'s business. Nine domains had none,
+so the frozen lexicographic tiebreak decided, and the linter reported **nine debts naming 54 states**.
+
+The declarations are landed, and each one says *which kind of decision it is* rather than listing a
+permutation:
+
+| domain | states | what the order is |
+|---|---:|---|
+| `propulsion` | 6 | physics: the throttle, then the chamber pressure it produces, then the feed pressure, then the pressurant; the two registers last |
+| `gnc` | 6 | the platform's chain: bias → alignment → covariance → radar → integrity verdict → manoeuvre |
+| `avionics` | 11 | fault containment: mode and time first (every verdict is stamped against them), then the ages, the votes, the tracking state, and the accumulators that count it |
+| `rcs` | 11 | the control chain: mode → authority → error → deadband → allocation → pulse width → what was delivered |
+| `structure` | 6 | the mechanisms before the quantities they explain |
+| `comms` | 7 | the link chain: mode → antenna → carrier lock → rate, then what the chain costs |
+| `power` | 3 | the trip latch, the load it leaves connected, the pack temperature that load produces |
+| `crew` | 2 | switches before breakers |
+| `thermal` | 2 | the heater decision, then the amplifier it is about |
+
+**Nothing on the sentinel advances today** — the rules that would move these states are domain code
+— so the declaration is a decision about the rules rather than a consequence of them, and each note
+says so. That is the honest instrument for this debt: not a derivation, but a *choice on the record*,
+which is the difference between an order and the alphabet renamed.
+
+### The refusal the round adds, and the one it did not
+
+`internal_order_note` was required only of `internal_order: independent`, on the reasoning that a
+list speaks for itself. **It does not.** An order is a claim about which state has to advance first,
+and a reader cannot tell a considered order from the frozen tiebreak under another name — so the
+linter now refuses *any* `internal_order` without a note, and the nine declarations carry one.
+
+Two tests moved rather than being weakened: the plant's tiebreak path is now exercised by *removing*
+a declaration from a copy (it must still advance the corpus and still name the domain it decided
+for), and the corpus test asserts the nine declarations instead of the nine debts.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 255 | **246** |
+| prose obligations | 154 | **145** |
+| domains with an undeclared sentinel order | 9 | **0** |
+| tests in `tests/test_vehicle_config.py` | 261 | **263** |
+
+## The rule was in the configuration, and the plant would not read it
+
+Thirteen `algebraic` states declare their arithmetic as a `derivation` over named inputs — the two
+cabins' load sums, the equilibrium temperature each relaxes toward, the environment heat, the oxygen
+and carbon dioxide the crew consumes. The linter has evaluated every one of them since the round that
+introduced the idiom. **The plant refused all thirteen with "its rule is not in the configuration"**,
+which was false: the rule *was* in the configuration, as arithmetic, and the plant was the one reader
+that would not compute it.
+
+They are evaluated now, with the same substitution and the same evaluator the linter checks them
+with — one definition of what a derivation means, so a derivation the linter accepts is one the plant
+can compute. A state with no derivation still owes domain code and still refuses by name.
+
+```
+  19 of 134 states advanced   (was 0)
+```
+
+The tick's first real numbers are the load sums: **733 W** of CSM cabin heat, **827 W** of LM,
+**2,477 W** of environment heat, and the two cabins settling at **286.21 K** and **286.97 K**.
+
+### And the map it advances them into cannot hold them
+
+The first run after the evaluator landed set `csm_cabin_o2_kg` to **0.05315987** — which is the water
+vapour's mass — and `lm_cabin_o2_kg` to **0.0**, which is the nitrogen's. **The plant's value map is
+keyed by node**, and twelve nodes carry more than one state: `cabin_atm` and `lm_cabin_atm` carry
+five each (four gases and a pressure). A second state's value overwrites the first, so a stock
+advances from another gas's number — a plausible mass of the wrong quantity.
+
+A refusal rather than a repair, because the fix is a key-space change (`(node, state)` rather than
+`node`) that touches every reader of the map, and a wrong value is worse than a gap. The tick says
+**17 of 134** with the four gas stocks and two lags named as gaps instead, and the build order routes
+a state on a shared node to *code* — which is where the fix is.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states advanced by a real tick | 0 | **17** |
+| `ready now` in the build order | 14 | **23** |
+| `owes a rule` | 84 | **75** |
+| root gaps (the debt) | 46 | **38** |
+| `declared debts` | 246 | 246 |
+
+The headline did not move and the two figures that measure the remaining work both did: **the
+algebraic layer is not 13 rules to write, it is 13 declarations to read** — and the plant's own key
+space is now a named obligation rather than a silent overwrite.
+
+## The frame's keys are nodes, and its own declaration says channel ids
+
+`presentation.yaml#frame.fields` states the `values` field's unit in one word:
+**`map[channel_id, number|bool|string]`** — that is the shape the window's consumers are promised, and
+the field is the one part of the file surface the vehicle side owns outright. `plant.emit_frame`
+hands them the plant's *internal* map instead, whose keys are nodes:
+
+```
+  what a frame carries now            {cabin_atm: 0.05315987, o2_csm: 279.0, internal: {...}}
+  what the declaration promises       {eclss.pp_o2_mmhg: ..., consumables.o2_csm_kg: ...}
+```
+
+**99 of the 142 published points come from a state on a node that carries more than one**, so the map
+cannot even name what it is carrying: four gas masses share `cabin_atm`, and `values["cabin_atm"]`
+holds whichever the loader wrote last. That is not a hypothetical — it is what round 20's first tick
+produced, when the plant learned to evaluate derivations and set `csm_cabin_o2_kg` to the *water
+vapour's* mass.
+
+The fix is one change in two halves and neither is optional: **key the plant's value space by state**
+(a node id already is a state id on every single-state node, so the change is additive) and **build
+the frame's `values` from the points registry**, which already declares each channel's `from`. What is
+owed is a *shape* rather than a number, which is why it is a debt in `presentation.yaml` rather than a
+state: nothing in the corpus can be configured to fix it, and a frame whose keys are wrong is a window
+a fleet cannot gate on.
+
+This is the third round in a row whose finding came from *reading what the vehicle already declares* —
+the sentinel's order, the algebraic rules, and now the frame's own unit string — and it is the largest
+of the three: the window is the objective's third completion criterion, and it cannot be served until
+this is fixed.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 246 | **247** |
+| prose obligations | 145 | **146** |
+| published points the frame cannot name | — | **99 of 142** |
+| tests in `tests/test_vehicle_config.py` | 264 | **265** |
+
+## The value space was keyed by node, so the oxygen was the water vapour
+
+Round 20's first tick set `csm_cabin_o2_kg` to **0.05315987** — the water vapour's mass — and
+`lm_cabin_o2_kg` to **0.0**, the nitrogen's, because the plant's value map was keyed by *node* and
+`cabin_atm` carries four gas masses and a pressure. A second state's value overwrote the first, and
+the result was a plausible mass of the wrong gas, which is the defect class this folder is built
+around.
+
+The map is keyed by **state** now, and the change is additive rather than a rewrite: every state's
+value is written under its own id, and a node carrying exactly one state also keeps its node key,
+because a node id *is* a state id in every one of those cases and every reader in the file and every
+channel in the registry asks for it that way. A node carrying five has no node key at all, because
+there is no single value it could mean. The numbers are what the corpus declares:
+
+```
+  csm_cabin_o2_kg   0.05315987 -> 2.528302      the oxygen, not the water
+  lm_cabin_o2_kg    0.0        -> 2.87112285    the oxygen, not the nitrogen
+  cabin_atm         a value    -> no key        four gases and a pressure cannot share one
+```
+
+**And the same defect was one level down.** A stage writes `{"internal": {state_id: value}}` and the
+commit was `{**values, **staged}`, so each sentinel accumulator wiped the others out — the plant's six
+accumulators, of which one survived a tick. The commit merges the sub-map now.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states advanced by a real tick | 17 | **19** |
+| `ready now` / `owes a rule` | 23 / 75 | **27 / 71** |
+| the oxygen's value | the water vapour's | **the oxygen's** |
+| `declared debts` | 247 | 247 |
+
+The tick's count moves by two and its *correctness* moves by more: the two states that joined it are
+the two whose values were wrong, and the four gas stocks that still cannot advance are blocked by
+their edges rather than by the map. The `presentation.yaml` debt is rewritten to say what is left —
+the frame's keys — and that is the last thing between this vehicle and a window a fleet can gate on.
+
+## The window's channels are counted now, not described
+
+Round 23 found the split by refusing to publish a channel whose unit is not its source state's:
+**63 of the 134 channels read from a state are the state itself; the other 71 are derived**, and their
+`derivation` is prose. Those two figures went into the `presentation.yaml` debt as a sentence — and a
+count in prose with no reader is this folder's oldest finding, so they are recomputed on every run by
+`check_channel_derivations`, which reads the registry and the states and holds the sentence to them.
+
+The check refuses three things: a sentence that no longer states the figures, figures that disagree
+with the registry, and — the one that points forward — **a derived channel that has become
+*evaluable***. A `derivation` written as an `expression` over named inputs is arithmetic the linter
+evaluates and the plant can apply, so a channel that has one and is still omitted from the frame is a
+defect rather than a limit: what was prose is now arithmetic, and the refusal says the omission is due
+to end. That is the shape of the remaining work on the window — 71 channels, each one division or one
+subtraction away from the state it reads, and the instrument now says so on the run where it changes.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | 247 |
+| the window's derived channels, counted | in prose | **71 of 134, machine-checked** |
+| tests in `tests/test_vehicle_config.py` | 265 | **266** |
+
+## A channel is a reading, and the frame computes four of them now
+
+Rounds 23 and 24 left the window with two figures and a decision. The figures: **63 of the 134
+channels read from a state are that state, and 71 are derived** — a partial pressure from a mass and
+a volume, a flow in litres per minute from a mass flow and a density — with their `derivation`
+written as prose, which nothing can evaluate, so the frame omitted them. The decision (round 27):
+**a channel is a reading, so its inputs may be readings.** An input bound to a bare state id — no
+`file.yaml:` prefix — means *that state's value this tick*, and everything else is a literal or a
+`<file>.yaml:<dotted.path>` source, exactly as `derivation_value` already defined them. The
+alternative was point rows naming only static paths, which would have made every channel a constant,
+and a cabin's partial pressure is not a constant.
+
+That decision was the only thing standing between the registry and its first batch, and the batch is
+the two compartments' partial pressures — one gas law, four channels:
+
+```yaml
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: csm_cabin_co2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_csm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        mmhg_to_pa: 133.322387415
+```
+
+`plant.emit_frame` resolves the readings, evaluates the expression with the same `derivation_value`
+the linter checks an `algebraic` state's rule with, and publishes the number under the channel id.
+The three answers per channel are the contract, in order: **the derivation if it evaluates, the
+source state if the units agree, omission if neither.** Omission is still the fallback and not a
+failure — a channel derived from a stock the plant has not advanced is a channel with no number this
+tick, not one with an invented number.
+
+### What held the number honest
+
+Two readings, one relation, and they disagree on purpose:
+
+| at | `eclss.pp_o2_mmhg` | `eclss.co2_pp_mmhg` |
+|---|---:|---:|
+| 295 K, the model's own `check` | 246.3656 mmHg | 3.0000 mmHg |
+| the tick's own value map, after one tick | 239.03 mmHg | 2.9107 mmHg |
+
+The first row is the reader for the claim that these four rows are *that relation*: at the
+temperature `atmosphere_model.check.partial_pressures_mmhg` is taken at, the declared stocks
+reproduce the declared mixture to six figures in **both** compartments — 3.0 mmHg of carbon dioxide
+and the 246.37 mmHg of oxygen the total-pressure block derives as the remainder. The second row is
+the reason the derivation reads a **state** rather than the constant: `vehicle.yaml#thermal.zones`
+says `nominal_temperature_k` is where the law's two *derivatives* are taken, and a channel fixed to
+it would report a cabin whose own temperature channel disagreed with it. `derivation_value` gained
+the readings parameter for this, and one thing it lost: an identifier the expression used and the
+bindings did not carry was substituted with `nan` and refused by the expression evaluator as "not a
+numeric expression" — true, and about the wrong thing. It is refused by name now.
+
+**And the instrument that was watching this changed shape.** Round 24's `check_channel_derivations`
+refused outright the moment a derived channel became evaluable: it could say the conversion was due
+and not how far it had got, so landing the first batch would have meant deleting the check. The
+count is a figure in the debt's sentence now — `4 of the 71 now carry an evaluable derivation` — and
+the check holds the sentence to it, one refusal per figure, naming which moved. What it *added* is
+the question a count cannot answer: every evaluable derivation's bindings are resolved — a number, a
+source that resolves to a number, or a state id the emitter will read from this tick's value map —
+and its expression and bindings are held to each other, because a bare name that is not a state id,
+a path that has been renamed, or a name the expression uses and nothing binds all leave a channel
+the emitter omits in silence. That check asks about **existence**, not value, which is why it is not
+`derivation_value`: evaluating a channel needs this tick's readings, and a linter that stood a probe
+in for one would be inventing the number it exists to stop.
+
+### The mistakes this round made
+
+- **The four channels were still absent from the t=0 frame, and the round had assumed they would
+  not be.** `plant.py --frame` was the first thing run after the emitter change and it printed the
+  same sixteen values as before. The gas law needs the cabin's temperature, `zone_csm_cabin_t` and
+  `zone_lm_cabin_t` declare no `initial`, and the plant's `lag` falls back to its driver — so the
+  cabin starts at its *equilibrium*, 286 K, and not at the 295 K `vehicle.yaml#thermal.zones` calls
+  its nominal. The linter requires `initial` of every `stock` and of nothing else, which is why this
+  is silent, and **28 integrator states are in that position**. Declaring them, with their
+  provenance, is the next round.
+- **The linter refused the corpus's own new sentence, and it was right to.** The first version of the
+  count read digits and the sentence said "Four of the 71"; the check's refusal named the figure it
+  could not find, which is the join working on its first run.
+- **The emitter died on `TypeError: unhashable type: 'list'`.** `thermal.zone_[id]_t_c` names four
+  states in its `from`, because the template covers four zones — the old code stringified the list,
+  which is why a key that could never match anything looked like a key that had been tried. A
+  template's instantiations are the registry's own open debt, so the row is skipped by name rather
+  than guessed at.
+- **The check resolved every binding and never compared the expression's names to them.** The first
+  version of `check_channel_derivation_inputs` looked at `inputs` and never at `expression`, so a row
+  carrying `spare: 1` that nothing uses composed — and so would a name the expression uses and
+  nothing binds, which is the typo that loses a channel. Both rules already existed, in
+  `check_declared_derivation`, which needs a declared *value* to hold the arithmetic against and a
+  channel has none: it produces the channel. They are `check_derivation_bindings` now, called by
+  both, which is the third binding site that function's own docstring was written to justify.
+- **The check's own fixture had a path that resolves to nothing.** It bound
+  `state.coolant_flow_kg_s.value`, which has never existed — harmless while nothing resolved
+  bindings, and a second refusal the moment the check did. It binds a bare state id now, which is
+  the input form this round introduced.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | 247 |
+| derived channels with an evaluable `derivation` | 0 of 71 | **4 of 71** |
+| values a frame carries after one tick | 18 | **22** |
+| tests in `tests/test_vehicle_config.py` | 266 | **268** |
+
+Two things this leaves open, and both are named rather than implied. The derived channels whose
+`derivation` is still prose: `eclss.leak_rate_g_s` is a different relation and the two one-hour
+averages are a different *statistic* — a rolling mean needs an hour of state the plant does not
+carry, and the same expression under that channel's name would be a wrong reading rather than a
+missing one. And **eight channels read a coupling node rather than a state, and the seven whose
+`from` is a single node publish the node's raw number under a unit it is not** —
+`prop.propellant_remaining_pct` carries 18,508 kg under a `%`, `eclss.o2_supply_pressure_psi`
+carries a mass under a pressure, `res.battery_energy_wh` carries joules under a watt-hour. The unit
+test that governs a state source is not applied on the node branch at all, so this is the same
+finding as this round's in the opposite direction: the frame publishing what it cannot compute. The
+eighth, `thermal.zone_[id]_t_c`, is omitted only because its `from` is a list of four states — the
+template the registry has not learned to instantiate. The eight are enumerated in
+`.scratch/apollo/SOURCES.md` §0.24.2, with the conversion each one needs; that is the next batch, and
+this paragraph is a measurement rather than a declaration, because the check that would hold it is
+the one the fix brings.
+
+## Twenty lags began at their driver, and nothing declared that
+
+The frame's four partial pressures were absent from the first tick because the law they carry has no
+cabin temperature to read, and that turned out to be the visible end of a rule that had been written
+for one class out of three. `advance()`'s stock branch used to return the tick's net flux *as* the
+node's value, so it never read a level; when that was fixed the linter began requiring `initial` of
+every `stock` — and of nothing else, because `stock` was the only integrator implemented at the time.
+Twenty lags and a delay were never asked, and the plant answered for them:
+
+```python
+current = float(state_level(values, state) or driver)
+```
+
+**A lag with no value relaxed from its driver**, which is a number nothing declared, and the `or`
+made it worse in the other direction: a state whose level was genuinely zero — an engine at rest, a
+pump commanded off — fell through to the driver too, because zero is falsy. The two cabin zones
+therefore began at their equilibrium, **286.214 K**, and not at the 295 K
+`vehicle.yaml#thermal.zones` calls their nominal; the mixture their `initial` gas masses describe was
+derived *at* 295 K, so the vehicle contradicted itself on its first tick and the four partial
+pressures had no temperature to read.
+
+### The rule, and the two classes that are outside it for a reason of shape
+
+`INTEGRATOR_METHODS` — `stock`, `lag`, `delay` — is the set the rule now covers, and it is shared
+with the plant, so the linter's demand and the reader that needs the value cannot come apart. The
+three groundings a stock had are the three a lag has: `initial_source` held against the document
+that declares the same number, `initial_derivation` over named inputs, or `initial_provenance` with
+its basis and reason. An owed starting value is `UNCONFIGURED` with an `initial_note`, which is a
+declaration and is counted like one.
+
+Two classes are deliberately outside, and each for a reason of *shape* rather than of importance:
+
+- **`dynamics`** (7 states) carries vectors, matrices and per-thruster maps — `m, m/s`,
+  `matrix[m^2, ...]`, `map[thruster_id,N]` — and `initial` is a scalar. `mission.yaml` already
+  declares the CSM's position and velocity, so `orbital_state`'s is the first one landable, and it
+  needs a form the field does not have.
+- **`discrete`** (43 states) carries modes, so its starting value is an `enum[...]` string rather
+  than a number; and the plant refuses a `discrete` state outright, so nothing invents one. An
+  initial that arrives with the rule is what the implementer of that rule owes.
+
+Neither exemption is silent: both are named in the check's own docstring, here, and in
+`.scratch/apollo/SOURCES.md`, which is the file the next round reads first.
+
+### What landed, and what is still owed
+
+| | count | where it came from |
+|---|---:|---|
+| starting values **sourced or derived** | 7 | `vehicle.yaml#thermal.zones` (both cabins, 295 K), `radiator_model.csm.radiating_temperature_k` (285 K), `loops.loop_primary` (7.2 C and 200 lb/hr), `electrical.fuel_cells.output_v` (29 V) |
+| starting values **chosen with a reason** | 4 | `thrust_main_n`, `dps_throttle_pct`, `chamber_pressure_pct` — no engine of this vehicle is firing at MET 0, because the mission's clock starts at the top of `translunar_coast` and the budget's first entry is the SIB's TLI — and `gyro_bias`, whose zero is the filter's prior rather than a claim about the gyro |
+| starting values **owed, and named** | 10 | the four other thermal zones, the TWT case, the pump's rated speed, the crew's workload, the suit circuit's flow, the battery pack and the two propulsion pressures — each with an `initial_note` naming the document or analysis that would close it |
+
+The three cabin-adjacent ones are the same missing figure: `thermal_diode.md:965` declares every
+thermal constant UNSPECIFIED, so a zone's steady rise is a *chosen* conductance and where it starts
+is the analysis nobody has. `pump_1_speed_rpm`'s is the rated speed its own `command_value` mapping
+already owes for `on`; `pressurant_pressure_psi`'s is the propellant tank's regulated pressure, which
+the Operational Data Book's loading table does not give (it gives the bottle's charge) and which
+`feed_pressure_pct` needs as well.
+
+### The two-key bug the seeding exposed
+
+Seeding a lag's `initial` wrote the value under the state's own id **and** its node — and that is
+what caught a latent inconsistency in the lag branch, which returned `{state.node: value}` where the
+stock branch returns `state_values(...)`. It had been invisible because a lag had only a node key:
+`state_level` prefers the state's own id and falls back to the node, so one key without the other
+still read correctly. With both written, the state-id key — written once at t=0 — shadowed every
+later write: `state_level` read the seed back as the current level, the lag relaxed from 295 K for
+ever, and the node key froze after the first tick. `state_values` is the one place that decides what
+a state's entries are, and both branches use it now.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | **257** |
+| literal `UNCONFIGURED` scalars (linter / plant) | 101 / 175 | **111 / 185** |
+| states fully configured | 114 / 134 | **109 / 134** |
+| build order | 27 · 20 · 16 · 71 | **27 · 25 · 14 · 68** |
+| a real tick | 19 of 134 | 19 of 134 |
+| values a frame carries at tick 0 | 16 | **26** |
+| tests in `tests/test_vehicle_config.py` | 268 | **270** |
+
+The debt count rose by ten because ten states now *say* they owe their starting value, which is the
+honest direction: the obligations were there and undeclared. The tick still advances 19 states — the
+two cabins were already among them and still are, now from a declared 295 K — and the build order
+moved five states into "owes a value", which is the cheapest bucket and the one the debt count
+already tracks.
+
+## The frame published a node's number under the channel's unit, seven times
+
+Round 28's emitter change gave a state-sourced channel three answers — the derivation, the unit test,
+omission — and the branch that handles a **node** source was left with one: publish whatever the node
+holds. `coupling.yaml#nodes` declares every node's unit, so the comparison was always available; it
+was simply never made on half the registry. The frame said:
+
+| channel | declared | published before | published now |
+|---|---|---|---|
+| `prop.propellant_remaining_pct` | `%` | 18,508.0 (kg) | **100.0** |
+| `res.battery_energy_wh` | `Wh` | 12,096,000.0 (J) | **3,360.0** |
+| `eclss.cabin_temp_c` | `degC` | 295.0 (K) | **21.85** |
+| `eclss.lm_cabin_temp_c` | `degC` | 295.0 (K) | **21.85** |
+| `eclss.absorber_capacity_pct` | `%` | 72.0 (man-hours) | **100.0** |
+| `eclss.lm_absorber_capacity_pct` | `%` | 41.0 (man-hours) | **100.0** |
+| `eclss.o2_supply_pressure_psi` | `psi` | 279.0 (kg) | **omitted** |
+
+Six of the seven are one expression away from the node they read, and each is now a `derivation` over
+the node's own name: kelvin less 273.15, joules over 3,600, man-hours over the rating
+`vehicle.yaml#consumables` declares, and kilograms over the tank load `vehicle.yaml#propulsion`
+declares. The values agree with declarations that were already in the corpus and nothing had joined
+them to a frame: 3,360 Wh is the three entry cells' `3 x 40 Ah x 28 V`, and 21.85 °C is inside the
+band `eclss.cabin_temp_c` declares in Celsius — which the old reading, 295, was 273 degrees outside.
+
+### The reading rule, widened by exactly what the value map can supply
+
+Round 27 made a bare input a *reading*; this batch showed the rule needed one qualification, and it is
+the value map's own: **a node's name is a key only where the node carries one state**, because
+`state_values` writes no node key for a shared node — one value cannot mean four. So a derivation may
+name a state's id or a single-state node's name, and the linter refuses a node that carries several
+with its own sentence ("name the state the arithmetic is about") rather than letting the emitter omit
+the channel in silence. `readings` in the emitter is now built from the tick's value map itself, which
+is the same statement from the other side.
+
+**And a row whose `from` is a list is the one shape that may be skipped**: `thermal.zone_[id]_t_c`
+names its four states that way because it is a template, and a frame keyed by channel id can carry its
+instantiations rather than its placeholder name. The linter used to skip it in silence — the same
+defect as the branch that published without testing — so it is recognised by name now, and a list
+source on a channel whose name carries no placeholder is a refusal.
+
+### The one that is omitted rather than mis-stated
+
+`eclss.o2_supply_pressure_psi` is the channel Apollo 13's crisis would have been read from, it is in
+apollo's 750-950 psi band, and four declared faults list it among the channels they perturb. Its
+source is `o2_csm`, a mass in kilograms, and **a pressure is not a function of a mass**: it needs the
+tank's volume and the oxygen's storage temperature, and this vehicle has no supply tank at all — no
+volume, no cryogenic temperature, no fill level. Two shapes would close it and the choice is a design
+decision rather than a lookup: a **tank model** (a stored volume and temperature, making the pressure
+an inference from the stock the way the cabin's pressure is an inference from its four gases) or a
+**sensed state** with its own lag, which is what `layer: measurement` claims. `domains/eclss/components.yaml#open_debts`
+carries both, and the frame omits the channel until one of them lands.
+
+### The mistakes this round made
+
+- **The check refused the sentence I had just written, for the second round running.** The pattern
+  wanted `N read a coupling node`; the sentence said `7 more published channels read a coupling node`.
+  It is the same shape as round 28's "Four" against a digit-matching pattern, and it is worth stating
+  as a habit rather than a fluke: *write the figure where the check's pattern puts it*, or write the
+  pattern from the sentence rather than from the intent.
+- **The test assumed the LM cabin's channel declares a band.** It does not: `eclss.cabin_temp_c` has
+  `range: [21.1, 23.9]` and `range_kind: band`, and its LM twin has neither — it carries `events` and
+  an `event_class` and no range at all. That is a smaller claim rather than a missing one, and the
+  fixture says so now; whether the two twins *should* make the same claim is the kind of question the
+  registry's own `range_kind` debt is the place for.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 257 | **258** |
+| literal `UNCONFIGURED` scalars (linter / plant) | 111 / 185 | 111 / 185 |
+| channels read from a node with a derivation | 0 of 7 | **6 of 7** |
+| values a frame carries at tick 0 | 26 | **25** |
+| tests in `tests/test_vehicle_config.py` | 270 | **272** |
+
+The debt count rose by one because the missing supply-tank pressure is now a sentence naming what
+would close it, and the frame carries one value fewer because the seventh channel is omitted rather
+than filled with a mass. The rest of the registry is untouched: 19 of 134 states still advance, the
+build order is still 27 · 25 · 14 · 68, and `--strict` still exits 2.
+
+## The residual was the observation, and eight ledger names were published by nothing
+
+`consumables/components.yaml#ledgers` declares one **triple per resource** — a ledger channel, an
+observation and their residual — with concrete names: `res.ledger_main_propellant_kg`,
+`res.recon_main_propellant_kg`, and so on for oxygen, water and RCS propellant. Its own note says why
+the triple is the instrument: *"the residual is published as evidence and never reconciled silently.
+It is how a slow leak first becomes visible — the leak is far below any sensor's precision long before
+it is above any threshold."* Apollo 13's signature is a quantity indication that disagrees with the
+bookkeeping.
+
+The registry declares the **family** `res.ledger_[resource]_kg`, and `domains/consumables/points.yaml`
+publishes it as **one row reading `prop_main_kg`** — the observed stock. `ChannelIndex`'s wildcard
+matches a concrete name against the family, so `check_domain`'s rule that every ledger channel must be
+registered has been resolving eight names — four ledgers and four residuals — that **no point row
+publishes**. Only the four observations exist. And the two rows that *do* publish carry the unit of
+the thing they read, so the unit test passed them and the frame said:
+
+```
+res.ledger_[resource]_kg: 18508.0
+res.recon_[resource]_kg: 18508.0
+```
+
+**A residual of 18,508 kg is not a residual.** It is the propellant mass under a name that claims to
+be `observed minus ledger`, on a channel whose note says a mismatch is evidence. A fleet reading the
+pair would see a bookkeeping error the size of the tank; the leak the pair exists to find is
+structurally invisible, because both terms are the same number. And the name is unusable besides:
+`values` is `map[channel_id, ...]`, and this is a family that also claims to be the water, the oxygen
+and the RCS ledger at once.
+
+### What the round changed
+
+- **The check asks the publisher rather than the pattern.** `check_domains` now collects the channel
+  ids some point row publishes *exactly*, and `check_domain`'s ledger rule compares against that set
+  as well as against the registry. Eight names fail it, and they are reported as **one debt** rather
+  than eight refusals: what is owed is one model, and the debt says what it is — a ledger accumulator
+  per resource (opening balance plus production less every charged draw less declared loss, and
+  `consumers:` already declares the draws) and an `algebraic` residual over it and the observation.
+  The registry's own open debt ("each registry entry naming the values its placeholders take") is why
+  the resolution rule above it has been passing, and that is stated where the debt is raised.
+- **The emitter omits a channel id that carries a placeholder.** A family is not a channel id, so it
+  is not a key in a `map[channel_id, ...]` — which is also what takes the two false readings out of
+  the frame, since both were published under exactly such a name. A test asserts that **no key in any
+  frame carries a placeholder**, at t=0 and after a tick, and that the observations the pair was
+  standing in for are still published.
+- **The two rows say what they are.** Their `derivation` prose now reads *owed, and this row is not
+  it*: the ledger has no state, the residual's two terms are the same number, and the frame carried
+  the observation under both names until this round. The obligation lives in the check, which names
+  the eight channels from the block rather than from a list.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 258 | **259** |
+| ledger channels published by nothing | 8, invisible | **8, one named debt** |
+| values a frame carries at tick 0 | 25 | **23** |
+| tests in `tests/test_vehicle_config.py` | 272 | **274** |
+
+The debt count rises by one because eight hidden obligations are now one visible one. Nothing else
+moves: 19 of 134 states still advance, the build order is still 27 · 25 · 14 · 68, `--strict` still
+exits 2, and the vehicle's reconciliation is still **owed** — the difference is that the ledger says
+so, and that the frame no longer publishes a residual that is a tank of propellant.
+
+## The oxygen supply had no tank, and the ECS guide has it on one page
+
+`eclss.o2_supply_pressure_psi` is the channel Apollo's own band is written for — 750-950 psi, a
+low-pressure event, a >5 psi/min fall — four declared faults perturb it, and its note says what it is
+for: *"the channel that corroborates a leak: the tank falls while the cabin pressure is held by the
+regulator."* And it read `o2_csm`, the shared oxygen **stock**, in kilograms. Round 30 omitted it
+rather than publishing 279 kg under a pressure's name, and named the choice the vehicle owed: a tank
+model or a sensed state.
+
+**The document answers it in one page.** `csm_ecs_study_guide.pdf` **PDF p. 12** (printed p. 2-1,
+section II) says the supply is *"two cryogenic tanks in the service module (S/M). Heaters within the
+tanks change the oxygen from a liquid to a gaseous state"*, and that downstream of the S/M shut-off
+valve *"the **high pressure (900 psig)** oxygen is supplied in parallel to the surge tank and backup
+tank in the LH equipment bay, and to the PLSS supply valve and the S/M supply regulator"*. The same
+page gives the surge tank's 3.7 lb, the inlet restrictors' 8.2 lb/hr at 900 psig, and the pressure
+transducer whose signal *"shares the indicator used for displaying O2 supply tank #1 pressure"* — so
+the quantity is **sensed**, on the real vehicle, and the channel's `layer: measurement` was right all
+along.
+
+### What landed
+
+`state o2_supply_pressure_psi` — a lag on the sentinel, `unit: psi`, **`initial: 900`** with its
+`initial_provenance` carrying the document and the page in the field, and the channel re-pointed at
+it. The frame now publishes `eclss.o2_supply_pressure_psi: 900.0` at tick 0, inside the channel's own
+band, instead of omitting it; the four faults that perturb the channel now perturb a number that
+exists; and the channel is oxygen's **observation** in `domains/consumables/components.yaml#ledgers`,
+which is what a sensed pressure is — so the ledger triple's observation term is now real.
+
+**And what it still owes is declared rather than implied.** A heated cryogenic tank holds its delivery
+pressure until the liquid is gone and then falls, so the relation between this state and `o2_csm` is a
+heater-and-regulator model rather than a gas law: the state carries `tau_s: UNCONFIGURED`, a
+`provenance.basis` of `UNCONFIGURED`, and a note recording the search — the ECS guide end to end and
+`mission_e_consumables.txt` — with what would close it (a tank or heater analysis, or a
+pressure-versus-contents curve). The debt entry that said the channel had *no producer* is rewritten:
+it has one, and what is owed is how it moves.
+
+### The choices made, on the record
+
+- **Sensed state, not an inferred one.** The document settles round 30's open question: the vehicle
+  had cryogenic tanks whose *pressure* was transduced and displayed. A tank model would have made the
+  pressure an inference from the stock, and the gas law is the wrong relation for a tank that is
+  boiling its contents on purpose.
+- **`lag` on the sentinel**, which is where the corpus keeps a published quantity no edge can drive
+  yet (`pressurant_pressure_psi` is the precedent). Its `internal_order` is declared with a note
+  saying the order means **nothing at all** — neither state reads the other — because the alphabet
+  would otherwise have decided it, and `o2_supply_pressure_psi` sorts before `suit_loop_flow_cfm`.
+- **900 psig as the starting value**, not a chosen number: the channel's own band brackets it, and the
+  figure is the document's working pressure for exactly this line.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 259 | **262** |
+| `UNCONFIGURED` scalars (linter / plant) | 111 / 185 | **113 / 187** |
+| world | 134 states | **135 states** |
+| build order | 27 · 25 · 14 · 68 | **27 · 26 · 14 · 68** |
+| channels read from a state | 134 (63 same-unit, 71 derived) | **135 (64 same-unit, 71 derived)** |
+| channels read from a node needing arithmetic | 7 (6 with a derivation) | **6 (6 with a derivation)** |
+| values a frame carries at tick 0 | 23 | **24** |
+| tests in `tests/test_vehicle_config.py` | 274 | **275** |
+
+The debt count rises by three — the state's time constant, its provenance basis, and the prose
+obligation for its rule — and every one of the three is a thing the vehicle now *says* it owes rather
+than a gap a reader had to notice. A real tick still advances 19 states and `--strict` still exits 2.
+
+## A band is a claim about the values a channel reads, and three of them were wrong
+
+The registry declares 43 `band` ranges and 15 `scale` ranges, and one rule had been applied to them:
+*a range with an alarm strictly inside it cannot be a band, so it is a scale*. That rule reads the
+**alarms**. Nothing read the **values** — and a band is a claim about what a channel should read, while
+a state's `initial` is the value it starts at, so where a channel publishes its source unchanged the
+two are claims about one number. The round added that reader and it found three defects, each with its
+own cause:
+
+| channel | declared | the value | what was wrong |
+|---|---|---|---|
+| `eclss.suit_loop_flow_cfm` | band 27–33 `**Sim**` | **35 cfm** | the band had no source and excluded the figure the only document publishes |
+| `prop.dps_throttle_pct` | band `[10, 60]` | **0 %** | a *band* where the range is a scale: the actuator parks below its operating band |
+| `eclss.absorber_capacity_pct` | band `[20, 100]` | **100.07 %** a minute after launch | the counter counts man-hours **spent** while its channel publishes capacity **left** |
+
+### The suit loop: the recommendation moved, not the figure
+
+`apollo_diode.md:92`'s 27–33 cfm carries the table's own `**Sim**` marker — *recommended nominal /
+expected range* — and no source. `csm_ecs_study_guide.pdf` **PDF p. 39** (printed p. 3-9, §III)
+publishes the suit compressor: *"In normal space operations, the operating compressor delivers
+approximately **35 cubic feet per minute** of suit gas at a pressure rise of 10 inches of water …
+Under emergency operating conditions … approximately **34.5 cubic feet per minute**."* A band centred
+on 30 sits five cfm below what the circuit delivers, so a healthy suit loop would read at the top of
+its own band. **Conflict C-27** records both, and the disposition is the published figure for the
+state and the band re-anchored at **32–38** — the design point as the centre, the recommendation's own
+half-width of 3 retained, because the width is a judgement about normal variation and the centre is
+now a citation. The LM's 12 cfm is a *per-suit* flow in the LM's own circuit; the register says so and
+does not pretend to reconcile it.
+
+### The throttle: a band that reports a parked engine as out of range
+
+`prop.dps_throttle_pct` declared the DPS's *operating* band, `[10, 60]`, and its own state's declared
+starting value is **0** — the actuator's closed stop, which is where it sits whenever the engine is
+off. That passed the alarm rule, because the alarm ("commanded into the 65–92.5 % non-operating
+region") is outside it. The operating band belongs on the component, where `operating_band_pct` and
+`non_operating_band_pct` already carry it, and the channel's range is now the full percentage **scale**
+— so the parked engine is in range and the *event* still fires where it should.
+
+### The absorbers: a counter that grew capacity
+
+This one the plant found, not the linter: a 60-second tick published
+`eclss.absorber_capacity_pct: 100.069`. The counter's node says what it is — *"a **consumption
+counter**, not a tank: it counts man-hours spent, so the element is exhausted when the count reaches
+its rating and the remaining capacity is a subtraction rather than a stock"* — and the edge's positive
+sensitivity agrees. But the state's `initial` was **72**, the rating itself, with
+`initial_source: coupling.yaml:nodes.absorber_capacity_csm.exhausted_at`: **two declarations that must
+not be equal, held equal by a check that compares them.** And the channel divided rather than
+subtracted, so a counter starting at its rating published a *full* element that had already spent
+everything. The fix is three lines and one direction: the counter starts at 0, the channel publishes
+`(rating − spent) / rating`, and the element now reads 100 % at MET 0 and falls as it is used — which
+is what the `<20` threshold on that channel always meant.
+
+### The instruments
+
+- **The linter** holds the three declarations the registry already had against each other —
+  `range`, `range_kind`, `from`, and the state's `initial` — and refuses when a band excludes the value
+  its own source starts at, naming both fixes (*the band is wrong* or *the range is a scale*). What it
+  cannot see is stated in its docstring: a channel carrying an evaluable `derivation` publishes
+  arithmetic rather than the state, and a linter has no tick.
+- **The plant's frame test** is that half's reader, and it is the wider instrument: every value the
+  reference plant publishes, at t=0 and after a tick, against every band in the registry. It is what
+  caught the absorbers, and it is DoD #5's own sentence — *no live declaration contradicts another* —
+  applied to the window the fleet actually reads.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | **261** |
+| `UNCONFIGURED` scalars (linter / plant) | 113 / 187 | **112 / 186** |
+| states fully configured | 109 / 135 | **110 / 135** |
+| build order | 27 · 26 · 14 · 68 | **27 · 25 · 14 · 69** |
+| conflicts recorded | 26 | **27** (C-27; C-25 and C-26 still open) |
+| tests in `tests/test_vehicle_config.py` | 275 | **277** |
+
+The debt count falls by one: the suit circuit's starting flow was owed and is now the ECS guide's
+figure. A real tick still advances 19 states and `--strict` still exits 2.
+
+## Three channels claimed three temperatures from one state, and two of them were the supply
+
+`thermal.coolant_supply_c`, `thermal.coolant_return_c` and `thermal.radiator_inlet_c` all read
+`coolant_loop_t` — the loop's supply state — and each declares a different band: 2.8–7.2, 5–15 and
+15–30 °C. **A subtraction of a number from itself is zero**, and the return channel's own note says
+what the pair is for: *"Return minus supply is the vehicle's heat load made visible in one
+subtraction."* All three were prose, so none of them published anything, and the obvious conversion —
+kelvin to Celsius, three times — would have published the *supply* under three names.
+
+What the three actually are, once the declarations are read together: `vehicle.yaml#thermal.loops`
+gives `loop_primary` a `supply_c` of 7.2 and a `radiator_inlet_c` of 22.8–23.9, sixteen kelvin higher.
+So the supply is the state and the other two are **a heat balance the vehicle has not got**: the rise
+is `load_w / (mass_flow_kg_s * c_p)`, the flow is a reading, and two of the three terms are declared
+nowhere — the fluid is named in the loops and its specific heat is *prose* inside `coolant_loop_t`'s
+relation ("about 3,600 J/kg-K"), and the loop's collected load is a sum over the domain's `heat_inputs`
+that nothing evaluates.
+
+### The conversion batch, and the two rows that say they are owed
+
+Nine channels that were prose are arithmetic now, and every one of them is held against a declaration
+rather than against my arithmetic:
+
+| channel | relation | the declaration it rests on |
+|---|---|---|
+| `thermal.coolant_supply_c`, `loop_transport_c`, `avionics_plate_c`, `comm_amp_c` | K − 273.15 | the channel's own `degC` against the state's `K` |
+| `thermal.primary_flow_l_min` | kg/s ÷ ρ × 1000 × 60 | `vehicle.yaml#thermal.loops.loop_primary.fluid_density_kg_m3` |
+| `eclss.cabin_pressure_psia`, `lm_cabin_pressure_psia` | Pa ÷ 6,894.757… | the psi, by definition |
+| `power.bus_a_current_a`, `source_1_current_a` | W ÷ V | `bus_a_v`, the bus's own reading |
+
+Three of the nine publish a value today — 7.2 °C, 7.2 °C and 1.44 L/min, all inside their bands — and
+the other six are waiting on states whose rules are still owed (`csm_cabin_pressure_pa` is `algebraic`
+with prose, `bus_a_v` is algebraic without a derivation, and the two zone lags have no `initial`). That
+is why the figure that moved is the debt's count **(4 → 13)** rather than the frame's.
+
+**And the two that cannot be computed now say so, in a field.** The corpus's prose derivations were two
+kinds wearing one name: an expression nobody had written yet, and one whose *terms do not exist*.
+`thermal.coolant_return_c` and `thermal.radiator_inlet_c` are the second, and each carries
+`owed:` — a sentence in the row naming what would close it and the bands the result has to land in
+(`return_c: [5, 15]`, `radiator_inlet_c: [22.8, 23.9]`). The linter reads the field three ways: an
+`owed` row that also carries an evaluable `derivation` is refused (the row computes its channel or it
+does not), an `owed` row whose sentence is a phrase is refused, and **the count of them is held to the
+debt's own sentence** — 2 of the prose rows. `domains/thermal/components.yaml#open_debts` carries the
+model: one `specific_heat_j_per_kg_k` field on the loop and one state holding its collected load, the
+same two terms `thermal.radiator_rejection_w` is waiting on.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | **262** |
+| derived channels carrying an evaluable `derivation` | 4 of 71 | **13 of 71** |
+| prose rows declaring themselves `owed` | — | **2** |
+| values a frame carries at tick 0 | 25 | **28** |
+| tests in `tests/test_vehicle_config.py` | 277 | **279** |
+
+The debt count rises by one because the loop's heat balance is now a sentence in the domain that owns
+it. Nothing else moves: 19 of 135 states still advance, the build order is still 27 · 25 · 14 · 69, and
+`--strict` still exits 2.
+
+## The mission's clock was inside its epoch's provenance, and step 7 was a comment
+
+Two declarations with nothing behind them, and they turned out to be the same accident seen twice.
+
+### The clock, two levels too deep
+
+`mission.yaml` declared the mission's duration, tick rate, tick count and *their* two provenance
+blocks **inside `met_epoch_provenance`** — the block that says where the epoch came from. Five
+declarations, two spaces deeper than the level their names imply, and the linter read them *there*:
+`check_mission_model` asked for `met_epoch_provenance.total_duration_h`, so the file and its reader
+agreed and neither could notice. What noticed was a reader written **fresh, without the assumption**:
+this round's `plant.py --determinism` asked `mission.yaml` for `tick_hz`, found nothing, and refused.
+
+Moving it found a third reader of the old path, and this is the round's sharpest result:
+`check_gnc_substepping` compared `gnc/estimator#sub_stepping.plant_tick_hz` against the mission's tick
+— read one level down — and **`return`ed silently when it was not there**. The move turned it into a
+check that ran nothing, which the folder names outright: *a check that cannot run is not a check that
+passed.* It refuses now, and the fixture that changes the rate to 40 Hz proves it speaks.
+
+So the round's fix is five parts: the clock at the top level; all three readers re-pointed; **the
+epoch's own provenance validated** (which nothing had ever done — its `basis` could have been anything);
+a new refusal for the *shape* (**a provenance block carrying another provenance block**, which is what
+had hidden the clock); and the demonstration that the third reader still fires.
+
+### Step 7 was a sentence
+
+`plant.md` §6 is the determinism contract: *"Two runs are equivalent iff, for the same seed and the
+same recorded input trace, every per-tick state hash is byte-identical."* Its rules include a
+**compare-point at every tick** — *"a hash over canonically-encoded state"* — and **canonical
+summation order**: *"contributors sorted by id before summing; float addition is non-associative and
+hash-map order is not a guarantee."*
+
+The plant's `step()` carried step 7 as a **comment** and nothing else. No hash, no canonical encoding,
+nothing that compared two runs — so *"the plant runs"* was a claim with no instrument behind it, and
+the definition of done's own second clause (*"a stable determinism hash across two runs of the same
+seed"*) had no implementation.
+
+What landed: `canonical_state` (sorted keys, `repr`-exact floats, every value tagged by type so `0` and
+`False` cannot collide), `state_hash` (SHA-256 over it, 16 hex digits, because this is a compare-point
+and not a security boundary), `canonical_contributors` (**sorted by id**, §6's other rule — the plant
+summed in `coupling.yaml`'s declaration order, so an edit that moved an edge could change the last bits
+of a sum and every hash downstream), and `plant.py --determinism`, which runs the same start twice,
+prints the compare-points and exits non-zero if two runs differ.
+
+The ordering change is provably behaviour-preserving today: the two integrators with more than one
+incoming edge (`zone_csm_avionics_t`, `coolant_loop_t`) already had the id-first edge as their driver,
+so the driver is the same one the declaration order picked — and the linter's `check_lag_drivers` sorts
+the same way, so the rule and the plant cannot disagree about which edge drives. Nothing demonstrated
+the *defect* until now because no stock in the corpus has two contributors yet; that is exactly the
+condition under which the thirty-eighth edge is added wrongly.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| mission clock keys at the top level of `mission.yaml` | 0 of 5 | **5 of 5** |
+| linter readers of the old nested path | 3 | **0** |
+| tests in `tests/test_vehicle_config.py` | 279 | **282** |
+
+No value moved and no count changed: this round is two declarations that said they were implemented and
+were not, plus the four instruments that now hold them. A real tick still advances 19 states, the build
+order is still 27 · 25 · 14 · 69, `--strict` still exits 2 — and `plant.py --determinism` now prints
+*"two independent runs of the same start: 50 of 50 compare-points identical"*.
+
+## Four blocks the linter holds could be deleted, and the corpus still composed
+
+The round before this one ended on a sentence: *a check that cannot run is not a check that passed.* So
+this round asked the mechanical version of it — **hold the input back and see whether the check
+notices** — and eleven blocks the linter reads were deleted from broken copies, one per case. Four of
+the eleven composed.
+
+### What was deleted, and what happened
+
+| block deleted | before | after |
+|---|---|---|
+| `channels.yaml#coverage` — the vehicle-wide census | COMPOSES, 262 debts | COMPOSES, **263** |
+| `coupling.yaml#failure_chains` — the fifteen stories | COMPOSES, 262 debts | **REFUSED** (and owed) |
+| `domains/thermal/fault_policy.yaml#coverage` | COMPOSES, 262 debts | COMPOSES, **263** |
+| `domains/gnc/components.yaml#estimator.sub_stepping` | COMPOSES, 262 debts | COMPOSES, **263** |
+
+Each was a **block-level** guard — `if not isinstance(coverage, dict): return`, `if not chains:
+return`, `if not coverage: return`, `if not isinstance(sub, dict): return`. Three of the four have a
+docstring that says the very thing the guard made optional: `check_fault_coverage`'s says *"A domain's
+coverage claim must be true, and every domain makes one"*, `check_layer_coverage` holds the registry's
+census against eleven policies, and `check_chain_faults` holds fifteen chains against 128 faults. The
+fourth's guard *reads* like applicability, and that is what made it the interesting one.
+
+**The failure chains were silent in two files at once.** Delete the block and the check returns; the
+linter's summary line prints *"0 failure chains"* instead of 15, for a reader that does not exist; and
+the README's front table still says *"the fifteen failure chains"* — a figure with no reader, in the row
+whose "declared cycles" and node-count clauses both already had one. Two statements about one
+list, neither checked, is the same silence arriving in the file that describes the file.
+
+This folder has the sentence already, written when `point_units` was the case:
+
+> **A field consulted only when it is present cannot report its own absence.**
+
+It was written about a *field* (`point_units` is read only as an exemption, so its absence cannot be
+seen by the check that reads it). Nothing said the same of a *block*, and a block is where the guard is
+structural: `return` is the natural way to write "nothing to check here", and it reads exactly like
+"nothing wrong here".
+
+### The fix: absence is a debt, and the count says so
+
+None of the four is a refusal on its own, because nothing about a missing claim is *wrong* — the claim
+is **owed**, which is what a debt is for. Each absence now reports a debt at the block's own path, and
+each debt carries the figures the linter derives, so the sentence that reports the absence is also the
+sentence that says what closes it:
+
+- `channels.yaml:coverage` — *"declares 148 registered channel(s) and no census block … derived here as
+  20 unperturbed, 15 of them `service`, and 42 perturbed `service` channel(s)"*;
+- `coupling.yaml:failure_chains` — *"declares no failure chains, and the domains' fault policies declare
+  128 fault(s) between them"*;
+- `domains/<domain>/fault_policy.yaml:coverage` — *"The domain publishes 15 channel(s) and no fault
+  perturbs 1 of them"*;
+- `domains/gnc/components.yaml:estimator.sub_stepping` — *"is not declared. C-07's resolution requires
+  the interface … every domain declares its natural rate"*.
+
+The chains are the case with a second half: the README figure is a checked figure now, so a corpus with
+no chains is **refused** as well as owed — `README.md:front table: calls coupling.yaml's chain list
+'fifteen' while it declares 0` — and that refusal is what a test asserts, because a debt alone leaves
+the non-strict gate at exit 0.
+
+### The round's own mistake, and how the fourth case was decided
+
+The sub-stepping block was first read as **not owed**: an estimator that runs at the tick rate needs no
+sub-stepping, nothing in the linter said the block was required, and making its absence a debt would be
+inventing an obligation — the one thing a debt count may not do. So the first draft of this section
+named it as the sweep's boundary case and left it.
+
+That reading was wrong, and the counter-evidence was in a file the round had already cited for
+something else. `integration/reconciliation/01-conflict-register.md` C-07 resolves the 50/100/200 Hz
+conflict with a sentence about exactly this:
+
+> What must not be deferred is the interface: **every domain declares its natural rate even though the
+> scheduler ignores it today.**
+
+The obligation was never the *check's* to decide, and it is not about sub-stepping at all — it is about
+the interface C-07 declined to defer. A domain that declares an estimator and no rate is a domain whose
+natural rate is undeclared, which is the deferred thing. So the fourth case is a debt like the other
+three, and the lesson is narrower and more useful than "look harder": **an absent declaration looks
+optional from inside the check that reads it, and the obligation is usually stated somewhere else.**
+
+Deleting the whole `estimator:` block is refused by two other checks, so the new debt carries the case
+the other guards do not: the estimator is there and its rates are not.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| blocks whose absence the linter reports | 0 of 4 | **4 of 4** |
+| README front-table figures the linter reads | the failure chains were not one | **it is** |
+| tests in `tests/test_vehicle_config.py` | 282 | **284** |
+
+The corpus itself is unchanged, so no pinned figure moved: 262 debts, 19 of 135 states advancing,
+27 · 25 · 14 · 69, `--strict` exits 2. What moved is what happens when a block is *not* there — and the
+sweep is stated as it ran: eleven blocks deleted from broken copies, four of which composed, and all
+four of those reported now.
+
+## The coolant's return was the wrong station, and a healthy loop would have tripped its warning
+
+Two channels, one state, and two bands sixteen kelvin apart.
+
+### What the corpus said
+
+`vehicle.yaml#thermal.loops.loop_primary` declared:
+
+```yaml
+supply_c: 7.2                 # 45 F, the mixed supply leaving the evaporator
+return_c: [5, 15]             # the diode's row for thermal.coolant_return_c
+radiator_inlet_c: [22.8, 23.9]  # 73-75 F, TN D-6718 and NR
+```
+
+and `domains/thermal/points.yaml` described the two channels that read those bands as **one station**:
+`thermal.coolant_return_c` was *"the loop temperature after the coldplates, before the radiator"*, and
+`thermal.radiator_inlet_c` was *"the loop temperature entering the radiator"*. Both rows read the same
+state — `coolant_loop_t` — and both are prose (their derivations are `owed`), so nothing had ever
+compared them.
+
+If they were one station, the published radiator inlet sits **above the return channel's own `>20` C
+warning** (`domains/thermal/profiles.yaml#coolant_return_high`, `apollo_diode.md:102`). A healthy
+vehicle in lunar orbit would trip that warning on every pass, and the alarm would be the corpus's own
+figure disagreeing with the corpus's own figure.
+
+### What the document said
+
+`csm_ecs_study_guide.pdf`, **PDF p. 74**, is the glycol temperature-control page:
+
+> if the temperature is less than 45 F the glycol temp control valve will … to mix with **the returning
+> cold glycol** to obtain 45 F at the inlet to the evaporator
+
+The returning glycol is **cold**, and it is mixed *up* to 45 F — which only makes sense for the line
+coming back **through the radiator**, not for the line leaving the coldplates. The same page gives the
+flow (167 lb/hr) and the evaporator's outlet (46 F).
+
+So the band was never the wrong number: **[5, 15] is the radiator's outlet** — the coolant coming back
+to the evaporator, which the study guide's mixing clause explains can be colder than the 45 F the valve
+holds the evaporator's inlet at. What was wrong was the *name*: `return` was doing duty for both the
+loads' return (the radiator inlet, 73-75 F) and the radiator's return (the outlet, 5-15 C), and the
+prose picked one while the figures meant the other.
+
+### The fix
+
+- the loop field is **`radiator_outlet_c: [5, 15]`** — same band, and a name that says which station;
+- `thermal.coolant_return_c`'s description is *"the coolant returning from the radiator to the
+  evaporator, after the radiator has rejected the load"*, and `thermal.radiator_inlet_c`'s is *"the
+  loop temperature leaving the coldplates and entering the radiator — the loads' return"*;
+- the heat load is **`radiator_inlet − supply`**, not `return − supply`: the domain's `open_debts`
+  sentence and the channel's own note said the latter, and it named the wrong pair of stations;
+- **`check_thermal_bindings` now holds the path**, with three rules the loop's geometry forces:
+  the loads only add heat (a post-load band cannot start below the loop's own supply), the radiator
+  only rejects it (its outlet cannot be warmer than its inlet), and **a loop that names its radiator's
+  stations may not also carry `return_c`** — two different things return on such a loop, and that
+  ambiguity is the defect. The LM keeps its `return_c`: it has no radiator, so the name has one
+  meaning there, and the rule says so by not firing.
+
+### The design the round did not take
+
+The first reading was that `loop_primary` had the *secondary* loop's figures on it — the vehicle
+carries two glycol circuits (`Apollo_Block_II_ECS_Components.pdf` lists a Primary **and** a Secondary
+Glycol Evaporator), the 45 F mixed supply looks like a cabin-circuit figure, and the published
+radiator inlet looks like a coldplate-circuit one. So the plan was to move `supply_c` to
+`loop_secondary` and re-point the four derivations that read it.
+
+The corpus refused the move before the linter did: **the zones declare `cooled_by: loop_primary`**, and
+`cabin_eq_csm_k` re-derives the cabins' equilibrium from that loop's supply against their own
+`limit_c`. Moving the supply would have been a topology decision taken to make two figures agree,
+which is the wrong direction — the figures already agreed once the *stations* were named. The question
+the move would have answered (which loads each of the two circuits serves) is recorded instead, in
+C-28, with the page that would settle it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| numeric conflicts recorded | 27 | **28** |
+| tests in `tests/test_vehicle_config.py` | 284 | **285** |
+| channels, edges, chains, states, nodes | 148 · 79 · 15 · 135 · 57 | unchanged |
+
+Nothing was re-rated and no channel was added or retired: this round moved a *name* onto the station
+its band describes, corrected the prose that had it elsewhere, and added the three rules that make the
+collapse impossible. The heat balance itself is still owed — `specific_heat_j_per_kg_k` and the loop's
+collected load — which is C-28's first open item, and the two channel rows still say so in their own
+`owed` fields.
+
+## Two of six zones were compared, and the other four were skipped in silence
+
+The check that holds a heat rate against the loads it sums found the state it compares by **node
+name**:
+
+```python
+state = next((s for s in states.values() if str(s.get("node")) == f"cabin_heat_{block.get('rate')}"), None)
+if state is None:
+    continue
+```
+
+`heat_inputs` has six zones. Two of them — the cabins — have states on nodes named `cabin_heat_csm`
+and `cabin_heat_lm`, so the convention matched them; the other four were skipped without a word. The
+`rate: csm` field existed only so the f-string could be built, and nothing else read it.
+
+### What the silence cost
+
+| zone | its heat | held against its loads before this round |
+|---|---:|---|
+| `csm_cabin` | 733 W | yes |
+| `lm_cabin` | 827 W | yes |
+| `csm_service_bay` | 630 W | **no** — declared, summed, compared to nothing |
+| `lm_descent_bay` | 180 W | **no** |
+| `csm_avionics_bay` | 360 W | **no state existed at all** |
+| `radiator_loop` | — | listed in `unheated`, with the reason |
+
+So 990 W of the vehicle's load was in the partition and in no comparison, and one zone could have lost
+its heat state entirely without the check saying so. That is the same defect the function's own
+docstring records one level up — `check_cabin_equilibrium` found all four of its inputs by convention
+until round 51 — arriving in the check written to hold the partition.
+
+### The fix
+
+The link is a declaration now, on the zone:
+
+```yaml
+csm_service_bay:
+  cooled_by: loop_primary
+  heat_state: service_bay_heat_w
+```
+
+and the check resolves it instead of guessing:
+
+- a heated zone with **no `cooled_by`**, or one that names something that is not a loop, is refused —
+  a heat rate with no loop is a watt with nowhere to go;
+- a `heat_state` that **does not resolve** is refused (the rule `check_zone_nodes` already applies to
+  the cabins' four links);
+- an **absent** `heat_state` is a **debt**, because nothing is wrong — the state is owed;
+- two zones naming **one state** are refused: a loop's collected load sums its zones, and a shared
+  state would count the same watts twice;
+- the state's `total_w` against the zone's loads, which is the rule that existed but only ever ran on
+  the cabins — it holds the service bay's 630 W and the descent bay's 180 W now.
+
+The `rate` field is gone with the convention that needed it.
+
+### The one zone that is owed, and why it is not built here
+
+`csm_avionics_bay`'s 360 W — the IMU, the guidance computer and the instrumentation — has no
+heat-rate state, so there is no `heat_state:` line on that zone rather than a wrong one. The linter
+reports it by name, with the load count and the sum, and it is the ingredient the loop's collected
+load is missing: the same 360 W is what the `>50 C` plate event is about, and `zone_csm_avionics_t`
+relaxes toward the structure plate rather than toward a heat-driven equilibrium.
+
+Building it is a graph change rather than a state: the bay's temperature node is driven by
+`E-STRUCT-PLATE`, and an `E-AVIONICS-HEAT` edge landing on the same node would become that lag's
+canonical driver — the first contributor by id — which would feed a watt into a state denominated in
+kelvin. The corpus's own idiom for that is the cabins': an equilibrium state between the heat and the
+sink, which the zone then relaxes toward. That is the next round's work, and it is why this round
+stops at the debt.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | **263** |
+| of which prose obligations | 150 | **151** |
+| zones whose heat rate is held against its loads | 2 | **4** |
+| tests in `tests/test_vehicle_config.py` | 285 | **286** |
+| states, nodes, edges, channels | 135 · 57 · 79 · 148 | unchanged |
+
+The new debt is the honest direction: the avionics bay's heat state was always owed — it is part of
+`domains/thermal/components.yaml#open_debts`'s "the loop's own collected load is a sum over
+`heat_inputs` that nothing evaluates" — and until this round nothing counted it.
+
+## The changelog row for the linter was four figures stale, and nothing read it
+
+`integration/reconciliation/README.md` carries one row per file, and each row is a *declaration about
+that file* — what it is, what it refuses, how big it is. The row for `tools/check_vehicle.py` opened
+by stating that the tool composes with **294** declared debts and carries 661 `report.refuse` call sites", and went on to
+name a tick order of 41 nodes, 138 severity declarations and 41 named channels with 3 described
+categories withheld.
+
+Counted against the tools, when this round looked:
+
+| the row said | the tool says |
+|---|---|
+| **294** declared debts | **263** |
+| 661 `report.refuse` call sites | **767** |
+| a tick order of 41 nodes | **57** |
+| 138 severity declarations | **142** |
+| 41 named channels and 3 described categories withheld | **38 and none** |
+
+Four of the five were stale, and nothing read any of them — the same sentence this folder has written
+about a dozen times (*a declaration no tool reads has already drifted*), arriving in the one file the
+vehicle's own README cannot reach. It is one directory away, it is a changelog about the *corpus*
+rather than the vehicle, and when this folder moves to its own repository it stays behind.
+
+### The reader, and why it is in the test file
+
+The obvious place for a check is `check_vehicle.py`, and it was written there first. It was the wrong
+place, for a reason the objective makes concrete: **the linter must not depend on a file that is not
+part of the vehicle.** Every fixture in `tests/test_vehicle_config.py` is a copy of this folder in a
+temporary directory, so a check that reads `../integration/…` would find nothing in every one of them
+— and a check that cannot run is not a check that passed, which would leave the row held by nothing
+in exactly the runs that matter.
+
+So the reader lives beside the one that already holds that README's test count, which is in the test
+file for the same reason. Every figure is *derived* rather than repeated: the debts and the node count
+from the linter's own output, the call sites from the tool's source, the severities and the withheld
+split from the corpus. And the reader is exercised against a stale row **one figure at a time** — each
+replaced by what the row said before this round — so a rule that had stopped matching could not pass
+by accident.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| the changelog row's stale figures | 4 of 5 | **0 of 5** |
+| readers of that row | 0 | **1** (and it holds five figures) |
+| `declared debts` | 263 | 263 |
+| tests in `tests/test_vehicle_config.py` | 286 | **287** |
+
+Nothing in the vehicle moved: 263 debts, 135 states, 57 nodes, 79 edges, 148 channels, `--strict` still
+exits 2. What moved is a paragraph one directory away that had been describing a smaller, different
+tool for many rounds.
+
+## The worklist's rule about declared arithmetic was unreachable on the sentinel
+
+Two findings in one round, because the second is what the first exposed.
+
+### The avionics bay's heat rate, the last ingredient
+
+`csm_avionics_bay` was the one heated zone whose load no state carried: `heat_inputs` assigns the IMU,
+the guidance computer and the instrumentation — 360 W — and the loop's collected load, which the
+heat-balance debt calls "a sum over `heat_inputs`", was short its avionics term. `avionics_bay_heat_w`
+sums them now, the same relation the other four heat rates are:
+
+```yaml
+expression: "csm_imu + csm_guidance_computer + csm_instrumentation"
+```
+
+It sits on the **`internal` sentinel**, and that is a decision rather than a shortcut. The bay's
+temperature is `zone_csm_avionics_t`, whose node is `coldplate_t` and whose driver is
+`E-STRUCT-PLATE` — a temperature per configuration. A heat-rate edge landing on that node would have
+to be denominated in K per W to be integrable, and the plant's canonical-driver rule (first
+contributor by id, `plant.md` §6) would make it the lag's driver, relaxing a *kelvin* state toward a
+*watt*. The cabins' idiom — an equilibrium state between the heat and the sink — is the shape that
+avoids it, and the sink here is the configuration's plate temperature, which arrives as an edge
+*sensitivity* rather than as a state, so the equilibrium cannot be derived until that lookup lands. So
+the state's reader is the loop's collected load, and the sentinel says so: no edge can reach it, so
+nothing here is pretending to drive a temperature.
+
+Landing it closed the debt the previous round counted — **263 → 262** — and it takes a real tick from
+**19 of 135 to 20 of 136 states**.
+
+### The rule that could not be reached
+
+The round's second finding is in `plant.py`'s `build_order`, and it is this folder's oldest shape
+again: *a check that cannot run is not a check that passed*.
+
+The classifier has one rule about arithmetic — **an `algebraic` state whose `derivation` the corpus
+declares is ready**, because round 20 taught the plant to evaluate it — and it sat *below* the
+sentinel routing, which `continue`s:
+
+```python
+if state.node == "internal":
+    blocking_rule.append(state)   # advanced with its domain: its driver is code
+    continue
+...
+if state.method == "algebraic":
+    if <a derivation is declared>:
+        ready.append(state)       # unreachable for anything on the sentinel
+```
+
+The sentinel routing was written first and correctly — for the fifty-odd sentinel states whose rule
+genuinely is domain code (`computer_mode`, `heater_bank_duty`, `attitude_error`, …). Nothing on the
+sentinel had a declared rule until this round, so the ordering never mattered. The moment
+`avionics_bay_heat_w` landed, the worklist filed a state whose arithmetic is three dotted paths under
+**"owes a rule: domain code"** and sent an implementer to write a rule that exists.
+
+The fix is one move: **ask whether the rule is declared before asking where the driver comes from.**
+The sentinel means *advanced with its domain*, which is a statement about where a driver comes from,
+not about whether one is declared. The negative is in the test: strip the derivation from a copy and
+the state goes back to owing a rule, because then there is code to write.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 263 | **262** |
+| states | 135 | **136** |
+| states fully configured | 110 / 135 | **111 / 136** |
+| a real tick | 19 of 135 | **20 of 136** |
+| build order | 27 ready · 25 value · 14 edge · 69 rule | **28** · 25 · 14 · **69** |
+| tests in `tests/test_vehicle_config.py` | 287 | **288** |
+
+The `rule` bucket did not move, which is the point: the state never belonged in it. What moved is one
+debt closed, one state advanced, one wrong instruction to the next implementer removed — and the
+worklist's own rule is now reachable from every state it applies to.
+
+## The loop's collected load was a sentence, and its every ingredient was already declared
+
+`domains/thermal/components.yaml#open_debts` has said, since the round that gave the zones their heat
+rates, that the loop's collected load is *"a sum over `heat_inputs` that nothing evaluates"*. Counted
+this round, the ingredients were all there:
+
+| zone | its heat rate | names |
+|---|---:|---|
+| `csm_cabin` | 733 W | `loop_primary` |
+| `csm_avionics_bay` | 360 W | `loop_primary` |
+| `csm_service_bay` | 630 W | `loop_primary` |
+| `lm_cabin` | 827 W | `loop_lm` |
+| `lm_descent_bay` | 180 W | `loop_lm` |
+
+Five rates, each held against the loads `heat_inputs` assigns, each on a zone that names its loop —
+and no figure that added them up. That is the third time this folder has found a join whose two
+halves both existed (`check_zone_nodes`' four links, the zone's `heat_state`, and now this), and the
+fix is the same shape: a state per loop, and a link the check reads rather than a convention it
+guesses.
+
+### What landed
+
+`loop_primary_load_w` **1,723 W** and `loop_lm_load_w` **1,007 W**, each an `algebraic` state on the
+`internal` sentinel whose derivation sums the heat rates of the zones that name it — which is also
+the CSM's and the LM's whole declared demand, because on this vehicle every heated zone is served by
+the loop it names. The loops declare the link:
+
+```yaml
+loop_primary:
+  load_state: loop_primary_load_w
+```
+
+and `check_thermal_heat_inputs` holds three things: a loop **no zone names** gets a *note* (not a
+debt: which of the two CSM circuits serves which zones is C-28's open question, and inventing a zone
+set for it would be inventing the answer); a loop that zones do name and that declares **no**
+`load_state` gets a **debt** naming the zones; and a `load_state` whose `total_w` is not the sum of
+those zones' heat rates is **refused**, because one of the two is a copy of a number the other
+determines. The zones are the declaration rather than a list inside the state, so **moving a zone to
+another loop moves both sums** — which is exactly what the fixture does, and both refuse.
+
+### The debt sentence, corrected rather than deleted
+
+The entry stays, because it still owes the specific heat; what changed is the half that is no longer
+true:
+
+> and the loop's own collected load **was** a sum over this domain's `heat_inputs` that nothing
+> evaluated — `loop_primary_load_w` and `loop_lm_load_w` are those sums now, held against the zones
+> that name each loop, so what this debt still owes is the specific heat alone.
+
+`check_debts_are_still_owed` refuses a standing debt that says its own obligation is answered, so the
+sentence had to move with the work rather than being left to drift.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| states | 136 | **138** |
+| states fully configured | 111 / 136 | **113 / 138** |
+| a real tick | 20 of 136 | **22 of 138** |
+| build order | 28 ready · 25 value · 14 edge · 69 rule | **30** · 25 · 14 · **69** |
+| tests in `tests/test_vehicle_config.py` | 288 | **289** |
+
+The two new states are counted **ready** rather than as owing code, which is round 40's classifier fix
+paying for itself: they are declared arithmetic on the sentinel, and both advance.
+
+**One observation that is not this round's fix.** The `internal` sub-map gains at most one computed
+sentinel state per tick: `_advance_into` stages with a shallow `dict.update`, so only the last
+sentinel state computed lands in `staged["internal"]`, and the commit merges that one entry into the
+previous map. Nothing is lost — every state's value is also at the top level under its own id, and
+`state_level` prefers that key — but a reader asking `values["internal"]["loop_primary_load_w"]` finds
+it only in the tick that computes it last. Making the staged merge deep is a finding of its own.
+
+## The second coolant loop had no declared role, and the document that answers it was already cited
+
+`loop_secondary` has been in the loop list since it landed with figures *scaled* from
+`loop_primary`'s and a reason that said only that no source gives them. What it **is** was never
+declared, which is why `check_thermal_heat_inputs` could only *note* that no zone names it, and why
+C-28 carried the question open: two CSM circuits serving different loads, or one circuit at two
+points? The study guide's `167 lb/hr` against the corpus's `200 lb/hr` was the evidence for the
+first reading.
+
+TN D-6718 — the Apollo experience report the corpus **already** takes its 200 lb/hr and its 73–75 °F
+radiator inlet from — answers both, on **PDF p. 11**:
+
+> The coolant system consists of a primary loop, which is operated continuously, and a secondary
+> loop, which serves as a backup system. The primary loop uses a centrifugal pump to circulate
+> **200 lb/hr** of coolant (ethylene glycol and water) … the flow leaving the evaporator is divided
+> into a **35-lb/hr** flow directed to the inertial measurement unit (IMU) … and a **165-lb/hr** flow
+> is routed to the suit heat exchanger … the 200-lb/hr flow is directed through a series-parallel
+> arrangement of 22 coldplates.
+>
+> A secondary coolant loop is provided as a backup for the primary loop and may be operated at the
+> discretion of the crewmembers. Both loops provide cooling for the suit and cabin atmospheres and
+> for the electronic equipment. The secondary loop does not have cabin-heating capability, nor does
+> it provide cooling to the guidance and navigation equipment.
+
+So the study guide's 167 lb/hr is **the 165-lb/hr suit-and-cabin branch of the same loop**, and the
+second circuit is a **backup** — a mode, not a zone server. That is what the corpus's zones have
+always implied (`cooled_by: loop_primary` on all three CSM compartments) and what nothing said.
+
+### What landed
+
+Every loop declares its **role**, and the check holds it against the zone join in both directions:
+
+```yaml
+loop_primary:
+  role: primary        # it serves the zones that name it, continuously
+loop_secondary:
+  role: backup         # a mode the crew selects: `set_coolant_loop`
+loop_lm:
+  role: primary
+```
+
+- a **`backup`** that a zone names in `cooled_by` is **refused** — a zone's declaration is the loop
+  that serves it continuously, and switching to the backup is `set_coolant_loop`'s
+  `primary | secondary | series | isolated` mode, which this domain already carries;
+- a **`primary`** that no zone names is **refused** — a loop with nothing to cool;
+- an absent `role` is a **debt**: the classification is owed, and until it is there neither rule can
+  be applied.
+
+`loop_primary`'s note now also carries the published split (35 lb/hr to the IMU, 165 to the
+suit/cabin exchangers, both rejoining before the 22 coldplates), because the heat balance's rise
+applies to the whole 200 lb/hr and the corpus had no statement of that either.
+
+### What this does *not* settle
+
+The **specific heat** is still owed, and the arithmetic is now sharp enough to say why it matters:
+
+| quantity | the corpus's figure |
+|---|---|
+| the loop's collected load (`loop_primary_load_w`, round 41) | 1,723 W |
+| the published flow (TN D-6718, p. 11) | 200 lb/hr = 0.0252 kg/s |
+| the published rise (45 °F mixed supply → 73–75 °F radiator inlet) | 15.6–16.7 K |
+| **the specific heat those three imply** | **≈ 4,100–4,400 J/kg·K** |
+
+That is at or above **water's** 4,182, and a 62.5 % ethylene glycol mixture is nearer 3.1–3.3 × 10³.
+So the three cannot all be true at once, and the candidates are named rather than chosen: the load
+is the zones' *electrical* demand (some of it — the S-band amplifier's RF, the cabin lighting —
+leaves the vehicle without entering the coolant); the 73–75 °F band is a flight figure for a
+particular load and environment rather than the design point; or the flow through the loads and the
+flow through the radiator are not the same stream (the cold-case mixing path in the same paragraph
+is exactly that, though it says *no bypass occurs* when the radiator cannot carry the total). What
+would settle it is a fluid-property table — the AOH SECS subsection (`.scratch/apollo/aoh_secs.pdf`,
+whose 53 pages have no usable text layer and must be rendered and read) is the candidate still
+unread, and TN D-6718 itself does not carry one.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| states · nodes · edges · channels | 138 · 57 · 79 · 148 | unchanged |
+| loops with a declared role | 0 of 3 | **3 of 3** |
+| tests in `tests/test_vehicle_config.py` | 289 | **290** |
+| the linter's refusal call sites (held by the changelog row) | 769 | **771** |
+
+## The coolant's specific heat was prose, and the document derives it from the loop's own three terms
+
+`coolant_loop_t`'s relation has said "with c_p about 3,600 J/kg-K" since the loop landed. It is the
+term the heat balance has been missing since round 34, and the one nothing could check: a number in
+a sentence, inside a relation, with no source behind it and no arithmetic in front of it.
+
+`Q = m_dot * c_p * dT` is exact, and **TN D-6718 publishes all three of the other terms for this
+loop**:
+
+| term | the document | the figure |
+|---|---|---|
+| `Q` | PDF p. 17 — the Blk I radiator's 3,700-Btu/hr capability against "the **4850-Btu/hr requirement** for an average earth-orbital environment" | 1,421.4 W |
+| `m_dot` | PDF p. 11 — "a centrifugal pump to circulate **200 lb/hr** of coolant" | 0.025199576 kg/s |
+| `dT` | PDF p. 11 — the 45 °F mixed supply to the 73–75 °F radiator inlet the entry's source already cites from NR | 28 °F = 15.5556 K |
+
+1,421.4 ÷ (0.025199576 × 15.5556) = **3,626.1 J/kg·K** — inside the range a 62.5/37.5 glycol-water
+mixture can have, and **0.7 % from the prose figure**, which is the corroboration: the sentence was a
+remembered number and this is the arithmetic behind it. The field is declared `derived`, and
+`check_thermal_bindings` re-derives it from the three declared terms, so it cannot drift from its own
+relation the way a prose figure can.
+
+### What the declaration unblocked
+
+With the property declared, the first of the two coolant temperatures that have waited since round 34
+becomes arithmetic:
+
+```yaml
+thermal.radiator_inlet_c:
+  expression: "(temperature_k + load_w / (mass_flow_kg_s * specific_heat_j_per_kg_k)) - kelvin_offset"
+```
+
+— `supply + load_w / (m_dot * c_p)` over four declarations (the `coolant_loop_t` reading, the loop's
+collected load from round 41, the published flow, and the specific heat). A tick publishes
+**26.06 °C** where the frame published a gap, and the frame's post-tick value count goes 28 → **29**.
+
+The corpus's own instruments noticed the conversion before the test suite did: `presentation.yaml`'s
+debt sentence states how many derived channels carry an evaluable `derivation` and how many prose
+rows declare what would close them, and `check_channel_derivations` refused the run until those two
+figures moved with the work — 13 → **14** and 2 → **1**. That check was written for exactly this
+round, and this is the first time a conversion has had to pay it.
+
+### The conflict the derivation exposed: C-29
+
+The loop's *collected load* is 1,723 W — the zones' electrical demand, summed in round 41 — and the
+requirement is 1,421.4 W. Over the document's flow and rise, the first needs a specific heat of
+**4,394 J/kg·K**: above water's 4,182, and impossible for any aqueous glycol mixture. The second
+gives 3,626. So the loop's **thermal** load is not its zones' electrical demand, and the 302 W
+between them is real — the S-band amplifier's radiated power, light through the windows, and a
+requirement that is an average rather than a peak.
+
+That is recorded rather than reconciled (C-29), because the consequence is a *reading* and not an
+error: with c_p = 3,626.1 the inlet is `7.2 + 1,723 / (0.0252 × 3,626.1)` = **26.06 °C**, above the
+loop's declared `radiator_inlet_c: [22.8, 23.9]` **design** band and below the channel's own 35 °C
+caution. The band is the point at which the radiator carries the requirement alone; a vehicle at its
+full electrical demand makes the **evaporator** take the difference, which is what
+`thermal.evaporator_rejection_w` (2,345 W) and the `water_cooling` budget are for. What would settle
+the gap is a heat-fraction per load or a peak-load figure for the lunar mission; neither is in any
+document read so far, and `loop_primary_load_w` keeps its meaning in the meantime.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| the loop's specific heat | prose, "about 3,600" | **3,626.1 J/kg-K, derived and re-derived** |
+| derived channels with an evaluable `derivation` | 13 of 71 | **14 of 71** |
+| prose rows declaring what would close them | 2 | **1** |
+| the frame's post-tick values | 28 | **29** |
+| numeric conflicts recorded | 28 | **29** (C-29) |
+| tests in `tests/test_vehicle_config.py` | 290 | **291** |
+
+What is still owed on this loop is the **other half of the balance**: `thermal.coolant_return_c` is
+`radiator_inlet_c − rejection_w / (m_dot * c_p)`, and `radiator_rejection_w`'s rule — ε σ A T⁴ minus
+the absorbed environmental load — is still domain code, so the return stays a prose row with one
+`owed` sentence rather than two.
+
+## The radiator had no temperature, so the loop's other half could not be computed
+
+Round 43 gave the loop's *rise* arithmetic. The *drop* needed something the model did not have, and
+`--readiness` had been saying so for rounds:
+
+```
+thermal  zone_radiator_t  edge E-ENV-RAD  E-ENV-RAD drives a lag in 'K' from `environment_heat`,
+                                         which is denominated in 'W'.
+```
+
+A lag relaxes toward a driver **in its own quantity**, and `E-ENV-RAD` delivered watts. So the panel's
+surface temperature had no rule at all, `radiator_rejection_w` (whose law is ε σ A T⁴ minus the
+absorbed load) had no T to be a function of, and `thermal.coolant_return_c` — the station the loop
+comes back through — could not be computed. Three declarations, one missing quantity.
+
+### The equilibrium, from the corpus's own law read backwards
+
+`radiator_model` states the law; it can be solved for temperature:
+
+```yaml
+radiator_eq_t:
+  expression: "((environment_heat_w + load_w) / (emissivity * stefan_boltzmann * area_effective_m2)) ** 0.25"
+```
+
+(2,477 + 1,723) ÷ (0.85 × 5.670374419e-8 × 8.1) = 1.0758e10, and its fourth root is **322.06 K**. The
+corpus's own design point checks it in the other direction: 2,588 W rejected at 285 K over the same
+emissivity and the same effective area is 2,575 W — the figure `radiator_model.csm` was sized from —
+so the equilibrium and the rating are one relation read two ways.
+
+Three things then follow, and each is a declaration rather than a patch:
+
+- a **node**, `radiator_eq`, and a driver edge of the right quantity — `E-RAD-EQ`, `K per K` = 1.0,
+  which is the shape the cabins' equilibrium edges already have. That retires the dimensional error
+  and with it a debt: the headline goes **262 → 261**;
+- **`radiator_rejection_w`'s derivation** — the same law at the equilibrium temperature, 4,200.13 −
+  2,477 = **1,723.13 W**. Which is the loop's collected load, and has to be: at equilibrium a
+  radiator passes exactly what it receives, so the state and `loop_primary_load_w` are one relation
+  read in two directions rather than two figures that happen to agree;
+- **`thermal.radiator_rejection_w`'s channel row** computes the law at the *live* surface temperature
+  instead, and **`thermal.coolant_return_c`** computes
+  `supply + (load_w − rejection_w) / (m_dot * c_p)` inline — because the panel's warm-up is a fact
+  about the *instantaneous* rejection, and a channel that read the equilibrium state could not show
+  it.
+
+### The balance closes, and the transient is visible
+
+| | at MET 0 + 1 tick | at 400 s | at equilibrium |
+|---|---:|---:|---:|
+| panel surface | 285.00 K | 312.29 K | 322.06 K |
+| rejection | 98.8 W | 1,236.1 W | 1,723.13 W |
+| `thermal.radiator_inlet_c` | 26.06 °C | 26.06 °C | 26.06 °C |
+| `thermal.coolant_return_c` | **24.98 °C** | 12.53 °C | **7.2 °C** |
+
+The panel starts at its own 285 K design point while the declared environment puts 2,477 W into it, so
+it warms with its 300 s time constant; the return falls from ~25 °C to the supply temperature as it
+does. That is a reading and not a defect — a cold panel in full sun cannot reject, which is what the
+return channel's `>20 °C` warning is for, and F-13's radiator-isolation chain is the same fact taken
+further. At equilibrium the two terms of the balance cancel and the loop returns exactly what it was
+given, which is the whole point of a closed loop.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | **261** |
+| of which prose obligations | 150 | **149** |
+| states · nodes · edges | 138 · 57 · 79 | **139 · 58 · 80** |
+| states fully configured | 113 / 138 | **114 / 139** |
+| a real tick | 22 of 138 | **25 of 139** |
+| build order | 30 ready · 25 value · 14 edge · 69 rule | **33** · 25 · **13** · **68** |
+| derived channels with an evaluable `derivation` | 14 of 71 | **15 of 71** |
+| prose rows declaring what would close them | 1 | **0** |
+| the frame's post-tick values | 29 | **32** |
+| tests in `tests/test_vehicle_config.py` | 291 | **292** |
+
+**The thermal domain's `owed` rows are gone**: both coolant temperatures are arithmetic, and the
+domain that carried the folder's longest-running debt — *"the loop has no heat balance"* — now has a
+loop whose heat balance closes in the plant. What remains owed there is C-29's heat fraction and the
+lunar-environment terms, not a temperature.
 
 ## The invariants, and which of them are enforced
 

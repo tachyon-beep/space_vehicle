@@ -299,6 +299,16 @@ nodes:
       tick of lag on the quantity the whole thermal domain is built on
   coolant_supply_t:  {domain: thermal, kind: state, unit: K, apollo: "101"}
   coldplate_t:       {domain: thermal, kind: state, unit: K, apollo: "105"}
+  radiator_eq:
+    domain: thermal
+    kind: state
+    unit: K
+    note: >-
+      the temperature the panel settles at for the load it carries: the radiator's own law solved
+      for T at the declared environment and the loop's collected load. The node exists because
+      `zone_radiator_t` is a lag and a lag needs a driver in its own quantity — `E-ENV-RAD` drove it
+      from a W node until round 45, so the plant refused the edge and the surface temperature had no
+      rule at all
   radiator_reject:
     domain: thermal
     kind: flow
@@ -1085,14 +1095,39 @@ edges:
       relation: "every watt the environment absorbs reaches the radiator surface, so the transfer is one for one in both the balance and the state it drives"
       at: "bad attitude, full sun"
       note: >-
-        **the forward edge `radiator_reject` did not have.** Round 70 moved `zone_radiator_t` onto
-        this node, found its only inbound edge was `E-WATER-RAD` — a back-edge, which neither the
-        linter nor the plant counts as a driver — and moved the state back. With the environment in
-        the graph the node has an input, and the radiator's temperature has something to be a
-        function of
+        **the environment's contribution to the equilibrium.** Round 70 moved `zone_radiator_t` onto
+        the `radiator_reject` node, found its only inbound edge was `E-WATER-RAD` — a back-edge,
+        which neither the linter nor the plant counts as a driver — and moved the state back, so
+        this edge was aimed at the lag and delivered watts to a quantity denominated in kelvin:
+        `--readiness` refused it by name ("drives a lag in 'K' from `environment_heat`, which is
+        denominated in 'W'"). Round 45 gave the surface a driver of its own kind — `E-RAD-EQ`,
+        from the node where the radiator's law is solved for temperature — and this edge now feeds
+        that solve, where watts are what it wants
     from: environment_heat
-    to: radiator_reject
+    to: radiator_eq
     kind: algebraic
+    advances: radiator_eq_t
+  - id: E-RAD-EQ
+    sensitivity:
+      value: 1.0
+      computation: "1.0"
+      unit: "K per K"
+      basis: derived
+      relation: >-
+        the panel relaxes toward the equilibrium at its own rate, and the transfer is one for one
+        because both ends are the same quantity — a temperature. `tau_s` on the state is what makes
+        it a relaxation rather than an assignment: 300 s, derived from the panel's own lumped mass
+        and its linearised radiation conductance
+      at: "bad attitude, full sun"
+      note: >-
+        **the driver `zone_radiator_t` never had.** Its old edge came from a W node, which the
+        linter's `lag_driver_basis` and the plant's `--readiness` both refuse; this one comes from
+        the node where `Q = epsilon * sigma * A * T^4` is solved for T, so the lag has a target in
+        kelvin and the rejection below it has a surface temperature to be a function of — which is
+        what the node's own `state_order` has said since round 70
+    from: radiator_eq
+    to: radiator_reject
+    kind: lag
     advances: zone_radiator_t
   - id: E-WATER-RAD
     sensitivity:

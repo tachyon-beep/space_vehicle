@@ -42,7 +42,7 @@ natural_rate_hz: 1
 # half and this list is the domain's, and the two are held equal.
 reads: [fuel_cell, bus_a, bus_b, avionics_compute, link, instrumentation, rcs_thrust,
         structure_config, water_cooling, command_executive]
-writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_transport,
+writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_eq, radiator_reject, loop_transport,
          cabin_zone_t, lm_cabin_zone_t, cabin_heat_csm, cabin_heat_lm, cabin_eq_csm,
          cabin_eq_lm, environment_heat, service_bay_heat, descent_bay_heat,
          service_bay_zone_t, descent_bay_zone_t]
@@ -429,19 +429,56 @@ state:
         as the service bay above and owed for the same reason: `E-BAY-HEAT-LM`'s sensitivity is
         `tau / (m x 900)` K per W, so this one scalar closes the descent bay's edge as well as its
         time constant. `LM0-510-1036` is what would answer both
+  - id: radiator_eq_t
+    node: radiator_eq
+    method: algebraic
+    unit: K
+    total_k: 322.06
+    provenance:
+      basis: derived
+      computes: total_k
+      derivation:
+        expression: "((environment_heat_w + load_w) / (emissivity * stefan_boltzmann * area_effective_m2)) ** 0.25"
+        inputs:
+          environment_heat_w: domains/thermal/components.yaml:state.environment_heat_w.total_w
+          load_w: domains/thermal/components.yaml:state.loop_primary_load_w.total_w
+          emissivity: domains/thermal/components.yaml:radiator_model.csm.emissivity
+          stefan_boltzmann: 5.670374419e-08
+          area_effective_m2: domains/thermal/components.yaml:radiator_model.csm.area_effective_m2
+      relation: >-
+        the temperature at which the panel's own emission carries what it absorbs plus what the loop
+        hands it: (2,477 + 1,723) / (0.85 x 5.670374419e-8 x 8.1) = 1.0758e10, and its fourth root is
+        322.06 K. The corpus's own design point checks it the other way — 2,588 W rejected at 285 K
+        over the same emissivity and the same effective area is 2,575 W, which is the figure
+        `radiator_model.csm` was sized from — so the equilibrium and the rating are one relation
+        read in two directions
+      note: >-
+        **the equilibrium the panel relaxes toward, which is what its driver edge never had.**
+        `E-ENV-RAD` drove a lag in K from a W node, so the plant refused it and `zone_radiator_t`
+        had no rule at all; the node's own `state_order` already said the surface temperature is
+        what the rejection is a function of, and this is what the surface temperature is a function
+        of. The declaration is the *steady* temperature for the declared operating point: the panel
+        starts at 285 K, its design linearisation point, so the first few hundred seconds are a
+        warm-up in which the surface is below equilibrium and the rejection is correspondingly
+        small — a transient the channel below shows rather than one this state hides
   - id: zone_radiator_t
     method: lag
     node: radiator_reject
     unit: K
-    initial: 285
-    initial_source: domains/thermal/components.yaml:radiator_model.csm.radiating_temperature_k
+    initial: 322.06
+    initial_source: domains/thermal/components.yaml:state.radiator_eq_t.total_k
     initial_provenance:
       basis: derived
       relation: >-
-        the panel starts at the temperature its own rating is written at. The 2,588 W rejection
-        and the 8.1 m2 effective area are the figures at a 285 K radiating surface, so 285 K is
-        this model's linearisation point rather than a second number: a panel that began
-        anywhere else would start outside the relation that sized it
+        the panel starts where its own law says it settles for the declared operating point:
+        `radiator_eq_t` is (2,477 W absorbed + 1,723 W of loop load) over (0.85 x 5.670374419e-8 x
+        8.1), and its fourth root is 322.06 K. **It started at 285 K until round 45** — the
+        temperature the radiator's own rating is written at, which is the *design* point with no
+        absorbed load — and that is not an equilibrium for the environment this corpus declares:
+        the panel would warm for its 300 s time constant, and for the first minutes the coolant
+        return would sit at ~25 C, above its own 5-15 C band and over its own >20 C warning. A cold
+        panel in full sun is a real condition (it is F-13's, one attitude change away), but it is
+        not MET 0: the vehicle begins in the attitude its environment state describes
     tau_s: 300
     provenance:
       basis: derived
@@ -569,10 +606,31 @@ state:
     method: algebraic
     node: radiator_reject
     unit: W
+    total_w: 1723.13
     provenance:
       basis: derived
-      relation: "epsilon x sigma x A_eff x T^4, minus the absorbed environmental load; see the radiators block below"
-      note: "algebraic because rejection is a function of the current surface temperature, not an integral of it — which is exactly why C-RAD-COOL is an algebraic loop solved to consistency rather than a delayed cycle"
+      computes: total_w
+      derivation:
+        expression: "emissivity * stefan_boltzmann * area_effective_m2 * radiator_eq_k ** 4 - environment_heat_w"
+        inputs:
+          emissivity: domains/thermal/components.yaml:radiator_model.csm.emissivity
+          stefan_boltzmann: 5.670374419e-08
+          area_effective_m2: domains/thermal/components.yaml:radiator_model.csm.area_effective_m2
+          radiator_eq_k: domains/thermal/components.yaml:state.radiator_eq_t.total_k
+          environment_heat_w: domains/thermal/components.yaml:state.environment_heat_w.total_w
+      relation: >-
+        the law `radiator_model` states, read at the equilibrium temperature: 0.85 x 5.670374419e-8
+        x 8.1 x 322.06^4 = 4,200.13 W of emission, less the 2,477 W the environment puts in, is
+        **1,723.13 W** — which is the loop's collected load, and has to be: at equilibrium a radiator
+        passes exactly what it receives, so this state and `loop_primary_load_w` are one relation
+        read in two directions rather than two figures that happen to agree
+      note: >-
+        **the steady rejection.** The *instantaneous* one — the same law at the surface temperature
+        this tick — is what `thermal.radiator_rejection_w`'s channel row computes, and the two
+        differ during the panel's warm-up. It is this state that `coolant_return_c` reads, because
+        the return is what the loop settles at. Algebraic because rejection is a function of the
+        current surface temperature, not an integral of it — which is exactly why C-RAD-COOL is an
+        algebraic loop solved to consistency rather than a delayed cycle"
   - id: loop_lm_load_w
     node: internal
     method: algebraic

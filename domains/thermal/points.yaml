@@ -22,26 +22,34 @@ points:
   - channel: thermal.coolant_return_c
     from: coolant_loop_t
     layer: measurement
-    derivation: "the coolant returning from the radiator to the evaporator, after the radiator has rejected the load"
-    owed: >-
-      **the radiator's own drop, and the load's rise is the other half.** This row read "the loop
-      temperature after the coldplates, before the radiator" until round 37, and that description
-      put it on the *hot* side of the loop — the same station `thermal.radiator_inlet_c` publishes at
-      73-75 F, sixteen kelvin above this channel's band and above its own >20 C warning. The
-      vehicle's own vocabulary has the return *cold*: `csm_ecs_study_guide.pdf` PDF p. 74 says the
-      glycol temperature control valve mixes "with the returning cold glycol to obtain 45 F at the
-      inlet to the evaporator", which is a line coming back from the radiator, not one leaving the
-      coldplates. What would close it: the same two terms the inlet row names — a
-      `specific_heat_j_per_kg_k` on the loop and a state holding the loop's collected load — applied
-      to the *rejection* rather than the load, since this row is `radiator_inlet_c -
-      rejection_w / (mass_flow_kg_s * c_p)`. The band the result has to land in is
-      `vehicle.yaml#thermal.loops.loop_primary.radiator_outlet_c: [5, 15]`, whose lower end the
-      study guide's mixing clause explains: the return can be colder than the 45 F the valve holds
-      the evaporator inlet at, which is exactly what "mix with the returning cold glycol" is for.
+    derivation:
+      expression: "(temperature_k + (load_w - (emissivity * stefan_boltzmann * area_effective_m2 * surface_t_k ** 4 - environment_heat_w)) / (mass_flow_kg_s * specific_heat_j_per_kg_k)) - kelvin_offset"
+      inputs:
+        temperature_k: coolant_loop_t
+        load_w: loop_primary_load_w
+        emissivity: domains/thermal/components.yaml:radiator_model.csm.emissivity
+        stefan_boltzmann: 5.670374419e-08
+        area_effective_m2: domains/thermal/components.yaml:radiator_model.csm.area_effective_m2
+        surface_t_k: zone_radiator_t
+        environment_heat_w: environment_heat_w
+        mass_flow_kg_s: coolant_flow_kg_s
+        specific_heat_j_per_kg_k: vehicle.yaml:thermal.loops.loop_primary.specific_heat_j_per_kg_k
+        kelvin_offset: 273.15
     note: >-
-      The drop across the radiator is the vehicle's heat load made visible in one subtraction —
-      inlet minus outlet — and it is the channel that tells an agent whether a rising component
-      temperature is a thermal problem or an electrical one.
+      **arithmetic since round 45, and it is the loop closing.** The station is the coolant coming
+      back through the radiator to the evaporator: the supply plus the rise the loads put in, less
+      the drop the radiator takes out — `supply + (load_w - rejection_w) / (m_dot * c_p)`, with the
+      rejection computed *here* rather than read from the equilibrium state, because the panel's
+      surface temperature is what the instantaneous rejection is a function of.
+
+      At equilibrium the two terms cancel and it reads the supply, 7.2 C — which is the physics and
+      not a coincidence: a radiator that settles at the temperature its load implies passes exactly
+      that load, so the loop returns what it was given. During the panel's warm-up it does not: at
+      MET 0 the surface starts at its 285 K design point while the declared environment puts 2,477 W
+      into it, so the rejection is ~98 W, the return reads **~25 C**, and it falls to 7.2 C over the
+      panel's own 300 s time constant. That transient is a reading rather than a defect — a cold
+      panel in full sun cannot reject, which is what the return channel's own >20 C warning is for,
+      and F-13's radiator-isolation chain is the same fact taken further.
   - channel: thermal.primary_flow_l_min
     from: coolant_flow_kg_s
     layer: measurement
@@ -150,12 +158,22 @@ points:
     from: radiator_rejection_w
     layer: estimate
     inputs: [thermal.radiator_inlet_c, "thermal.zone_[id]_t_c"]
-    derivation: "epsilon x sigma x A_eff x T_rad^4, minus the absorbed environmental load"
+    derivation:
+      expression: "(emissivity * stefan_boltzmann * area_effective_m2 * surface_t_k ** 4) - environment_heat_w"
+      inputs:
+        emissivity: domains/thermal/components.yaml:radiator_model.csm.emissivity
+        stefan_boltzmann: 5.670374419e-08
+        area_effective_m2: domains/thermal/components.yaml:radiator_model.csm.area_effective_m2
+        surface_t_k: zone_radiator_t
+        environment_heat_w: environment_heat_w
     note: >-
-      Marked an estimate because the radiating temperature is inferred from the inlet, and the
-      environmental term depends on an attitude the vehicle knows only approximately. The
-      event is 'capacity below generated heat', which is apollo's own condition and is
-      computable from published channels without knowing the truth.
+      **arithmetic since round 45, and it is the law at the surface temperature this tick** — the
+      same expression `radiator_rejection_w`'s state carries at the equilibrium temperature, which
+      is why the two differ while the panel is warming. Marked an estimate because the radiating
+      temperature is inferred rather than measured and the environmental term depends on an
+      attitude the vehicle knows only approximately. The event is 'capacity below generated heat',
+      which is apollo's own condition and is computable from published channels without knowing the
+      truth.
   - channel: thermal.evaporator_rejection_w
     from: radiator_rejection_w
     layer: estimate
