@@ -178,7 +178,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 246 declared debts
 and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
-a real tick advances **0** of the 134 states against the build order's **14** ready — the second
+a real tick advances **17** of the 134 states against the build order's **23** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 84 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 75 of the 134 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1786,10 +1786,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    14   10 %  ready now — the two classes the reference plant can advance
+    23   17 %  ready now — the classes the reference plant can advance
     20   15 %  owes a value — the cheapest to close, and the debt count already tracks them
     16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    75   56 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -9547,6 +9547,53 @@ for), and the corpus test asserts the nine declarations instead of the nine debt
 | prose obligations | 154 | **145** |
 | domains with an undeclared sentinel order | 9 | **0** |
 | tests in `tests/test_vehicle_config.py` | 261 | **263** |
+
+## The rule was in the configuration, and the plant would not read it
+
+Thirteen `algebraic` states declare their arithmetic as a `derivation` over named inputs — the two
+cabins' load sums, the equilibrium temperature each relaxes toward, the environment heat, the oxygen
+and carbon dioxide the crew consumes. The linter has evaluated every one of them since the round that
+introduced the idiom. **The plant refused all thirteen with "its rule is not in the configuration"**,
+which was false: the rule *was* in the configuration, as arithmetic, and the plant was the one reader
+that would not compute it.
+
+They are evaluated now, with the same substitution and the same evaluator the linter checks them
+with — one definition of what a derivation means, so a derivation the linter accepts is one the plant
+can compute. A state with no derivation still owes domain code and still refuses by name.
+
+```
+  19 of 134 states advanced   (was 0)
+```
+
+The tick's first real numbers are the load sums: **733 W** of CSM cabin heat, **827 W** of LM,
+**2,477 W** of environment heat, and the two cabins settling at **286.21 K** and **286.97 K**.
+
+### And the map it advances them into cannot hold them
+
+The first run after the evaluator landed set `csm_cabin_o2_kg` to **0.05315987** — which is the water
+vapour's mass — and `lm_cabin_o2_kg` to **0.0**, which is the nitrogen's. **The plant's value map is
+keyed by node**, and twelve nodes carry more than one state: `cabin_atm` and `lm_cabin_atm` carry
+five each (four gases and a pressure). A second state's value overwrites the first, so a stock
+advances from another gas's number — a plausible mass of the wrong quantity.
+
+A refusal rather than a repair, because the fix is a key-space change (`(node, state)` rather than
+`node`) that touches every reader of the map, and a wrong value is worse than a gap. The tick says
+**17 of 134** with the four gas stocks and two lags named as gaps instead, and the build order routes
+a state on a shared node to *code* — which is where the fix is.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states advanced by a real tick | 0 | **17** |
+| `ready now` in the build order | 14 | **23** |
+| `owes a rule` | 84 | **75** |
+| root gaps (the debt) | 46 | **38** |
+| `declared debts` | 246 | 246 |
+
+The headline did not move and the two figures that measure the remaining work both did: **the
+algebraic layer is not 13 rules to write, it is 13 declarations to read** — and the plant's own key
+space is now a named obligation rather than a silent overwrite.
 
 ## The invariants, and which of them are enforced
 

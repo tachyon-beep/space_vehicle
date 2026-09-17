@@ -66,6 +66,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
     Report,
+    derivation_value,
     derive_schedule,
     lag_driver_basis,
     stock_flux_basis,
@@ -218,6 +219,9 @@ class World:
     # sentinel in the order they advance, or the string "independent". Absent means the domain owes
     # the declaration, and this file says so out loud when it advances them anyway.
     internal_order: dict[str, Any] = field(default_factory=dict)
+    # Every YAML document a declared `derivation` may name, so an `algebraic` state's own arithmetic
+    # can be evaluated at a tick. Loaded once, with the world.
+    documents: dict[str, Any] = field(default_factory=dict)
 
     def states_on(self, node: str) -> list[State]:
         return [s for s in self.states if s.node == node]
@@ -328,6 +332,23 @@ def load_world(root: Path) -> World:
             "coupling.yaml", "the tick order cannot be derived: " + "; ".join(report.refusals)
         )
 
+    # **Every document a declared derivation may name.** The plant evaluates an `algebraic` state's
+    # own arithmetic (round 20), and a derivation's inputs are dotted paths into these files — so the
+    # world carries them, exactly as the linter's `load_documents` does. Without this the plant would
+    # have to guess where a number lives, and a guess about that is how a plant invents one.
+    documents: dict[str, Any] = {
+        "vehicle.yaml": load_yaml(root / "vehicle.yaml"),
+        "coupling.yaml": coupling,
+        "mission.yaml": load_yaml(root / "mission.yaml"),
+        "channels.yaml": channels_doc,
+        "presentation.yaml": presentation,
+    }
+    for directory in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        for name in ("components", "profiles", "commands", "points", "fault_policy"):
+            candidate = directory / f"{name}.yaml"
+            if candidate.is_file():
+                documents[f"domains/{directory.name}/{name}.yaml"] = load_yaml(candidate)
+
     channels: dict[str, dict[str, Any]] = {}
     for section, rows in channels_doc.items():
         if not isinstance(rows, list) or section in {"open_debts", "crew_positions"}:
@@ -354,6 +375,7 @@ def load_world(root: Path) -> World:
         nodes={str(k): v for k, v in (coupling.get("nodes") or {}).items()},
         internal_order=internal_order,
         channels=channels,
+        documents=documents,
         frame_fields=[
             str((f or {}).get("name"))
             for f in (presentation.get("frame") or {}).get("fields") or []
@@ -975,6 +997,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         )
         if not ok:
             raise Unconfigured(f"coupling.yaml:edge {driver_edge.id}", why)
+        _refuse_shared_node(world, state, where)
         tau = float(state.spec["tau_s"])
         driver = values.get(incoming[0].source)
         if driver is None:
@@ -988,6 +1011,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         return {state.node: driver + (current - driver) * alpha}
 
     if state.method == "stock":
+        _refuse_shared_node(world, state, where)
         quantum = float(state.spec["quantum"])
         # --------------------------------------------------------------------------------------
         # **The level, which this branch never read.** `stock_flux` returns a *delta* —
@@ -1080,6 +1104,30 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             f"{state.id}__shortfall": shortfall,
         }
 
+    if state.method == "algebraic":
+        # **The rule the configuration does carry, and the plant would not read.** Thirteen
+        # `algebraic` states declare their arithmetic as a `derivation` over named inputs — load
+        # sums, an equilibrium temperature, an environment heat — and the linter has evaluated every
+        # one of them since the round that introduced the idiom. The plant refused all thirteen with
+        # "its rule is not in the configuration", which was false: the rule *was* in the
+        # configuration, as arithmetic, and the plant was the one reader that would not compute it.
+        #
+        # So an `algebraic` state whose spec or provenance carries a `derivation` is evaluated here,
+        # with the same substitution and the same evaluator the linter checks it with — one
+        # definition of what a derivation means, so a derivation the linter accepts is one the plant
+        # can compute. A state with no derivation still owes domain code and still refuses by name.
+        derivation = state.spec.get("derivation") or (state.spec.get("provenance") or {}).get(
+            "derivation"
+        )
+        if derivation is not None:
+            _refuse_shared_node(world, state, where)
+            value, why = derivation_value(derivation, world.documents)
+            if value is None:
+                raise Unconfigured(f"{where}.derivation", f"cannot be evaluated: {why}")
+            if state.node == "internal":
+                return {"internal": {**{}, state.id: value}, state.id: value}
+            return {state.node: value}
+
     if state.method == "hazard":
         raise Unconfigured(
             where,
@@ -1097,6 +1145,30 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         "state's relation, a `discrete` state's transitions and a `dynamics` state's equations "
         "are domain code, and the configuration deliberately does not pretend to carry them",
     )
+
+
+def _refuse_shared_node(world: World, state: State, where: str) -> None:
+    """Refuse a state whose node carries another state, because the value map cannot hold both.
+
+    The map is keyed by node, so two states on one node overwrite each other and whichever advanced
+    first reads the other's number on the next tick. Twelve nodes carry more than one state;
+    `cabin_atm` and `lm_cabin_atm` carry five each. The fix is a key-space change and the reason this
+    is a refusal rather than a repair: a value of the wrong quantity is indistinguishable from a
+    right one on a panel.
+    """
+    if state.node == "internal" or state.method not in {"lag", "stock", "algebraic", "dynamics", "delay"}:
+        return
+    siblings = [other.id for other in world.states_on(state.node) if other.id != state.id]
+    if not siblings:
+        return
+    raise Unconfigured(
+        f"{where}",
+        f"integrates `{state.node}`, which carries {len(siblings) + 1} states "
+        f"({state.id} and {', '.join(sorted(siblings))}). The plant's value map is keyed by node, so "
+        "a second state's value overwrites the first and this one would advance from another "
+        "state's number — a plausible value of the wrong quantity rather than a refusal",
+    )
+
 
 
 def initial_values(world: World) -> dict[str, Any]:
@@ -1483,7 +1555,7 @@ def report_build_order(world: World) -> None:
     buckets = build_order(world)
     total = sum(len(v) for v in buckets.values())
     titles = {
-        "ready": "ready now — the two classes the reference plant can advance",
+        "ready": "ready now — the classes the reference plant can advance",
         "value": "owes a value — the cheapest to close, and the debt count already tracks them",
         "edge": "owes an edge — a coupling with no sensitivity, or a state nothing drives",
         "rule": "owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code",
@@ -1620,6 +1692,17 @@ def build_order(world: World) -> dict[str, list[State]]:
             # the edge. Without this the build order called four states ready that `advance` refuses
             # by name, which is precisely the disagreement this function's docstring says cannot
             # happen.
+            # **An `algebraic` state whose arithmetic the corpus declares is ready.** Thirteen of
+            # them carry a `derivation` over named inputs, the linter evaluates every one, and
+            # round 20 taught the plant to evaluate them too — so the worklist must stop sending an
+            # implementer to write code for a relation that is already a declaration.
+            if state.method == "algebraic":
+                derivation = state.spec.get("derivation") or (
+                    state.spec.get("provenance") or {}
+                ).get("derivation")
+                if derivation is not None:
+                    ready.append(state)
+                    continue
             if state.method == "lag" and incoming:
                 node_map = {name: dict(node) for name, node in world.nodes.items()}
                 ok, _ = lag_driver_basis(
@@ -1680,6 +1763,18 @@ def build_order(world: World) -> dict[str, list[State]]:
             integrated = state.method in {"lag", "stock"}
             if any(not (e.usable if integrated else e.declared) for e in incoming):
                 blocking_edge.append(state)
+                continue
+            # **A state whose node carries another state owes *code*.** The plant's value map is
+            # keyed by node, so two states on one node overwrite each other; `advance` refuses such a
+            # state by name and the fix is a key-space change in the plant. The bucket is `rule`
+            # because that is the file an implementer opens — and it comes *after* the edge test,
+            # because `advance` asks the edges first and the two must classify a state the same way.
+            if (
+                state.node != "internal"
+                and state.method in {"lag", "stock", "algebraic", "dynamics", "delay"}
+                and [o for o in world.states_on(state.node) if o.id != state.id]
+            ):
+                blocking_rule.append(state)
                 continue
             # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
             # else, so a delay state is domain code like the rest. Classifying it as ready would

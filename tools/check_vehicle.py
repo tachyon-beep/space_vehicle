@@ -10678,6 +10678,64 @@ def evaluate_expression(expression: str) -> float:
     return float(eval(expression, {"__builtins__": {}}, {}))  # noqa: S307
 
 
+def derivation_value(
+    derivation: Any, documents: dict[str, Any]
+) -> tuple[float | None, str]:
+    """The number a declared `derivation` evaluates to, or why it cannot be evaluated.
+
+    `check_declared_derivation` answers "does this value agree with its own arithmetic"; this answers
+    "what *is* the arithmetic", which is the question a plant asks before it advances an `algebraic`
+    state. The two share the syntax and the substitution, so a derivation the linter accepts is
+    exactly one the plant can compute — and one that names a path the plant cannot resolve is
+    refused by name rather than defaulted.
+
+    Returns `(value, "")` or `(None, reason)`. The reason distinguishes the three ways an input can
+    fail, because they need different fixes: a path that does not resolve (a rename), a path whose
+    leaf is `UNCONFIGURED` (a debt, counted where the quantity lives), and a leaf that is not a
+    number at all.
+    """
+    if not isinstance(derivation, dict):
+        return None, f"is a {type(derivation).__name__}, which is not a mapping"
+    expression = derivation.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        return None, f"declares the expression {expression!r}"
+    inputs = derivation.get("inputs")
+    if not isinstance(inputs, dict) or not inputs:
+        return None, "declares no inputs, so the expression has nothing bound to it"
+    values: dict[str, float] = {}
+    for key, raw in inputs.items():
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            values[str(key)] = float(raw)
+            continue
+        text = str(raw)
+        if ":" not in text:
+            return None, f"binds {key} to {text!r}, which is neither a number nor a source"
+        filename, dotted = text.split(":", 1)
+        document = documents.get(filename)
+        if document is None:
+            return None, f"binds {key} to {filename!r}, which is not a document this plant loaded"
+        resolved = resolve_dotted(document, dotted)
+        if resolved is None:
+            return None, (
+                f"binds {key} to {text!r}, which does not resolve. A source that has been renamed "
+                "reads exactly like a source that is unset"
+            )
+        if resolved == "UNCONFIGURED":
+            return None, f"binds {key} to {text!r}, which is UNCONFIGURED"
+        if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
+            return None, (
+                f"binds {key} to {text!r}, which resolves to {resolved!r} rather than a number"
+            )
+        values[str(key)] = float(resolved)
+    substituted = IDENTIFIER.sub(
+        lambda match, values=values: repr(values.get(match.group(0), float("nan"))), expression
+    )
+    try:
+        return evaluate_expression(substituted), ""
+    except Exception as exc:  # noqa: BLE001 - any failure is a named refusal
+        return None, f"cannot be evaluated: {exc}"
+
+
 def check_edge_derivations(
     coupling: dict[str, Any], documents: dict[str, Any], report: Report
 ) -> None:
