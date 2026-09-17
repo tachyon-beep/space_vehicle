@@ -177,11 +177,12 @@ pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
-and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, which
-is the figure `test_the_readme_status_matches_the_tools` did not pin until this round: the sentence
-above said "every figure in this sentence is derived by the tools and asserted against this file",
-and the one figure the definition of done actually watches — how many states the plant can advance —
-was neither stated here nor asserted anywhere. Every figure in this sentence is derived by the tools and asserted
+and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
+a real tick advances **2** of the 134 states against the build order's **18** ready — the second
+of those is the objective's own second completion criterion, and both are read out of
+`tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
+"every figure in this sentence is derived by the tools and asserted against this file" while the two
+figures that measure the remaining work were neither stated here nor asserted anywhere. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
 recurring finding arriving at its own status section. That completes the design's spike many times over (`simulator-design.md:113`
@@ -9405,6 +9406,42 @@ been looked for: **not a declaration no tool reads, but a tool's output no decla
 | figure | before | after |
 |---|---|---|
 | `states fully configured` | stated nowhere | **114 of 134** |
+| tests in `tests/test_vehicle_config.py` | 260 | 260 |
+
+## The definition of done's second figure: 18 ready, 2 advanced
+
+The objective's second completion criterion is *"`--build-order`'s 'ready now' bucket agreeing with
+what a real tick does"*, and it opens by stating the gap as **15 versus 1**. Both numbers are printed
+by `tools/plant.py` — the bucket by `--build-order`, the tick by `--readiness`, which runs §9's step 4
+for real against `initial_values` — and until this round **no declaration carried either of them**:
+the status paragraph claimed every figure in it was derived and asserted, and the two figures that
+measure the remaining work were neither stated nor asserted.
+
+They are now, and the gap has a composition:
+
+```
+   18   13 %  ready now — the two classes the reference plant can advance
+    2 of 134 states advanced, 132 could not
+  of the 132, 43 are the debt and 89 are states that read one
+```
+
+**The build order counts a state ready when its own declaration is complete; a tick cannot advance
+it unless its driver was produced in the same pass.** Thirty of the eighteen's difference is that
+distinction plus the sentinel: a state with every field filled and an edge whose sensitivity is owed
+is "ready now" to a worklist and still cannot move. The 43 root gaps are the domain-code layer
+(`algebraic`, `discrete`, `dynamics`, `delay` and `hazard` states whose rule the configuration
+deliberately does not carry), and the other 89 are states that read one of them — which is why the
+count that matters for the fourth phase is 43 and not 132.
+
+The two figures are held to the README by `test_the_readme_status_matches_the_tools` now, beside the
+configured-state count, so the next round's movement shows up as a number rather than as prose. This
+is round 15's finding generalised: **the tool already computed the answer; what was missing was a
+declaration that carries it.**
+
+| figure | before | after |
+|---|---|---|
+| `states advanced` by a real tick | stated nowhere | **2 of 134** |
+| `ready now` in the build order, held against it | stated nowhere | **18** |
 | tests in `tests/test_vehicle_config.py` | 260 | 260 |
 
 ## The invariants, and which of them are enforced
