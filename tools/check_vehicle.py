@@ -10679,7 +10679,9 @@ def evaluate_expression(expression: str) -> float:
 
 
 def derivation_value(
-    derivation: Any, documents: dict[str, Any]
+    derivation: Any,
+    documents: dict[str, Any],
+    readings: dict[str, Any] | None = None,
 ) -> tuple[float | None, str]:
     """The number a declared `derivation` evaluates to, or why it cannot be evaluated.
 
@@ -10689,10 +10691,20 @@ def derivation_value(
     exactly one the plant can compute — and one that names a path the plant cannot resolve is
     refused by name rather than defaulted.
 
-    Returns `(value, "")` or `(None, reason)`. The reason distinguishes the three ways an input can
-    fail, because they need different fixes: a path that does not resolve (a rename), a path whose
-    leaf is `UNCONFIGURED` (a debt, counted where the quantity lives), and a leaf that is not a
-    number at all.
+    **`readings` is what makes a channel's derivation evaluable at all.** A channel is a *reading*,
+    so its inputs may be readings: an input bound to a bare name — no `file.yaml:` prefix — is
+    *that state's value this tick*, and the reader that has the tick is the one that supplies it.
+    `None` means the caller has no live values, which is the linter's case and was the only case
+    until the frame started publishing derived channels; a mapping means those names are readings
+    and anything not in it is refused as before. The plant builds the mapping from its value map,
+    so a state that has no value this tick is absent from it rather than bound to something
+    plausible — a channel derived from a stock the plant has not advanced yet is a channel the
+    frame omits, which is the same rule the unit test already applies.
+
+    Returns `(value, "")` or `(None, reason)`. The reason distinguishes the ways an input can fail,
+    because they need different fixes: a path that does not resolve (a rename), a path whose leaf is
+    `UNCONFIGURED` (a debt, counted where the quantity lives), a leaf that is not a number, a bare
+    name the caller cannot read, and a reading whose value is not a number either.
     """
     if not isinstance(derivation, dict):
         return None, f"is a {type(derivation).__name__}, which is not a mapping"
@@ -10709,7 +10721,23 @@ def derivation_value(
             continue
         text = str(raw)
         if ":" not in text:
-            return None, f"binds {key} to {text!r}, which is neither a number nor a source"
+            # A bare name is a reading, and a reading the caller cannot supply is a refusal rather
+            # than a zero: an unbound input substituted numerically would publish a number nobody
+            # computed, which is the whole failure this folder is organised against.
+            if readings is not None and text in readings:
+                reading = readings[text]
+                if not isinstance(reading, (int, float)) or isinstance(reading, bool):
+                    return None, (
+                        f"binds {key} to {text!r}, which is a reading holding {reading!r} rather "
+                        "than a number"
+                    )
+                values[str(key)] = float(reading)
+                continue
+            return None, (
+                f"binds {key} to {text!r}, which is neither a number nor a source. A bare name is "
+                "a reading — a state's value this tick — and only a caller with the tick's value "
+                "map can supply one"
+            )
         filename, dotted = text.split(":", 1)
         document = documents.get(filename)
         if document is None:
@@ -10727,9 +10755,18 @@ def derivation_value(
                 f"binds {key} to {text!r}, which resolves to {resolved!r} rather than a number"
             )
         values[str(key)] = float(resolved)
-    substituted = IDENTIFIER.sub(
-        lambda match, values=values: repr(values.get(match.group(0), float("nan"))), expression
-    )
+    # **An unbound name was substituted with `nan` and refused by the expression evaluator**, whose
+    # answer was "not a numeric expression" — true, and about the wrong thing. A name the expression
+    # uses and the bindings do not carry is a typo in one of the two, and this is the only reader
+    # that can say which: `check_declared_derivation` refuses it for the declarations that carry a
+    # value, and a *channel*'s derivation carries none, so it is refused here instead.
+    unbound = sorted(set(IDENTIFIER.findall(expression)) - set(values))
+    if unbound:
+        return None, (
+            f"names {unbound} in its expression and binds nothing to them, so the arithmetic is "
+            f"over a name nothing supplies. The inputs are {sorted(values)}"
+        )
+    substituted = IDENTIFIER.sub(lambda match, values=values: repr(values[match.group(0)]), expression)
     try:
         return evaluate_expression(substituted), ""
     except Exception as exc:  # noqa: BLE001 - any failure is a named refusal
@@ -10868,6 +10905,53 @@ def lag_driver_basis(
     return True, ""
 
 
+def check_derivation_bindings(
+    where: str, derivation: Any, report: Report
+) -> tuple[str, dict[str, Any]] | None:
+    """The structure every `derivation` owes, whether or not it carries a value of its own.
+
+    The other half of `check_declared_derivation` is "does this agree with the value it claims"; this
+    is the half that needs no value, and it has a second call site now, which is why it is a function
+    rather than a paragraph: a **channel**'s derivation produces the channel, so there is no number
+    in the corpus to hold it against, and the two name rules still apply to it — *"every name the
+    expression uses is bound here"* and *"binds X, which the expression does not use, so nothing
+    reads it"*. A rule written twice is a rule that will disagree with itself.
+
+    Returns `(expression, inputs)` or `None` when the declaration is not a derivation at all.
+    """
+    if not isinstance(derivation, dict):
+        report.refuse(where, f"is a {type(derivation).__name__}, which is not a mapping")
+        return None
+    expression = derivation.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        report.refuse(f"{where}.expression", f"is {expression!r}, not an expression")
+        return None
+    inputs = derivation.get("inputs")
+    if not isinstance(inputs, dict) or not inputs:
+        report.refuse(
+            f"{where}.inputs",
+            f"is {inputs!r}. Every name the expression uses is bound here, and an expression "
+            "with no bindings is a `computation` rather than a derivation",
+        )
+        return None
+
+    named = set(IDENTIFIER.findall(expression))
+    for unknown in sorted(named - set(inputs)):
+        report.refuse(
+            f"{where}.inputs",
+            f"binds no {unknown!r}, which the expression uses. An unbound name is a number the "
+            "expression expects from somewhere this file does not say",
+        )
+    for unused in sorted(set(inputs) - named):
+        report.refuse(
+            f"{where}.inputs",
+            f"binds {unused!r}, which the expression does not use, so nothing reads it",
+        )
+    if named - set(inputs) or set(inputs) - named:
+        return None
+    return expression, inputs
+
+
 def check_declared_derivation(
     where: str,
     derivation: Any,
@@ -10884,38 +10968,13 @@ def check_declared_derivation(
     consumer's `rate_kg_s` is the same shape of claim — an arithmetic over named inputs, where each
     input is either a number or a `"<file>.yaml:<dotted.path>"` source. A second copy of these
     twelve refusals is the defect this folder spends its rounds removing, so the second binding
-    site calls this one instead.
+    site calls this one instead. The five refusals that need no value moved to
+    `check_derivation_bindings`, for the same reason and a third binding site.
     """
-    if not isinstance(derivation, dict):
-        report.refuse(where, f"is a {type(derivation).__name__}, which is not a mapping")
+    parsed = check_derivation_bindings(where, derivation, report)
+    if parsed is None:
         return
-    expression = derivation.get("expression")
-    if not isinstance(expression, str) or not expression.strip():
-        report.refuse(f"{where}.expression", f"is {expression!r}, not an expression")
-        return
-    inputs = derivation.get("inputs")
-    if not isinstance(inputs, dict) or not inputs:
-        report.refuse(
-            f"{where}.inputs",
-            f"is {inputs!r}. Every name the expression uses is bound here, and an expression "
-            "with no bindings is a `computation` rather than a derivation",
-        )
-        return
-
-    named = set(IDENTIFIER.findall(expression))
-    for unknown in sorted(named - set(inputs)):
-        report.refuse(
-            f"{where}.inputs",
-            f"binds no {unknown!r}, which the expression uses. An unbound name is a number the "
-            "expression expects from somewhere this file does not say",
-        )
-    for unused in sorted(set(inputs) - named):
-        report.refuse(
-            f"{where}.inputs",
-            f"binds {unused!r}, which the expression does not use, so nothing reads it",
-        )
-    if named - set(inputs) or set(inputs) - named:
-        return
+    expression, inputs = parsed
 
     values: dict[str, float] = {}
     complete = True
@@ -12302,7 +12361,9 @@ def check_lag_drivers(root: Path, coupling: dict[str, Any], report: Report) -> N
             report.debt(f"coupling.yaml:edge {incoming[0].get('id')}", reason)
 
 
-def check_channel_derivations(root: Path, report: Report) -> None:
+def check_channel_derivations(
+    root: Path, documents: dict[str, Any], report: Report
+) -> None:
     """The window's channels: how many are their source state, and how many are a sentence.
 
     Round 23 built the frame's `values` from the points registry and found, by refusing to publish a
@@ -12322,9 +12383,20 @@ def check_channel_derivations(root: Path, report: Report) -> None:
     pressure is not a constant.
 
     So they are counted here, from the registry and the states, and the debt's own sentence is held
-    to the count. It refuses when they disagree — which is what happens the moment a channel gains an
-    evaluable `derivation`, gains a unit, gains a state, or is added. The check cannot make the 71
-    evaluable; what it can do is make sure nobody has to count them by hand again.
+    to all three counts. **The first version of this refused outright the moment a channel gained an
+    evaluable `derivation`** — the instrument working, and a gate rather than a reader: it could say
+    that the conversion was due and not that it had begun, so landing the first batch would have
+    meant deleting the check. The count is what the debt needed: each converted channel moves one
+    figure in the sentence, the sentence is what says how far the conversion has got, and this holds
+    the two together. It refuses when they disagree, which is what happens the moment a channel gains
+    an evaluable `derivation`, gains a unit, gains a state, or is added.
+
+    **And the bindings are held to resolving**, which is the one thing a derivation can get wrong
+    that the count cannot see: a renamed document, a misspelled input or a bare name that is not a
+    state id leaves a channel the emitter silently omits — a reading lost from the frame with
+    nothing said. The question here is *existence* and not value, which is why it is not
+    `derivation_value`: that function evaluates, and evaluating a channel needs this tick's readings,
+    which a linter does not have and must not invent. See `check_channel_derivation_inputs`.
     """
     presentation = load(root / "presentation.yaml", report) or {}
     stated = " ".join(str(entry) for entry in presentation.get("open_debts") or [])
@@ -12352,38 +12424,122 @@ def check_channel_derivations(root: Path, report: Report) -> None:
             derivation = row.get("derivation")
             if isinstance(derivation, dict) and derivation.get("expression"):
                 evaluable += 1
+                check_channel_derivation_inputs(
+                    f"domains/{path.parent.name}/points.yaml:{row.get('channel')}.derivation",
+                    derivation,
+                    set(methods),
+                    documents,
+                    report,
+                )
     # The debt's own sentence, which is the only place these figures live outside the registry.
     stated_same = re.search(r"only (\d+) have the state's own unit", stated, re.I)
     stated_derived = re.search(r"the other (\d+) are", stated, re.I)
-    if not stated_same or not stated_derived:
+    stated_evaluable = re.search(r"(\d+) of the 71 now carry an evaluable", stated, re.I)
+    if not stated_same or not stated_derived or not stated_evaluable:
         report.refuse(
             "presentation.yaml:open_debts",
-            "no longer states how many published channels are their own source state and how many "
-            "are derived, so the figures this check computes have no declaration to be held to. A "
-            "count with no reader does not have to be plausible",
+            "no longer states how many published channels are their own source state, how many are "
+            "derived, and how many of the derived ones now carry an evaluable `derivation`, so the "
+            "figures this check computes have no declaration to be held to. A count with no reader "
+            "does not have to be plausible",
         )
         return
-    # **A channel that becomes evaluable must be published, not merely counted.** The plant omits a
-    # derived channel because prose cannot be applied; one that carries an `expression` over named
-    # inputs can be applied by the same evaluator that reads a state's `derivation`, so the frame
-    # omitting it is now a defect rather than a limit. Refused here rather than fixed silently,
-    # because the fix belongs in the emitter and this check's job is to say when it is due.
-    if evaluable:
-        report.refuse(
-            "presentation.yaml:open_debts",
-            f"has {evaluable} derived channel(s) carrying an evaluable `derivation`, and the frame "
-            "still omits them: what was prose is now arithmetic, so the emitter can publish them and "
-            "the debt's count is out of date. The check that reads this registry is the place that "
-            "says when the omission stops being a limit",
-        )
-    if int(stated_same.group(1)) != same or int(stated_derived.group(1)) != derived:
-        report.refuse(
-            "presentation.yaml:open_debts",
-            f"states {stated_same.group(1)} channels as their own source state and "
-            f"{stated_derived.group(1)} as derived, and the registry now has {same} and {derived}"
-            + (f" ({evaluable} of the derived ones carry an evaluable `derivation`)" if evaluable else "")
-            + ". A figure in prose that nothing recomputes is this folder's oldest finding",
-        )
+    # **Three counts, and the third is the one that moves.** A converted channel changes neither the
+    # 63 nor the 71 — its unit still differs from its source state's — so the figure the conversion
+    # moves is the count of evaluable derivations, and the sentence has to carry it or the debt is
+    # describing a vehicle that no longer exists. Each refusal names the figure it is about, because
+    # "the debt is out of date" is not something a reader can act on.
+    for stated_count, computed, what in (
+        (stated_same, same, "published channels are their own source state"),
+        (stated_derived, derived, "of those channels are derived"),
+        (stated_evaluable, evaluable, "of the derived channels carry an evaluable `derivation`"),
+    ):
+        if int(stated_count.group(1)) != computed:
+            report.refuse(
+                "presentation.yaml:open_debts",
+                f"states that {stated_count.group(1)} {what}, and the registry now has {computed}. "
+                "A figure in prose that nothing recomputes is this folder's oldest finding, and this "
+                "one moves with every channel the conversion lands",
+            )
+
+
+def check_channel_derivation_inputs(
+    where: str,
+    derivation: dict[str, Any],
+    state_ids: set[str],
+    documents: dict[str, Any],
+    report: Report,
+) -> None:
+    """Whether every input a channel's own arithmetic names is something the plant can read.
+
+    This is the *existence* half of `derivation_value`, and it is separate from it for one reason:
+    an evaluator needs a value for every reading, and a linter has no tick. The frame's readings are
+    this tick's state values, so what the linter can say about them is that the state exists —
+    **and what it must not do is stand in for the value**, because a probe substituted for a reading
+    is a number nobody computed appearing inside the check that exists to stop exactly that.
+
+    So three bindings resolve and nothing else does:
+
+      - a literal number;
+      - a `"<file>.yaml:<dotted.path>"` source that resolves to a number — the same
+        `resolve_dotted` the evaluator uses, so a renamed document or field is refused here by the
+        path it was renamed from;
+      - **a bare state id**, which `plant.emit_frame` supplies from the tick's value map — round 27's
+        decision on channel readings, and the reason this check takes the state table at all.
+
+    A bare name that is not a state id is refused rather than skipped: it is the shape a typo takes,
+    and a channel whose input names nothing is a channel the emitter omits in silence. The two rules
+    that hold the expression and the bindings to each other — every name used is bound, every binding
+    is used — come from `check_derivation_bindings`, the same function the value-carrying
+    declarations are checked with: a channel's derivation is one of those declarations, with its
+    value living in the *channel* rather than in the row, so it needs the same two rules and has no
+    number to be held against.
+    """
+    parsed = check_derivation_bindings(where, derivation, report)
+    if parsed is None:
+        return
+    _expression, inputs = parsed
+    for key in sorted(inputs):
+        raw = inputs[key]
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            continue
+        text = str(raw)
+        if ":" not in text:
+            if text in state_ids:
+                continue
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"binds {text!r}, which is neither a source nor one of the {len(state_ids)} states "
+                "this corpus declares. A bare name is a reading — that state's value this tick — so "
+                "a name that is not a state is a binding the emitter can only fail on",
+            )
+            continue
+        filename, dotted = text.split(":", 1)
+        document = documents.get(filename)
+        if document is None:
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"names {filename!r}, which is not a document this linter loaded. The sources it can "
+                f"resolve are {sorted(documents)}",
+            )
+            continue
+        resolved = resolve_dotted(document, dotted)
+        if resolved is None:
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"is {text!r} and {filename} has no {dotted!r}. A source that has been renamed reads "
+                "exactly like a source that is unset",
+            )
+            continue
+        if resolved == "UNCONFIGURED":
+            # Counted where the quantity lives, as everywhere else: the channel on top of it is a
+            # second report of one unknown, which is the inflation this folder forbids.
+            continue
+        if not isinstance(resolved, (int, float)) or isinstance(resolved, bool):
+            report.refuse(
+                f"{where}.inputs.{key}",
+                f"is {text!r}, which resolves to {resolved!r} rather than a number",
+            )
 
 
 def _units_agree(channel_unit: str, state_unit: str) -> bool:
@@ -15071,7 +15227,7 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_lag_drivers(root, coupling or {}, report)
-    check_channel_derivations(root, report)
+    check_channel_derivations(root, documents, report)
     check_thermal_budget(root, report)
     # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
     # oxygen in it is what the compartment's own two alarms have to call habitable.

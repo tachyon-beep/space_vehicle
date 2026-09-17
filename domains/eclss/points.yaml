@@ -26,8 +26,23 @@ points:
   - channel: eclss.co2_pp_mmhg
     from: csm_cabin_co2_kg
     layer: measurement
-    derivation: "the CO2 mole fraction of the cabin's total pressure"
-    note: "apollo's instantaneous alarm at >7.6 mmHg. The 3 mmHg one-hour average is a different statistic and lives on the derived channel below."
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: csm_cabin_co2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_csm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        mmhg_to_pa: 133.322387415
+    note: >-
+      apollo's instantaneous alarm at >7.6 mmHg. The 3 mmHg one-hour average is a different
+      statistic and lives on the derived channel below. **The mole fraction is arithmetic now
+      rather than a sentence**: the gas law over the live stock, the cabin's own volume and the
+      zone's temperature *state*, which is what `E-ZONE-ATM` declares as this quantity's driver. The
+      295 K `nominal_temperature_k` is deliberately not the input — `vehicle.yaml#thermal.zones`
+      says that figure is where the law's two *derivatives* are taken, and a channel computing a
+      level at it would report a cabin whose own temperature channel disagreed with it.
   - channel: eclss.co2_pp_1h_avg_mmhg
     from: csm_cabin_co2_kg
     layer: estimate
@@ -55,7 +70,15 @@ points:
   - channel: eclss.pp_o2_mmhg
     from: csm_cabin_o2_kg
     layer: measurement
-    derivation: "the oxygen mole fraction of the cabin's total pressure"
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: csm_cabin_o2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_csm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        mmhg_to_pa: 133.322387415
     note: >-
       236.02-256.71 mmHg, derived rather than chosen: 4.8-5.2 psia of total pressure is 248.23 to
       268.92 mmHg, and the 12.209 mmHg of water vapour and carbon dioxide
@@ -64,6 +87,9 @@ points:
       were the *total* pressure band**, which the oxygen can only reach in a cabin with no diluent
       and no water at all. The two failure modes are opposite and only one band covers both — below
       200 is hypoxic, above 300 is the fire risk that killed the Apollo 1 crew on the ground.
+      **The value is the same gas law the CO2 channel above carries**, over this gas's own molar
+      mass and stock — one relation, two channels of one mixture, which is what makes their sum
+      with the water vapour and the diluent the pressure `eclss.cabin_pressure_psia` reads.
   # ------------------------------------------------------------------------------------
   # The LM's three, and they were missing. The linter's producer check found them: every one
   # is a threshold's point (`lm_cabin_high`, `lm_cabin_low`, `lm_co2_caution`, `lm_ppo2_hypoxia`)
@@ -87,12 +113,23 @@ points:
   - channel: eclss.lm_co2_pp_mmhg
     from: lm_cabin_co2_kg
     layer: measurement
-    derivation: "the LM compartment's CO2 partial pressure"
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: lm_cabin_co2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_lm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.lm
+        mmhg_to_pa: 133.322387415
     note: >-
       the channel Apollo 13's crisis turned on, and the one whose LM path is a different absorber
       from the CSM's. The third-order clue in apollo_diode.md:335 is a rising trend *despite*
       normal pressure and oxygen, which is why this is published separately from the pressure
-      rather than derived from it by a fleet.
+      rather than derived from it by a fleet. **It is the same gas law as its CSM twin and a
+      different compartment in every term**: this stock, this zone's temperature state and the 6.7
+      m3 the LM's own entry declares — which is why the two channels move independently and a fleet
+      cannot average them.
   - channel: eclss.lm_cabin_temp_c
     from: lm_cabin_zone_t
     layer: measurement
@@ -107,11 +144,22 @@ points:
   - channel: eclss.lm_pp_o2_mmhg
     from: lm_cabin_o2_kg
     layer: measurement
-    derivation: "the LM compartment's oxygen partial pressure"
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: lm_cabin_o2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_lm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.lm
+        mmhg_to_pa: 133.322387415
     note: >-
       the same band as the CSM's and a different compartment, which is the point: during the
       surface phase the LM is the crewed vehicle and the CSM is empty and cold, so a fleet that
-      watched only `eclss.pp_o2_mmhg` would be watching the wrong spacecraft for three days.
+      watched only `eclss.pp_o2_mmhg` would be watching the wrong spacecraft for three days. It is
+      the CSM channel's gas law over the LM's own stock, volume and zone temperature, and at the
+      295 K the mixture's own `check` block is taken at, the two agree — which is a check on this
+      relation rather than a coincidence: one mixture, two compartments, one law.
 
   - channel: eclss.o2_supply_pressure_psi
     from: o2_csm

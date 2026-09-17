@@ -9696,6 +9696,128 @@ subtraction away from the state it reads, and the instrument now says so on the 
 | the window's derived channels, counted | in prose | **71 of 134, machine-checked** |
 | tests in `tests/test_vehicle_config.py` | 265 | **266** |
 
+## A channel is a reading, and the frame computes four of them now
+
+Rounds 23 and 24 left the window with two figures and a decision. The figures: **63 of the 134
+channels read from a state are that state, and 71 are derived** — a partial pressure from a mass and
+a volume, a flow in litres per minute from a mass flow and a density — with their `derivation`
+written as prose, which nothing can evaluate, so the frame omitted them. The decision (round 27):
+**a channel is a reading, so its inputs may be readings.** An input bound to a bare state id — no
+`file.yaml:` prefix — means *that state's value this tick*, and everything else is a literal or a
+`<file>.yaml:<dotted.path>` source, exactly as `derivation_value` already defined them. The
+alternative was point rows naming only static paths, which would have made every channel a constant,
+and a cabin's partial pressure is not a constant.
+
+That decision was the only thing standing between the registry and its first batch, and the batch is
+the two compartments' partial pressures — one gas law, four channels:
+
+```yaml
+    derivation:
+      expression: "mass_kg / molar_mass_kg_per_mol * gas_constant * temperature_k / (volume_m3 * mmhg_to_pa)"
+      inputs:
+        mass_kg: csm_cabin_co2_kg
+        molar_mass_kg_per_mol: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+        gas_constant: 8.314462618153
+        temperature_k: zone_csm_cabin_t
+        volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
+        mmhg_to_pa: 133.322387415
+```
+
+`plant.emit_frame` resolves the readings, evaluates the expression with the same `derivation_value`
+the linter checks an `algebraic` state's rule with, and publishes the number under the channel id.
+The three answers per channel are the contract, in order: **the derivation if it evaluates, the
+source state if the units agree, omission if neither.** Omission is still the fallback and not a
+failure — a channel derived from a stock the plant has not advanced is a channel with no number this
+tick, not one with an invented number.
+
+### What held the number honest
+
+Two readings, one relation, and they disagree on purpose:
+
+| at | `eclss.pp_o2_mmhg` | `eclss.co2_pp_mmhg` |
+|---|---:|---:|
+| 295 K, the model's own `check` | 246.3656 mmHg | 3.0000 mmHg |
+| the tick's own value map, after one tick | 239.03 mmHg | 2.9107 mmHg |
+
+The first row is the reader for the claim that these four rows are *that relation*: at the
+temperature `atmosphere_model.check.partial_pressures_mmhg` is taken at, the declared stocks
+reproduce the declared mixture to six figures in **both** compartments — 3.0 mmHg of carbon dioxide
+and the 246.37 mmHg of oxygen the total-pressure block derives as the remainder. The second row is
+the reason the derivation reads a **state** rather than the constant: `vehicle.yaml#thermal.zones`
+says `nominal_temperature_k` is where the law's two *derivatives* are taken, and a channel fixed to
+it would report a cabin whose own temperature channel disagreed with it. `derivation_value` gained
+the readings parameter for this, and one thing it lost: an identifier the expression used and the
+bindings did not carry was substituted with `nan` and refused by the expression evaluator as "not a
+numeric expression" — true, and about the wrong thing. It is refused by name now.
+
+**And the instrument that was watching this changed shape.** Round 24's `check_channel_derivations`
+refused outright the moment a derived channel became evaluable: it could say the conversion was due
+and not how far it had got, so landing the first batch would have meant deleting the check. The
+count is a figure in the debt's sentence now — `4 of the 71 now carry an evaluable derivation` — and
+the check holds the sentence to it, one refusal per figure, naming which moved. What it *added* is
+the question a count cannot answer: every evaluable derivation's bindings are resolved — a number, a
+source that resolves to a number, or a state id the emitter will read from this tick's value map —
+and its expression and bindings are held to each other, because a bare name that is not a state id,
+a path that has been renamed, or a name the expression uses and nothing binds all leave a channel
+the emitter omits in silence. That check asks about **existence**, not value, which is why it is not
+`derivation_value`: evaluating a channel needs this tick's readings, and a linter that stood a probe
+in for one would be inventing the number it exists to stop.
+
+### The mistakes this round made
+
+- **The four channels were still absent from the t=0 frame, and the round had assumed they would
+  not be.** `plant.py --frame` was the first thing run after the emitter change and it printed the
+  same sixteen values as before. The gas law needs the cabin's temperature, `zone_csm_cabin_t` and
+  `zone_lm_cabin_t` declare no `initial`, and the plant's `lag` falls back to its driver — so the
+  cabin starts at its *equilibrium*, 286 K, and not at the 295 K `vehicle.yaml#thermal.zones` calls
+  its nominal. The linter requires `initial` of every `stock` and of nothing else, which is why this
+  is silent, and **28 integrator states are in that position**. Declaring them, with their
+  provenance, is the next round.
+- **The linter refused the corpus's own new sentence, and it was right to.** The first version of the
+  count read digits and the sentence said "Four of the 71"; the check's refusal named the figure it
+  could not find, which is the join working on its first run.
+- **The emitter died on `TypeError: unhashable type: 'list'`.** `thermal.zone_[id]_t_c` names four
+  states in its `from`, because the template covers four zones — the old code stringified the list,
+  which is why a key that could never match anything looked like a key that had been tried. A
+  template's instantiations are the registry's own open debt, so the row is skipped by name rather
+  than guessed at.
+- **The check resolved every binding and never compared the expression's names to them.** The first
+  version of `check_channel_derivation_inputs` looked at `inputs` and never at `expression`, so a row
+  carrying `spare: 1` that nothing uses composed — and so would a name the expression uses and
+  nothing binds, which is the typo that loses a channel. Both rules already existed, in
+  `check_declared_derivation`, which needs a declared *value* to hold the arithmetic against and a
+  channel has none: it produces the channel. They are `check_derivation_bindings` now, called by
+  both, which is the third binding site that function's own docstring was written to justify.
+- **The check's own fixture had a path that resolves to nothing.** It bound
+  `state.coolant_flow_kg_s.value`, which has never existed — harmless while nothing resolved
+  bindings, and a second refusal the moment the check did. It binds a bare state id now, which is
+  the input form this round introduced.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | 247 |
+| derived channels with an evaluable `derivation` | 0 of 71 | **4 of 71** |
+| values a frame carries after one tick | 18 | **22** |
+| tests in `tests/test_vehicle_config.py` | 266 | **268** |
+
+Two things this leaves open, and both are named rather than implied. The derived channels whose
+`derivation` is still prose: `eclss.leak_rate_g_s` is a different relation and the two one-hour
+averages are a different *statistic* — a rolling mean needs an hour of state the plant does not
+carry, and the same expression under that channel's name would be a wrong reading rather than a
+missing one. And **eight channels read a coupling node rather than a state, and the seven whose
+`from` is a single node publish the node's raw number under a unit it is not** —
+`prop.propellant_remaining_pct` carries 18,508 kg under a `%`, `eclss.o2_supply_pressure_psi`
+carries a mass under a pressure, `res.battery_energy_wh` carries joules under a watt-hour. The unit
+test that governs a state source is not applied on the node branch at all, so this is the same
+finding as this round's in the opposite direction: the frame publishing what it cannot compute. The
+eighth, `thermal.zone_[id]_t_c`, is omitted only because its `from` is a list of four states — the
+template the registry has not learned to instantiate. The eight are enumerated in
+`.scratch/apollo/SOURCES.md` §0.24.2, with the conversion each one needs; that is the next batch, and
+this paragraph is a measurement rather than a declaration, because the check that would hold it is
+the one the fix brings.
+
 ## The invariants, and which of them are enforced
 
 

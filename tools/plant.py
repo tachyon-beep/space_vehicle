@@ -222,10 +222,11 @@ class World:
     # Every YAML document a declared `derivation` may name, so an `algebraic` state's own arithmetic
     # can be evaluated at a tick. Loaded once, with the world.
     documents: dict[str, Any] = field(default_factory=dict)
-    # channel id -> the state (or node) it is read from, from the domains' `points.yaml`. The frame's
-    # `values` is declared `map[channel_id, ...]` and this is the registry that says which state each
-    # channel id is.
-    points: dict[str, str] = field(default_factory=dict)
+    # channel id -> the row `domains/*/points.yaml` declares it in: what state it reads, whether it
+    # is registered as a different quantity from that state, and — where the row carries one — the
+    # arithmetic that turns the state into the channel. The frame's `values` is declared
+    # `map[channel_id, ...]`, and this is the registry that says which channel id is what.
+    points: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def states_on(self, node: str) -> list[State]:
         return [s for s in self.states if s.node == node]
@@ -353,14 +354,14 @@ def load_world(root: Path) -> World:
             if candidate.is_file():
                 documents[f"domains/{directory.name}/{name}.yaml"] = load_yaml(candidate)
 
-    points: dict[str, str] = {}
+    points: dict[str, dict[str, Any]] = {}
     for directory in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
         candidate = directory / "points.yaml"
         if not candidate.is_file():
             continue
         for row in (load_yaml(candidate).get("points") or []):
             if isinstance(row, dict) and row.get("channel") and row.get("from"):
-                points[str(row["channel"])] = str(row["from"])
+                points[str(row["channel"])] = row
 
     channels: dict[str, dict[str, Any]] = {}
     for section, rows in channels_doc.items():
@@ -818,6 +819,26 @@ def emit_frame(
     statement of it. Building the frame here is what turns that statement into something that
     either produces a frame or does not — and it is the one part of the file surface the vehicle
     side owns outright, so it is the part worth proving from this side of the window.
+
+    **A channel is a reading, so a derived one is computed rather than omitted.** `points.yaml`
+    declares each channel's `from` — the state it is a reading of — and, where the channel's unit is
+    not that state's, a `derivation`: an expression over named inputs, in the same idiom the corpus
+    has used for an `algebraic` state's rule since round 20. Round 27 settled what those inputs may
+    be, and it is the one question the conversion could not answer for itself: an input bound to a
+    **bare state id** means *that state's value this tick*, and everything else is a literal or a
+    `<file>.yaml:<dotted.path>` source, as `derivation_value` already defines them. So the emitter
+    substitutes this tick's readings before it evaluates, and `eclss.co2_pp_mmhg` — a mass in
+    kilograms, a volume, a temperature and the gas law — is published as a partial pressure in
+    millimetres of mercury rather than omitted or, worse, published as the mass.
+
+    Three answers per channel, in this order, and the order is the contract:
+
+      - **the row carries an evaluable `derivation`** — evaluate it at this tick's readings and
+        publish the number;
+      - **it does not, and the units agree** — the channel is the state itself, so publish the
+        state's value;
+      - **neither** — **omit**. Publishing 0.042 kg under a channel whose unit is mmHg is a reading
+        a fleet would act on and a quantity it is not, which is worse than a gap a reader can see.
     """
     # **`values` is `map[channel_id, ...]` and it was the plant's node-keyed map.** The registry
     # declares which state each channel is read from, so the frame is built from it: a channel whose
@@ -825,8 +846,39 @@ def emit_frame(
     # what makes the map a reading rather than a rumour.
     published: dict[str, Any] = {}
     by_state = {state.id: state for state in world.states}
-    for channel, source in sorted(world.points.items()):
+    # What this tick's value map can be read *by name*: a channel's derivation names the states it
+    # reads, and a state the plant has not advanced is absent rather than bound to a zero. That is
+    # the same rule as the omission below, one level down — a channel derived from a stock that has
+    # no level yet is a channel without a number, not a channel with an invented one.
+    readings: dict[str, Any] = {}
+    for candidate in world.states:
+        level = state_level(values, candidate)
+        if level is not None:
+            readings[candidate.id] = level
+    for channel, point in sorted(world.points.items()):
+        source = point.get("from")
+        if not isinstance(source, str):
+            # `thermal.zone_[id]_t_c` names its four states as a *list*, because the template covers
+            # four zones and naming one of them was how the cabins stayed in the family. A frame's
+            # `values` is keyed by channel id and this id still carries its placeholder, so what the
+            # frame can carry is the four instantiations — and instantiating a template is the
+            # registry's own open debt (`channels.yaml#open_debts`: "each registry entry naming the
+            # values its placeholders take"), not something the emitter may guess at. Omitted here.
+            continue
         state = by_state.get(source)
+        row = world.channels.get(channel) or {}
+        derivation = point.get("derivation")
+        if isinstance(derivation, dict) and derivation.get("expression"):
+            # A channel that declares its arithmetic is evaluated, whether or not its unit happens
+            # to agree with its source's: the `derivation` is what the channel *means*, and the
+            # unit test below is the fallback for the rows whose `derivation` is still prose.
+            value, why = derivation_value(derivation, world.documents, readings)
+            if value is not None:
+                published[channel] = value
+                continue
+            # No number this tick — a reading the plant has not advanced yet, most often — so the
+            # channel falls through to the unit test and then to omission. The linter is what
+            # refuses a derivation whose *bindings* do not resolve; this is the tick's own answer.
         if state is not None:
             # **A channel is its source only when the two are the same quantity.** `points.yaml`'s
             # `derivation` is *prose* — "the CO2 partial pressure from the mass and the volume" — and
@@ -835,7 +887,6 @@ def emit_frame(
             # `eclss.co2_pp_mmhg` is a reading a fleet would act on and a quantity it is not. The
             # units are the registry's own, so this is a comparison of two declarations rather than a
             # guess about a sentence.
-            row = world.channels.get(channel) or {}
             if str(row.get("unit") or "").strip().lower() != str(state.unit or "").strip().lower():
                 continue
             value = state_level(values, state)
