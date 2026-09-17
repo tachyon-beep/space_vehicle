@@ -10583,6 +10583,58 @@ The new debt is the honest direction: the avionics bay's heat state was always o
 `domains/thermal/components.yaml#open_debts`'s "the loop's own collected load is a sum over
 `heat_inputs` that nothing evaluates" — and until this round nothing counted it.
 
+## The changelog row for the linter was four figures stale, and nothing read it
+
+`integration/reconciliation/README.md` carries one row per file, and each row is a *declaration about
+that file* — what it is, what it refuses, how big it is. The row for `tools/check_vehicle.py` opened
+by stating that the tool composes with **294** declared debts and carries 661 `report.refuse` call sites", and went on to
+name a tick order of 41 nodes, 138 severity declarations and 41 named channels with 3 described
+categories withheld.
+
+Counted against the tools, when this round looked:
+
+| the row said | the tool says |
+|---|---|
+| **294** declared debts | **263** |
+| 661 `report.refuse` call sites | **767** |
+| a tick order of 41 nodes | **57** |
+| 138 severity declarations | **142** |
+| 41 named channels and 3 described categories withheld | **38 and none** |
+
+Four of the five were stale, and nothing read any of them — the same sentence this folder has written
+about a dozen times (*a declaration no tool reads has already drifted*), arriving in the one file the
+vehicle's own README cannot reach. It is one directory away, it is a changelog about the *corpus*
+rather than the vehicle, and when this folder moves to its own repository it stays behind.
+
+### The reader, and why it is in the test file
+
+The obvious place for a check is `check_vehicle.py`, and it was written there first. It was the wrong
+place, for a reason the objective makes concrete: **the linter must not depend on a file that is not
+part of the vehicle.** Every fixture in `tests/test_vehicle_config.py` is a copy of this folder in a
+temporary directory, so a check that reads `../integration/…` would find nothing in every one of them
+— and a check that cannot run is not a check that passed, which would leave the row held by nothing
+in exactly the runs that matter.
+
+So the reader lives beside the one that already holds that README's test count, which is in the test
+file for the same reason. Every figure is *derived* rather than repeated: the debts and the node count
+from the linter's own output, the call sites from the tool's source, the severities and the withheld
+split from the corpus. And the reader is exercised against a stale row **one figure at a time** — each
+replaced by what the row said before this round — so a rule that had stopped matching could not pass
+by accident.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| the changelog row's stale figures | 4 of 5 | **0 of 5** |
+| readers of that row | 0 | **1** (and it holds five figures) |
+| `declared debts` | 263 | 263 |
+| tests in `tests/test_vehicle_config.py` | 286 | **287** |
+
+Nothing in the vehicle moved: 263 debts, 135 states, 57 nodes, 79 edges, 148 channels, `--strict` still
+exits 2. What moved is a paragraph one directory away that had been describing a smaller, different
+tool for many rounds.
+
 ## The invariants, and which of them are enforced
 
 
