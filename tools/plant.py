@@ -1322,19 +1322,24 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         # "its rule is not in the configuration", which was false: the rule *was* in the
         # configuration, as arithmetic, and the plant was the one reader that would not compute it.
         #
-        # So an `algebraic` state whose spec or provenance carries a `derivation` is evaluated here,
+        # So an `algebraic` state whose provenance carries a `derivation` is evaluated here,
         # with the same substitution and the same evaluator the linter checks it with — one
         # definition of what a derivation means, so a derivation the linter accepts is one the plant
         # can compute. A state with no derivation still owes domain code and still refuses by name.
-        derivation = state.spec.get("derivation") or (state.spec.get("provenance") or {}).get(
-            "derivation"
-        )
+        #
+        # **And the key is `provenance.derivation` and not `state.derivation`, which is the round
+        # after the one above.** This read was `state.spec.get("derivation") or provenance...`, and
+        # `build_order` carried the same expression — so a state declaring arithmetic only at the
+        # state level was computed on every tick under a key `check_provenance_derivations` never
+        # looked at, and the *agreement* between these two reads is what hid it: two copies of one
+        # expression cannot disagree with each other, and neither was the declaration the linter
+        # checked. The linter refuses that spelling by name now, and this reads one key, which is
+        # the only way two readers cannot disagree about which declaration they are reading.
+        derivation = (state.spec.get("provenance") or {}).get("derivation")
         if derivation is not None:
             value, why = derivation_value(derivation, world.documents)
             if value is None:
                 raise Unconfigured(f"{where}.derivation", f"cannot be evaluated: {why}")
-            if state.node == "internal":
-                return state_values(world, state, value)
             return state_values(world, state, value)
 
     if state.method == "hazard":
@@ -1946,10 +1951,17 @@ def build_order(world: World) -> dict[str, list[State]]:
             # an implementer to write a rule that exists. The sentinel means "advanced with its
             # domain", which is a statement about *where the driver comes from*, not about whether
             # one is declared; a state whose inputs are all named has nothing left to write.
+            #
+            # **And it reads the same key `advance` does, which it did not until the round that
+            # found the disagreement.** This was `state.spec.get("derivation") or provenance...`,
+            # the same expression `advance` carried — so a state declaring its arithmetic only at
+            # the state level was called *ready* for a tick that the linter's own rule could not
+            # see, and the state at the top of this bucket's list was reported as implemented for
+            # a rule declared nowhere a check looks. A worklist that reads a different declaration
+            # than the checker is the "two readers, two answers" defect this function's own
+            # docstring is about.
             if state.method == "algebraic":
-                derivation = state.spec.get("derivation") or (
-                    state.spec.get("provenance") or {}
-                ).get("derivation")
+                derivation = (state.spec.get("provenance") or {}).get("derivation")
                 if derivation is not None:
                     ready.append(state)
                     continue

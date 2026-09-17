@@ -11868,6 +11868,23 @@ def check_provenance_derivations(
     as the worked example of what to write instead. The other two callers of `rederive` — an
     edge's `sums_to_h` block and `mission.yaml`'s tick arithmetic — are untouched: they are blocks
     whose inputs are numbers on their face rather than declarations elsewhere.
+
+    **A `derivation` written one level up is refused too, and it is the round that found this
+    check's own blind spot.** Everything above walks `state.provenance.derivation` — the idiom
+    twenty-one states use, eighteen of them `algebraic` — and the *plant* reads
+    `state.derivation or state.provenance.derivation` in two places, `advance()` and
+    `build_order()`. So a state could carry arithmetic at the state level that the plant computes
+    with and the worklist calls ready, under a key no check in this file ever looks at: a fixture
+    with a bare `derivation` on `bus_a_load_w` composed, and `--build-order` moved it out of *owes
+    a rule* (33 ready · 68 rules → 34 · 67) with nothing refusing. Two readers, two spellings, and
+    the one that checks read the spelling the other did not.
+
+    The refusal is the rule this file already states rather than a new one: a `derivation` is
+    checkable only when something says which field it produces (`provenance.computes`) and on what
+    basis (`provenance.basis`), and a state-level `derivation` declares neither — so there is
+    nothing to hold the arithmetic against and no value to compare it to. Moving it under
+    `provenance` is not a workaround; it is the form every other state in the corpus already uses,
+    and the plant reads that same key.
     """
     for name, document in sorted(documents.items()):
         if not name.endswith("components.yaml"):
@@ -11875,12 +11892,24 @@ def check_provenance_derivations(
         for state in (document or {}).get("state") or []:
             if not isinstance(state, dict):
                 continue
+            where = f"{name}:state {state.get('id')}"
+            if state.get("derivation") is not None:
+                report.refuse(
+                    f"{where}.derivation",
+                    "is a derivation at the state level, which nothing here evaluates and nothing "
+                    "can: the key this pass checks is `provenance.derivation`, because that is "
+                    "where a state says what its arithmetic produces (`provenance.computes`) and "
+                    "why it may claim it (`provenance.basis`). The plant reads *both* spellings, so "
+                    "this one would be computed on every tick while the linter reported a value "
+                    "nobody had checked — which is the defect, not the arithmetic. Move it under "
+                    "`provenance` with `basis: derived` and `computes: <field>`",
+                )
+                continue
             provenance = state.get("provenance") or {}
             derivation = provenance.get("derivation")
             computation = provenance.get("computation")
             if derivation is None and computation is None:
                 continue
-            where = f"{name}:state {state.get('id')}"
             subject = provenance.get("computes")
             if not subject:
                 report.refuse(

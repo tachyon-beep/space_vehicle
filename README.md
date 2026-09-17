@@ -15104,6 +15104,94 @@ domain that carried the folder's longest-running debt — *"the loop has no heat
 loop whose heat balance closes in the plant. What remains owed there is C-29's heat fraction and the
 lunar-environment terms, not a temperature.
 
+## A state's rule was declared in a place the plant read and the linter did not
+
+The rule layer is the largest block between here and `--strict` exit 0, and this round went looking
+for its cheapest group — an `algebraic` state whose relation is arithmetic over declarations that
+exist. `bus_a_load_w` is the first name on that list, and its own note has said what it is since the
+domain landed: *"sum of the enabled loads, recomputed every tick rather than tracked"*. Giving it a
+`derivation` over the loads' own `demand_w` fields is therefore a small change with a large
+consequence: the state stops owing a rule and starts being computed, ready now, in a real tick.
+
+It was tried on a copy first, which is the only reason this is a finding rather than a commit. The
+copy composed — `exit 0`, 261 debts, no refusal — and the build order moved:
+
+| | the corpus | with the derivation planted |
+|---|---|---|
+| buckets | 33 ready · 25 value · 13 edge · 68 rule | **34** · 25 · 13 · **67** |
+| a real tick | 25 of 139 states advanced | **26** of 139 |
+
+The arithmetic was in the file, the plant computed it, the worklist called it done — and
+`check_provenance_derivations`, the one pass that evaluates a state's arithmetic, had never seen it,
+because it walks `state.provenance.derivation` and the fixture had written `state.derivation`.
+
+### Two readers, two spellings
+
+The corpus has one home for a state's arithmetic and has had since the idiom landed: a
+`provenance` block with `basis: derived`, `computes: <the field it produces>` and a `derivation` of
+an `expression` over named `inputs`. Eighteen `algebraic` states and three lags carry it, and every
+one of them is re-derived on every run, against the field it claims to produce.
+
+The *plant* read that key **or** the state-level one, in two places, and the check that exists for
+exactly this question read the other one:
+
+| reader | the read, before this round | what it meant |
+|---|---|---|
+| `advance()` | `state.spec.get("derivation") or (provenance or {}).get("derivation")` | compute the state-level one when both are there |
+| `build_order()` | `state.spec.get("derivation") or (provenance or {}).get("derivation")` | the same expression, so the same answer — which is the agreement that hid the defect |
+| `check_provenance_derivations` | `provenance.get("derivation")` | **the only key anything ever checked** |
+
+So the second spelling was a hole with two mouths. A state carrying arithmetic *only* at the state
+level had it computed on every tick under a key no check looked at — and `computes` did not exist to
+be checked, because there is nowhere at the state level to write what the arithmetic produces. And
+the worklist is the reader that turns that from cosmetic into wrong: it is this folder's answer to
+*what do I implement first*, and it was reporting a state as already-implemented whose rule is
+declared nowhere the linter can find it.
+
+### The fix is one key, not a second check
+
+- **`check_provenance_derivations` refuses the state-level spelling by name**, and says where the
+  arithmetic belongs: the key that *is* checked is `provenance.derivation`, because that is where a
+  state says what its arithmetic produces and why it may claim it. The refusal is the rule this file
+  already states, applied to the key beside it rather than a new rule about arithmetic.
+- **The plant reads `provenance.derivation` only**, in both `advance()` and `build_order()`. That is
+  what makes the two readers a single reader: a derivation the linter evaluates is now exactly the
+  set the plant computes and the set the worklist counts ready, with no spelling that one of the
+  three accepts and another does not.
+
+**The mistake this round made on the way is worth recording, because the fixture caught it and a
+reader would not have.** The first version of the test wrote the corrected form by appending a
+second `provenance:` block to the state — and the state's original `provenance` was still there
+below it, so PyYAML kept the last one and the fixture landed where it started: `bus_a_load_w` went
+on owing a rule and the test failed on its own fixture rather than on the linter. That is the
+folder's oldest trap (*a key written twice in one mapping*) arriving in the round that was writing
+about a different one, and the fixture now rewrites the block it means instead of adding one beside
+it.
+
+**And the round found the same shape one file over, which it did not fix and is naming instead.**
+`check_tool_docstrings` reads `tools/faults.py`'s docstring and nothing else, so `tools/plant.py`'s
+own docstring — *"the schedule is derivable — 39 nodes"*, written when there were 39 — has been
+wrong since the schedule grew, and `plant.md` §2's "the derived order is 40 nodes" with it. Neither
+is read by anything, which is why neither moved. It is a round of its own because the fix has to be
+a reader rather than a correction: the README's historical sections quote figures like these on
+purpose, so the check needs to be scoped to the sentence that claims to be current.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 — the round adds a refusal, not a debt |
+| `report.refuse` call sites in the linter | 772 | **773** |
+| states · nodes · edges | 139 · 58 · 80 | 139 · 58 · 80 |
+| states fully configured · a real tick | 114 / 139 · 25 | 114 / 139 · 25 |
+| build order | 33 · 25 · 13 · 68 | 33 · 25 · 13 · 68 |
+| tests in `tests/test_vehicle_config.py` | 291 | **292** |
+
+**The corpus's own figures did not move, and that is the point**: this round wrote no value and
+closed no debt. What it closed is a hole between two readers — the state that a planted `derivation`
+made *ready* goes back to owing the rule nobody has written, and the four spellings of "where a
+state's arithmetic lives" are one.
+
 ## The invariants, and which of them are enforced
 
 
