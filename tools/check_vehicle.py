@@ -12312,6 +12312,15 @@ def check_channel_derivations(root: Path, report: Report) -> None:
     which nothing can evaluate. The frame omits them, the debt says so, and the two figures lived in
     a sentence: exactly the shape this folder spends its rounds removing.
 
+    **The decision the conversion needs, made here rather than by the first batch's author.** A
+    channel is a *reading*, so its inputs may be readings: an input bound to a bare state id (no
+    `file.yaml:` prefix) means **that state's value this tick**, and everything else is a static path
+    or a literal as `derivation_value` already defines them. `plant.emit_frame` substitutes the
+    reading before it evaluates, which is why a channel derived from a live stock
+    (`eclss.co2_pp_mmhg` from `csm_cabin_co2_kg`) can be published at all. The alternative — point
+    rows naming only static paths — would have made every channel a constant, and a cabin's partial
+    pressure is not a constant.
+
     So they are counted here, from the registry and the states, and the debt's own sentence is held
     to the count. It refuses when they disagree — which is what happens the moment a channel gains an
     evaluable `derivation`, gains a unit, gains a state, or is added. The check cannot make the 71
