@@ -13708,11 +13708,41 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
             served_by[cooled].append(zone)
     for loop_id, served in sorted(served_by.items()):
         loop_where = f"vehicle.yaml#thermal.loops.{loop_id}"
+        # **What each loop is, held against the zones that name it.** `role: primary` means the
+        # loop serves its zones continuously; `role: backup` means it is a *mode* the crew selects
+        # (`set_coolant_loop`), which is what TN D-6718, PDF p. 11 says the CSM's secondary loop is
+        # — "a backup for the primary loop and may be operated at the discretion of the
+        # crewmembers". So a zone naming a backup is a nominal assignment to a mode, and a primary
+        # that no zone names is a loop with nothing to cool; both are refused. An absent `role` is a
+        # debt, like every other absent declaration here: the classification is owed, and until it
+        # is there the check cannot say which of the two rules applies.
+        role = (loops_by_id[loop_id] or {}).get("role")
+        if role not in ("primary", "backup"):
+            report.debt(
+                f"{loop_where}.role",
+                f"is {role!r}, and a loop is either `primary` (it serves the zones that name it, "
+                "continuously) or `backup` (it is a mode the crew selects). Nothing here says which, "
+                "so neither rule below can be applied to it",
+            )
+            continue
+        if role == "backup" and served:
+            report.refuse(
+                f"{loop_where}.role",
+                f"is `backup` and {sorted(served)} name it in `cooled_by`. A backup is selected, not "
+                "assigned: the zone's declaration is the loop that serves it continuously, and "
+                "switching to the backup is `set_coolant_loop`'s mode",
+            )
+        if role == "primary" and not served:
+            report.refuse(
+                f"{loop_where}.role",
+                "is `primary` and no zone names it, so the loop that serves a compartment "
+                "continuously is a loop with nothing to cool",
+            )
         if not served:
             report.note(
                 f"{loop_where}.load_state",
                 "is not declared, and no zone names this loop, so there is no collected load to hold "
-                "— which zone each CSM circuit serves is C-28's open question rather than a figure",
+                "— a backup carries the same zones by selection rather than by assignment",
             )
             continue
         name = (loops_by_id[loop_id] or {}).get("load_state")

@@ -1159,6 +1159,17 @@ thermal:
         # round 38 wrote down when the zone's `heat_state` was added: a link that is looked up by
         # naming rule is a link that goes quiet when the name moves.
         load_state: loop_primary_load_w
+        # **What this loop is, and how its published 200 lb/hr is spent.** TN D-6718, PDF p. 11:
+        # "The coolant system consists of a primary loop, which is operated continuously, and a
+        # secondary loop, which serves as a backup system. The primary loop uses a centrifugal pump
+        # to circulate 200 lb/hr of coolant (ethylene glycol and water)"; the flow leaving the
+        # evaporator "is divided into a 35-lb/hr flow directed to the inertial measurement unit (IMU)
+        # … and a 165-lb/hr flow is routed to the suit heat exchanger"; the two rejoin and "the
+        # 200-lb/hr flow is directed through a series-parallel arrangement of 22 coldplates". So the
+        # study guide's 167 lb/hr is this loop's 165-lb/hr suit-and-cabin branch and not a second
+        # circuit, and the loop's temperature rise applies to the whole 200 lb/hr — which is what
+        # the heat balance needs to know.
+        role: primary
         provenance:
           basis: historical
           source: "TN D-6718 and NR ch.14: primary loop 200 lb/hr, about 1.44 L/min of glycol-water and inside apollo's own 1.3-1.7 L/min band; mixed supply 45 F = 7.2 C, evaporator outlet 41.5 F = 5.3 C over a 37-45 F range, radiator inlet 73-75 F, evaporator actuating above 49 F. Total coolant mass is NOT published — only a 1 gal reservoir — so loop_volume_l is chosen"
@@ -1169,9 +1180,18 @@ thermal:
         coolant_mass_kg: 18.9
         flow_l_min: [1.0, 1.5]
         loop_volume_l: 18
+        # **A backup, and the document says so.** TN D-6718, PDF p. 11: "A secondary coolant loop is
+        # provided as a backup for the primary loop and may be operated at the discretion of the
+        # crewmembers. Both loops provide cooling for the suit and cabin atmospheres and for the
+        # electronic equipment. The secondary loop does not have cabin-heating capability, nor does
+        # it provide cooling to the guidance and navigation equipment." That is why no zone names
+        # it: a zone's `cooled_by` is the loop that serves it continuously, and selecting the backup
+        # is a *mode* — `set_coolant_loop`'s `primary | secondary | series | isolated`, which this
+        # domain already carries.
+        role: backup
         provenance:
           basis: chosen
-          reason: "apollo_diode.md:97 names two water-glycol loops with primary and secondary pumps and gives figures for neither, so the secondary is scaled from the primary: 1.0-1.5 L/min and 18 L against the primary's 1.3-1.7 and 25. The thermal domain carries the same choice for the same reason, and this entry exists because until round 43 it did not — the file that is supposed to be the loop list had the LM's loop under this name instead"
+          reason: "the figures are scaled from the primary's because no source publishes the backup's — TN D-6718, PDF p. 11 says what the loop is (a backup, crew-selectable, no cabin heating and no G&N cooling) and publishes no flow, volume or mass for it. apollo_diode.md:97 names two water-glycol loops with primary and secondary pumps and gives figures for neither, so the secondary keeps the primary's of 1.0-1.5 L/min and 18 L against 1.3-1.7 and 25. The thermal domain carries the same choice for the same reason, and this entry exists because until round 43 it did not — the file that is supposed to be the loop list had the LM's loop under this name instead"
       - id: loop_lm
         vehicle: lm
         fluid: "65 % water / 35 % inhibited ethylene glycol"
@@ -1190,6 +1210,9 @@ thermal:
         coolant_mass_kg: 11.3
         # The LM's own collected load: its cabin and its descent stage, 1,007 W.
         load_state: loop_lm_load_w
+        # The LM's one loop: it serves its cabin and its descent stage continuously, and there is no
+        # published second circuit for the LM to back it up with.
+        role: primary
         provenance:
           basis: historical
           source: "TN D-6724 and NR ch.6: LM loop 222 lb/hr minimum, about 25 lb of coolant, operating +29 to +120 F = -1.7 to 48.9 C — an operating range and not a supply temperature, which is why `supply_c` below is `chosen` rather than sourced. The fluid is the LM's own mixture and not the CSM's — 65 % water against 62.5 % glycol — which is the single clearest reason the two are separate loops rather than one loop with two pumps"

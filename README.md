@@ -10782,6 +10782,90 @@ previous map. Nothing is lost — every state's value is also at the top level u
 `state_level` prefers that key — but a reader asking `values["internal"]["loop_primary_load_w"]` finds
 it only in the tick that computes it last. Making the staged merge deep is a finding of its own.
 
+## The second coolant loop had no declared role, and the document that answers it was already cited
+
+`loop_secondary` has been in the loop list since it landed with figures *scaled* from
+`loop_primary`'s and a reason that said only that no source gives them. What it **is** was never
+declared, which is why `check_thermal_heat_inputs` could only *note* that no zone names it, and why
+C-28 carried the question open: two CSM circuits serving different loads, or one circuit at two
+points? The study guide's `167 lb/hr` against the corpus's `200 lb/hr` was the evidence for the
+first reading.
+
+TN D-6718 — the Apollo experience report the corpus **already** takes its 200 lb/hr and its 73–75 °F
+radiator inlet from — answers both, on **PDF p. 11**:
+
+> The coolant system consists of a primary loop, which is operated continuously, and a secondary
+> loop, which serves as a backup system. The primary loop uses a centrifugal pump to circulate
+> **200 lb/hr** of coolant (ethylene glycol and water) … the flow leaving the evaporator is divided
+> into a **35-lb/hr** flow directed to the inertial measurement unit (IMU) … and a **165-lb/hr** flow
+> is routed to the suit heat exchanger … the 200-lb/hr flow is directed through a series-parallel
+> arrangement of 22 coldplates.
+>
+> A secondary coolant loop is provided as a backup for the primary loop and may be operated at the
+> discretion of the crewmembers. Both loops provide cooling for the suit and cabin atmospheres and
+> for the electronic equipment. The secondary loop does not have cabin-heating capability, nor does
+> it provide cooling to the guidance and navigation equipment.
+
+So the study guide's 167 lb/hr is **the 165-lb/hr suit-and-cabin branch of the same loop**, and the
+second circuit is a **backup** — a mode, not a zone server. That is what the corpus's zones have
+always implied (`cooled_by: loop_primary` on all three CSM compartments) and what nothing said.
+
+### What landed
+
+Every loop declares its **role**, and the check holds it against the zone join in both directions:
+
+```yaml
+loop_primary:
+  role: primary        # it serves the zones that name it, continuously
+loop_secondary:
+  role: backup         # a mode the crew selects: `set_coolant_loop`
+loop_lm:
+  role: primary
+```
+
+- a **`backup`** that a zone names in `cooled_by` is **refused** — a zone's declaration is the loop
+  that serves it continuously, and switching to the backup is `set_coolant_loop`'s
+  `primary | secondary | series | isolated` mode, which this domain already carries;
+- a **`primary`** that no zone names is **refused** — a loop with nothing to cool;
+- an absent `role` is a **debt**: the classification is owed, and until it is there neither rule can
+  be applied.
+
+`loop_primary`'s note now also carries the published split (35 lb/hr to the IMU, 165 to the
+suit/cabin exchangers, both rejoining before the 22 coldplates), because the heat balance's rise
+applies to the whole 200 lb/hr and the corpus had no statement of that either.
+
+### What this does *not* settle
+
+The **specific heat** is still owed, and the arithmetic is now sharp enough to say why it matters:
+
+| quantity | the corpus's figure |
+|---|---|
+| the loop's collected load (`loop_primary_load_w`, round 41) | 1,723 W |
+| the published flow (TN D-6718, p. 11) | 200 lb/hr = 0.0252 kg/s |
+| the published rise (45 °F mixed supply → 73–75 °F radiator inlet) | 15.6–16.7 K |
+| **the specific heat those three imply** | **≈ 4,100–4,400 J/kg·K** |
+
+That is at or above **water's** 4,182, and a 62.5 % ethylene glycol mixture is nearer 3.1–3.3 × 10³.
+So the three cannot all be true at once, and the candidates are named rather than chosen: the load
+is the zones' *electrical* demand (some of it — the S-band amplifier's RF, the cabin lighting —
+leaves the vehicle without entering the coolant); the 73–75 °F band is a flight figure for a
+particular load and environment rather than the design point; or the flow through the loads and the
+flow through the radiator are not the same stream (the cold-case mixing path in the same paragraph
+is exactly that, though it says *no bypass occurs* when the radiator cannot carry the total). What
+would settle it is a fluid-property table — the AOH SECS subsection (`.scratch/apollo/aoh_secs.pdf`,
+whose 53 pages have no usable text layer and must be rendered and read) is the candidate still
+unread, and TN D-6718 itself does not carry one.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| states · nodes · edges · channels | 138 · 57 · 79 · 148 | unchanged |
+| loops with a declared role | 0 of 3 | **3 of 3** |
+| tests in `tests/test_vehicle_config.py` | 289 | **290** |
+| the linter's refusal call sites (held by the changelog row) | 769 | **771** |
+
 ## The invariants, and which of them are enforced
 
 
