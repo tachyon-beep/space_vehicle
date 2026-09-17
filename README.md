@@ -467,11 +467,13 @@ LM descent-engine Isp of 311 s traces only to Wikipedia where NASA's design requ
   it is not a timing problem: a minimum-energy Hohmann transfer needs 10,928.2 m/s, so the published
   speed is 93.8 m/s *slower than the cheapest trajectory that arrives at all*. The 73-hour transit
   wins, because the phase ladder and the LOI budget depend on it, and the transfer that arrives in
-  73.0 h has **a = 254,545 km, e = 0.974216, apogee 502,526 km and a cutoff speed of 10,949.8 m/s**.
-  Four of the six elements are now determined and `check_trajectory` re-derives all four, refusing
-  an initial state whose apogee is short of the Moon. The other two need one datum rather than a
-  design: a **lunar ephemeris at the arrival epoch**, because the transfer plane is fixed by where
-  the Moon is at MET 73 h. The landing site is unset for a different reason — `apollo_diode.md:1206`
+  73.0 h has **a = 278,906 km, e = 0.976468, apogee 551,248.8 km and a cutoff speed of 10,956.1 m/s**
+  — sized, since round 12, to where the Moon *is* at that instant (394,751.5 km, from JPL Horizons;
+  the mean distance gave a = 254,545 km). Five of the six elements are determined and
+  `check_trajectory` re-derives them, refusing an initial state whose apogee is short of the Moon.
+  The remaining two are the plane's orientation, which is now *solvable* — a plane with the parking
+  orbit's inclination containing the Moon's position has exactly two solutions — and the free-return
+  constraint is what chooses between the mirror pair. The landing site is unset for a different reason — `apollo_diode.md:1206`
   argues against a site whose history is recognisable, so it should be chosen rather than inherited.
 
 ## Closing a coupling, and the three ways the request turns out to be wrong
@@ -9217,6 +9219,76 @@ gets refused rather than landed.
 
 No debt closed, and that is the honest accounting: the round found that the value it went to land
 would have been wrong, and spent itself making the corpus say why.
+
+## The transfer was sized to an average, and the Moon at the epoch is 10,351 km farther out
+
+Four rounds of prose said the same sentence: *the transfer plane is fixed by where the Moon is at
+MET 73 h, and no document contains an ephemeris at that epoch.* That is the one datum the archive
+cannot hold — the mission epoch is in 2026 — and it is one query away:
+
+```
+https://ssd.jpl.nasa.gov/api/horizons.api
+  ?format=text&COMMAND='301'&OBJ_DATA='NO'&MAKE_EPHEM='YES'&EPHEM_TYPE='VECTORS'
+  &CENTER='500@399'&START_TIME='2026-09-15 03:13:45'&STOP_TIME='2026-09-15 03:14:45'
+  &STEP_SIZE='1 m'&VEC_TABLE='2'&REF_PLANE='FRAME'&REF_SYSTEM='J2000'
+  &OUT_UNITS='KM-S'&VEC_LABELS='YES'&CSV_FORMAT='YES'
+```
+
+DE441, geocentric, ICRF/J2000, at `met_epoch_utc + 73.0 h`, and the whole query is recorded in
+`mission.yaml#initial_state.lunar_ephemeris_at_arrival` rather than the numbers alone:
+
+| | |
+|---|---|
+| position | (−299,474.3417, −220,328.0455, −132,662.8339) km |
+| velocity | (0.6085621, −0.7087855, −0.3437141) km/s |
+| distance | **394,751.5123 km** |
+
+**The corpus had solved its transfer to 384,400 km — the Moon's mean distance — and the Moon is not
+there.** The design constraint is "reach the Moon at 73.0 h", and the semi-major axis that satisfies
+it is a function of the radius it has to reach:
+
+| | sized to the mean | sized to the epoch |
+|---|---:|---:|
+| arrival radius | 384,400.0 km | **394,751.5 km** |
+| semi-major axis | 254,545 km | **278,906 km** (+9.6 %) |
+| eccentricity | 0.974216 | **0.976468** |
+| apogee | 502,526.8 km | **551,248.8 km** |
+| transfer period | 355.02 h | **407.19 h** |
+| cutoff speed | 10,949.8 m/s | **10,956.1 m/s** |
+| TLI Δv from the parking orbit | 3,156.7 m/s | **3,163.0 m/s** |
+
+`check_trajectory` carried `r_arrival = 384400.0` as a literal. It now reads the ephemeris, and
+**refuses to run without it** — a check that would silently fall back to a mean is the defect this
+round is about, so an absent `distance_km` is a refusal and not a default. The published
+post-injection speed is now 96.2 m/s short of the Hohmann minimum at the epoch (93.8 against the
+mean), which strengthens C-24 rather than changing it.
+
+### And the debt said three elements were owed when it was two
+
+The block also listed `true_anomaly_at_cutoff` as an unknown. **It is not one.** The eccentricity is
+defined as `1 - r_p/a` with `r_p` the radius at cutoff, so the cutoff *is* the transfer's perigee and
+the true anomaly there is zero by the model's own construction — the finite burn's 346.87 s arc
+refines where the burn ends, not the element. It is now a declared `0.0` with that reasoning, and
+the linter refuses a non-zero one.
+
+What is genuinely left is the plane: a plane with the parking orbit's inclination that contains the
+Moon's position has **exactly two solutions**, mirror images about the Earth-Moon line, and the
+argument of perigee follows from which one is chosen. The ephemeris carries the Moon's *velocity* as
+well, which is what a free-return discriminator needs — so what remains is arithmetic with a stated
+rule rather than a datum nobody has.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | 253 |
+| `report.refuse` call sites in the linter | 742 | **744** |
+| tests in `tests/test_vehicle_config.py` | 255 | **257** |
+
+The debt count is unchanged and the reason is worth stating: the round closed one owed *element* and
+re-opened nothing, but that element was counted in prose, and prose obligations are counted per
+paragraph rather than per element. What moved is the trajectory itself, which was nine per cent wrong
+in its semi-major axis.
 
 ## The invariants, and which of them are enforced
 

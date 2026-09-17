@@ -8464,7 +8464,24 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
             f"declares a cutoff speed of {speed:g} m/s but vis-viva gives {v_derived:.1f} m/s",
         )
     # 3. the speed must actually reach the arrival radius — conflict C-24 made mechanical.
-    r_arrival = 384400.0
+    #
+    # **The radius is the Moon's own, at the arrival epoch, and not its mean distance.** This
+    # check carried the 384,400 km mean for four rounds, and the corpus's transfer was solved to
+    # it: when the ephemeris landed (`mission.yaml#initial_state.lunar_ephemeris_at_arrival`) the
+    # Moon turned out to be 10,351 km farther out at MET 73 h, and the semi-major axis the
+    # transfer needs is 9.6 % larger. A check that runs on a mean while the vehicle flies to an
+    # epoch is the same defect as a band read off the wrong pressure.
+    ephemeris = state.get("lunar_ephemeris_at_arrival") or {}
+    r_arrival = ephemeris.get("distance_km")
+    if not isinstance(r_arrival, (int, float)):
+        report.refuse(
+            f"{where}.arrival_radius",
+            "is unavailable: `initial_state.lunar_ephemeris_at_arrival` declares no "
+            "`distance_km`, so the radius this trajectory has to reach is unknown and the "
+            "check below would be measuring against a mean distance instead of the epoch",
+        )
+        return
+    r_arrival = float(r_arrival)
     apogee_r = a * (1.0 + e)
     if apogee_r < r_arrival:
         report.refuse(
@@ -8506,7 +8523,7 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
             if abs(a_solved - a) / a > 2e-3:
                 report.refuse(
                     where,
-                    f"declares a = {a:,.0f} km but Kepler's equation puts the Moon's mean "
+                    f"declares a = {a:,.0f} km but Kepler's equation puts the Moon's own "
                     f"distance at {ladder_h:g} h from a = {a_solved:,.0f} km",
                 )
     # 6. **The four elements this check computed and never compared.** Rules 1 to 5 hold the
@@ -8552,6 +8569,18 @@ def check_trajectory(doc: dict[str, Any], report: Report) -> None:
                 "here is a rounding of its own arithmetic; a declared element that is not the "
                 "rounding of the relation is a figure from somewhere else",
             )
+    # And the element that was recorded as owed and is in fact determined: the cutoff is the
+    # transfer's perigee, because `radius_at_cutoff_km` is the perigee radius the eccentricity is
+    # defined from. A declared true anomaly that is not zero is a contradiction with the block's
+    # own `e = 1 - r_p/a` rather than a second opinion about it.
+    anomaly = elements.get("true_anomaly_at_cutoff_deg")
+    if isinstance(anomaly, (int, float)) and abs(float(anomaly)) > 1e-9:
+        report.refuse(
+            f"{where}.true_anomaly_at_cutoff_deg",
+            f"declares {anomaly!r}, and the cutoff is this orbit's perigee by construction: "
+            "`eccentricity` is 1 - r_p/a with r_p the cutoff radius, so the true anomaly there is "
+            "zero and a non-zero one describes a different orbit",
+        )
     # The inclination is not arithmetic — an impulsive burn at cutoff does not change the plane,
     # which the block's own `determination.inclination` states — so it is an equality with the
     # parking orbit rather than a derivation, and it was read by nothing either.

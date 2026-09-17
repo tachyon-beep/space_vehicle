@@ -926,13 +926,13 @@ initial_state:
     source: "A11 Tbl 7-II: 25,562 ft/s in parking orbit to 35,546 ft/s space-fixed after TLI cutoff, over a 346.87 s burn"
     note: >-
       published, and **it cannot reach the Moon**. 10,834.4 m/s from a 185 km parking orbit is
-      93.8 m/s *slower* than a minimum-energy Hohmann transfer to the Moon's distance
-      (10,928.2 m/s), so no Earth-centred conic from this orbit at this speed arrives at the
-      Moon at any transit time: its apogee is 188,812 km, half the distance. That is an
-      impossibility rather than a timing discrepancy, and conflict register C-24 records the
-      disposition. The 73-hour transit wins, because the mission's phase ladder and its LOI
-      budget depend on it and nothing depends on the instant; the derived requirement is
-      10,949.8 m/s.
+      96.2 m/s *slower* than a minimum-energy Hohmann transfer to where the Moon actually is at
+      the arrival epoch (10,930.6 m/s at 394,751.5 km; 93.8 m/s against the mean distance), so no
+      Earth-centred conic from this orbit at this speed arrives at the Moon at any transit time:
+      its apogee is 188,812 km, half the distance. That is an impossibility rather than a timing
+      discrepancy, and conflict register C-24 records the disposition. The 73-hour transit wins,
+      because the mission's phase ladder and its LOI budget depend on it and nothing depends on
+      the instant; the derived requirement is 10,956.1 m/s.
 
   # ------------------------------------------------------------------------------------
   # The patched-conic osculating elements at MET 0, which is TLI cutoff.
@@ -946,43 +946,63 @@ initial_state:
 
     frame: EARTH_J2000
     epoch: "MET 0"
-    semi_major_axis_km: 254545
-    eccentricity: 0.974216
+    semi_major_axis_km: 278906
+    eccentricity: 0.976468
     inclination_deg: 32.521
     radius_at_cutoff_km: 6563.2
-    speed_at_cutoff_m_s: 10949.8
+    speed_at_cutoff_m_s: 10956.1
     # 502,526.81172 — the correct rounding of a(1+e), and written to two places rather than
     # as a whole number because `significant_figures` reads precision off a float's repr and
     # cannot tell a written integer from one with a trailing `.0`: as `502526` it acquired a
     # phantom seventh digit, which put the relation's own value (502,526.8) out of reach of
     # the element it produces. See the round that corrected this in README.md.
-    apogee_km: 502526.81
-    transfer_period_h: 355.02
+    apogee_km: 551248.78
+    transfer_period_h: 407.19
     arrival_at_moon_h: 73.0
     determination:
       semi_major_axis: >-
-        solved from the arrival constraint: a Kepler ellipse from r = 6,563.2 km reaches
-        r = 384,400 km — the Moon's mean distance — at t = 73.0 h. Bisection on the Kepler
-        equation gives a = 254,545 km.
+        solved from the arrival constraint: a Kepler ellipse from r = 6,563.2 km reaches the
+        Moon at t = 73.0 h. **The radius it must reach is the one `lunar_ephemeris_at_arrival`
+        gives for that instant — 394,751.5 km — and not the Moon's mean distance**, which is
+        10,351 km nearer; bisection on the Kepler equation gives a = 278,906 km, against
+        254,545 for the mean. See the note on the provenance below: that is a 9.6 % change in
+        the transfer, and it is the difference between a document and an epoch.
       eccentricity: "e = 1 - r_p/a, one determination with the semi-major axis rather than two."
       inclination: "the parking orbit's 32.521 deg, adopted unchanged: an impulsive burn at cutoff does not change the plane."
       speed: "vis-viva at r = 6,563.2 km with a = 254,545 km."
+    true_anomaly_at_cutoff_deg: 0.0
+    true_anomaly_provenance:
+      basis: derived
+      relation: >-
+        the cutoff is the transfer's **perigee**, because `radius_at_cutoff_km` is the perigee
+        radius the eccentricity is defined from (`e = 1 - r_p/a`) — so the true anomaly at cutoff
+        is zero by the model's own construction and was never a free parameter. The finite burn's
+        346.87 s arc is a refinement of where the burn *ends*, not a sixth element: it moves the
+        osculating perigee slightly and leaves this one at zero
+      note: >-
+        **this was recorded as owed for four rounds and it was determined.** The debt said "three
+        of six elements are still owed"; the count was two, and the two are the plane's
+        orientation, not the trajectory's position along it
     owed:
       right_ascension_of_ascending_node: >-
         fixed by the arrival geometry — the transfer plane must contain the Moon's position at
-        MET 73.0 h — and therefore *solvable* rather than free, once a lunar ephemeris at
-        2026-09-12T02:13:45Z + 73 h is available. Not guessable either: a transfer plane that
-        misses the Moon by a degree at arrival misses it by 6,700 km.
-      argument_of_perigee: "the same constraint, second degree of freedom."
-      true_anomaly_at_cutoff: >-
-        the same constraint, third: the vehicle must be at the right point of its parking orbit
-        when the burn ends, and the burn's own arc is part of that geometry.
+        MET 73.0 h, and `lunar_ephemeris_at_arrival` now gives that position. It is therefore
+        *solvable*, and it has **exactly two solutions**: a plane with the parking orbit's
+        inclination that contains a given position vector is fixed up to the sign of the node,
+        and the two are mirror images about the Earth-Moon line. Which one the vehicle flies is
+        what the free-return constraint below decides.
+      argument_of_perigee: >-
+        the same constraint, second degree of freedom: once the plane is chosen, the perigee
+        direction is the angle from the node to the cutoff point, and the cutoff point is the
+        perigee — so this follows from the plane and from `true_anomaly_at_cutoff_deg` being zero.
       free_return: >-
-        a constraint on those three rather than a fourth unknown. A free return requires the
+        **the discriminator, not a constraint on two free numbers.** A free return requires the
         approach hyperbola to bend the vehicle back toward Earth with no further burn, which pins
         the arrival asymptote's direction relative to the Moon's velocity — and it is a property
-        the fleet can *spend*, because a midcourse correction trades it away. That is why it is
-        recorded as a requirement on the missing ephemeris rather than as a fifth owed element.
+        the fleet can *spend*, because a midcourse correction trades it away. Of the two mirror
+        planes the ephemeris leaves, this is what selects one, and it is a computation over the
+        Moon's own velocity vector rather than a datum: the arrival asymptote must be aimed
+        behind the Moon's leading edge by the angle the flyby turns the velocity through.
     finite_burn_note: >-
       the published burn is 346.87 s, which at parking-orbit speed is about 24 degrees of arc:
       TLI on this vehicle is emphatically not an impulse, and the elements above describe the
@@ -993,14 +1013,56 @@ initial_state:
       basis: derived
       relation: "Kepler's equation solved for the semi-major axis that reaches the Moon's mean distance in 73.0 h from r = 6,563.2 km, then vis-viva at cutoff"
       note: >-
-        four of the six elements are arithmetic from three published figures — the parking orbit's
-        altitudes and period, its inclination, and the phase ladder's 73-hour translunar coast.
-        The other two need one input this vehicle does not have, and naming it precisely is the
-        point: not "a patched-conic design", which is a task, but "a lunar ephemeris at the
-        arrival epoch", which is a datum. That is what makes the remaining work finite, and it is
-        why the debt below is smaller than it was.
+        **five of the six elements are arithmetic now, and the input that was missing arrived.**
+        The parking orbit's altitudes and period, its inclination, the ladder's 73-hour coast and
+        the Moon's own position at the end of it determine a, e, i and the cutoff speed — and the
+        cutoff's true anomaly is zero because the cutoff *is* the perigee. What the ephemeris
+        settled was not only the arrival radius, which moved the semi-major axis by 9.6 %: it is
+        also the one thing that makes the plane solvable at all. Two elements remain, they are
+        each other's mirror, and the free return chooses between them.
 
-  tli_delta_v_m_s: 3157
+
+  # ------------------------------------------------------------------------------------
+  # The Moon, at the arrival epoch. **This is the one datum the archive cannot hold**:
+  # every other figure in this file comes from a document, and the lunar ephemeris at
+  # MET 73 h does not exist in any of them because the mission epoch is in 2026. It was
+  # queried from JPL Horizons and the query is recorded rather than the numbers alone,
+  # so the figure is reproducible by anyone who runs it again.
+  # ------------------------------------------------------------------------------------
+  lunar_ephemeris_at_arrival:
+
+    epoch_utc: "2026-09-15T03:13:45Z"      # met_epoch_utc + arrival_at_moon_h
+    epoch_met_h: 73.0
+    target: "Moon (301), geocentric, geometric state"
+    frame: "ICRF/J2000, Earth mean equator and equinox"
+    ephemeris: "DE441"
+    position_km: [-299474.3416559732, -220328.0454508178, -132662.8339279912]
+    velocity_km_s: [0.6085621185346707, -0.7087855352961040, -0.3437140980457897]
+    distance_km: 394751.5123
+    speed_km_s: 0.995422
+    query:
+      endpoint: "https://ssd.jpl.nasa.gov/api/horizons.api"
+      parameters: >-
+        format=text, COMMAND='301', OBJ_DATA='NO', MAKE_EPHEM='YES', EPHEM_TYPE='VECTORS',
+        CENTER='500@399', START_TIME='2026-09-15 03:13:45', STOP_TIME='2026-09-15 03:14:45',
+        STEP_SIZE='1 m', VEC_TABLE='2', REF_PLANE='FRAME', REF_SYSTEM='J2000',
+        OUT_UNITS='KM-S', VEC_LABELS='YES', CSV_FORMAT='YES'
+      retrieved: "2026-09-16, DE441, solutions API v1.2"
+    provenance:
+      basis: historical
+      source: "JPL Horizons, query recorded above verbatim; the epoch is this file's own `met_epoch_utc` plus the ladder's 73.0 h, and Horizons was asked for the Moon's geocentric vector in that frame and those units"
+      note: >-
+        **two honest imprecisions, both recorded rather than corrected.** Horizons takes its
+        argument in TDB and the query passed the UTC epoch unchanged, a 69 s difference that
+        moves the Moon by 0.4 km — immaterial here, and the alternative is converting a
+        contract that makes time UTC into a dynamical timescale inside a vehicle file. And
+        the epoch is `chosen` (this file says so at `met_epoch_provenance`), so the Moon's
+        position is a *consequence* of an arbitrary launch date rather than a published one:
+        a real mission's TLI is timed so that the arrival geometry is what it wants, and this
+        vehicle chose the date first. What the datum settles is not where Apollo went but
+        where the Moon is, which is what a trajectory from this epoch has to hit
+
+  tli_delta_v_m_s: 3163
   tli_delta_v_published_m_s: 3043
   tli_note: >-
     the budget above carries the derived figure and this note carries the published one, because
@@ -1093,7 +1155,7 @@ open_debts:
   - "Nothing maps a crew member to a *station*. The crew are named three ways — `ask_crew`'s `crew_id` and this file's `positions` both say `commander`, `lm_pilot`, `csm_pilot`; `channels.yaml#crew_positions` names stations (`csm_commander`, `csm_navigator`, `csm_lower_equipment_bay`, `lm_commander`, `lm_pilot`, `tunnel`, `surface_eva`); and `location_phase_default` names a *vehicle* (`csm`). The last is the odd one and it is correct on its own terms — all three are in the CSM before undocking — but `ask_crew`'s perception bound is per *station*, so a question asked from \"csm\" is a question asked from nowhere. The linter now refuses a `location_phase_default` that is not a vehicle any configuration carries crew in, and it cannot go further because which CSM station each person occupies is undeclared: the corpus gives three stations for three people and never says who sits where. That mapping is a decision about the vehicle rather than a repair, which is why it is here and not in a check."
   - "**The sequence of blackouts, not their count.** `plant.py --blackout` gives the number: 23.5 h silent across the five orbital phases, 46.5 min in every 117.8, and the LM's surface link is continuous because the site declares it so. What is still unbudgeted is *which* manoeuvres land in the dark — how many contact periods each phase contains, and which of them fall during an activity that cannot be paused. A phase with 12 occultations and a phase with 20 are different experiments, and the alignment of the first blackout against the phase's start is a free parameter of the arrival geometry — it depends on where in the orbit the vehicle was at LOI, which depends on the transfer plane, which depends on the same lunar ephemeris the three owed orbital elements need. One datum closes three debts, and this is the third of them."
 
-  - "**Three of six orbital elements are still owed** — the ascending node, the argument of perigee and the true anomaly at cutoff — plus the free-return constraint on them. Four are determined: a = 254,545 km, e = 0.974216, i = 32.521 deg and 10,949.8 m/s at cutoff. What the three need is one datum rather than a design: a lunar ephemeris at 2026-09-12T02:13:45Z + 73 h. A transfer plane that misses the Moon by a degree at arrival misses it by 6,700 km, so the node is not a free parameter and it is not guessable. `check_trajectory` re-derives the four and refuses a disagreement."
+  - "**Two of six orbital elements are still owed, and they are each other's mirror.** The count said three for four rounds; the true anomaly at cutoff was never a free parameter — the cutoff *is* the transfer's perigee, since the eccentricity is defined from that radius — and it is now a declared zero. The lunar ephemeris the debt asked for has arrived (`initial_state.lunar_ephemeris_at_arrival`, a recorded JPL Horizons query), and it did two things: it re-sized the transfer, because the Moon is 10,351 km farther out at MET 73 h than the mean distance the elements were solved to, and it made the plane solvable. What remains is the ascending node and the argument of perigee: a plane with the parking orbit's inclination that contains the Moon's position has exactly two solutions, mirror images about the Earth-Moon line, and the **free-return constraint is the discriminator** rather than a third unknown. That is a computation over the Moon's own velocity vector, which the ephemeris also carries, so this is now a round's arithmetic rather than a datum nobody has. `check_trajectory` re-derives the five determined elements, refuses a transfer sized to a mean distance, and refuses a non-zero true anomaly at cutoff."
   - "**The entry corridor**: the last of the landing-site decisions. The site itself is declared (`landing_site`, chosen at 12.4 N 47.5 E against `apollo_diode.md:1206`), and `check_landing_site` re-derives the geometry it produces — but the corridor a descending LM must fly to reach it is a different quantity and is not parameterised. It sets the downrange distance from powered-descent initiation to touchdown, which is what `descent`'s 2.5 h is actually spent on, and nothing here says how far out the vehicle starts."
   - "The two lunar-orbit phases assume the CSM stays in a circular orbit while the LM descends; whether the CSM performs a plane change during the surface phase is a real mission-design decision and is not made here."
   - "The posture machine above is authored from `mission_diode.md` and its guards are named but not yet evaluated: `g_safe_exit`, `g_prepare`, `g_execute`, `g_resume`, `g_recovery`, `g_standby` and `g_complete` are prose conditions. `transition_evidence` mechanises the freshness half of them, which is the half that has a checkable failure mode; the threshold half belongs to the domains that own each quantity, and several of those thresholds do not exist yet."
