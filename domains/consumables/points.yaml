@@ -44,7 +44,11 @@ points:
   - channel: res.battery_energy_wh
     from: battery_energy
     layer: estimate
-    derivation: "the power domain's battery stock, published here as a resource so that one time-to-limit covers every consumable"
+    derivation:
+      expression: energy_j / joules_per_watt_hour
+      inputs:
+        energy_j: battery_energy
+        joules_per_watt_hour: 3600
     note: "read from the power domain, not owned by this one. The state-to-node contract makes that explicit: `battery_energy` is in this domain's `reads`, not its `writes`."
   - channel: "res.ledger_[resource]_kg"
     from: prop_main_kg

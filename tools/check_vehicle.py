@@ -12440,43 +12440,111 @@ def check_channel_derivations(
     the two together. It refuses when they disagree, which is what happens the moment a channel gains
     an evaluable `derivation`, gains a unit, gains a state, or is added.
 
+    **And the same registry has a second half this check could not see.** Seven of the 142 published
+    points read a *coupling node* rather than a state — and an eighth names its source as a *list* of
+    four, which is a template — and the count above skipped all eight: `methods` is keyed by state id,
+    so `prop.propellant_remaining_pct`, which reads the `prop_main` node, fell out of the loop at
+    `source is None` and was counted nowhere. That is how those seven came to be published with the
+    node's raw number under a unit that is not the node's:
+    `prop.propellant_remaining_pct` carried 18,508 kg under a `%`, `eclss.cabin_temp_c` carried
+    kelvin under `degC`, `res.battery_energy_wh` carried joules under a watt-hour. The emitter's
+    unit test governed a *state* source only. Both halves are counted here now, by the same rule and
+    against the same sentence, because a channel the frame omits is the same defect whichever key
+    space its source lives in.
+
     **And the bindings are held to resolving**, which is the one thing a derivation can get wrong
-    that the count cannot see: a renamed document, a misspelled input or a bare name that is not a
-    state id leaves a channel the emitter silently omits — a reading lost from the frame with
-    nothing said. The question here is *existence* and not value, which is why it is not
-    `derivation_value`: that function evaluates, and evaluating a channel needs this tick's readings,
-    which a linter does not have and must not invent. See `check_channel_derivation_inputs`.
+    that the count cannot see: a renamed document, a misspelled input or a bare name the emitter
+    cannot read leaves a channel the frame silently omits — a reading lost with nothing said. The
+    question here is *existence* and not value, which is why it is not `derivation_value`: that
+    function evaluates, and evaluating a channel needs this tick's readings, which a linter does not
+    have and must not invent. See `check_channel_derivation_inputs`.
     """
     presentation = load(root / "presentation.yaml", report) or {}
     stated = " ".join(str(entry) for entry in presentation.get("open_debts") or [])
     units = {str(row.get("id")): str(row.get("unit") or "") for row in walk_channels(root)}
     methods: dict[str, tuple[str, str]] = {}
+    node_states: dict[str, list[str]] = {}
     for path in sorted((root / "domains").glob("*/components.yaml")):
         components = load(path, Report()) or {}
         for state in components.get("state") or []:
             if isinstance(state, dict) and state.get("id"):
                 methods[str(state["id"])] = (str(state.get("unit") or ""), str(state.get("method")))
+                if state.get("node"):
+                    node_states.setdefault(str(state["node"]), []).append(str(state["id"]))
+    # What a bare name in a channel's derivation may be: a state's own id, or a coupling node the
+    # value map can be read by name — which is exactly a node carrying one state, since
+    # `state_values` writes a node key only then. A node carrying four gas masses has no such key,
+    # and a derivation that named it would be a channel the emitter could only omit.
+    readable: dict[str, str] = {sid: unit for sid, (unit, _method) in methods.items()}
+    for node, ids in node_states.items():
+        if len(ids) == 1:
+            readable[node] = methods[ids[0]][0]
+    crowded_nodes = {node: len(ids) for node, ids in node_states.items() if len(ids) > 1}
     same = derived = evaluable = 0
+    node_derived = node_evaluable = 0
     for path in sorted((root / "domains").glob("*/points.yaml")):
         points = load(path, Report()) or {}
         for row in points.get("points") or []:
             if not isinstance(row, dict) or not row.get("from"):
                 continue
+            unit = units.get(str(row.get("channel")), "")
+            derivation = row.get("derivation")
+            has_expression = isinstance(derivation, dict) and derivation.get("expression")
+            if not isinstance(row["from"], str):
+                # A row whose `from` is a *list* is a template instantiated per key —
+                # `thermal.zone_[id]_t_c` names its four states that way — and a frame's `values` is
+                # keyed by channel id, so what can be published is the instantiations. That is the
+                # registry's own open debt ("each registry entry naming the values its placeholders
+                # take"), and a channel whose *name* carries the placeholder is the one shape that
+                # may be skipped. Anything else with a list here is a source nothing can read.
+                if "[" in str(row.get("channel") or ""):
+                    report.note(
+                        f"domains/{path.parent.name}/points.yaml:{row.get('channel')}",
+                        f"names {len(row['from'])} states as its source and is a template, so the "
+                        "frame can carry its instantiations and not this id",
+                    )
+                    continue
+                report.refuse(
+                    f"domains/{path.parent.name}/points.yaml:{row.get('channel')}",
+                    f"reads {row['from']!r}, which is a list, and its own name carries no "
+                    "placeholder for the keys it would instantiate. A point reads one state or one "
+                    "coupling node",
+                )
+                continue
             source = methods.get(str(row["from"]))
             if source is None:
+                # The node-sourced half: same question, same arithmetic, a different key space.
+                node = node_states.get(str(row["from"]))
+                if node is None:
+                    continue
+                node_unit = str((documents.get("coupling.yaml") or {}).get("nodes", {}).get(
+                    str(row["from"]), {}
+                ).get("unit") or "")
+                if _units_agree(unit, node_unit):
+                    continue
+                node_derived += 1
+                if has_expression:
+                    node_evaluable += 1
+                    check_channel_derivation_inputs(
+                        f"domains/{path.parent.name}/points.yaml:{row.get('channel')}.derivation",
+                        derivation,
+                        readable,
+                        crowded_nodes,
+                        documents,
+                        report,
+                    )
                 continue
-            unit = units.get(str(row.get("channel")), "")
             if _units_agree(unit, source[0]):
                 same += 1
                 continue
             derived += 1
-            derivation = row.get("derivation")
-            if isinstance(derivation, dict) and derivation.get("expression"):
+            if has_expression:
                 evaluable += 1
                 check_channel_derivation_inputs(
                     f"domains/{path.parent.name}/points.yaml:{row.get('channel')}.derivation",
                     derivation,
-                    set(methods),
+                    readable,
+                    crowded_nodes,
                     documents,
                     report,
                 )
@@ -12484,24 +12552,28 @@ def check_channel_derivations(
     stated_same = re.search(r"only (\d+) have the state's own unit", stated, re.I)
     stated_derived = re.search(r"the other (\d+) are", stated, re.I)
     stated_evaluable = re.search(r"(\d+) of the 71 now carry an evaluable", stated, re.I)
-    if not stated_same or not stated_derived or not stated_evaluable:
+    stated_nodes = re.search(r"(\d+) more published channels read a coupling node", stated, re.I)
+    stated_node_evaluable = re.search(r"(\d+) of those carry an evaluable", stated, re.I)
+    if not all((stated_same, stated_derived, stated_evaluable, stated_nodes, stated_node_evaluable)):
         report.refuse(
             "presentation.yaml:open_debts",
             "no longer states how many published channels are their own source state, how many are "
-            "derived, and how many of the derived ones now carry an evaluable `derivation`, so the "
-            "figures this check computes have no declaration to be held to. A count with no reader "
-            "does not have to be plausible",
+            "derived, how many of the derived ones now carry an evaluable `derivation`, how many read "
+            "a coupling node, and how many of *those* carry one — so the figures this check computes "
+            "have no declaration to be held to. A count with no reader does not have to be plausible",
         )
         return
-    # **Three counts, and the third is the one that moves.** A converted channel changes neither the
-    # 63 nor the 71 — its unit still differs from its source state's — so the figure the conversion
-    # moves is the count of evaluable derivations, and the sentence has to carry it or the debt is
-    # describing a vehicle that no longer exists. Each refusal names the figure it is about, because
-    # "the debt is out of date" is not something a reader can act on.
+    # **Five counts, and the last two are the node-sourced half.** A converted channel changes
+    # neither the 63 nor the 71 — its unit still differs from its source state's — so the figure the
+    # conversion moves is the count of evaluable derivations, and the sentence has to carry it or the
+    # debt is describing a vehicle that no longer exists. Each refusal names the figure it is about,
+    # because "the debt is out of date" is not something a reader can act on.
     for stated_count, computed, what in (
         (stated_same, same, "published channels are their own source state"),
         (stated_derived, derived, "of those channels are derived"),
         (stated_evaluable, evaluable, "of the derived channels carry an evaluable `derivation`"),
+        (stated_nodes, node_derived, "published channels read a coupling node and are not that node's unit"),
+        (stated_node_evaluable, node_evaluable, "of those carry an evaluable `derivation`"),
     ):
         if int(stated_count.group(1)) != computed:
             report.refuse(
@@ -12515,7 +12587,8 @@ def check_channel_derivations(
 def check_channel_derivation_inputs(
     where: str,
     derivation: dict[str, Any],
-    state_ids: set[str],
+    readable: dict[str, str],
+    crowded_nodes: dict[str, int],
     documents: dict[str, Any],
     report: Report,
 ) -> None:
@@ -12533,11 +12606,19 @@ def check_channel_derivation_inputs(
       - a `"<file>.yaml:<dotted.path>"` source that resolves to a number — the same
         `resolve_dotted` the evaluator uses, so a renamed document or field is refused here by the
         path it was renamed from;
-      - **a bare state id**, which `plant.emit_frame` supplies from the tick's value map — round 27's
-        decision on channel readings, and the reason this check takes the state table at all.
+      - **a bare name the value map can supply**: a state's own id, or a coupling node carrying one
+        state — round 27's decision on channel readings, widened by the round that found seven
+        channels publishing a *node's* raw number under a unit that is not the node's. `readable` is
+        built by the caller from the states and the nodes, and it is exactly the set of keys
+        `plant.emit_frame` can hand a derivation this tick.
 
-    A bare name that is not a state id is refused rather than skipped: it is the shape a typo takes,
-    and a channel whose input names nothing is a channel the emitter omits in silence. The two rules
+    A bare name outside that set is refused rather than skipped: it is the shape a typo takes, and a
+    channel whose input names nothing is a channel the emitter omits in silence. A node carrying
+    several states is refused with its own sentence, because it is the near miss — the name exists,
+    and the value map has no key for it. And a name the map *does* hold is refused when its state is
+    not a number (`_holds_a_number`): a mode, a per-key map, a matrix or a tuple of quantities is a
+    reading the emitter will not bind, and finding that at the tick rather than at the build is how a
+    reading disappears from the frame with nothing said. The two rules
     that hold the expression and the bindings to each other — every name used is bound, every binding
     is used — come from `check_derivation_bindings`, the same function the value-carrying
     declarations are checked with: a channel's derivation is one of those declarations, with its
@@ -12554,13 +12635,31 @@ def check_channel_derivation_inputs(
             continue
         text = str(raw)
         if ":" not in text:
-            if text in state_ids:
+            if text in readable:
+                if not _holds_a_number(readable[text]):
+                    report.refuse(
+                        f"{where}.inputs.{key}",
+                        f"binds {text!r}, whose unit is {readable[text]!r}. A reading is a number "
+                        "this tick — that is what makes it usable in an expression — and a state "
+                        "holding a mode, a map, a matrix or a tuple of quantities is not one, so "
+                        "the frame would lose the channel at the tick rather than here",
+                    )
+                continue
+            if text in crowded_nodes:
+                report.refuse(
+                    f"{where}.inputs.{key}",
+                    f"binds {text!r}, which is a coupling node carrying {crowded_nodes[text]} states. "
+                    "A node's name is a reading only where the node carries exactly one state, "
+                    "because that is when the value map has a key for it; name the state the "
+                    "arithmetic is about, and the emitter can supply it",
+                )
                 continue
             report.refuse(
                 f"{where}.inputs.{key}",
-                f"binds {text!r}, which is neither a source nor one of the {len(state_ids)} states "
-                "this corpus declares. A bare name is a reading — that state's value this tick — so "
-                "a name that is not a state is a binding the emitter can only fail on",
+                f"binds {text!r}, which is neither a source nor one of the {len(readable)} names this "
+                "corpus can read this tick — a state's own id, or a coupling node carrying one "
+                "state. A bare name is a reading, so a name that is none of those is a binding the "
+                "emitter can only fail on",
             )
             continue
         filename, dotted = text.split(":", 1)
@@ -12594,6 +12693,25 @@ def check_channel_derivation_inputs(
 def _units_agree(channel_unit: str, state_unit: str) -> bool:
     """Whether a channel and its source state are the same quantity, by their own declarations."""
     return channel_unit.strip().lower() == state_unit.strip().lower()
+
+
+# The unit vocabularies that say a state holds something other than a number: a mode, a per-key map,
+# a matrix, or a tuple of quantities. A *reading* is a number this tick — that is what makes it
+# usable in an expression — so a derivation naming one of these is a channel the emitter would refuse
+# to bind at the tick, and the linter refusing it first is the difference between a build failure and
+# a reading that quietly disappears from the frame.
+NON_NUMERIC_UNITS = ("bool", "dimensionless")
+
+
+def _holds_a_number(unit: str) -> bool:
+    """Whether a state's declared unit says its value is a number an expression can use."""
+    text = unit.strip()
+    if text.lower() in NON_NUMERIC_UNITS:
+        return False
+    if any(marker in text for marker in ("enum[", "map[", "matrix[")):
+        return False
+    # `m, m/s` and `m, m/s, dimensionless` are tuples of quantities rather than one scalar.
+    return "," not in text
 
 
 def walk_channels(root: Path) -> list[dict[str, Any]]:

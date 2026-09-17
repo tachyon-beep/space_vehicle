@@ -21,8 +21,19 @@ points:
   - channel: eclss.cabin_temp_c
     from: cabin_zone_t
     layer: measurement
-    derivation: "the thermal domain's cabin zone temperature, published here because the crew's own channels read it in these units"
-    note: "one physical quantity, one owner: `thermal.zone_[id]_t_c` and this channel are two views of `cabin_zone_t`, and the node is what makes that a fact rather than a coincidence."
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: cabin_zone_t
+        kelvin_offset: 273.15
+    note: >-
+      one physical quantity, one owner: `thermal.zone_[id]_t_c` and this channel are two views of
+      `cabin_zone_t`, and the node is what makes that a fact rather than a coincidence. **The
+      conversion is arithmetic now rather than a label**: this channel is in `degC` and the node it
+      reads is in `K`, and until this round's emitter change the frame published the kelvin under
+      the Celsius name — 295 for a cabin the band calls 21.1-23.9. The node's own name is the input
+      because that is what `from` names, and a node carrying one state is a reading the value map
+      can supply under either name.
   - channel: eclss.co2_pp_mmhg
     from: csm_cabin_co2_kg
     layer: measurement
@@ -133,7 +144,11 @@ points:
   - channel: eclss.lm_cabin_temp_c
     from: lm_cabin_zone_t
     layer: measurement
-    derivation: "the LM compartment's temperature, from the thermal domain's zone node"
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: lm_cabin_zone_t
+        kelvin_offset: 273.15
     note: >-
       published here and produced by the thermal domain, which is the arrangement the CSM's cabin
       temperature already has — and the arrangement that made the duplication
@@ -164,7 +179,13 @@ points:
   - channel: eclss.o2_supply_pressure_psi
     from: o2_csm
     layer: measurement
-    derivation: "the cryogenic supply tank's pressure, from the consumables domain's stock"
+    derivation: >-
+      **owed, and deliberately not written as arithmetic.** The channel is the cryogenic supply
+      tank's pressure and its source is a *mass* stock (`o2_csm`, in kilograms), so this is not a
+      conversion: a pressure is not a function of the mass alone. It needs the tank's volume and the
+      oxygen's storage temperature — and the vehicle models neither, because it has no supply tank
+      at all. `domains/eclss/components.yaml#open_debts` carries the obligation and what would close
+      it. Until then the frame **omits** the channel rather than publishing 279 kg under a psi name.
     note: "apollo's 750-950 psi with a low-pressure event and a >5 psi/min fall. It is the channel that corroborates a leak: the tank falls while the cabin pressure is held by the regulator, and reading the two together is how a leak is distinguished from a regulator fault."
   - channel: eclss.suit_loop_flow_cfm
     from: suit_loop_flow_cfm
@@ -174,7 +195,12 @@ points:
   - channel: eclss.absorber_capacity_pct
     from: absorber_capacity_csm
     layer: estimate
-    derivation: "man-hours of CO2 removal left in the CSM's LiOH element, as a percentage of its 72 man-hour rating"
+    derivation:
+      expression: man_hours / rating_man_hours * percent_per_unity
+      inputs:
+        man_hours: absorber_capacity_csm
+        rating_man_hours: vehicle.yaml:consumables.co2_removal.csm_element_man_hours
+        percent_per_unity: 100
     note: >-
       The denominator is the rating, 72 man-hours (vehicle.yaml#consumables), and this is now one
       of a pair of channels rather than the vehicle's only view of CO2 capacity. It said "the
@@ -184,7 +210,12 @@ points:
   - channel: eclss.lm_absorber_capacity_pct
     from: absorber_capacity_lm
     layer: estimate
-    derivation: "man-hours of CO2 removal left in the LM's loaded cartridge, as a percentage of its 41 man-hour rating"
+    derivation:
+      expression: man_hours / rating_man_hours * percent_per_unity
+      inputs:
+        man_hours: absorber_capacity_lm
+        rating_man_hours: vehicle.yaml:consumables.co2_removal.lm_primary_man_hours
+        percent_per_unity: 100
     note: >-
       the LM's own absorber, and the channel that did not exist until round 42. `eclss.lm_co2_pp_mmhg`
       was the only LM atmosphere channel with an absorber behind it, so a surface crew could watch

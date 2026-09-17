@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 257 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 258 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 257 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 258 declared debts
 and every one of them named. **109 of the 134 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 134 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **257** is every obligation the linter can name:
-**111** literal `UNCONFIGURED` scalars and **146** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **258** is every obligation the linter can name:
+**111** literal `UNCONFIGURED` scalars and **147** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **185** the plant
@@ -9904,6 +9904,86 @@ honest direction: the obligations were there and undeclared. The tick still adva
 two cabins were already among them and still are, now from a declared 295 K — and the build order
 moved five states into "owes a value", which is the cheapest bucket and the one the debt count
 already tracks.
+
+## The frame published a node's number under the channel's unit, seven times
+
+Round 28's emitter change gave a state-sourced channel three answers — the derivation, the unit test,
+omission — and the branch that handles a **node** source was left with one: publish whatever the node
+holds. `coupling.yaml#nodes` declares every node's unit, so the comparison was always available; it
+was simply never made on half the registry. The frame said:
+
+| channel | declared | published before | published now |
+|---|---|---|---|
+| `prop.propellant_remaining_pct` | `%` | 18,508.0 (kg) | **100.0** |
+| `res.battery_energy_wh` | `Wh` | 12,096,000.0 (J) | **3,360.0** |
+| `eclss.cabin_temp_c` | `degC` | 295.0 (K) | **21.85** |
+| `eclss.lm_cabin_temp_c` | `degC` | 295.0 (K) | **21.85** |
+| `eclss.absorber_capacity_pct` | `%` | 72.0 (man-hours) | **100.0** |
+| `eclss.lm_absorber_capacity_pct` | `%` | 41.0 (man-hours) | **100.0** |
+| `eclss.o2_supply_pressure_psi` | `psi` | 279.0 (kg) | **omitted** |
+
+Six of the seven are one expression away from the node they read, and each is now a `derivation` over
+the node's own name: kelvin less 273.15, joules over 3,600, man-hours over the rating
+`vehicle.yaml#consumables` declares, and kilograms over the tank load `vehicle.yaml#propulsion`
+declares. The values agree with declarations that were already in the corpus and nothing had joined
+them to a frame: 3,360 Wh is the three entry cells' `3 x 40 Ah x 28 V`, and 21.85 °C is inside the
+band `eclss.cabin_temp_c` declares in Celsius — which the old reading, 295, was 273 degrees outside.
+
+### The reading rule, widened by exactly what the value map can supply
+
+Round 27 made a bare input a *reading*; this batch showed the rule needed one qualification, and it is
+the value map's own: **a node's name is a key only where the node carries one state**, because
+`state_values` writes no node key for a shared node — one value cannot mean four. So a derivation may
+name a state's id or a single-state node's name, and the linter refuses a node that carries several
+with its own sentence ("name the state the arithmetic is about") rather than letting the emitter omit
+the channel in silence. `readings` in the emitter is now built from the tick's value map itself, which
+is the same statement from the other side.
+
+**And a row whose `from` is a list is the one shape that may be skipped**: `thermal.zone_[id]_t_c`
+names its four states that way because it is a template, and a frame keyed by channel id can carry its
+instantiations rather than its placeholder name. The linter used to skip it in silence — the same
+defect as the branch that published without testing — so it is recognised by name now, and a list
+source on a channel whose name carries no placeholder is a refusal.
+
+### The one that is omitted rather than mis-stated
+
+`eclss.o2_supply_pressure_psi` is the channel Apollo 13's crisis would have been read from, it is in
+apollo's 750-950 psi band, and four declared faults list it among the channels they perturb. Its
+source is `o2_csm`, a mass in kilograms, and **a pressure is not a function of a mass**: it needs the
+tank's volume and the oxygen's storage temperature, and this vehicle has no supply tank at all — no
+volume, no cryogenic temperature, no fill level. Two shapes would close it and the choice is a design
+decision rather than a lookup: a **tank model** (a stored volume and temperature, making the pressure
+an inference from the stock the way the cabin's pressure is an inference from its four gases) or a
+**sensed state** with its own lag, which is what `layer: measurement` claims. `domains/eclss/components.yaml#open_debts`
+carries both, and the frame omits the channel until one of them lands.
+
+### The mistakes this round made
+
+- **The check refused the sentence I had just written, for the second round running.** The pattern
+  wanted `N read a coupling node`; the sentence said `7 more published channels read a coupling node`.
+  It is the same shape as round 28's "Four" against a digit-matching pattern, and it is worth stating
+  as a habit rather than a fluke: *write the figure where the check's pattern puts it*, or write the
+  pattern from the sentence rather than from the intent.
+- **The test assumed the LM cabin's channel declares a band.** It does not: `eclss.cabin_temp_c` has
+  `range: [21.1, 23.9]` and `range_kind: band`, and its LM twin has neither — it carries `events` and
+  an `event_class` and no range at all. That is a smaller claim rather than a missing one, and the
+  fixture says so now; whether the two twins *should* make the same claim is the kind of question the
+  registry's own `range_kind` debt is the place for.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 257 | **258** |
+| literal `UNCONFIGURED` scalars (linter / plant) | 111 / 185 | 111 / 185 |
+| channels read from a node with a derivation | 0 of 7 | **6 of 7** |
+| values a frame carries at tick 0 | 26 | **25** |
+| tests in `tests/test_vehicle_config.py` | 270 | **272** |
+
+The debt count rose by one because the missing supply-tank pressure is now a sentence naming what
+would close it, and the frame carries one value fewer because the seventh channel is omitted rather
+than filled with a mass. The rest of the registry is untouched: 19 of 134 states still advance, the
+build order is still 27 · 25 · 14 · 68, and `--strict` still exits 2.
 
 ## The invariants, and which of them are enforced
 

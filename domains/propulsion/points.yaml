@@ -53,7 +53,12 @@ points:
   - channel: prop.propellant_remaining_pct
     from: prop_main
     layer: estimate
-    derivation: "the resource model's inference, published here in the unit the engine's own thresholds use"
+    derivation:
+      expression: mass_kg / loaded_kg * percent_per_unity
+      inputs:
+        mass_kg: prop_main
+        loaded_kg: vehicle.yaml:propulsion.sps.mass_kg
+        percent_per_unity: 100
     note: "read from the consumables domain rather than owned here: one stock, one owner, and the percentage is a view of it"
   - channel: prop.accumulated_dv_m_s
     from: accumulated_dv_m_s

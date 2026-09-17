@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 257 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 258 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -399,7 +399,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 257 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 258 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -847,15 +847,18 @@ def emit_frame(
     # what makes the map a reading rather than a rumour.
     published: dict[str, Any] = {}
     by_state = {state.id: state for state in world.states}
-    # What this tick's value map can be read *by name*: a channel's derivation names the states it
-    # reads, and a state the plant has not advanced is absent rather than bound to a zero. That is
-    # the same rule as the omission below, one level down — a channel derived from a stock that has
-    # no level yet is a channel without a number, not a channel with an invented one.
-    readings: dict[str, Any] = {}
-    for candidate in world.states:
-        level = state_level(values, candidate)
-        if level is not None:
-            readings[candidate.id] = level
+    # What this tick's value map can be read *by name*: a channel's derivation names what it reads,
+    # and anything the plant has not advanced is absent rather than bound to a zero. The map is the
+    # answer, and its keys are the names — a state's own id, and a node's name where the node carries
+    # one state (`state_values` writes no node key for a shared node, because one value cannot mean
+    # four). **The node half is what the eight node-sourced channels need**: `prop_main` is a
+    # reading exactly as `prop_main_kg` is, and a channel whose `from` names the node should be able
+    # to name it in its arithmetic too.
+    readings = {
+        key: value
+        for key, value in values.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
     for channel, point in sorted(world.points.items()):
         source = point.get("from")
         if not isinstance(source, str):
@@ -880,19 +883,29 @@ def emit_frame(
             # No number this tick — a reading the plant has not advanced yet, most often — so the
             # channel falls through to the unit test and then to omission. The linter is what
             # refuses a derivation whose *bindings* do not resolve; this is the tick's own answer.
-        if state is not None:
-            # **A channel is its source only when the two are the same quantity.** `points.yaml`'s
-            # `derivation` is *prose* — "the CO2 partial pressure from the mass and the volume" — and
-            # prose cannot be evaluated, so a channel whose unit differs from its source state's is
-            # **omitted rather than filled with the state's number**: publishing 0.042 kg under
-            # `eclss.co2_pp_mmhg` is a reading a fleet would act on and a quantity it is not. The
-            # units are the registry's own, so this is a comparison of two declarations rather than a
-            # guess about a sentence.
-            if str(row.get("unit") or "").strip().lower() != str(state.unit or "").strip().lower():
-                continue
-            value = state_level(values, state)
-        else:
-            value = values.get(source)
+        # **A channel is its source only when the two are the same quantity.** `points.yaml`'s
+        # `derivation` is *prose* — "the CO2 partial pressure from the mass and the volume" — and
+        # prose cannot be evaluated, so a channel whose unit differs from its source's is **omitted
+        # rather than filled with the source's number**: publishing 0.042 kg under
+        # `eclss.co2_pp_mmhg` is a reading a fleet would act on and a quantity it is not. The units
+        # are the registry's own, so this is a comparison of two declarations rather than a guess
+        # about a sentence.
+        #
+        # **And it was a comparison of two *states*.** The `else` branch below published whatever a
+        # coupling node held, with no unit test at all, which is how seven channels came to carry the
+        # node's raw number under a unit it is not: `prop.propellant_remaining_pct` read 18,508 kg
+        # and published it as a percentage, `eclss.o2_supply_pressure_psi` published a mass under a
+        # pressure, `res.battery_energy_wh` published joules under a watt-hour. A node declares its
+        # unit in `coupling.yaml#nodes`, so the comparison was always available; it was simply not
+        # made on half the registry.
+        source_unit = (
+            state.unit
+            if state is not None
+            else (world.nodes.get(source) or {}).get("unit") or ""
+        )
+        if str(row.get("unit") or "").strip().lower() != str(source_unit or "").strip().lower():
+            continue
+        value = state_level(values, state) if state is not None else values.get(source)
         if value is None:
             continue
         published[channel] = value
