@@ -61,6 +61,14 @@ state:
     method: lag
     node: fuel_cell
     unit: V
+    initial: 29
+    initial_source: vehicle.yaml:electrical.fuel_cells.output_v
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the converter starts at the cells' declared output voltage, 29 V — the three modules are
+        activated before launch and rated at 29 +- 2 V each, so the bus is up before the mission
+        clock starts and the converter regulates around what they are already making
     tau_s: UNCONFIGURED
     note: >-
       Converter regulation lags its setpoint. electrical_diode.md:248 gives a 1.2 kW
@@ -212,6 +220,14 @@ state:
     node: internal
     method: lag
     unit: degC
+    initial: UNCONFIGURED
+    initial_note: >-
+      the pack's temperature at MET 0, owed with its time constant and for the same reason:
+      `thermal_diode.md:965` declares every thermal constant unspecified, this state's `tau_s`
+      is UNCONFIGURED because of it, and where the pack starts is the same analysis. It matters
+      more here than for a zone: `battery_overtemp` and `battery_thermal_runaway_rate` are two
+      thresholds judged against this channel, so a guessed starting temperature is a guessed
+      margin on a runaway
     tau_s: UNCONFIGURED
     provenance:
       basis: apollo

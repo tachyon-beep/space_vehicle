@@ -229,6 +229,30 @@ DOMAIN_FILES = (
 # grew from six to seven when the first delay element landed: a transport delay is not a
 # lag, and the linter refused the state by name rather than letting it default.
 METHODS = {"algebraic", "lag", "stock", "delay", "dynamics", "discrete", "hazard"}
+# **The methods whose starting value is a declaration.** A state whose value the plant carries from
+# one tick to the next has to be told where it starts, and the rule that says so was written for one
+# method because one method was implemented at the time: every `stock` declares `initial` and
+# nothing else was asked. So twenty lags and a delay began at whatever `advance()` happened to do —
+# and what it did was relax each of them from its *driver*, which is a number nothing declared: the
+# two cabin zones started at their equilibrium, 286.214 K, rather than at the 295 K
+# `vehicle.yaml#thermal.zones` calls their nominal, and the frame's four partial pressures had no
+# temperature to read on the first tick because of it.
+#
+# The set is the integrators that carry a scalar level: `stock`, `lag`, `delay`. Two classes sit
+# outside it deliberately, and each for a reason of *shape* rather than of importance:
+#
+#   - **`dynamics`** — its quantities are vectors, matrices and per-thruster maps (`m, m/s`,
+#     `matrix[m^2, ...]`, `map[thruster_id,N]`) and `initial` is a scalar. Seven states; the shape of
+#     a vector initial is a decision about the field rather than a value, and `mission.yaml` already
+#     declares the CSM's position and velocity, so `orbital_state`'s is the first one landable.
+#   - **`discrete`** — a mode rather than a number, so its starting value is an `enum[...]` string
+#     rather than a scalar — forty-three states, the same shape question in a different vocabulary.
+#     The plant refuses a `discrete` state outright ("its rule is domain code"), so nothing invents
+#     one; and an initial that arrives with the rule is what the implementer of that rule owes.
+#
+# Neither exemption is silent: both are stated in `check_initial_values`'s docstring, in the README
+# section that landed this rule, and in `.scratch/apollo/SOURCES.md`.
+INTEGRATOR_METHODS = ("stock", "lag", "delay")
 # S0 is the service-owned safety kernel; A0..A3 are the agent ladder (vocabulary V-08).
 AUTHORITIES = {"S0", "A0", "A1", "A2", "A3"}
 # The eleven domains the corpus has specifications for, so the linter can name what is still
@@ -4057,6 +4081,81 @@ def check_range_kinds(registry: dict[str, dict[str, Any]], report: Report) -> No
             report.refuse(f"channels.yaml:{cid}", f"declares a band {rng} with no width")
 
 
+def check_initial_values(where: str, components: dict[str, Any], report: Report) -> None:
+    """Every state whose value the plant carries across ticks declares where that value starts.
+
+    `advance()`'s stock branch used to return the tick's net flux *as* the node's new value, so it
+    never read the level and never needed one — and when that was fixed the level was required, and
+    `vehicle.yaml#consumables`, `coupling.yaml`'s `preloaded` prose and the atmosphere model turned
+    out to carry the numbers already, in three places, none of them the state that integrates the
+    tank. That is the folder's recurring shape, and the reason it went unnoticed is worth stating:
+    **a branch that never reads a value never reports it missing.** The rule was written for `stock`
+    and for nothing else, because `stock` was the only integrator implemented at the time.
+
+    **So twenty lags and a delay were never asked, and the plant answered for them.** The lag branch
+    relaxes a state from its *driver* when it has no value — a number nothing declared, and for the
+    two cabin zones the wrong one: they began at their equilibrium, 286.214 K, rather than at the
+    295 K `vehicle.yaml#thermal.zones` calls their nominal, and the frame's four partial pressures
+    had no cabin temperature to read on the first tick because of it. A delay begins at nothing at
+    all. `INTEGRATOR_METHODS` is the set the rule now covers, with the two classes outside it
+    exempted by name and for a reason of shape rather than of importance; see there.
+
+    Two rules, unchanged from the round that wrote them for stocks. The state declares `initial`,
+    because a state with no declared starting value begins at whatever the code does. And a
+    *numeric* initial says where it came from — a resolvable path into another document
+    (`initial_source`, held against its source by `check_initial_sources`), a `initial_derivation`
+    over named inputs, or its own `initial_provenance` block — because a number with none of the
+    three is a guess wearing a unit. An owed starting value is `UNCONFIGURED` with an
+    `initial_note`, which is a declaration and is counted like one.
+    """
+    for state in components.get("state") or []:
+        if not isinstance(state, dict) or state.get("method") not in INTEGRATOR_METHODS:
+            continue
+        sid = str(state.get("id"))
+        method = str(state.get("method"))
+        swhere = f"{where}:state {sid}"
+        if "initial" not in state:
+            report.refuse(
+                f"{swhere}.initial",
+                f"is a {method} and declares no initial condition. A {method} carries a value "
+                "across ticks — that is what its method means — so its starting value is a number "
+                "the plant must have before it can advance anything from it",
+            )
+            continue
+        initial = state.get("initial")
+        if initial == "UNCONFIGURED":
+            if not state.get("initial_note"):
+                report.refuse(
+                    f"{swhere}.initial",
+                    "is UNCONFIGURED with no `initial_note`. An owed starting amount is a decision "
+                    "about the mission, and the note is where what would close it is written",
+                )
+            continue
+        if not isinstance(initial, (int, float)):
+            report.refuse(
+                f"{swhere}.initial",
+                f"is {initial!r}, which is neither a number nor `UNCONFIGURED`",
+            )
+            continue
+        source = state.get("initial_source")
+        provenance = state.get("initial_provenance")
+        derivation = state.get("initial_derivation")
+        if not source and not isinstance(provenance, dict) and derivation is None:
+            report.refuse(
+                f"{swhere}.initial",
+                f"is the number {initial!r} with none of `initial_source`, `initial_derivation` or "
+                "`initial_provenance`. A grounding is what separates a published load from a "
+                "figure somebody typed",
+            )
+        elif isinstance(provenance, dict):
+            check_basis(
+                f"{swhere}.initial_provenance",
+                provenance.get("basis"),
+                provenance,
+                report,
+            )
+
+
 def check_domain(
     path: Path,
     node_ids: set[str],
@@ -6361,67 +6460,10 @@ def check_domain(
                     )
 
     # --------------------------------------------------------------------------------------
-    # A stock's initial condition, which the plant now integrates from and which the
-    # configuration declared nowhere.
-    #
-    # `advance()`'s stock branch used to return the tick's net flux *as* the node's new value,
-    # so it never read the level and never needed one. With that fixed the level is required,
-    # and `vehicle.yaml#consumables`, `coupling.yaml`'s `preloaded` prose and the atmosphere
-    # model all turned out to carry the numbers already — in three places, none of them the
-    # state that integrates the tank. That is the folder's recurring shape exactly, and the
-    # reason it went unnoticed for so long is worth stating: **a branch that never reads a
-    # value never reports it missing.**
-    #
-    # Two rules. Every stock declares `initial`, because a tank with no declared starting
-    # amount is a tank that begins at whatever the code initialises it to. And a *numeric*
-    # initial says where it came from — either a resolvable path into another document
-    # (`initial_source`, checked by `check_initial_sources` where both documents are loaded) or
-    # its own provenance block — because a number with neither is a guess wearing a unit.
+    # The integrators' initial conditions, which the plant integrates from and which the
+    # configuration declared in one class out of three.
     # --------------------------------------------------------------------------------------
-    for state in components.get("state") or []:
-        if not isinstance(state, dict) or state.get("method") != "stock":
-            continue
-        sid = str(state.get("id"))
-        swhere = f"{where}:state {sid}"
-        if "initial" not in state:
-            report.refuse(
-                f"{swhere}.initial",
-                "is a stock and declares no initial condition. A stock is the one class that "
-                "carries a value across ticks, so its starting amount is a number the plant must "
-                "have before it can subtract anything from it",
-            )
-            continue
-        initial = state.get("initial")
-        if initial == "UNCONFIGURED":
-            if not state.get("initial_note"):
-                report.refuse(
-                    f"{swhere}.initial",
-                    "is UNCONFIGURED with no `initial_note`. An owed starting amount is a decision "
-                    "about the mission, and the note is where what would close it is written",
-                )
-            continue
-        if not isinstance(initial, (int, float)):
-            report.refuse(
-                f"{swhere}.initial",
-                f"is {initial!r}, which is neither a number nor `UNCONFIGURED`",
-            )
-            continue
-        source = state.get("initial_source")
-        provenance = state.get("initial_provenance")
-        if not source and not isinstance(provenance, dict):
-            report.refuse(
-                f"{swhere}.initial",
-                f"is the number {initial!r} with neither `initial_source` nor "
-                "`initial_provenance`. A grounding is what separates a published load from a "
-                "figure somebody typed",
-            )
-        elif isinstance(provenance, dict):
-            check_basis(
-                f"{swhere}.initial_provenance",
-                provenance.get("basis"),
-                provenance,
-                report,
-            )
+    check_initial_values(where, components, report)
 
     on_sentinel = sorted(
         str(state.get("id"))
@@ -9084,6 +9126,13 @@ def check_initial_sources(
     reason: a provenance block *describes* where a value came from, and a source *is* the other
     declaration, resolvable and comparable.
 
+    **And it covers every integrator, not just the stocks it was written for.** The round that
+    extended `initial` to `INTEGRATOR_METHODS` gave the same three groundings to lags and delays,
+    and a grounding that only one class is held to is a grounding the next class fills with a
+    literal: the two cabin zones and the radiator start at figures `vehicle.yaml` and the thermal
+    model already declare, and the point of an `initial_source` is that the *two* move together when
+    either one does.
+
     The path is dotted and rooted at a top-level section, so `vehicle.yaml:consumables.csm.o2_kg`
     and `coupling.yaml:absorber_capacity_csm.exhausted_at` both resolve. A source that names a
     missing document, a missing key, or a non-numeric value is refused rather than skipped: each
@@ -9103,7 +9152,7 @@ def check_initial_sources(
     for path in sorted((root / "domains").glob("*/components.yaml")):
         components = load(path, Report()) or {}
         for state in components.get("state") or []:
-            if not isinstance(state, dict) or state.get("method") != "stock":
+            if not isinstance(state, dict) or state.get("method") not in INTEGRATOR_METHODS:
                 continue
             swhere = f"domains/{path.parent.name}/components.yaml:state {state.get('id')}"
             # An initial that is a *computed consequence* of published figures binds them, the way

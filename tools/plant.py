@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 247 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 257 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -65,6 +65,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
+    INTEGRATOR_METHODS,
     Report,
     derivation_value,
     derive_schedule,
@@ -398,7 +399,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 247 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 257 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1096,9 +1097,32 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 f"reads {incoming[0].source!r}, which nothing supplies",
                 needs=incoming[0].source,
             )
-        current = float(state_level(values, state) or driver)
+        # **The state's own level, and a refusal when it has none.** This read
+        # `state_level(values, state) or driver`, which invented a starting value two ways: a state
+        # the plant had not seeded began at its *target* — so the two cabin zones started at their
+        # equilibrium, 286.214 K, and not at the 295 K the vehicle calls their nominal — and a state
+        # whose level was genuinely *zero* (an engine at rest, a pump commanded off) fell through
+        # the same `or` to the driver, because zero is falsy. Both are the failure this folder is
+        # organised against, arriving in the one line that had a fallback rather than a refusal.
+        current_level = state_level(values, state)
+        if current_level is None:
+            raise Unconfigured(
+                f"{where}.initial",
+                "declares no starting value, so there is nothing to relax from. The linter requires "
+                "one of every integrator (`INTEGRATOR_METHODS`) and the plant seeds it; a state "
+                "without one would be advanced from a number this file chose",
+                needs=f"{state.id}.initial",
+            )
+        current = float(current_level)
         alpha = math.exp(-dt / tau)
-        return {state.node: driver + (current - driver) * alpha}
+        # **`state_values`, not `{state.node: value}`.** This returned the node key alone, which was
+        # invisible while a lag had only a node key: `state_level` prefers the state's own id and
+        # falls back to the node, so one key without the other still read correctly. The round that
+        # gave every integrator a declared `initial` seeds *both* — and then the state-id key,
+        # written once at t=0, shadowed this write on every tick: `state_level` read the seed back as
+        # the current level, so the lag relaxed from 295 K forever and the node key stopped moving
+        # after the first tick. One place decides what a state's entries are, and this is it.
+        return state_values(world, state, driver + (current - driver) * alpha)
 
     if state.method == "stock":
         quantum = float(state.spec["quantum"])
@@ -1300,7 +1324,7 @@ def _refuse_shared_node(world: World, state: State, where: str) -> None:
 
 
 def initial_values(world: World) -> dict[str, Any]:
-    """The value map at t=0, from the stocks' own declared initial conditions.
+    """The value map at t=0, from the states' own declared initial conditions.
 
     Until this existed the plant had no answer to "what is the vehicle holding at the start", and
     it did not need one: `advance()`'s stock branch returned the tick's net flux as the node's
@@ -1310,15 +1334,26 @@ def initial_values(world: World) -> dict[str, Any]:
     the published volume and pressure, the absorbers' man-hour ratings are on their own coupling
     nodes, and the accumulators start at zero because that is what an accumulator is.
 
+    **And it seeded the stocks, which was the same defect one class over.** A `stock` was the only
+    integrator the linter asked for an `initial`, so a `lag` had none and never missed one — and
+    the lag branch relaxed each of them from its *driver* when it had no value, which is a number
+    nothing declared. The two cabin zones began at their equilibrium, 286.214 K, rather than at the
+    295 K `vehicle.yaml#thermal.zones` calls their nominal, and the frame's four partial pressures
+    had no cabin temperature to read on the first tick because of it. Every integrator declares a
+    starting value now (`INTEGRATOR_METHODS`, the same set the linter holds) and every declared one
+    is seeded here. The two classes outside that set are outside for a reason of *shape* rather
+    than of importance — `dynamics` carries vectors and matrices, `discrete` carries modes — so
+    their absence here is the same statement the linter makes.
+
     **Keyed by node, which is the plant's own key space, not by channel.** `advance()` returns
     `{state.node: value}` and `step()` commits that map, so this is the seed of the same map and
-    nothing here is a projection. The frame's `values` will want the *published* channel names,
-    and that is the publisher's step rather than the plant's: `eclss.pp_o2_mmhg` is a partial
-    pressure in millimetres of mercury while `csm_cabin_o2_kg` is a mass in kilograms, so the
-    projection is a unit conversion and calling the mass by the channel's name would be a wrong
-    number wearing the right one.
+    nothing here is a projection. The frame's `values` wants the *published* channel names, and
+    that is the publisher's step rather than the plant's: `eclss.pp_o2_mmhg` is a partial pressure
+    in millimetres of mercury while `csm_cabin_o2_kg` is a mass in kilograms, so the projection is a
+    unit conversion and calling the mass by the channel's name would be a wrong number wearing the
+    right one — which is the round that landed the frame's derived channels.
 
-    A stock the configuration has not given a value is left out rather than guessed, and the plant
+    A state the configuration has not given a value is left out rather than guessed, and the plant
     refuses by name when a tick reaches it — which is the behaviour the check beside this wants.
 
     **`internal` is a key space rather than a key.** The sentinel is not a node, and forty-eight
@@ -1332,7 +1367,7 @@ def initial_values(world: World) -> dict[str, Any]:
     """
     values: dict[str, Any] = {}
     for state in world.states:
-        if state.method != "stock":
+        if state.method not in INTEGRATOR_METHODS:
             continue
         initial = (state.spec or {}).get("initial")
         if not isinstance(initial, (int, float)):
@@ -1341,7 +1376,7 @@ def initial_values(world: World) -> dict[str, Any]:
             values.setdefault("internal", {})[state.id] = float(initial)
             values[state.id] = float(initial)
         else:
-            # **Every stock's own key, and the node's as well when the node carries one state.**
+            # **Every state's own key, and the node's as well when the node carries one state.**
             # Four gas masses share `cabin_atm`, so a node-keyed seeding kept only the last of them
             # and the oxygen integrated from the water vapour's level — a plausible mass of the wrong
             # gas. `state_values` is the one place that decides what a state's entries are, so the

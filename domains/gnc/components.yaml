@@ -364,6 +364,15 @@ state:
     node: internal
     method: lag
     unit: deg/s
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        the estimate starts at its prior, and the prior is zero: `gnc.gyro_bias_xyz_deg_s` is the
+        filter's *estimate* of how wrong the gyro is, and `gnc_diode.md:815-825` estimates
+        attitude and bias together from a zero prior (WMAP's precedent). The physical bias is
+        what `GNC-01-imu-drift` walks, and a vehicle that began with a non-zero estimate would be
+        claiming knowledge it has not yet earned
     tau_s: UNCONFIGURED
     provenance:
       basis: historical

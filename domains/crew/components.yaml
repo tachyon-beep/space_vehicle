@@ -158,6 +158,14 @@ state:
     node: crew_state
     method: lag
     unit: "enum-level"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the workload level at MET 0. `apollo_diode.md:227` gives the four-level vocabulary and the
+      five-minute lag, and no source in the corpus gives a starting level — the mission's clock
+      starts at the top of `translunar_coast`, so what the crew are doing then is a property of
+      the scenario that nothing declares. What would close it: a crew activity timeline for the
+      early coast, or a decision that the index begins at `low`, which is a statement about the
+      mission's start rather than a measurement
     tau_s: 300
     provenance:
       basis: apollo

@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 257 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,8 +176,8 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 247 declared debts
-and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 257 declared debts
+and every one of them named. **109 of the 134 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 134 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
@@ -189,14 +189,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **247** is every obligation the linter can name:
-**101** literal `UNCONFIGURED` scalars and **146** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **257** is every obligation the linter can name:
+**111** literal `UNCONFIGURED` scalars and **146** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **175** the plant
+the missing charging efficiency, the pump-speed conversion). The **185** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 175 is the linter's 101 **plus** the graph's unset edge
+`coupling.yaml` included, so its 185 is the linter's 111 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 71 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 68 of the 134 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1787,9 +1787,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     27   20 %  ready now — the classes the reference plant can advance
-    20   15 %  owes a value — the cheapest to close, and the debt count already tracks them
-    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    71   53 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    25   19 %  owes a value — the cheapest to close, and the debt count already tracks them
+    14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    68   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -9817,6 +9817,93 @@ template the registry has not learned to instantiate. The eight are enumerated i
 `.scratch/apollo/SOURCES.md` §0.24.2, with the conversion each one needs; that is the next batch, and
 this paragraph is a measurement rather than a declaration, because the check that would hold it is
 the one the fix brings.
+
+## Twenty lags began at their driver, and nothing declared that
+
+The frame's four partial pressures were absent from the first tick because the law they carry has no
+cabin temperature to read, and that turned out to be the visible end of a rule that had been written
+for one class out of three. `advance()`'s stock branch used to return the tick's net flux *as* the
+node's value, so it never read a level; when that was fixed the linter began requiring `initial` of
+every `stock` — and of nothing else, because `stock` was the only integrator implemented at the time.
+Twenty lags and a delay were never asked, and the plant answered for them:
+
+```python
+current = float(state_level(values, state) or driver)
+```
+
+**A lag with no value relaxed from its driver**, which is a number nothing declared, and the `or`
+made it worse in the other direction: a state whose level was genuinely zero — an engine at rest, a
+pump commanded off — fell through to the driver too, because zero is falsy. The two cabin zones
+therefore began at their equilibrium, **286.214 K**, and not at the 295 K
+`vehicle.yaml#thermal.zones` calls their nominal; the mixture their `initial` gas masses describe was
+derived *at* 295 K, so the vehicle contradicted itself on its first tick and the four partial
+pressures had no temperature to read.
+
+### The rule, and the two classes that are outside it for a reason of shape
+
+`INTEGRATOR_METHODS` — `stock`, `lag`, `delay` — is the set the rule now covers, and it is shared
+with the plant, so the linter's demand and the reader that needs the value cannot come apart. The
+three groundings a stock had are the three a lag has: `initial_source` held against the document
+that declares the same number, `initial_derivation` over named inputs, or `initial_provenance` with
+its basis and reason. An owed starting value is `UNCONFIGURED` with an `initial_note`, which is a
+declaration and is counted like one.
+
+Two classes are deliberately outside, and each for a reason of *shape* rather than of importance:
+
+- **`dynamics`** (7 states) carries vectors, matrices and per-thruster maps — `m, m/s`,
+  `matrix[m^2, ...]`, `map[thruster_id,N]` — and `initial` is a scalar. `mission.yaml` already
+  declares the CSM's position and velocity, so `orbital_state`'s is the first one landable, and it
+  needs a form the field does not have.
+- **`discrete`** (43 states) carries modes, so its starting value is an `enum[...]` string rather
+  than a number; and the plant refuses a `discrete` state outright, so nothing invents one. An
+  initial that arrives with the rule is what the implementer of that rule owes.
+
+Neither exemption is silent: both are named in the check's own docstring, here, and in
+`.scratch/apollo/SOURCES.md`, which is the file the next round reads first.
+
+### What landed, and what is still owed
+
+| | count | where it came from |
+|---|---:|---|
+| starting values **sourced or derived** | 7 | `vehicle.yaml#thermal.zones` (both cabins, 295 K), `radiator_model.csm.radiating_temperature_k` (285 K), `loops.loop_primary` (7.2 C and 200 lb/hr), `electrical.fuel_cells.output_v` (29 V) |
+| starting values **chosen with a reason** | 4 | `thrust_main_n`, `dps_throttle_pct`, `chamber_pressure_pct` — no engine of this vehicle is firing at MET 0, because the mission's clock starts at the top of `translunar_coast` and the budget's first entry is the SIB's TLI — and `gyro_bias`, whose zero is the filter's prior rather than a claim about the gyro |
+| starting values **owed, and named** | 10 | the four other thermal zones, the TWT case, the pump's rated speed, the crew's workload, the suit circuit's flow, the battery pack and the two propulsion pressures — each with an `initial_note` naming the document or analysis that would close it |
+
+The three cabin-adjacent ones are the same missing figure: `thermal_diode.md:965` declares every
+thermal constant UNSPECIFIED, so a zone's steady rise is a *chosen* conductance and where it starts
+is the analysis nobody has. `pump_1_speed_rpm`'s is the rated speed its own `command_value` mapping
+already owes for `on`; `pressurant_pressure_psi`'s is the propellant tank's regulated pressure, which
+the Operational Data Book's loading table does not give (it gives the bottle's charge) and which
+`feed_pressure_pct` needs as well.
+
+### The two-key bug the seeding exposed
+
+Seeding a lag's `initial` wrote the value under the state's own id **and** its node — and that is
+what caught a latent inconsistency in the lag branch, which returned `{state.node: value}` where the
+stock branch returns `state_values(...)`. It had been invisible because a lag had only a node key:
+`state_level` prefers the state's own id and falls back to the node, so one key without the other
+still read correctly. With both written, the state-id key — written once at t=0 — shadowed every
+later write: `state_level` read the seed back as the current level, the lag relaxed from 295 K for
+ever, and the node key froze after the first tick. `state_values` is the one place that decides what
+a state's entries are, and both branches use it now.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | **257** |
+| literal `UNCONFIGURED` scalars (linter / plant) | 101 / 175 | **111 / 185** |
+| states fully configured | 114 / 134 | **109 / 134** |
+| build order | 27 · 20 · 16 · 71 | **27 · 25 · 14 · 68** |
+| a real tick | 19 of 134 | 19 of 134 |
+| values a frame carries at tick 0 | 16 | **26** |
+| tests in `tests/test_vehicle_config.py` | 268 | **270** |
+
+The debt count rose by ten because ten states now *say* they owe their starting value, which is the
+honest direction: the obligations were there and undeclared. The tick still advances 19 states — the
+two cabins were already among them and still are, now from a declared 295 K — and the build order
+moved five states into "owes a value", which is the cheapest bucket and the one the debt count
+already tracks.
 
 ## The invariants, and which of them are enforced
 

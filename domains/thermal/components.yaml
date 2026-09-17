@@ -227,6 +227,8 @@ state:
     method: lag
     node: cabin_zone_t
     unit: K
+    initial: 295
+    initial_source: vehicle.yaml:thermal.zones.csm_cabin.nominal_temperature_k
     tau_s: 2880
     lumped_mass_kg: 400
     specific_heat_j_per_kg_k: 900
@@ -250,6 +252,13 @@ state:
     method: lag
     node: coldplate_t
     unit: K
+    initial: UNCONFIGURED
+    initial_note: >-
+      the coldplate's temperature at MET 0. No source in the corpus reaches it: this zone's time
+      constant is derived from a *chosen* conductance sized so an 800 W electronics load sits
+      about 6 K above the plate, and that rise is stated against an ambient rather than
+      measured. `thermal_diode.md:965` declares every thermal constant unspecified, and a
+      launch-day coldplate temperature is that same missing analysis
     tau_s: 406
     lumped_mass_kg: 60
     specific_heat_j_per_kg_k: 900
@@ -269,6 +278,12 @@ state:
         54,000/133 = 406.0 s
       note: "apollo_diode.md:97: electronics were directly cooled by coldplates, so the coldplate and its boxes are one lump"
   - id: zone_csm_service_t
+    initial: UNCONFIGURED
+    initial_note: >-
+      the service bay's temperature at MET 0, owed with the lumped mass this state already
+      declares UNCONFIGURED: that one scalar closes `E-BAY-HEAT`'s sensitivity and this time
+      constant, and where the bay starts is the same analysis rather than a second figure.
+      `thermal_diode.md:965` is why neither is published
     # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
     # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
     # watt is, and it follows from this mass by division once `c_p` is stated with it
@@ -301,6 +316,8 @@ state:
     method: lag
     node: lm_cabin_zone_t
     unit: K
+    initial: 295
+    initial_source: vehicle.yaml:thermal.zones.lm_cabin.nominal_temperature_k
     tau_s: 2880
     lumped_mass_kg: 400
     specific_heat_j_per_kg_k: 900
@@ -320,6 +337,11 @@ state:
         either figure. The two compartments are the same construction in two spacecraft, which is
         why the second one is a copy of the first and says so
   - id: zone_lm_descent_t
+    initial: UNCONFIGURED
+    initial_note: >-
+      the descent stage's temperature at MET 0, owed with its lumped mass and for the same
+      reason as the service bay above: `LM0-510-1036` is the document this state's own note
+      names, and it answers both the bay's rise per watt and where the bay starts
     # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
     # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
     # watt is, and it follows from this mass by division once `c_p` is stated with it
@@ -343,6 +365,15 @@ state:
     method: lag
     node: radiator_reject
     unit: K
+    initial: 285
+    initial_source: domains/thermal/components.yaml:radiator_model.csm.radiating_temperature_k
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the panel starts at the temperature its own rating is written at. The 2,588 W rejection
+        and the 8.1 m2 effective area are the figures at a 285 K radiating surface, so 285 K is
+        this model's linearisation point rather than a second number: a panel that began
+        anywhere else would start outside the relation that sized it
     tau_s: 300
     provenance:
       basis: derived
@@ -352,6 +383,13 @@ state:
     method: lag
     node: internal
     unit: K
+    initial: UNCONFIGURED
+    initial_note: >-
+      the travelling-wave tube's case temperature at MET 0. Its *rise* is declared — 250 W
+      through 17 W/K is about 15 K above the coldplate — but not the coldplate's own starting
+      temperature, which is the avionics zone's debt above. The two are one analysis, and this
+      is the state the flagship chain overheats, so a guessed starting temperature is a guessed
+      margin on the chain
     tau_s: 265
     provenance:
       basis: derived
@@ -361,6 +399,19 @@ state:
     method: lag
     node: coolant_supply_t
     unit: K
+    initial: 280.35
+    initial_derivation:
+      expression: supply_c + kelvin_offset
+      inputs:
+        supply_c: vehicle.yaml:thermal.loops.loop_primary.supply_c
+        kelvin_offset: 273.15
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the loop starts at its declared supply temperature, 7.2 C = 280.35 K
+        (`vehicle.yaml#thermal.loops.loop_primary.supply_c`). The return sits at 5-15 C and the
+        loop's mean between the two, so the supply is the defensible starting point rather than
+        the return, and it is the temperature the evaporator and the radiator are rated against
     tau_s: 45
     provenance:
       basis: derived
@@ -370,11 +421,32 @@ state:
     method: lag
     node: coolant_flow
     unit: "kg/s"
+    initial: 0.025199576111111112
+    initial_derivation:
+      expression: nominal_flow_lb_per_h * lb_to_kg / seconds_per_hour
+      inputs:
+        nominal_flow_lb_per_h: vehicle.yaml:thermal.loops.loop_primary.nominal_flow_lb_per_h
+        lb_to_kg: 0.45359237
+        seconds_per_hour: 3600
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the loop starts at its published flow: 200 lb/hr (`vehicle.yaml#thermal.loops`), which
+        is the 0.0252 kg/s this state's own relation above quotes and the figure the loop's
+        mixing time constant is derived from
     tau_s: 8
     provenance:
       basis: chosen
       reason: "pump spin-up: a centrifugal pump reaches speed in a few seconds, and 8 s is long enough that a bus sag lasting one tick cannot produce an instant flow loss. This is the lag that makes the flagship chain a ramp rather than a step"
   - id: pump_1_speed_rpm
+    initial: UNCONFIGURED
+    initial_note: >-
+      the pump's speed at MET 0, which is the rated speed this state's own `command_value`
+      mapping already owes: `on` is UNCONFIGURED for exactly this figure, and the channel's
+      0-12,000 rpm is a `range_kind: band` rather than a rating. A pump that begins *off* would
+      close the mapping and make the mission's first minutes a spin-up the thermal chain has to
+      survive, which is a decision about the scenario rather than a value. What would close it:
+      a pump curve or a rated rpm for the CSM's coolant pump
     method: lag
     node: coolant_flow
     unit: rpm
@@ -403,6 +475,18 @@ state:
       basis: chosen
       reason: "as coolant_flow_kg_s; the pump has its own speed state because a blocked loop and a slowing pump produce the same flow with different speeds, and that difference is the diagnosis"
   - id: loop_transport_t
+    initial: 280.35
+    initial_derivation:
+      expression: supply_c + kelvin_offset
+      inputs:
+        supply_c: vehicle.yaml:thermal.loops.loop_primary.supply_c
+        kelvin_offset: 273.15
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the transport line is full of supply-temperature coolant before anything moves, so its
+        contents at MET 0 are the same starting condition as the loop node above — one fluid at
+        one temperature, and the delay element holds what is in the pipe
     method: delay
     node: loop_transport
     unit: K

@@ -123,6 +123,15 @@ state:
       source: "the ascent engine cannot throttle and is not restartable in any operational sense, so its state machine has no throttle state and its minimum off time is zero — there is nothing to protect by waiting, because a second attempt is not a thing that happens"
 
   - id: thrust_main_n
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        no engine of this vehicle is firing at MET 0. The mission's clock starts at the top of
+        `translunar_coast` (`mission.yaml#phases`), the budget's first entry is the SIVB's TLI —
+        an external stage — and the first burn on the vehicle's own budget is the 6.4 m/s
+        translunar midcourse correction later in that phase. Zero is what the mission profile
+        says rather than a placeholder for a figure nobody has
     node: thrust_main
     method: lag
     unit: N
@@ -132,6 +141,13 @@ state:
       reason: "thrust build-up and tailoff. apollo_diode.md:521 gives valve and motor mechanical transit as 'typically 0.1 to several seconds', and half a second sits inside that: long enough that a one-tick command cannot produce instant thrust, short enough that a burn's shape is dominated by its commanded duration rather than by its rise"
 
   - id: dps_throttle_pct
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        as `thrust_main_n`: the descent engine is not firing at MET 0, so its throttle actuator
+        sits at its closed stop. The engine's own `operating_band_pct` starts at 10.5 % and the
+        actuator's separate existence is what lets a command sit below the band it cannot use
     node: internal
     method: lag
     unit: "%"
@@ -141,6 +157,13 @@ state:
       reason: "the throttle actuator's response. It is a separate state from the engine's thrust because the actuator can be commanded somewhere the engine cannot operate, and that distinction is the whole content of the 65-92.5 % non-operating region"
 
   - id: chamber_pressure_pct
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        as `thrust_main_n`: no chamber is firing at MET 0, so the chamber is at ambient and its
+        gauge reads zero percent of nominal. This is the state whose 0.3 s filling time the
+        launch sequence exercises, and it starts empty
     node: internal
     method: lag
     unit: "% nominal"
@@ -150,6 +173,14 @@ state:
       reason: "chamber pressure follows thrust with the chamber's own filling time; faster than the valve because the chamber is small. apollo_diode.md:135 publishes it at 10 Hz with a 0.1 % precision, which is a fast channel and needs a fast state behind it"
 
   - id: feed_pressure_pct
+    initial: UNCONFIGURED
+    initial_note: >-
+      the feed line's pressure at MET 0 as a percentage of nominal. Unlike the chamber it is
+      *not* zero: the propellant tanks are pressurized from before launch and the engine is in a
+      coast with its valves closed, so the starting figure is the regulator's locked-up pressure,
+      which nothing declares — `propulsion.components.yaml#pressurant_regulator` is a regulator
+      with no output pressure to its name. The search for one is recorded on
+      `pressurant_pressure_psi` below, and it answers both
     node: internal
     method: lag
     unit: "% nominal"
@@ -159,6 +190,15 @@ state:
       reason: "feed pressure is downstream of the regulator and upstream of the injector, so it responds fastest of the three. It is the channel the F-08 stuck-sensor chain turns on, and a state slower than the sensor would make a stuck sensor undetectable by rate"
 
   - id: pressurant_pressure_psi
+    initial: UNCONFIGURED
+    initial_note: >-
+      the helium regulator's downstream pressure at MET 0. **Searched:** ODB Vol III's loading
+      tables (Table 3.2-10 gives the *storage* pressures, 3,600/178/4,150 psia, and no
+      regulated pressure) and `mission_e_consumables.txt` (a regulator appears only as a 3 psi
+      unit in a different assembly) — the same search this state's `tau_s` note records, and the
+      reason its `basis` is UNCONFIGURED. What would close it: a propellant-tank pressurization
+      analysis, or a loading table that gives the tank's regulated pressure rather than the
+      bottle's charge
     node: internal
     method: lag
     unit: psi

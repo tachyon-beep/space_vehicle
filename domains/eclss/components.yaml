@@ -366,6 +366,14 @@ state:
     node: internal
     method: lag
     unit: ft3/min
+    initial: UNCONFIGURED
+    initial_note: >-
+      the suit circuit's flow at MET 0. The state is on the `internal` sentinel with no driver
+      edge, and `apollo_diode.md:92` publishes the operating band — 27-33 cfm with a <20 event —
+      rather than a starting value; this domain's own `open_debts` records that the circuit is
+      modelled as a single flow channel. What would close it: the suit circuit's published flow
+      (`csm_ecs_study_guide.pdf`, in the source library), or a decision that the fan starts at
+      the bottom of its band
     tau_s: 5
     provenance:
       basis: chosen
