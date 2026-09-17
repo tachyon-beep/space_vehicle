@@ -1538,10 +1538,15 @@ def check_layer_coverage(
     The comparison is exact and whole-registry, matching `check_fault_coverage`'s rule per domain:
     a fault that names a template perturbs the template, and a fault that names one instance of a
     template has named a channel this registry does not have.
+
+    **And the block's absence was silent**, which is the other half of the same claim: this function
+    opened with `if not isinstance(coverage, dict): return`, so `coverage:` could be deleted from
+    `channels.yaml` — the whole vehicle-wide claim with it — and the run still said COMPOSES. A block
+    that is only read when it is present cannot report its own absence, which is the sentence the
+    folder wrote for `point_units`; a missing census is a debt rather than a refusal because nothing
+    is wrong, something is owed. The same round found the shape in four blocks at once.
     """
     coverage = (channels or {}).get("coverage")
-    if not isinstance(coverage, dict):
-        return
 
     def flatten(name: Any) -> str:
         return re.sub(r"\[[^\]]*\]", "[]", str(name))
@@ -1573,6 +1578,24 @@ def check_layer_coverage(
         "unperturbed_service_layer": sum(1 for c in unperturbed if layers.get(c) == "service"),
         "perturbed_service_layer": sum(1 for c in perturbed if layers.get(c) == "service"),
     }
+    # **The census is owed, and its absence used to be silent.** This opened `if not isinstance(
+    # coverage, dict): return`, so deleting the block from `channels.yaml` left 148 registered
+    # channels with no vehicle-wide claim about them and a verdict of COMPOSES. That is the sentence
+    # this folder wrote when `point_units` was the case — *a field consulted only when it is present
+    # cannot report its own absence* — and it is a debt rather than a refusal because nothing here is
+    # *wrong*: the census is a deliverable that is not there. The numbers come from the derivation
+    # above, so the debt hands over the value that closes it.
+    if not isinstance(coverage, dict):
+        report.debt(
+            "channels.yaml:coverage",
+            f"declares {len(registry)} registered channel(s) and no census block. The block is how "
+            "the registry states the layer split across the fault line — derived here as "
+            f"{derived['unperturbed']} unperturbed, {derived['unperturbed_service_layer']} of them "
+            f"`service`, and {derived['perturbed_service_layer']} perturbed `service` channel(s) — "
+            "and without it those figures exist only in the prose of `open_debts`, which is where "
+            "two of the three were wrong until they became fields",
+        )
+        return
     where = "channels.yaml:coverage"
     for field, actual in derived.items():
         claim = coverage.get(field)
@@ -3121,10 +3144,14 @@ def check_chain_faults(
       - the chain's `scenario_use` names a declared `scenario_postures` id, because the scenario is
         what tells an operator which experiment the story belongs to and fifteen chains pointing at
         a scenario that has been renamed read exactly like fifteen that work.
+
+    **The list's own absence was the fourth thing, and nothing reported it.** `if not chains: return`
+    meant the whole block could be deleted — every rule above and the fifteen stories with it — and
+    the corpus still composed. The README's front table names the chains in words, and the summary
+    line counts them, so the deletion was visible in two places and read by neither; the count is
+    held now (`check_readme_figures`) and the absence is a debt.
     """
     chains = [c for c in coupling.get("failure_chains") or [] if isinstance(c, dict)]
-    if not chains:
-        return
     faults: dict[str, list[str]] = {}
     domains = root / "domains"
     if domains.is_dir():
@@ -3133,6 +3160,21 @@ def check_chain_faults(
             for fault in policy.get("faults") or []:
                 if isinstance(fault, dict) and fault.get("id"):
                     faults[str(fault["id"])] = [str(p) for p in fault.get("perturbs") or []]
+    # **A list that is only checked when it is there is not checked.** This opened `if not chains:
+    # return`, so the fifteen chains — the corpus's whole statement of what a fleet has to work out,
+    # and the list the crisis posture's scenarios are read off — could be deleted from `coupling.yaml`
+    # and the run composed with the same debt count. The summary line went from "15 failure chains"
+    # to "0 failure chains" and nothing read that either. A fault corpus with no chains is a debt:
+    # the chains are owed, and the count of faults that would have to appear in them is the linter's.
+    if not chains:
+        report.debt(
+            "coupling.yaml:failure_chains",
+            f"declares no failure chains, and the domains' fault policies declare {len(faults)} "
+            "fault(s) between them. The chain list is where a fault's consequences are ordered into "
+            "what a fleet sees first, second and third, and `realised_by` is what joins it to the "
+            "policies — without it every fault is declared and none of them has a story",
+        )
+        return
     scenarios = {
         str(p.get("id")) for p in mission.get("scenarios") or [] if isinstance(p, dict)
     } | {str(p.get("id")) for p in mission.get("scenario_postures") or [] if isinstance(p, dict)}
@@ -3375,12 +3417,15 @@ def check_fault_coverage(path: Path, docs: dict[str, dict[str, Any]], report: Re
 
     The comparison is exact — the declared exceptions must *be* the channels no fault perturbs —
     because a claim with a slack clause is a claim that cannot be checked.
+
+    **A domain that makes no claim at all was the one case this could not see.** `if not coverage:
+    return` made the block optional in the code while the sentence above says every domain makes one:
+    delete `coverage:` from a domain's `fault_policy.yaml` and the check skipped the domain in
+    silence, so a domain with no claim read exactly like one whose exception list is empty. The
+    absence is a debt now, and it names what is owed: the derived count of channels no fault touches.
     """
     points = docs.get("points.yaml") or {}
     policy = docs.get("fault_policy.yaml") or {}
-    coverage = policy.get("coverage")
-    if not coverage:
-        return
     published = {
         re.sub(r"\[[^\]]*\]", "[]", str(p.get("channel")))
         for p in points.get("points") or []
@@ -3392,8 +3437,20 @@ def check_fault_coverage(path: Path, docs: dict[str, dict[str, Any]], report: Re
         for c in (fault.get("perturbs") or [])
     }
     actual = published - perturbed
-    declared = {re.sub(r"\[[^\]]*\]", "[]", str(x)) for x in coverage.get("unperturbed") or []}
+    coverage = policy.get("coverage")
     where = f"domains/{path.name}/fault_policy.yaml:coverage"
+    if not coverage:
+        if published:
+            report.debt(
+                where,
+                f"declares no coverage block. The domain publishes {len(published)} channel(s) and "
+                f"no fault perturbs {len(actual)} of them, which is what this block exists to state "
+                "— \"every channel this domain publishes is perturbed by at least one fault above, "
+                "except ...\". Without it a domain that makes no claim reads exactly like one whose "
+                "exception list is empty",
+            )
+        return
+    declared = {re.sub(r"\[[^\]]*\]", "[]", str(x)) for x in coverage.get("unperturbed") or []}
     if actual - declared:
         report.refuse(
             where,
@@ -12126,10 +12183,25 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
     rather than equality, because a sub-step has to land on tick boundaries — a 100 Hz major cycle
     inside a 50 Hz tick is two sub-steps, and a 10 Hz guidance update is one every five ticks, and
     either one failing to divide would mean a sub-step that straddles a tick.
+
+    **And the block's absence was the fourth silent deletion this round found.** `if not isinstance(
+    sub, dict): return` looks like applicability — an estimator that does not sub-step needs no
+    block — but the obligation is not the check's to decide, and C-07's resolution states it:
+    *"What must not be deferred is the interface: every domain declares its natural rate even though
+    the scheduler ignores it today."* A domain that declares an estimator and no rate is a domain
+    whose natural rate is undeclared, which is the thing the register says may not be deferred. So
+    the absence is a debt, at the block's own path, and this check says so rather than returning.
     """
     estimator = load(root / "domains" / "gnc" / "components.yaml", Report()) or {}
     sub = (estimator.get("estimator") or {}).get("sub_stepping")
     if not isinstance(sub, dict):
+        report.debt(
+            "domains/gnc/components.yaml:estimator.sub_stepping",
+            "is not declared. C-07's resolution requires the interface even though the scheduler "
+            "ignores it — *every domain declares its natural rate* — so the filter's major cycle, "
+            "its guidance update and the plant tick it sub-steps inside have nowhere to be stated, "
+            "and nothing can hold them against `mission.yaml#tick_hz`",
+        )
         return
     tick = (mission or {}).get("tick_hz")
     if not isinstance(tick, (int, float)) or not tick:
@@ -15066,6 +15138,20 @@ def check_readme_figures(
                 "README.md:front table",
                 f"calls `coupling.yaml`'s cycle list {match.group(1)!r} while it declares "
                 f"{len(cycles)}",
+            )
+    # The chains, which the front table names and nothing read. Round 36 deleted the whole
+    # `failure_chains` block from a broken copy and the corpus composed: the check that holds the
+    # chains returned on their absence, the summary line counted 0 instead of 15, and this row —
+    # *"the fifteen failure chains"* — was prose. Two statements about the list, neither with a
+    # reader, which is the same silence in two files.
+    chains = (documents.get("coupling.yaml") or {}).get("failure_chains") or []
+    for match in re.finditer(r"the ([A-Za-z0-9]+) failure chains", flat):
+        stated = spoken_number(match.group(1))
+        if stated != len(chains):
+            report.refuse(
+                "README.md:front table",
+                f"calls `coupling.yaml`'s chain list {match.group(1)!r} while it declares "
+                f"{len(chains)}",
             )
     if re.search(r"(\d+)-node tick order", flat) is None:
         report.refuse(

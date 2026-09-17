@@ -10316,6 +10316,102 @@ were not, plus the four instruments that now hold them. A real tick still advanc
 order is still 27 · 25 · 14 · 69, `--strict` still exits 2 — and `plant.py --determinism` now prints
 *"two independent runs of the same start: 50 of 50 compare-points identical"*.
 
+## Four blocks the linter holds could be deleted, and the corpus still composed
+
+The round before this one ended on a sentence: *a check that cannot run is not a check that passed.* So
+this round asked the mechanical version of it — **hold the input back and see whether the check
+notices** — and eleven blocks the linter reads were deleted from broken copies, one per case. Four of
+the eleven composed.
+
+### What was deleted, and what happened
+
+| block deleted | before | after |
+|---|---|---|
+| `channels.yaml#coverage` — the vehicle-wide census | COMPOSES, 262 debts | COMPOSES, **263** |
+| `coupling.yaml#failure_chains` — the fifteen stories | COMPOSES, 262 debts | **REFUSED** (and owed) |
+| `domains/thermal/fault_policy.yaml#coverage` | COMPOSES, 262 debts | COMPOSES, **263** |
+| `domains/gnc/components.yaml#estimator.sub_stepping` | COMPOSES, 262 debts | COMPOSES, **263** |
+
+Each was a **block-level** guard — `if not isinstance(coverage, dict): return`, `if not chains:
+return`, `if not coverage: return`, `if not isinstance(sub, dict): return`. Three of the four have a
+docstring that says the very thing the guard made optional: `check_fault_coverage`'s says *"A domain's
+coverage claim must be true, and every domain makes one"*, `check_layer_coverage` holds the registry's
+census against eleven policies, and `check_chain_faults` holds fifteen chains against 128 faults. The
+fourth's guard *reads* like applicability, and that is what made it the interesting one.
+
+**The failure chains were silent in two files at once.** Delete the block and the check returns; the
+linter's summary line prints *"0 failure chains"* instead of 15, for a reader that does not exist; and
+the README's front table still says *"the fifteen failure chains"* — a figure with no reader, in the row
+whose "declared cycles" and "57-node tick order" clauses both already had one. Two statements about one
+list, neither checked, is the same silence arriving in the file that describes the file.
+
+This folder has the sentence already, written when `point_units` was the case:
+
+> **A field consulted only when it is present cannot report its own absence.**
+
+It was written about a *field* (`point_units` is read only as an exemption, so its absence cannot be
+seen by the check that reads it). Nothing said the same of a *block*, and a block is where the guard is
+structural: `return` is the natural way to write "nothing to check here", and it reads exactly like
+"nothing wrong here".
+
+### The fix: absence is a debt, and the count says so
+
+None of the four is a refusal on its own, because nothing about a missing claim is *wrong* — the claim
+is **owed**, which is what a debt is for. Each absence now reports a debt at the block's own path, and
+each debt carries the figures the linter derives, so the sentence that reports the absence is also the
+sentence that says what closes it:
+
+- `channels.yaml:coverage` — *"declares 148 registered channel(s) and no census block … derived here as
+  20 unperturbed, 15 of them `service`, and 42 perturbed `service` channel(s)"*;
+- `coupling.yaml:failure_chains` — *"declares no failure chains, and the domains' fault policies declare
+  128 fault(s) between them"*;
+- `domains/<domain>/fault_policy.yaml:coverage` — *"The domain publishes 15 channel(s) and no fault
+  perturbs 1 of them"*;
+- `domains/gnc/components.yaml:estimator.sub_stepping` — *"is not declared. C-07's resolution requires
+  the interface … every domain declares its natural rate"*.
+
+The chains are the case with a second half: the README figure is a checked figure now, so a corpus with
+no chains is **refused** as well as owed — `README.md:front table: calls coupling.yaml's chain list
+'fifteen' while it declares 0` — and that refusal is what a test asserts, because a debt alone leaves
+the non-strict gate at exit 0.
+
+### The round's own mistake, and how the fourth case was decided
+
+The sub-stepping block was first read as **not owed**: an estimator that runs at the tick rate needs no
+sub-stepping, nothing in the linter said the block was required, and making its absence a debt would be
+inventing an obligation — the one thing a debt count may not do. So the first draft of this section
+named it as the sweep's boundary case and left it.
+
+That reading was wrong, and the counter-evidence was in a file the round had already cited for
+something else. `integration/reconciliation/01-conflict-register.md` C-07 resolves the 50/100/200 Hz
+conflict with a sentence about exactly this:
+
+> What must not be deferred is the interface: **every domain declares its natural rate even though the
+> scheduler ignores it today.**
+
+The obligation was never the *check's* to decide, and it is not about sub-stepping at all — it is about
+the interface C-07 declined to defer. A domain that declares an estimator and no rate is a domain whose
+natural rate is undeclared, which is the deferred thing. So the fourth case is a debt like the other
+three, and the lesson is narrower and more useful than "look harder": **an absent declaration looks
+optional from inside the check that reads it, and the obligation is usually stated somewhere else.**
+
+Deleting the whole `estimator:` block is refused by two other checks, so the new debt carries the case
+the other guards do not: the estimator is there and its rates are not.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| blocks whose absence the linter reports | 0 of 4 | **4 of 4** |
+| README front-table figures the linter reads | the failure chains were not one | **it is** |
+| tests in `tests/test_vehicle_config.py` | 282 | **284** |
+
+The corpus itself is unchanged, so no pinned figure moved: 262 debts, 19 of 135 states advancing,
+27 · 25 · 14 · 69, `--strict` exits 2. What moved is what happens when a block is *not* there — and the
+sweep is stated as it ran: eleven blocks deleted from broken copies, four of which composed, and all
+four of those reported now.
+
 ## The invariants, and which of them are enforced
 
 
