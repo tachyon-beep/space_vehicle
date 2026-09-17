@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 246 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 247 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 246 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 247 declared debts
 and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
 a real tick advances **17** of the 134 states against the build order's **23** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **246** is every obligation the linter can name:
-**101** literal `UNCONFIGURED` scalars and **145** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **247** is every obligation the linter can name:
+**101** literal `UNCONFIGURED` scalars and **146** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **175** the plant
@@ -9594,6 +9594,45 @@ a state on a shared node to *code* — which is where the fix is.
 The headline did not move and the two figures that measure the remaining work both did: **the
 algebraic layer is not 13 rules to write, it is 13 declarations to read** — and the plant's own key
 space is now a named obligation rather than a silent overwrite.
+
+## The frame's keys are nodes, and its own declaration says channel ids
+
+`presentation.yaml#frame.fields` states the `values` field's unit in one word:
+**`map[channel_id, number|bool|string]`** — that is the shape the window's consumers are promised, and
+the field is the one part of the file surface the vehicle side owns outright. `plant.emit_frame`
+hands them the plant's *internal* map instead, whose keys are nodes:
+
+```
+  what a frame carries now            {cabin_atm: 0.05315987, o2_csm: 279.0, internal: {...}}
+  what the declaration promises       {eclss.pp_o2_mmhg: ..., consumables.o2_csm_kg: ...}
+```
+
+**99 of the 142 published points come from a state on a node that carries more than one**, so the map
+cannot even name what it is carrying: four gas masses share `cabin_atm`, and `values["cabin_atm"]`
+holds whichever the loader wrote last. That is not a hypothetical — it is what round 20's first tick
+produced, when the plant learned to evaluate derivations and set `csm_cabin_o2_kg` to the *water
+vapour's* mass.
+
+The fix is one change in two halves and neither is optional: **key the plant's value space by state**
+(a node id already is a state id on every single-state node, so the change is additive) and **build
+the frame's `values` from the points registry**, which already declares each channel's `from`. What is
+owed is a *shape* rather than a number, which is why it is a debt in `presentation.yaml` rather than a
+state: nothing in the corpus can be configured to fix it, and a frame whose keys are wrong is a window
+a fleet cannot gate on.
+
+This is the third round in a row whose finding came from *reading what the vehicle already declares* —
+the sentinel's order, the algebraic rules, and now the frame's own unit string — and it is the largest
+of the three: the window is the objective's third completion criterion, and it cannot be served until
+this is fixed.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 246 | **247** |
+| prose obligations | 145 | **146** |
+| published points the frame cannot name | — | **99 of 142** |
+| tests in `tests/test_vehicle_config.py` | 264 | **265** |
 
 ## The invariants, and which of them are enforced
 
