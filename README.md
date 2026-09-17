@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 263 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 135 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 263 declared debts
 and every one of them named. **110 of the 135 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 135 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **263** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **151** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **186** the plant
@@ -10498,6 +10498,90 @@ its band describes, corrected the prose that had it elsewhere, and added the thr
 collapse impossible. The heat balance itself is still owed — `specific_heat_j_per_kg_k` and the loop's
 collected load — which is C-28's first open item, and the two channel rows still say so in their own
 `owed` fields.
+
+## Two of six zones were compared, and the other four were skipped in silence
+
+The check that holds a heat rate against the loads it sums found the state it compares by **node
+name**:
+
+```python
+state = next((s for s in states.values() if str(s.get("node")) == f"cabin_heat_{block.get('rate')}"), None)
+if state is None:
+    continue
+```
+
+`heat_inputs` has six zones. Two of them — the cabins — have states on nodes named `cabin_heat_csm`
+and `cabin_heat_lm`, so the convention matched them; the other four were skipped without a word. The
+`rate: csm` field existed only so the f-string could be built, and nothing else read it.
+
+### What the silence cost
+
+| zone | its heat | held against its loads before this round |
+|---|---:|---|
+| `csm_cabin` | 733 W | yes |
+| `lm_cabin` | 827 W | yes |
+| `csm_service_bay` | 630 W | **no** — declared, summed, compared to nothing |
+| `lm_descent_bay` | 180 W | **no** |
+| `csm_avionics_bay` | 360 W | **no state existed at all** |
+| `radiator_loop` | — | listed in `unheated`, with the reason |
+
+So 990 W of the vehicle's load was in the partition and in no comparison, and one zone could have lost
+its heat state entirely without the check saying so. That is the same defect the function's own
+docstring records one level up — `check_cabin_equilibrium` found all four of its inputs by convention
+until round 51 — arriving in the check written to hold the partition.
+
+### The fix
+
+The link is a declaration now, on the zone:
+
+```yaml
+csm_service_bay:
+  cooled_by: loop_primary
+  heat_state: service_bay_heat_w
+```
+
+and the check resolves it instead of guessing:
+
+- a heated zone with **no `cooled_by`**, or one that names something that is not a loop, is refused —
+  a heat rate with no loop is a watt with nowhere to go;
+- a `heat_state` that **does not resolve** is refused (the rule `check_zone_nodes` already applies to
+  the cabins' four links);
+- an **absent** `heat_state` is a **debt**, because nothing is wrong — the state is owed;
+- two zones naming **one state** are refused: a loop's collected load sums its zones, and a shared
+  state would count the same watts twice;
+- the state's `total_w` against the zone's loads, which is the rule that existed but only ever ran on
+  the cabins — it holds the service bay's 630 W and the descent bay's 180 W now.
+
+The `rate` field is gone with the convention that needed it.
+
+### The one zone that is owed, and why it is not built here
+
+`csm_avionics_bay`'s 360 W — the IMU, the guidance computer and the instrumentation — has no
+heat-rate state, so there is no `heat_state:` line on that zone rather than a wrong one. The linter
+reports it by name, with the load count and the sum, and it is the ingredient the loop's collected
+load is missing: the same 360 W is what the `>50 C` plate event is about, and `zone_csm_avionics_t`
+relaxes toward the structure plate rather than toward a heat-driven equilibrium.
+
+Building it is a graph change rather than a state: the bay's temperature node is driven by
+`E-STRUCT-PLATE`, and an `E-AVIONICS-HEAT` edge landing on the same node would become that lag's
+canonical driver — the first contributor by id — which would feed a watt into a state denominated in
+kelvin. The corpus's own idiom for that is the cabins': an equilibrium state between the heat and the
+sink, which the zone then relaxes toward. That is the next round's work, and it is why this round
+stops at the debt.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | **263** |
+| of which prose obligations | 150 | **151** |
+| zones whose heat rate is held against its loads | 2 | **4** |
+| tests in `tests/test_vehicle_config.py` | 285 | **286** |
+| states, nodes, edges, channels | 135 · 57 · 79 · 148 | unchanged |
+
+The new debt is the honest direction: the avionics bay's heat state was always owed — it is part of
+`domains/thermal/components.yaml#open_debts`'s "the loop's own collected load is a sum over
+`heat_inputs` that nothing evaluates" — and until this round nothing counted it.
 
 ## The invariants, and which of them are enforced
 

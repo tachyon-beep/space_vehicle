@@ -13606,28 +13606,75 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
     # the two declarations could part company in the quiet direction: a load re-rated in
     # `domains/power/` would change what the cabin's equipment actually draws while the thermal
     # state went on relaxing toward the old figure — a cabin modelled as cooler than it is.
+    #
+    # **The states are found by declaration now, and until round 38 they were found by node name.**
+    # This block read `node == f"cabin_heat_{block.get('rate')}"` and ended `if state is None:
+    # continue` — so it compared the two cabins and **silently skipped the other four zones**. The
+    # service bay's 630 W and the descent bay's 180 W were declared, summed and never held against
+    # anything, and the avionics bay's 360 W could have no state at all without a word. That is the
+    # same defect this function's own docstring records one level up (`check_cabin_equilibrium`
+    # finding its four inputs by convention), arriving in the check that holds the partition. The
+    # zone declares `heat_state` and `cooled_by` now, the convention is gone, and a heated zone that
+    # owes its heat rate owes it *loudly*.
     states = {
         str(s.get("id")): s
         for s in thermal.get("state") or []
         if isinstance(s, dict) and s.get("id")
     }
+    zones_by_id = {
+        str(z.get("id")): z for z in (vehicle_doc.get("thermal") or {}).get("zones") or []
+    }
+    loops = {str(x.get("id")) for x in (vehicle_doc.get("thermal") or {}).get("loops") or []}
+    claimed: dict[str, str] = {}
     for zone, block in sorted(heat.items()):
-        state = next(
-            (s for s in states.values() if str(s.get("node")) == f"cabin_heat_{block.get('rate')}"),
-            None,
-        )
-        if state is None:
-            continue
+        zone_row = zones_by_id.get(zone) or {}
+        zone_where = f"vehicle.yaml#thermal.zones.{zone}"
+        cooled = zone_row.get("cooled_by")
+        if cooled not in loops:
+            report.refuse(
+                f"{zone_where}.cooled_by",
+                f"names {cooled!r}, which is not a loop `vehicle.yaml#thermal.loops` declares "
+                f"({sorted(loops)}). A zone whose heat has no loop is a heat rate with nowhere to "
+                "go, and a loop's collected load is the sum over the zones that name it",
+            )
         declared = sum(
             int(loads[str(load_id)].get("demand_w") or 0)
             for load_id in block.get("loads") or []
             if str(load_id) in loads
         )
+        name = zone_row.get("heat_state")
+        state = states.get(str(name))
+        if name is not None and state is None:
+            report.refuse(
+                f"{zone_where}.heat_state",
+                f"names {name!r}, which is not a state in domains/thermal/components.yaml. The link "
+                "is what the state is found by now, so a link that does not resolve is a heat rate "
+                "nothing carries",
+            )
+            continue
+        if state is None:
+            report.debt(
+                f"{zone_where}.heat_state",
+                f"names no heat-rate state, and `heat_inputs.{zone}` assigns "
+                f"{len(block.get('loads') or [])} load(s) summing to {declared} W. Every other "
+                "heated zone has one — `cabin_heat_csm_w`, `cabin_heat_lm_w`, `service_bay_heat_w`, "
+                "`descent_bay_heat_w` — and without it those watts are assigned to a compartment and "
+                "carried by nothing, which is the ingredient the loop's collected load is missing",
+            )
+            continue
+        if str(name) in claimed:
+            report.refuse(
+                f"{zone_where}.heat_state",
+                f"names {name!r}, which `{claimed[str(name)]}` already names. One state cannot be two "
+                "compartments' heat: a loop's collected load sums its zones, and a shared state would "
+                "count the same watts twice",
+            )
+        claimed[str(name)] = zone
         if state.get("total_w") != declared:
             report.refuse(
-                f"domains/thermal/components.yaml:state {state['id']}",
+                f"domains/thermal/components.yaml:state {name}",
                 f"declares {state.get('total_w')!r} W and the loads `heat_inputs.{zone}` assigns "
-                f"sum to {declared} W. The cabin would relax toward a heat rate its equipment does "
+                f"sum to {declared} W. The zone would relax toward a heat rate its equipment does "
                 "not produce",
             )
         # The `computation` is re-derived by `check_domain`'s one loop, which reads

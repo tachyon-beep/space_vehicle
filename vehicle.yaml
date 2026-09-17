@@ -1276,6 +1276,13 @@ thermal:
         # avionics bay's temperature is the coldplate's — which is what makes this link one that
         # had to be declared rather than derived from a channel name.
         implemented_by: [avionics_plate_high]
+        # **The one heated zone with no heat-rate state, and it is owed rather than overlooked.**
+        # `heat_inputs.csm_avionics_bay` assigns the IMU, the guidance computer and the
+        # instrumentation — 360 W — and no state sums them, while the cabin, the service bay and the
+        # descent bay each have one. There is no `heat_state` line here rather than a wrong one:
+        # the state does not exist, `check_thermal_heat_inputs` reports the debt by name, and the
+        # loop's collected load is the figure that cannot be assembled without it.
+        cooled_by: loop_primary
         provenance:
           basis: apollo
           ref: "apollo_diode.md:105"
@@ -1284,6 +1291,12 @@ thermal:
         limit_c: [-20, 60]
         regulated: false
         temperature_state: zone_csm_service_t
+        # The bay's 630 W is `service_bay_heat_w`, and it is declared here rather than found by
+        # convention: the check that holds a heat rate against its loads used to look the state up
+        # by node name (`cabin_heat_{rate}`) and skip in silence when that missed, which it did for
+        # four of the six zones.
+        cooled_by: loop_primary
+        heat_state: service_bay_heat_w
         provenance:
           basis: chosen
           reason: "unregulated in this model; its temperature matters through the propellant and pressurant it contains, which is where the F-09 frozen-line chain lives"
@@ -1310,6 +1323,11 @@ thermal:
         limit_c: [-30, 50]
         regulated: false
         temperature_state: zone_lm_descent_t
+        # The frozen-line chain's zone: 180 W of landing radar and RCS heaters, and the same join as
+        # the service bay's — declared, so the state that carries the heat is found by the
+        # declaration rather than by a naming convention that only ever matched the cabins.
+        cooled_by: loop_lm
+        heat_state: descent_bay_heat_w
         provenance:
           basis: chosen
           reason: "the descent stage is exposed and unregulated; its thermal state is what the frozen-line chain needs"
@@ -1317,6 +1335,9 @@ thermal:
         limit_c: [null, null]
         regulated: false
         temperature_state: zone_radiator_t
+        # No `cooled_by` and no `heat_state`: the domain lists this zone in `unheated`, with the
+        # reason, so "nothing heats it and no loop serves it" is a declaration rather than the
+        # absence of one.
         provenance:
           basis: chosen
           reason: "the radiator is an observable with no command interface (simulator-design.md:158): a rejection curve, not a limit"

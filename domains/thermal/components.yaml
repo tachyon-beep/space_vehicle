@@ -878,7 +878,9 @@ open_debts:
 heat_inputs:
 
   csm_cabin:
-    rate: csm
+    # No `rate:` here any more: it existed so the check could look the heat state up by node name
+    # (`cabin_heat_{rate}`), which is how it skipped four zones in silence. The zone declares
+    # `heat_state` now, so the field that stood in for the link is gone with the convention.
     loads: [csm_cabin_fan, csm_suit_fan, csm_co2_scrubber, csm_lighting,
             csm_sband_transceiver, csm_sband_power_amplifier, csm_heaters]
     note: >-
@@ -900,7 +902,6 @@ heat_inputs:
       the largest pair of loads on the vehicle and they sit here rather than in the cabin: the
       primary loop's pumps are on the service module
   lm_cabin:
-    rate: lm
     loads: [lm_cabin_fan, lm_suit_fan, lm_co2_scrubber, lm_lighting, lm_sband_transmitter,
             lm_sband_high_power, lm_guidance_computer, lm_instrumentation, lm_heaters]
     note: >-
