@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 250 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **251** is every obligation the linter can name:
-**102** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **250** is every obligation the linter can name:
+**101** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **176** the plant
+the missing charging efficiency, the pump-speed conversion). The **175** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 176 is the linter's 102 **plus** the graph's unset edge
+`coupling.yaml` included, so its 175 is the linter's 101 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1782,8 +1782,8 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 134 states, by what blocks them:
 
     18   13 %  ready now — the two classes the reference plant can advance
-    21   16 %  owes a value — the cheapest to close, and the debt count already tracks them
-    11    8 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    20   15 %  owes a value — the cheapest to close, and the debt count already tracks them
+    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -9349,6 +9349,39 @@ sensitivity.
 | `UNCONFIGURED scalars` the plant counts | 178 | **176** |
 | `report.refuse` call sites in the linter | 744 | **745** |
 | tests in `tests/test_vehicle_config.py` | 257 | **259** |
+
+## The battery's dead zone was coarser than the smallest load it feeds
+
+`battery_charge_j.min_flow_per_s` was owed with a note that named the wrong field — *"every load's
+`rated_w`"*, where `rated_w` is a **source** field in that domain and no load carries it — and the
+value was derivable all along. The node's one edge runs to `bus_a`, and the smallest load on that bus
+is the S-band transceiver at **36 W**, so the smallest flow this stock must represent is **36 J/s**.
+It is now a `min_flow_derivation` over the load budget's own `demand_w`, evaluated by the linter on
+every run: a derived field with no evaluator is a number with a note.
+
+**Landing it exposed why the field matters.** The declared quantum was **1 J**, and at the vehicle's
+50 Hz tick the smallest flow over one tick is `36 x 0.02 = 0.72 J` — so the dead zone was *coarser
+than the smallest load*, and `plant.md` §4's rule refuses exactly that. The linter said so the moment
+`min_flow_per_s` stopped being a debt, and the quantum is now **0.1 J**, seven times finer than the
+smallest flow and still coarse enough to keep the fixed point cheap.
+
+Two smaller things the round found on the way, both recorded rather than smoothed: the note's field
+name (`rated_w` → `demand_w`, which a reader would have gone looking for and not found), and the
+build order moving `battery_charge_j` from *owes a value* to *owes an edge* — because the charge's
+rate driver is still a coupling with no sensitivity, and closing a value does not close the edge
+behind it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 251 | **250** |
+| literal `UNCONFIGURED` scalars | 102 | **101** |
+| `UNCONFIGURED scalars` the plant counts | 176 | **175** |
+| `owes a value` in the build order | 21 | **20** |
+| `owes an edge` | 11 | **12** |
+| `report.refuse` call sites in the linter | 745 | 745 |
+| tests in `tests/test_vehicle_config.py` | 259 | **260** |
 
 ## The invariants, and which of them are enforced
 

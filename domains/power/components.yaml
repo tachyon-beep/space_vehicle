@@ -168,14 +168,32 @@ state:
     initial: 12096000
     initial_source: "domains/power/components.yaml:load_budget.csm_battery_energy_wh"
     initial_factor: 3600
-    quantum: 1.0
-    min_flow_per_s: UNCONFIGURED
+    # **A joule was too coarse and nothing could see it until the smallest flow was derived.**
+    # The rule is `plant.md` §4's: the quantum is the dead zone, so it must sit below the smallest
+    # flow the stock sees over one tick. At 50 Hz and the smallest load on this bus, that flow is
+    # 36 W x 0.02 s = 0.72 J, and a 1 J quantum swallowed the S-band transceiver whole — the
+    # linter refused it the moment `min_flow_per_s` stopped being a debt. A tenth of a joule is
+    # seven times finer than the smallest flow and still coarse enough to keep the fixed point
+    # cheap.
+    quantum: 0.1
+    min_flow_per_s: 36.0
+    min_flow_derivation:
+      expression: "smallest_load_w"
+      inputs:
+        smallest_load_w: domains/power/components.yaml:loads.csm_sband_transceiver.demand_w
+    min_flow_note: >-
+      **the smallest flow this stock must represent, and it is the smallest load the battery
+      feeds.** The node's one edge runs to `bus_a`, and the smallest load on that bus is the S-band
+      transceiver at **36 W = 36 J/s** — the coarsest flow the dead zone may swallow whole. A
+      `min_flow_per_s` larger than any real flow would absorb that load and the stock would never
+      see it; one far smaller buys fixed-point iterations for nothing. The relation is the load
+      budget's own `demand_w` field — **which the old note called `rated_w`**, a field this domain
+      has on its *sources* and on no load at all, so a reader following that sentence would have
+      gone looking for a key that does not exist.
     note: >-
-      The one conserved quantity in the domain, and the reason the LM is a countdown. The
-      quantum is 1 J, which is far below any real battery flow, so the dead zone is not a
-      risk here — `min_flow_per_s` is declared unset rather than guessed, and what it waits
-      for is the smallest load the battery feeds: the field is "the smallest flow this stock
-      must represent" and every load's `rated_w` is in the same unit.
+      The one conserved quantity in the domain, and the reason the LM is a countdown. The quantum is
+      1 J, which is far below any real battery flow, so the dead zone is not a risk here — and
+      `min_flow_per_s` is now derived from the smallest load rather than owed.
     provenance:
       basis: historical
       source: "the capacities are published (NR, PSR: 40 Ah entry batteries, 400 Ah LM descent, 296 Ah LM ascent); that the charge is a conserved stock rather than a voltage-dependent model is chosen, because a first-order relaxation model would need parameters no source gives"

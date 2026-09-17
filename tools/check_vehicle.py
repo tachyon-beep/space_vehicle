@@ -9123,6 +9123,21 @@ def check_initial_sources(
                     "declare `initial_derivation` over the figures the relation names, and the "
                     "starting amount re-derives on every run as an edge's sensitivity does",
                 )
+            # **The same idiom on the other end of a stock's life.** `min_flow_per_s` is the
+            # coarsest flow the stock must still resolve, and round 14 derived the battery's from
+            # the smallest load on its bus — at which point the *quantum* beside it turned out to be
+            # coarser than that flow, which the domain's own rule refuses. A derived field with no
+            # evaluator is a number with a note, so this is the fourth binding site of the rule.
+            flow_derivation = state.get("min_flow_derivation")
+            if flow_derivation is not None:
+                check_declared_derivation(
+                    f"{swhere}.min_flow_derivation",
+                    flow_derivation,
+                    state.get("min_flow_per_s"),
+                    "`min_flow_per_s`",
+                    documents,
+                    report,
+                )
             source = state.get("initial_source")
             if not source:
                 continue
