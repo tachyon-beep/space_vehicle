@@ -42,17 +42,29 @@ met_epoch_provenance:
     epoch is the missing half of that statement. The value is arbitrary and recorded here so
     two runs cannot silently disagree about when they started.
 
-  total_duration_h: 192.0
-  total_duration_provenance:
-    basis: derived
-    relation: "sum of the phase durations below; the linter refuses a build where they disagree"
+# --------------------------------------------------------------------------------------
+# The mission's clock, which is *not* provenance and was nested inside it.
+#
+# These five keys sat two spaces deeper, under `met_epoch_provenance`, until round 35 — so the
+# block that says where the *epoch* came from also carried the mission's duration, its tick rate,
+# its tick count and two provenance blocks of their own. The linter read them there
+# (`check_mission_model` asked for `met_epoch_provenance.total_duration_h`), so the file and its
+# reader agreed and neither could notice; what noticed was a *fresh* reader: the plant's new
+# `--determinism` looked for `mission.yaml`'s `tick_hz`, found nothing, and said so. A declaration
+# belongs at the level its name implies, and `check_basis` refuses a provenance block that carries
+# another one now, because that is the shape this accident has.
+# --------------------------------------------------------------------------------------
+total_duration_h: 192.0
+total_duration_provenance:
+  basis: derived
+  relation: "sum of the phase durations below; the linter refuses a build where they disagree"
 
-  tick_hz: 50
-  total_ticks: 34560000
-  total_ticks_provenance:
-    basis: derived
-    computation: "192.0 * 3600 * 50"
-    relation: "the phase ladder's 192.0 h at 3600 s/h and the plant's 50 Hz tick, which is the figure review-findings.md §13 has been pricing. It was a sentence rather than a value until round 45, and the linter could not tell whether it was still true — nor whether `total_duration_h` above still agreed with the phases, which is the half that would have moved first"
+tick_hz: 50
+total_ticks: 34560000
+total_ticks_provenance:
+  basis: derived
+  computation: "192.0 * 3600 * 50"
+  relation: "the phase ladder's 192.0 h at 3600 s/h and the plant's 50 Hz tick, which is the figure review-findings.md §13 has been pricing. It was a sentence rather than a value until round 45, and the linter could not tell whether it was still true — nor whether `total_duration_h` still agreed with the phases, which is the half that would have moved first"
 
 # --------------------------------------------------------------------------------------
 # Crew. Two fly to the surface; three are aboard until the LM separates. Metabolic loads

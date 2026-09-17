@@ -10251,6 +10251,71 @@ The debt count rises by one because the loop's heat balance is now a sentence in
 it. Nothing else moves: 19 of 135 states still advance, the build order is still 27 · 25 · 14 · 69, and
 `--strict` still exits 2.
 
+## The mission's clock was inside its epoch's provenance, and step 7 was a comment
+
+Two declarations with nothing behind them, and they turned out to be the same accident seen twice.
+
+### The clock, two levels too deep
+
+`mission.yaml` declared the mission's duration, tick rate, tick count and *their* two provenance
+blocks **inside `met_epoch_provenance`** — the block that says where the epoch came from. Five
+declarations, two spaces deeper than the level their names imply, and the linter read them *there*:
+`check_mission_model` asked for `met_epoch_provenance.total_duration_h`, so the file and its reader
+agreed and neither could notice. What noticed was a reader written **fresh, without the assumption**:
+this round's `plant.py --determinism` asked `mission.yaml` for `tick_hz`, found nothing, and refused.
+
+Moving it found a third reader of the old path, and this is the round's sharpest result:
+`check_gnc_substepping` compared `gnc/estimator#sub_stepping.plant_tick_hz` against the mission's tick
+— read one level down — and **`return`ed silently when it was not there**. The move turned it into a
+check that ran nothing, which the folder names outright: *a check that cannot run is not a check that
+passed.* It refuses now, and the fixture that changes the rate to 40 Hz proves it speaks.
+
+So the round's fix is five parts: the clock at the top level; all three readers re-pointed; **the
+epoch's own provenance validated** (which nothing had ever done — its `basis` could have been anything);
+a new refusal for the *shape* (**a provenance block carrying another provenance block**, which is what
+had hidden the clock); and the demonstration that the third reader still fires.
+
+### Step 7 was a sentence
+
+`plant.md` §6 is the determinism contract: *"Two runs are equivalent iff, for the same seed and the
+same recorded input trace, every per-tick state hash is byte-identical."* Its rules include a
+**compare-point at every tick** — *"a hash over canonically-encoded state"* — and **canonical
+summation order**: *"contributors sorted by id before summing; float addition is non-associative and
+hash-map order is not a guarantee."*
+
+The plant's `step()` carried step 7 as a **comment** and nothing else. No hash, no canonical encoding,
+nothing that compared two runs — so *"the plant runs"* was a claim with no instrument behind it, and
+the definition of done's own second clause (*"a stable determinism hash across two runs of the same
+seed"*) had no implementation.
+
+What landed: `canonical_state` (sorted keys, `repr`-exact floats, every value tagged by type so `0` and
+`False` cannot collide), `state_hash` (SHA-256 over it, 16 hex digits, because this is a compare-point
+and not a security boundary), `canonical_contributors` (**sorted by id**, §6's other rule — the plant
+summed in `coupling.yaml`'s declaration order, so an edit that moved an edge could change the last bits
+of a sum and every hash downstream), and `plant.py --determinism`, which runs the same start twice,
+prints the compare-points and exits non-zero if two runs differ.
+
+The ordering change is provably behaviour-preserving today: the two integrators with more than one
+incoming edge (`zone_csm_avionics_t`, `coolant_loop_t`) already had the id-first edge as their driver,
+so the driver is the same one the declaration order picked — and the linter's `check_lag_drivers` sorts
+the same way, so the rule and the plant cannot disagree about which edge drives. Nothing demonstrated
+the *defect* until now because no stock in the corpus has two contributors yet; that is exactly the
+condition under which the thirty-eighth edge is added wrongly.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| mission clock keys at the top level of `mission.yaml` | 0 of 5 | **5 of 5** |
+| linter readers of the old nested path | 3 | **0** |
+| tests in `tests/test_vehicle_config.py` | 279 | **282** |
+
+No value moved and no count changed: this round is two declarations that said they were implemented and
+were not, plus the four instruments that now hold them. A real tick still advances 19 states, the build
+order is still 27 · 25 · 14 · 69, `--strict` still exits 2 — and `plant.py --determinism` now prints
+*"two independent runs of the same start: 50 of 50 compare-points identical"*.
+
 ## The invariants, and which of them are enforced
 
 

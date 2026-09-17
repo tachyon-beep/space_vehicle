@@ -53,6 +53,7 @@ tell you where.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -949,6 +950,74 @@ def emit_frame(
 SECONDS_PER_HOUR = 3600.0
 
 
+def canonical_state(values: dict[str, Any]) -> str:
+    """A state encoded so that two equal states have equal strings, byte for byte.
+
+    `plant.md` §6's compare-point is *"a hash over canonically-encoded state, every tick"*, and the
+    encoding is the half that matters: `json.dumps` with a sorted key order and `repr`-exact floats,
+    because the contract is bit-identity and not equality within a tolerance — *"no ε survives a
+    comparator"*. A float is written with `repr`, which round-trips exactly; an integer stays an
+    integer; and every other type is tagged with its name so that `0` and `False` cannot collide.
+
+    Until this round **step 7 was a comment**. The tick's docstring listed the seven steps and said
+    steps 1, 2, 5, 6 and 7 were stubbed "with their contracts written down" — and for step 7 the
+    contract was written down and nothing else was: the plant produced a value map, and no reader
+    could tell whether two runs of it agreed. That is the definition of done's own second clause
+    (*"a stable determinism hash across two runs of the same seed"*) with no implementation, which
+    is this folder's oldest finding arriving in the one place the folder cannot lint.
+    """
+    return json.dumps(_canonical(values), sort_keys=True, separators=(",", ":"))
+
+
+def _canonical(value: Any) -> Any:
+    """One value, in a form `json.dumps` writes the same way twice — and tags what JSON cannot."""
+    if isinstance(value, bool):
+        return {"bool": value}
+    if isinstance(value, int):
+        return {"int": value}
+    if isinstance(value, float):
+        # `repr` and not `round`: the contract is bit-identity, so the encoding must round-trip.
+        return {"float": repr(value)}
+    if isinstance(value, str):
+        return {"str": value}
+    if isinstance(value, dict):
+        return {"map": {str(key): _canonical(item) for key, item in value.items()}}
+    if isinstance(value, (list, tuple)):
+        return {"seq": [_canonical(item) for item in value]}
+    if value is None:
+        return {"null": None}
+    return {"other": repr(value)}
+
+
+def state_hash(values: dict[str, Any]) -> str:
+    """The compare-point itself: a SHA-256 over the canonical encoding, truncated to 16 hex digits.
+
+    Truncated because this is a *compare-point* rather than a security boundary: it localises the
+    first differing tick by binary search, and a collision would have to happen inside one run's own
+    state space to cost anything.
+    """
+    return hashlib.sha256(canonical_state(values).encode("utf-8")).hexdigest()[:16]
+
+
+def canonical_contributors(edges: list[Edge]) -> list[Edge]:
+    """A node's contributors in a canonical order: **sorted by id**, as `plant.md` §6 requires.
+
+    *"Canonical summation order: contributors sorted by id before summing — float addition is
+    non-associative and hash-map order is not a guarantee."* The plant summed in `coupling.yaml`'s
+    **declaration order**, which is stable for one file and not canonical for the corpus: adding an
+    edge, or moving one, changes the order of the additions and can change the last bits of a sum —
+    and with them every compare-point hash downstream. Nothing demonstrated it until now because no
+    stock in the corpus has two contributors yet (one edge each, and the rest unset), which is
+    exactly the condition under which the thirty-eighth edge is added wrongly.
+
+    Sorting is *not* a change of the model: both integrators that carry more than one incoming edge
+    (`zone_csm_avionics_t` and `coolant_loop_t`) already have the id-first edge as their driver, so
+    the driver this picks is the driver the declaration order picked; and the linter's
+    `check_lag_drivers` sorts the same way, so the rule and the plant agree about which edge drives.
+    """
+    return sorted(edges, key=lambda edge: edge.id)
+
+
 def stock_flux(
     world: World, edge: Edge, values: dict[str, Any], dt: float, driver_node: str | None = None
 ) -> float:
@@ -1097,7 +1166,9 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         # of propellant. `lag_driver_basis` is the linter's rule, called here so the refusal and the
         # linter's debt cannot come apart.
         spec = state.spec
-        driver_edge = incoming[0]
+        # **§6's canonical order, and it decides the driver too.** The first contributor by id, not by
+        # declaration: which edge drives a lag is a modelling decision, and file order is not one.
+        driver_edge = canonical_contributors(incoming)[0]
         ok, why = lag_driver_basis(
             {
                 "id": driver_edge.id,
@@ -1183,8 +1254,10 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 f"{where}.initial",
                 f"integrates `{state.node}` from {current!r}, which is not a number",
             )
+        # **Sorted by id before summing**, because float addition is non-associative: the sum a
+        # declaration order produces is a sum an edit can change without changing the model.
         total = 0.0
-        for edge in incoming:
+        for edge in canonical_contributors(incoming):
             total += stock_flux(world, edge, values, dt)
         # And the outbound half, which was missing entirely: **every tank in the vehicle only
         # filled.** The README states the rule — "a back-edge *out* of a stock still drains it,
@@ -1472,7 +1545,11 @@ def step(
     # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
     #    accumulator of every `conserve` edge, which exists once the stocks do.
     # 6. Instruments: T -> A. One-way, and the quality function cannot see the faults.
-    # 7. Compare-point: a hash over canonically-encoded state, every tick.
+    # 7. Compare-point: `state_hash(committed)` is a hash over canonically-encoded state, and the
+    #    caller takes it every tick — `--determinism` is the caller that does, and
+    #    `test_two_runs_of_the_same_start_produce_the_same_compare_point` is the reader. It is a
+    #    function rather than a line in here because `step`'s contract is to *return the state*: a
+    #    hash appended to the map would be a value nothing declared.
     return committed
 
 
@@ -2154,6 +2231,18 @@ def main(argv: list[str] | None = None) -> int:
         help="where each crew member is, phase by phase, from the two halves of the crew model",
     )
     parser.add_argument(
+        "--determinism",
+        action="store_true",
+        help="run the same start twice and print the two compare-point hash sequences: "
+        "`plant.md` §6's per-tick state hash, which two equivalent runs must share",
+    )
+    parser.add_argument(
+        "--ticks",
+        type=int,
+        default=50,
+        help="how many ticks `--determinism` walks (default 50, at the declared tick rate)",
+    )
+    parser.add_argument(
         "--closed-gate",
         action="append",
         default=[],
@@ -2223,6 +2312,59 @@ def main(argv: list[str] | None = None) -> int:
         for where, was, now in changed:
             print(f"  {where:34} {prune(was)} -> {prune(now)}")
         return 0
+
+    if args.determinism:
+        # **§6's compare-point, run.** The two runs are *independent*: a fresh `load_world` each time,
+        # so anything the loader does in file order is inside the comparison rather than outside it.
+        # The tick is the declared one — `mission.yaml`'s `tick_hz` — because "equivalent" is a claim
+        # about the ticks the mission actually flies.
+        # **Where the name implies, which is where it was not.** This read `mission.yaml`'s
+        # `tick_hz` at the top level and found nothing, because the mission's clock was nested
+        # inside `met_epoch_provenance` — so the first reader that was not written alongside the
+        # nesting is what found it. The keys are at the top level now, and `check_basis` refuses a
+        # provenance block carrying another one, which is the shape that hid them.
+        tick_hz = load_yaml(root / "mission.yaml").get("tick_hz")
+        if not isinstance(tick_hz, (int, float)) or tick_hz <= 0:
+            sys.stderr.write("mission.yaml declares no numeric tick_hz, so there is no tick to run\n")
+            return 3
+        dt = 1.0 / float(tick_hz)
+        runs: list[list[str]] = []
+        for _ in range(2):
+            world = load_world(root)
+            values = initial_values(world)
+            hashes: list[str] = []
+            for _tick in range(max(1, int(args.ticks))):
+                gaps: list[Gap] = []
+                values = step(world, values, dt, gaps)
+                hashes.append(state_hash(values))
+            runs.append(hashes)
+        print(f"  the declared tick: {tick_hz:g} Hz, dt = {dt:g} s, over {len(runs[0])} tick(s)")
+        for index, digest in enumerate(runs[0][:5], start=1):
+            print(f"  tick {index:4}  {digest}")
+        if len(runs[0]) > 5:
+            print(f"  ... and {len(runs[0]) - 5} more")
+        if runs[0] == runs[1]:
+            print()
+            print(
+                f"  two independent runs of the same start: **{len(runs[0])} of {len(runs[0])} "
+                "compare-points identical**"
+            )
+            print(
+                "  and that is the whole claim: bit-identity, same build and same platform, with no "
+                "tolerance anywhere in it"
+            )
+            return 0
+        differing = next(
+            (i for i, (a, b) in enumerate(zip(runs[0], runs[1], strict=True)) if a != b), None
+        )
+        print()
+        print(f"  **the runs diverge at tick {(differing or 0) + 1}**: {runs[0][differing]} against {runs[1][differing]}")
+        print(
+            "  two runs of one start disagreeing means something in the tick reads state the world "
+            "does not carry — a set, a dict key order, a clock — and `plant.md` §6 says every "
+            "compare-point must be byte-identical"
+        )
+        return 1
 
     if args.frame:
         frame = emit_frame(

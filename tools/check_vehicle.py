@@ -761,20 +761,19 @@ def check_met_clock(doc: dict[str, Any], report: Report) -> None:
             )
         rederive(where, block.get("sums_to_h"), block.get("computation"), report)
 
-    provenance = doc.get("met_epoch_provenance") or {}
-    declared = provenance.get("total_duration_h")
+    declared = doc.get("total_duration_h")
     if declared != total:
         report.refuse(
-            "mission.yaml:met_epoch_provenance",
+            "mission.yaml:total_duration_h",
             f"declares total_duration_h {declared!r} and the phases sum to {total:g} h. MET is an "
             "integer tick count from the epoch, so a duration that disagrees with the ladder is a "
             "mission whose clock runs out somewhere other than where the phases end",
         )
-    ticks = provenance.get("total_ticks")
-    tick_hz = provenance.get("tick_hz")
+    ticks = doc.get("total_ticks")
+    tick_hz = doc.get("tick_hz")
     if not isinstance(ticks, (int, float)) or not isinstance(tick_hz, (int, float)):
         report.refuse(
-            "mission.yaml:met_epoch_provenance",
+            "mission.yaml",
             "does not state `total_ticks` and `tick_hz` as numbers, so the vehicle's tick count — "
             "the figure the whole review prices — exists only as a sentence in a relation",
         )
@@ -782,13 +781,13 @@ def check_met_clock(doc: dict[str, Any], report: Report) -> None:
         expected = total * 3600.0 * float(tick_hz)
         if abs(float(ticks) - expected) > 1.0:
             report.refuse(
-                "mission.yaml:met_epoch_provenance",
+                "mission.yaml:total_ticks",
                 f"declares {ticks!r} ticks and {total:g} h at {tick_hz} Hz is {expected:,.0f}",
             )
         rederive(
-            "mission.yaml:met_epoch_provenance.total_ticks_provenance",
+            "mission.yaml:total_ticks_provenance",
             ticks,
-            (provenance.get("total_ticks_provenance") or {}).get("computation"),
+            (doc.get("total_ticks_provenance") or {}).get("computation"),
             report,
         )
 
@@ -1167,6 +1166,28 @@ def check_basis(where: str, basis: str | None, extra: dict[str, Any], report: Re
         report.refuse(where, "basis is `apollo` but no reference into the corpus is given")
     if basis == "historical" and not extra.get("source"):
         report.refuse(where, "basis is `historical` but no external source is given")
+    # **A provenance block describes one value, so a second one inside it is a second value.** This
+    # is the shape `mission.yaml` had for the whole folder's life: `met_epoch_provenance` — where the
+    # *epoch* came from — also carried `total_duration_h`, `tick_hz`, `total_ticks` and their own two
+    # provenance blocks, and `check_mission_model` read them *there*, so the file and its reader
+    # agreed and neither could notice. What noticed was a fresh reader: the plant's `--determinism`
+    # asked `mission.yaml` for `tick_hz` and found nothing. The declaration had been written one
+    # level too deep, which is the same accident as a section header with its children indented out
+    # (`check_vehicle_sections`) arriving in a mapping nobody thought of as a section.
+    nested = sorted(
+        str(key)
+        for key, value in extra.items()
+        if str(key).endswith(("_provenance", "_source")) and isinstance(value, dict)
+    )
+    if nested:
+        report.refuse(
+            where,
+            f"carries {nested}, which {'is' if len(nested) == 1 else 'are'} provenance block(s) "
+            "inside a provenance block. A provenance describes one value's origin; a second one in "
+            "here means a second value came with it, and a reader looking for that value at the "
+            "level its name implies will not find it — which is how the mission's tick rate sat "
+            "inside its epoch's provenance until round 35",
+        )
 
 
 PROSE_FIELDS = {"note", "notes", "reason", "relation", "why"}
@@ -10750,6 +10771,13 @@ def check_presentation_references(
     seed = mission.get("random_seed_provenance")
     if isinstance(seed, dict):
         check_basis("mission.yaml:random_seed_provenance", seed.get("basis"), seed, report)
+    # **And the epoch's, which nothing validated at all.** `met_epoch_provenance` carried the whole
+    # mission clock until round 35 and was never passed to `check_basis`: its `basis` could have been
+    # anything, its `reason` could have been absent, and no run would have said so. It is a
+    # provenance block like the others, and the same rule applies to it.
+    epoch = mission.get("met_epoch_provenance")
+    if isinstance(epoch, dict):
+        check_basis("mission.yaml:met_epoch_provenance", epoch.get("basis"), epoch, report)
 
 
 # The characters a re-derivable expression may use *after* its declared inputs have been
@@ -12082,8 +12110,15 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
     `gnc/estimator#sub_stepping` declares three rates and a note that reads like a design decision
     — "the major cycle is a sub-step inside the 50 Hz tick through the plant's integer-microsecond
     event queue, **not a second plant rate (C-07)**". The 50 Hz is the vehicle's tick, and the
-    vehicle's tick is declared once, in `mission.yaml#met_epoch_provenance.tick_hz`, where the
-    34,560,000-tick figure is derived from it.
+    vehicle's tick is declared once, in `mission.yaml#tick_hz`, where the 34,560,000-tick figure is
+    derived from it.
+
+    **This function read that key one level down, inside `met_epoch_provenance`, and returned
+    silently when it was not there.** Round 35 moved the clock to the level its name implies and
+    re-pointed two readers; this was the third, and the move turned it into a check that ran nothing
+    — which is the failure the folder names outright (*"a check that cannot run is not a check that
+    passed"*). So a mission with no tick is a refusal here rather than a `return`, and the fixture in
+    `test_the_determinism_view_runs_two_runs_and_says_so` changes the rate to prove the check fires.
 
     So this is a cross-file equality that nothing compared, in the direction that matters: change
     the mission's tick rate and the filter's sub-stepping silently becomes a claim about a clock
@@ -12096,15 +12131,20 @@ def check_gnc_substepping(root: Path, mission: dict[str, Any], report: Report) -
     sub = (estimator.get("estimator") or {}).get("sub_stepping")
     if not isinstance(sub, dict):
         return
-    tick = (mission or {}).get("met_epoch_provenance", {}).get("tick_hz")
+    tick = (mission or {}).get("tick_hz")
     if not isinstance(tick, (int, float)) or not tick:
+        report.refuse(
+            "mission.yaml:tick_hz",
+            "is not a number, so this check cannot say whether `gnc/estimator#sub_stepping`'s rates "
+            "divide the plant's tick — and a check that cannot run is not a check that passed",
+        )
         return
     where = "domains/gnc/components.yaml:estimator.sub_stepping"
     declared = sub.get("plant_tick_hz")
     if declared != tick:
         report.refuse(
             f"{where}.plant_tick_hz",
-            f"is {declared!r} and `mission.yaml#met_epoch_provenance.tick_hz` is {tick:g}. The "
+            f"is {declared!r} and `mission.yaml#tick_hz` is {tick:g}. The "
             "block's own note says the major cycle is a sub-step *inside the plant tick* rather "
             "than a second plant rate, so a tick rate here that is not the mission's is a claim "
             "about a clock the vehicle does not have",
