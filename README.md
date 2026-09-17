@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 250 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 255 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,9 +176,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 250 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 255 declared debts
 and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
-a real tick advances **2** of the 134 states against the build order's **18** ready — the second
+a real tick advances **0** of the 134 states against the build order's **14** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **250** is every obligation the linter can name:
-**101** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **255** is every obligation the linter can name:
+**101** literal `UNCONFIGURED` scalars and **154** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **175** the plant
@@ -1786,9 +1786,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    18   13 %  ready now — the two classes the reference plant can advance
+    14   10 %  ready now — the two classes the reference plant can advance
     20   15 %  owes a value — the cheapest to close, and the debt count already tracks them
-    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     84   63 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -9443,6 +9443,63 @@ declaration that carries it.**
 | `states advanced` by a real tick | stated nowhere | **2 of 134** |
 | `ready now` in the build order, held against it | stated nowhere | **18** |
 | tests in `tests/test_vehicle_config.py` | 260 | 260 |
+
+## Both states a real tick could advance were dimensional errors
+
+Round 17 put the tick's figure in the status paragraph: **2 of 134 states advanced**. Round 18 asked
+what those two were, and the answer is the reason this round exists —
+
+```
+  crew     crew_workload   lag  enum-level  -> 14.0        (relaxed toward `water_potable`)
+  propulsion thrust_main_n lag  N           -> 18508.0     (relaxed toward `prop_main`)
+```
+
+The plant's lag branch is `relax toward values[source]`: it reads the driver node's value and moves
+the state toward it, applying **neither the edge's declared unit nor its scale**. So a crew workload —
+an `enum-level` — was relaxed toward fourteen kilograms of water, and a thrust in newtons toward
+eighteen and a half tonnes of propellant. Neither is a crash; both are plausible numbers, which is
+exactly the defect class the corpus's rules are written against.
+
+**The rule that was missing is the lag-side analogue of `stock_flux_basis`** — one function,
+`lag_driver_basis`, called by the linter *and* the plant so the debt and the refusal cannot come
+apart. A lag's driver must be the state's own quantity: the source node denominated in it, the
+edge's unit the identity between the two ends, and its scale 1, because a scale the integrator does
+not apply is a scale that is not in the model. Five edges fail it:
+
+| edge | declared | drives | why it cannot be integrated |
+|---|---|---|---|
+| `E-CREW-WATER` | `kg/h per crew` | `crew_workload`, an `enum-level` | a rate where a level belongs |
+| `E-PROP-ENG` | `kg/s per N` | `thrust_main_n`, in N | thrust per unit flow, stated backwards |
+| `E-FC-HEAT` | `W per W` | a zone temperature | heat relaxed into kelvin |
+| `E-ENV-RAD` | `W per W` | `zone_radiator_t` | the same |
+| `E-BUS-PUMP` | `kg/s per V`, 0.0009 | `coolant_flow_kg_s` | a scale nothing applies |
+
+They are **debts rather than refusals** because the corpus can be completed two ways — declare an
+identity driver, or give the plant the rule that applies a scale — and a blanket refusal would have
+to choose. What the plant does is refuse each by name at the tick, so the two states that advanced
+wrongly now advance not at all, and the tick's own figure says so:
+
+```
+    0 of 134 states advanced, 134 could not
+  of the 134, 46 are the debt and 88 are states that read one
+```
+
+**The headline went up by five and the tick went down by two, and both are improvements.** The two
+states were the reference plant's entire claim to be able to advance anything; they are now named
+obligations instead of silent errors, and the remaining work is the same 46 root rules with five of
+them newly visible.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 250 | **255** |
+| prose obligations | 149 | **154** |
+| states advanced by a real tick | 2 | **0** |
+| root gaps (the debt, as against states that read one) | 43 | **46** |
+| `ready now` in the build order | 18 | **14** |
+| `owes an edge` | 12 | **16** |
+| tests in `tests/test_vehicle_config.py` | 260 | **261** |
 
 ## The invariants, and which of them are enforced
 

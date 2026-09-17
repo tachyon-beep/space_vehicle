@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 250 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 255 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
     Report,
     derive_schedule,
+    lag_driver_basis,
     stock_flux_basis,
 )
 
@@ -360,7 +361,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 250 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 255 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -950,6 +951,30 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             )
 
     if state.method == "lag":
+        # **The rule this branch did not have.** The lag integrator relaxes the state toward the
+        # driver's raw value and applies neither the edge's unit nor its scale — so an edge whose
+        # two ends are different quantities, or whose transfer is not the identity, produced a
+        # plausible number out of a dimensional error. Both states this plant could advance were
+        # exactly that: a crew workload relaxed toward 14 kg of water and a thrust toward 18,508 kg
+        # of propellant. `lag_driver_basis` is the linter's rule, called here so the refusal and the
+        # linter's debt cannot come apart.
+        spec = state.spec
+        driver_edge = incoming[0]
+        ok, why = lag_driver_basis(
+            {
+                "id": driver_edge.id,
+                "from": driver_edge.source,
+                "to": driver_edge.target,
+                "kind": driver_edge.kind,
+                "sensitivity": driver_edge.sensitivity,
+            },
+            str(spec.get("unit") or ""),
+            # `world.nodes` is the coupling file's own mapping, so the rule reads the same shape the
+            # linter hands it: raw node dictionaries with `unit` and `kind` in them.
+            {name: dict(node) for name, node in world.nodes.items()},
+        )
+        if not ok:
+            raise Unconfigured(f"coupling.yaml:edge {driver_edge.id}", why)
         tau = float(state.spec["tau_s"])
         driver = values.get(incoming[0].source)
         if driver is None:
@@ -1588,6 +1613,29 @@ def build_order(world: World) -> dict[str, list[State]]:
             # `discrete` and `hazard` are excluded because they are exceptions in fact rather than
             # by convention: a mode is moved by a command, an event or the domain's own logic, which
             # `moved_by` declares, and a hazard is drawn rather than computed.
+            # **And the driver has to be one the integrator can use.** `lag_driver_basis` is the
+            # rule round 18 added, and this classifier has to ask it for the same reason it asks
+            # `usable`: a lag whose driver edge is in a different quantity is not "ready now" — it
+            # is a coupling that cannot be integrated, and the bucket an implementer should read is
+            # the edge. Without this the build order called four states ready that `advance` refuses
+            # by name, which is precisely the disagreement this function's docstring says cannot
+            # happen.
+            if state.method == "lag" and incoming:
+                node_map = {name: dict(node) for name, node in world.nodes.items()}
+                ok, _ = lag_driver_basis(
+                    {
+                        "id": incoming[0].id,
+                        "from": incoming[0].source,
+                        "to": incoming[0].target,
+                        "kind": incoming[0].kind,
+                        "sensitivity": incoming[0].sensitivity,
+                    },
+                    str(state.spec.get("unit") or ""),
+                    node_map,
+                )
+                if not ok:
+                    blocking_edge.append(state)
+                    continue
             siblings = [o for o in world.states_on(state.node) if o.id != state.id]
             # **Either form of declared arithmetic counts, and `derivation` is the stronger one.**
             # This tested only `computation`, so the round that converted twelve literal

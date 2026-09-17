@@ -10721,6 +10721,85 @@ def check_edge_derivations(
         )
 
 
+def lag_driver_basis(
+    edge: dict[str, Any], state_unit: str, nodes: dict[str, Any]
+) -> tuple[bool, str]:
+    """Whether a `lag`'s driver edge can be integrated, or why it cannot.
+
+    The lag-side analogue of `stock_flux_basis`, and it exists because of what the reference plant
+    does with a lag: **it reads the source node's value and relaxes the state toward it, applying
+    neither the edge's declared unit nor its scale.** Run over the corpus for the first time, the
+    only two states a real tick could advance were both integrated wrongly —
+
+      * `crew_workload` (an `enum-level`) relaxed toward `water_potable` (14.0 kg of water), through
+        an edge whose own unit is `kg/h per crew`;
+      * `thrust_main_n` (newtons) relaxed toward `prop_main` (18,508 kg of propellant), through an
+        edge whose unit is `kg/s per N` — thrust per unit of flow, stated backwards.
+
+    Both numbers are plausible and both are nonsense, which is the definition of the defect this
+    rule is for: a dimensional error wearing a number. So a lag's driver has to be *the state's own
+    quantity*, one for one: the sensitivity's numerator matches the state's unit, its denominator
+    matches the source node's unit, and its scale is 1 — because a scale the integrator does not
+    apply is a scale that is not in the model.
+
+    Returns `(True, "")` when the driver can be integrated and `(False, reason)` otherwise. **Both
+    tools call it**, so the plant's refusal and the linter's debt cannot come apart.
+    """
+    where = str(edge.get("id"))
+    sensitivity = edge.get("sensitivity") or {}
+    value = sensitivity.get("value")
+    if value in (None, "UNCONFIGURED"):
+        return False, f"{where} carries no sensitivity value, so nothing establishes its driver"
+
+    def _norm(text: str) -> str:
+        return text.replace("-", "").replace("_", "").replace(" ", "").lower()
+
+    unit = str(sensitivity.get("unit") or "")
+    source_node = (nodes or {}).get(str(edge.get("from"))) or {}
+    source_unit = str(source_node.get("unit") or "")
+    source_units = {_norm(part) for part in re.split(r"[+,]", source_unit) if part.strip()}
+
+    # 1. The two ends have to be the same quantity, because the integrator hands the driver over
+    #    unchanged: `relax toward values[source]` is the whole of the model.
+    if source_units and _norm(state_unit) not in source_units:
+        return False, (
+            f"{where} drives a lag in {state_unit!r} from `{edge.get('from')}`, which is "
+            f"denominated in {source_unit!r}. The lag integrator relaxes the state toward the "
+            "driver's raw value and applies no conversion, so a driver in a different quantity is "
+            "a dimensional error that produces a number rather than a refusal"
+        )
+
+    # 2. And the edge's own unit has to be the identity transfer between them, for the same reason:
+    #    a scale the integrator does not apply is a scale that is not in the model.
+    sides = [part.strip() for part in unit.split(" per ")] if unit else []
+    numerator = sides[0].split()[0] if sides and sides[0].split() else ""
+    denominator = " ".join(sides[1:]).strip() if len(sides) > 1 else ""
+    if numerator and _norm(numerator) != _norm(state_unit):
+        return False, (
+            f"{where} declares {unit!r} and drives a lag in {state_unit!r}. The plant moves the "
+            "state toward the driver itself, so the edge's numerator and the state have to be the "
+            "same quantity — this one converts into something the state is not"
+        )
+    if denominator and source_units and _norm(denominator) not in source_units:
+        return False, (
+            f"{where} declares {unit!r} against a source node denominated in {source_unit!r}, so "
+            "the denominator names a quantity the driver is not: the transfer is against the wrong "
+            "end of the edge"
+        )
+    try:
+        scale = float(value)
+    except (TypeError, ValueError):
+        return False, f"{where} carries the sensitivity {value!r}, which is not a number"
+    if abs(scale - 1.0) > 1e-12:
+        return False, (
+            f"{where} carries a scale of {scale:g} that the lag integrator does not apply — it "
+            "relaxes toward the driver itself. Either the edge is an identity transfer or the plant "
+            "needs the rule that multiplies it, and until one of those is true the state would "
+            "advance by the wrong amount rather than not at all"
+        )
+    return True, ""
+
+
 def check_declared_derivation(
     where: str,
     derivation: Any,
@@ -12101,6 +12180,58 @@ def check_cabin_pressure_closure(root: Path, report: Report) -> None:
                 "wrong — and the band that says 248-269 was the *total* pressure band, which the "
                 "12.2 mmHg of water vapour and carbon dioxide never let the oxygen reach",
             )
+
+
+def check_lag_drivers(root: Path, coupling: dict[str, Any], report: Report) -> None:
+    """Every `lag`'s driver, held to the rule the plant integrates it by.
+
+    The reference plant applies an edge's sensitivity when it advances a stock and *not* when it
+    relaxes a lag: the lag branch reads the source node's value and moves the state toward it. That
+    is a rule, and it was written nowhere, so the corpus could declare a driver the integrator
+    cannot use and nothing said so — and the first run of a real tick found the only two states it
+    could advance integrated that way: a crew workload relaxed toward a tank of water and a thrust
+    relaxed toward a mass of propellant.
+
+    A debt rather than a refusal, because the corpus can be completed two ways: declare an identity
+    driver, or give the plant the rule that applies a scale. A refusal would have to choose.
+    """
+    nodes = {
+        str(node.get("id")): node
+        for node in (coupling or {}).get("nodes") or []
+        if isinstance(node, dict) and node.get("id")
+    }
+    methods: dict[str, dict[str, Any]] = {}
+    per_node: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                methods[str(state["id"])] = state
+                per_node.setdefault(str(state.get("node") or ""), []).append(state)
+    # **The walk iterates the states, not the edges, because the plant does.** `advance` collects
+    # every edge into the state's node and takes `incoming[0]` as the driver, so an edge whose
+    # `advances` is absent still drives a singleton — and a check that iterated edges and required
+    # `advances` was silent on `crew_workload`, which is exactly one of the two states the first
+    # real tick advanced wrongly.
+    edges = [e for e in (coupling or {}).get("edges") or [] if isinstance(e, dict)]
+    for state in (spec for spec in methods.values() if str(spec.get("method")) == "lag"):
+        incoming = [
+            e
+            for e in edges
+            if str(e.get("to")) == str(state.get("node"))
+            and e.get("kind") != CLAMP_KIND
+            and (e.get("advances") is None or str(e.get("advances")) == str(state.get("id")))
+        ]
+        if not incoming:
+            continue
+        # An `UNCONFIGURED` sensitivity is already a debt with the edge's own path — the walk that
+        # counts unset scalars reaches it — so reporting it here as well is the inflation the
+        # folder's rules forbid: one missing number under two names reads like two.
+        if (incoming[0].get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
+            continue
+        ok, reason = lag_driver_basis(incoming[0], str(state.get("unit") or ""), nodes)
+        if not ok:
+            report.debt(f"coupling.yaml:edge {incoming[0].get('id')}", reason)
 
 
 def check_mass_properties(root: Path, report: Report) -> None:
@@ -14772,6 +14903,7 @@ def main(argv: list[str] | None = None) -> int:
     check_presentation_references(
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
+    check_lag_drivers(root, coupling or {}, report)
     check_thermal_budget(root, report)
     # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
     # oxygen in it is what the compartment's own two alarms have to call habitable.
