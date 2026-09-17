@@ -997,7 +997,6 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         )
         if not ok:
             raise Unconfigured(f"coupling.yaml:edge {driver_edge.id}", why)
-        _refuse_shared_node(world, state, where)
         tau = float(state.spec["tau_s"])
         driver = values.get(incoming[0].source)
         if driver is None:
@@ -1006,12 +1005,11 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 f"reads {incoming[0].source!r}, which nothing supplies",
                 needs=incoming[0].source,
             )
-        current = float(values.get(state.node) or driver)
+        current = float(state_level(values, state) or driver)
         alpha = math.exp(-dt / tau)
         return {state.node: driver + (current - driver) * alpha}
 
     if state.method == "stock":
-        _refuse_shared_node(world, state, where)
         quantum = float(state.spec["quantum"])
         # --------------------------------------------------------------------------------------
         # **The level, which this branch never read.** `stock_flux` returns a *delta* —
@@ -1031,7 +1029,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         # error as a stock that fills without ever draining, and it is worse in one way: an empty
         # tank and a full one look identical on the first tick of a mission nobody has run.
         # --------------------------------------------------------------------------------------
-        current = values.get(state.node)
+        current = state_level(values, state)
         if current is None:
             raise Unconfigured(
                 f"{where}.initial",
@@ -1099,7 +1097,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             level = 0.0
             moved = round((level - current) / quantum) if quantum else 0
         return {
-            state.node: level,
+            **state_values(world, state, level),
             residual_key: (total + carried) - moved * quantum,
             f"{state.id}__shortfall": shortfall,
         }
@@ -1120,13 +1118,12 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             "derivation"
         )
         if derivation is not None:
-            _refuse_shared_node(world, state, where)
             value, why = derivation_value(derivation, world.documents)
             if value is None:
                 raise Unconfigured(f"{where}.derivation", f"cannot be evaluated: {why}")
             if state.node == "internal":
-                return {"internal": {**{}, state.id: value}, state.id: value}
-            return {state.node: value}
+                return state_values(world, state, value)
+            return state_values(world, state, value)
 
     if state.method == "hazard":
         raise Unconfigured(
@@ -1145,6 +1142,41 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         "state's relation, a `discrete` state's transitions and a `dynamics` state's equations "
         "are domain code, and the configuration deliberately does not pretend to carry them",
     )
+
+
+def state_values(world: World, state: State, value: Any) -> dict[str, Any]:
+    """The map entries one state's new value belongs under.
+
+    **The value space was keyed by node, and twelve nodes carry more than one state.** `cabin_atm`
+    carries four gas masses and a pressure, so `values["cabin_atm"]` held whichever the loader wrote
+    last — and the first tick after the plant learned to evaluate derivations set `csm_cabin_o2_kg` to
+    the *water vapour's* mass, and `lm_cabin_o2_kg` to the nitrogen's. Two plausible numbers of
+    kilograms, both the wrong gas.
+
+    So every state's value is written under **its own id**, and a node that carries exactly one state
+    also keeps its node key, because a node id already is a state id in every one of those cases and
+    every reader in this file and every channel in the registry asks for it that way. The map is
+    therefore additive: nothing that worked before changes, and the states that could not be named are
+    named. The sentinel keeps `values["internal"][state.id]` as well, which is where its accumulators
+    have always lived.
+    """
+    out: dict[str, Any] = {state.id: value}
+    if len(world.states_on(state.node)) == 1:
+        out[state.node] = value
+    if state.node == "internal":
+        out["internal"] = {state.id: value}
+    return out
+
+
+def state_level(values: dict[str, Any], state: State) -> Any:
+    """A state's own current value, by its own key first and its node's second.
+
+    The order matters while the two key spaces coexist: a multi-state node has no node key at all, and
+    a single-state node's two keys are the same number by construction.
+    """
+    if state.id in values:
+        return values[state.id]
+    return values.get(state.node)
 
 
 def _refuse_shared_node(world: World, state: State, where: str) -> None:
@@ -1211,8 +1243,14 @@ def initial_values(world: World) -> dict[str, Any]:
             continue
         if state.node == "internal":
             values.setdefault("internal", {})[state.id] = float(initial)
+            values[state.id] = float(initial)
         else:
-            values[state.node] = float(initial)
+            # **Every stock's own key, and the node's as well when the node carries one state.**
+            # Four gas masses share `cabin_atm`, so a node-keyed seeding kept only the last of them
+            # and the oxygen integrated from the water vapour's level — a plausible mass of the wrong
+            # gas. `state_values` is the one place that decides what a state's entries are, so the
+            # seeding and the advancing cannot disagree about the key space.
+            values.update(state_values(world, state, float(initial)))
     # The key exists even when nothing seeds it, so a reader can tell the sentinel is there and
     # empty rather than absent — the same distinction `state.json`'s gate map draws for a closed
     # gate and an unnamed one.
@@ -1268,6 +1306,13 @@ def step(
     for state in sentinel:
         _advance_into(world, state, values, staged, horizon, gaps)
     committed = {**values, **staged}
+    # **The sentinel is a sub-map, so replacing its key loses the others.** A stage writes
+    # `{"internal": {state_id: value}}` and `{**values, **staged}` replaced the whole map with that
+    # one entry, so the accumulators wiped each other out — the same shape of defect as the node
+    # collision, one level down. Merged here rather than in `state_values`, because a *stage* is a
+    # partial view and only the commit sees both halves.
+    if isinstance(values.get("internal"), dict) and isinstance(staged.get("internal"), dict):
+        committed["internal"] = {**values["internal"], **staged["internal"]}
 
     # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
     #    accumulator of every `conserve` edge, which exists once the stocks do.
@@ -1763,18 +1808,6 @@ def build_order(world: World) -> dict[str, list[State]]:
             integrated = state.method in {"lag", "stock"}
             if any(not (e.usable if integrated else e.declared) for e in incoming):
                 blocking_edge.append(state)
-                continue
-            # **A state whose node carries another state owes *code*.** The plant's value map is
-            # keyed by node, so two states on one node overwrite each other; `advance` refuses such a
-            # state by name and the fix is a key-space change in the plant. The bucket is `rule`
-            # because that is the file an implementer opens — and it comes *after* the edge test,
-            # because `advance` asks the edges first and the two must classify a state the same way.
-            if (
-                state.node != "internal"
-                and state.method in {"lag", "stock", "algebraic", "dynamics", "delay"}
-                and [o for o in world.states_on(state.node) if o.id != state.id]
-            ):
-                blocking_rule.append(state)
                 continue
             # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
             # else, so a delay state is domain code like the rest. Classifying it as ready would

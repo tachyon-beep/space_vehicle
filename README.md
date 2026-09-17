@@ -178,7 +178,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 247 declared debts
 and every one of them named. **114 of the 134 states are fully configured and 20 carry a debt**, and
-a real tick advances **17** of the 134 states against the build order's **23** ready — the second
+a real tick advances **19** of the 134 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 75 of the 134 states need code. (This said *before the
+`internal` sentinel counted among them, so 71 of the 134 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1786,10 +1786,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 134 states, by what blocks them:
 
-    23   17 %  ready now — the classes the reference plant can advance
+    27   20 %  ready now — the classes the reference plant can advance
     20   15 %  owes a value — the cheapest to close, and the debt count already tracks them
     16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    75   56 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    71   53 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -9633,6 +9633,44 @@ this is fixed.
 | prose obligations | 145 | **146** |
 | published points the frame cannot name | — | **99 of 142** |
 | tests in `tests/test_vehicle_config.py` | 264 | **265** |
+
+## The value space was keyed by node, so the oxygen was the water vapour
+
+Round 20's first tick set `csm_cabin_o2_kg` to **0.05315987** — the water vapour's mass — and
+`lm_cabin_o2_kg` to **0.0**, the nitrogen's, because the plant's value map was keyed by *node* and
+`cabin_atm` carries four gas masses and a pressure. A second state's value overwrote the first, and
+the result was a plausible mass of the wrong gas, which is the defect class this folder is built
+around.
+
+The map is keyed by **state** now, and the change is additive rather than a rewrite: every state's
+value is written under its own id, and a node carrying exactly one state also keeps its node key,
+because a node id *is* a state id in every one of those cases and every reader in the file and every
+channel in the registry asks for it that way. A node carrying five has no node key at all, because
+there is no single value it could mean. The numbers are what the corpus declares:
+
+```
+  csm_cabin_o2_kg   0.05315987 -> 2.528302      the oxygen, not the water
+  lm_cabin_o2_kg    0.0        -> 2.87112285    the oxygen, not the nitrogen
+  cabin_atm         a value    -> no key        four gases and a pressure cannot share one
+```
+
+**And the same defect was one level down.** A stage writes `{"internal": {state_id: value}}` and the
+commit was `{**values, **staged}`, so each sentinel accumulator wiped the others out — the plant's six
+accumulators, of which one survived a tick. The commit merges the sub-map now.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| states advanced by a real tick | 17 | **19** |
+| `ready now` / `owes a rule` | 23 / 75 | **27 / 71** |
+| the oxygen's value | the water vapour's | **the oxygen's** |
+| `declared debts` | 247 | 247 |
+
+The tick's count moves by two and its *correctness* moves by more: the two states that joined it are
+the two whose values were wrong, and the four gas stocks that still cannot advance are blocked by
+their edges rather than by the map. The `presentation.yaml` debt is rewritten to say what is left —
+the frame's keys — and that is the last thing between this vehicle and a window a fleet can gate on.
 
 ## The invariants, and which of them are enforced
 
