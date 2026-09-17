@@ -10412,6 +10412,93 @@ The corpus itself is unchanged, so no pinned figure moved: 262 debts, 19 of 135 
 sweep is stated as it ran: eleven blocks deleted from broken copies, four of which composed, and all
 four of those reported now.
 
+## The coolant's return was the wrong station, and a healthy loop would have tripped its warning
+
+Two channels, one state, and two bands sixteen kelvin apart.
+
+### What the corpus said
+
+`vehicle.yaml#thermal.loops.loop_primary` declared:
+
+```yaml
+supply_c: 7.2                 # 45 F, the mixed supply leaving the evaporator
+return_c: [5, 15]             # the diode's row for thermal.coolant_return_c
+radiator_inlet_c: [22.8, 23.9]  # 73-75 F, TN D-6718 and NR
+```
+
+and `domains/thermal/points.yaml` described the two channels that read those bands as **one station**:
+`thermal.coolant_return_c` was *"the loop temperature after the coldplates, before the radiator"*, and
+`thermal.radiator_inlet_c` was *"the loop temperature entering the radiator"*. Both rows read the same
+state — `coolant_loop_t` — and both are prose (their derivations are `owed`), so nothing had ever
+compared them.
+
+If they were one station, the published radiator inlet sits **above the return channel's own `>20` C
+warning** (`domains/thermal/profiles.yaml#coolant_return_high`, `apollo_diode.md:102`). A healthy
+vehicle in lunar orbit would trip that warning on every pass, and the alarm would be the corpus's own
+figure disagreeing with the corpus's own figure.
+
+### What the document said
+
+`csm_ecs_study_guide.pdf`, **PDF p. 74**, is the glycol temperature-control page:
+
+> if the temperature is less than 45 F the glycol temp control valve will … to mix with **the returning
+> cold glycol** to obtain 45 F at the inlet to the evaporator
+
+The returning glycol is **cold**, and it is mixed *up* to 45 F — which only makes sense for the line
+coming back **through the radiator**, not for the line leaving the coldplates. The same page gives the
+flow (167 lb/hr) and the evaporator's outlet (46 F).
+
+So the band was never the wrong number: **[5, 15] is the radiator's outlet** — the coolant coming back
+to the evaporator, which the study guide's mixing clause explains can be colder than the 45 F the valve
+holds the evaporator's inlet at. What was wrong was the *name*: `return` was doing duty for both the
+loads' return (the radiator inlet, 73-75 F) and the radiator's return (the outlet, 5-15 C), and the
+prose picked one while the figures meant the other.
+
+### The fix
+
+- the loop field is **`radiator_outlet_c: [5, 15]`** — same band, and a name that says which station;
+- `thermal.coolant_return_c`'s description is *"the coolant returning from the radiator to the
+  evaporator, after the radiator has rejected the load"*, and `thermal.radiator_inlet_c`'s is *"the
+  loop temperature leaving the coldplates and entering the radiator — the loads' return"*;
+- the heat load is **`radiator_inlet − supply`**, not `return − supply`: the domain's `open_debts`
+  sentence and the channel's own note said the latter, and it named the wrong pair of stations;
+- **`check_thermal_bindings` now holds the path**, with three rules the loop's geometry forces:
+  the loads only add heat (a post-load band cannot start below the loop's own supply), the radiator
+  only rejects it (its outlet cannot be warmer than its inlet), and **a loop that names its radiator's
+  stations may not also carry `return_c`** — two different things return on such a loop, and that
+  ambiguity is the defect. The LM keeps its `return_c`: it has no radiator, so the name has one
+  meaning there, and the rule says so by not firing.
+
+### The design the round did not take
+
+The first reading was that `loop_primary` had the *secondary* loop's figures on it — the vehicle
+carries two glycol circuits (`Apollo_Block_II_ECS_Components.pdf` lists a Primary **and** a Secondary
+Glycol Evaporator), the 45 F mixed supply looks like a cabin-circuit figure, and the published
+radiator inlet looks like a coldplate-circuit one. So the plan was to move `supply_c` to
+`loop_secondary` and re-point the four derivations that read it.
+
+The corpus refused the move before the linter did: **the zones declare `cooled_by: loop_primary`**, and
+`cabin_eq_csm_k` re-derives the cabins' equilibrium from that loop's supply against their own
+`limit_c`. Moving the supply would have been a topology decision taken to make two figures agree,
+which is the wrong direction — the figures already agreed once the *stations* were named. The question
+the move would have answered (which loads each of the two circuits serves) is recorded instead, in
+C-28, with the page that would settle it.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| numeric conflicts recorded | 27 | **28** |
+| tests in `tests/test_vehicle_config.py` | 284 | **285** |
+| channels, edges, chains, states, nodes | 148 · 79 · 15 · 135 · 57 | unchanged |
+
+Nothing was re-rated and no channel was added or retired: this round moved a *name* onto the station
+its band describes, corrected the prose that had it elsewhere, and added the three rules that make the
+collapse impossible. The heat balance itself is still owed — `specific_heat_j_per_kg_k` and the loop's
+collected load — which is C-28's first open item, and the two channel rows still say so in their own
+`owed` fields.
+
 ## The invariants, and which of them are enforced
 
 

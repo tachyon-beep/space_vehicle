@@ -1135,8 +1135,21 @@ thermal:
         # below their own low limit: 8.66 C against a 10 C floor, which the vehicle would have tripped
         # every cold pass. `check_cabin_equilibrium` re-derives it.
         supply_c: 7.2
-        return_c: [5, 15]
+        # **`return_c` was this field's name until round 37, and the name was the defect.** The band
+        # is the glycol coming *back* through the radiator, which the loop mixes up to 45 F at the
+        # evaporator inlet — `csm_ecs_study_guide.pdf`, PDF p. 74: "if the temperature is less than
+        # 45 F the glycol temp control valve will [bypass] to mix with the returning cold glycol to
+        # obtain 45 F at the inlet to the evaporator". The corpus's prose called the return the
+        # station *after the coldplates*, which is the radiator inlet — and that inlet is published
+        # at 73-75 F, sixteen kelvin above this band's top and above the return channel's own >20 C
+        # warning. Two names for one station, one name for two stations, and nothing joined a loop's
+        # station to the channel that reads it. The station is named now, and
+        # `check_thermal_bindings` refuses a loop that carries both `return_c` and
+        # `radiator_inlet_c`, because on a loop with a radiator two different things return.
+        radiator_outlet_c: [5, 15]
         evaporator_outlet_c: [2.8, 7.2]
+        # The hot side, and the loop's own published figure for it: 73-75 F. This is the station the
+        # corpus's prose called the return; it is the *loads*' return, not the radiator's.
         radiator_inlet_c: [22.8, 23.9]
         evaporator_actuation_c: 9.4
         loop_volume_l: 25

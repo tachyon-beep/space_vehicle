@@ -22,23 +22,26 @@ points:
   - channel: thermal.coolant_return_c
     from: coolant_loop_t
     layer: measurement
-    derivation: "the loop temperature after the coldplates, before the radiator"
+    derivation: "the coolant returning from the radiator to the evaporator, after the radiator has rejected the load"
     owed: >-
-      **the loop's heat balance.** Return minus supply is the vehicle's heat load in one
-      subtraction, and neither term of the subtraction exists: the loop's rise is
-      `load_w / (mass_flow_kg_s * specific_heat_j_per_kg_k)`, the flow is a reading, and
-      **`specific_heat_j_per_kg_k` and the loop's own load are declared nowhere** — the fluid is
-      named in `vehicle.yaml#thermal.loops` and its c_p is prose in `coolant_loop_t`'s relation
-      ("about 3,600 J/kg-K"), while the load is a sum over the thermal domain's `heat_inputs` that
-      nothing evaluates. Converting this row the obvious way would publish the *supply* under the
-      return's name, which is what the two rows did until round 34: they read one state and claimed
-      two different temperatures. What would close it: one `specific_heat_j_per_kg_k` field on the
-      loop and one state holding the loop's collected load, and the declared `return_c: [5, 15]`
-      in `vehicle.yaml#thermal.loops` is the band the result has to land in.
+      **the radiator's own drop, and the load's rise is the other half.** This row read "the loop
+      temperature after the coldplates, before the radiator" until round 37, and that description
+      put it on the *hot* side of the loop — the same station `thermal.radiator_inlet_c` publishes at
+      73-75 F, sixteen kelvin above this channel's band and above its own >20 C warning. The
+      vehicle's own vocabulary has the return *cold*: `csm_ecs_study_guide.pdf` PDF p. 74 says the
+      glycol temperature control valve mixes "with the returning cold glycol to obtain 45 F at the
+      inlet to the evaporator", which is a line coming back from the radiator, not one leaving the
+      coldplates. What would close it: the same two terms the inlet row names — a
+      `specific_heat_j_per_kg_k` on the loop and a state holding the loop's collected load — applied
+      to the *rejection* rather than the load, since this row is `radiator_inlet_c -
+      rejection_w / (mass_flow_kg_s * c_p)`. The band the result has to land in is
+      `vehicle.yaml#thermal.loops.loop_primary.radiator_outlet_c: [5, 15]`, whose lower end the
+      study guide's mixing clause explains: the return can be colder than the 45 F the valve holds
+      the evaporator inlet at, which is exactly what "mix with the returning cold glycol" is for.
     note: >-
-      Return minus supply is the vehicle's heat load made visible in one subtraction, and it
-      is the channel that tells an agent whether a rising component temperature is a thermal
-      problem or an electrical one.
+      The drop across the radiator is the vehicle's heat load made visible in one subtraction —
+      inlet minus outlet — and it is the channel that tells an agent whether a rising component
+      temperature is a thermal problem or an electrical one.
   - channel: thermal.primary_flow_l_min
     from: coolant_flow_kg_s
     layer: measurement
@@ -120,14 +123,18 @@ points:
   - channel: thermal.radiator_inlet_c
     from: coolant_loop_t
     layer: measurement
-    derivation: "the loop temperature entering the radiator"
+    derivation: "the loop temperature leaving the coldplates and entering the radiator — the loads' return"
     owed: >-
-      **the radiator loop's own temperature, which is not the coldplate loop's.** `vehicle.yaml#`
-      `thermal.loops` declares `radiator_inlet_c: [22.8, 23.9]` for `loop_primary` — sixteen kelvin
-      above the `supply_c: 7.2` this row reads — so the two cannot be the same reading, and the
-      corpus holds one state for both loops. What would close it: the loop's heat balance (see
-      `coolant_return_c` above, which is the same missing relation one step earlier) and a
-      declaration of which loop this channel belongs to.
+      **the loop's heat balance.** This is the station the corpus's prose called the return until
+      round 37, and the figures always disagreed with that prose: the published inlet is 73-75 F
+      while `thermal.coolant_return_c`'s band is 5-15 C with a >20 C warning, so a vehicle at the
+      published operating point would have tripped the return's warning continuously. The two are
+      different stations of one loop — the loads' return, and the radiator's return — and they wait
+      on the same terms. What would close it: a `specific_heat_j_per_kg_k` on the loop and a state
+      holding the loop's collected load, since the rise is `supply_c + load_w / (mass_flow_kg_s *
+      c_p)`. The band the result has to land in is
+      `vehicle.yaml#thermal.loops.loop_primary.radiator_inlet_c: [22.8, 23.9]`, which is the one
+      figure here with a published source.
   - channel: thermal.radiator_rejection_w
     from: radiator_rejection_w
     layer: estimate

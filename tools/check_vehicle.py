@@ -10180,6 +10180,16 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
 
     The join is by `id`, because unlike the electrical inventory the two files already agree on
     their names — which is the evidence that they were always meant to be one declaration.
+
+    **And the loop's own stations are held in the order the coolant visits them.** Round 37's finding
+    was a name doing duty for two stations: `loop_primary` carried `return_c: [5, 15]` beside
+    `radiator_inlet_c: [22.8, 23.9]` while the domain's prose called the return the station
+    *after the coldplates* — so a healthy vehicle at the published inlet would have tripped the
+    return channel's own `>20 C` warning for the whole of lunar orbit. The vehicle's vocabulary has
+    the return cold (`csm_ecs_study_guide.pdf` PDF p. 74: the valve mixes "the returning cold
+    glycol" up to 45 F at the evaporator's inlet), and the rules at the end of the loop walk are
+    what the loop's geometry forces: the loads only add heat, the radiator only rejects it, and a
+    loop with a radiator must name which of its two returns it means.
     """
     thermal = (vehicle or {}).get("thermal") or {}
     domain = load(root / "domains" / "thermal" / "components.yaml", report) or {}
@@ -10291,6 +10301,62 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
             report.refuse(
                 f"{where}.{loop_id}",
                 f"gives a volume of {volume!r} L and the thermal domain gives {two['volume_l']!r}",
+            )
+        # --------------------------------------------------------------------------------------
+        # **The loop's stations, in the order the coolant visits them.** This is round 37's
+        # finding: `loop_primary` carried `return_c: [5, 15]` beside `radiator_inlet_c: [22.8,
+        # 23.9]`, and the domain's own prose called the return "the loop temperature after the
+        # coldplates, before the radiator" — the same station as the inlet, sixteen kelvin away
+        # from the band the return carried and above the return channel's own >20 C warning. So a
+        # healthy vehicle at the published radiator inlet tripped `coolant_return_high` every pass,
+        # and nothing compared two fields of one loop.
+        #
+        # The vehicle's vocabulary has the return *cold*, which is why the two figures were never
+        # contradictory once the stations are named: `csm_ecs_study_guide.pdf` PDF p. 74 has the
+        # glycol temperature control valve mixing "with the returning cold glycol to obtain 45 F at
+        # the inlet to the evaporator" — a line coming back from the radiator. The three rules
+        # below are what the loop's own path forces, and they are checked here because this is the
+        # function that already treats the loop entry as one declaration.
+        # --------------------------------------------------------------------------------------
+        supply = one.get("supply_c")
+        inlet = one.get("radiator_inlet_c")
+        outlet = one.get("radiator_outlet_c")
+        back = one.get("return_c")
+        if isinstance(supply, (int, float)) and isinstance(inlet, list) and len(inlet) == 2:
+            if float(inlet[0]) < float(supply):
+                report.refuse(
+                    f"{where}.{loop_id}.radiator_inlet_c",
+                    f"starts at {inlet[0]} C, below this loop's own supply of {supply} C. The "
+                    "coolant leaves the heat sink and the loads only add to it, so the station "
+                    "entering the radiator cannot be colder than the one leaving the evaporator",
+                )
+            if isinstance(outlet, list) and len(outlet) == 2 and float(outlet[1]) > float(inlet[0]):
+                report.refuse(
+                    f"{where}.{loop_id}.radiator_outlet_c",
+                    f"reaches {outlet[1]} C while the radiator's inlet starts at {inlet[0]} C. The "
+                    "radiator only rejects heat: a return warmer than the coolant entering it is a "
+                    "radiator that warms the loop",
+                )
+        if back is not None and (inlet is not None or outlet is not None):
+            report.refuse(
+                f"{where}.{loop_id}.return_c",
+                "declares a return on a loop that names its radiator's stations. Two different "
+                "things return on a loop with a radiator — the coolant from the loads and the "
+                "coolant from the radiator — and the corpus spent several rounds calling them one "
+                "station. Name the station: `radiator_inlet_c` for the loads' return, "
+                "`radiator_outlet_c` for the radiator's",
+            )
+        if (
+            isinstance(supply, (int, float))
+            and isinstance(back, list)
+            and len(back) == 2
+            and float(back[0]) < float(supply)
+        ):
+            report.refuse(
+                f"{where}.{loop_id}.return_c",
+                f"starts at {back[0]} C, below this loop's own supply of {supply} C, and the return "
+                "minus the supply is the heat the loads added. A return band that reaches below the "
+                "supply is a loop whose loads cool it",
             )
 
     # The radiators. `vehicle.yaml` gives a per-panel rejection and a panel count; the domain
