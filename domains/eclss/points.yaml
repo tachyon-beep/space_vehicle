@@ -12,7 +12,11 @@ points:
   - channel: eclss.cabin_pressure_psia
     from: csm_cabin_pressure_pa
     layer: measurement
-    derivation: "the ideal-gas pressure from the four gas stocks and E-ZONE-ATM's cabin temperature, converted to psia"
+    derivation:
+      expression: pressure_pa / pascals_per_psi
+      inputs:
+        pressure_pa: csm_cabin_pressure_pa
+        pascals_per_psi: 6894.757293168361
     note: >-
       apollo's band is 4.8-5.2 psia with a <4.5 caution and a <3.5 emergency. The instrument's
       0.01 psia precision is 69 Pa, and a 1 K cabin temperature change is about 117 Pa — so the
@@ -115,7 +119,11 @@ points:
   - channel: eclss.lm_cabin_pressure_psia
     from: lm_cabin_pressure_pa
     layer: measurement
-    derivation: "the LM compartment's total pressure, from its four conserved gas masses and its volume"
+    derivation:
+      expression: pressure_pa / pascals_per_psi
+      inputs:
+        pressure_pa: lm_cabin_pressure_pa
+        pascals_per_psi: 6894.757293168361
     note: >-
       the LM's own cabin pressure, and the number the crew read during the descent while the CSM's
       was somebody else's vehicle. The compartment is 6.7 m3 against the CSM's 5.9, and it holds

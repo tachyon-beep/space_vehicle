@@ -12522,6 +12522,7 @@ def check_channel_derivations(
     crowded_nodes = {node: len(ids) for node, ids in node_states.items() if len(ids) > 1}
     same = derived = evaluable = 0
     node_derived = node_evaluable = 0
+    owed_rows = 0
     for path in sorted((root / "domains").glob("*/points.yaml")):
         points = load(path, Report()) or {}
         for row in points.get("points") or []:
@@ -12530,6 +12531,30 @@ def check_channel_derivations(
             unit = units.get(str(row.get("channel")), "")
             derivation = row.get("derivation")
             has_expression = isinstance(derivation, dict) and derivation.get("expression")
+            # **A row may declare itself owed, and that is a declaration rather than an excuse.**
+            # The corpus's prose derivations are of two kinds and they were indistinguishable: one
+            # whose expression simply has not been written yet, and one whose *terms do not exist*
+            # (`thermal.coolant_return_c` needs the loop's heat balance, and neither the fluid's
+            # specific heat nor the loop's load is declared). The first is a chore and the second is
+            # a debt, so the second says so in an `owed` field, in the row, with the sentence that
+            # names what would close it — and the count of them is held to the debt's own sentence,
+            # because a marker only a reader can see is prose again.
+            if row.get("owed") is not None:
+                owed_rows += 1
+                text_owed = str(row.get("owed") or "")
+                if len(text_owed) < 80:
+                    report.refuse(
+                        f"domains/{path.parent.name}/points.yaml:{row.get('channel')}.owed",
+                        f"is {text_owed!r}. An owed row's sentence is where what would close it is "
+                        "written, and a phrase is not a sentence",
+                    )
+                if has_expression:
+                    report.refuse(
+                        f"domains/{path.parent.name}/points.yaml:{row.get('channel')}",
+                        "declares itself `owed` and carries an evaluable `derivation`. The row "
+                        "computes its channel or it does not: one of the two declarations is wrong, "
+                        "and either way the frame's reader cannot tell which",
+                    )
             if not isinstance(row["from"], str):
                 # A row whose `from` is a *list* is a template instantiated per key —
                 # `thermal.zone_[id]_t_c` names its four states that way — and a frame's `values` is
@@ -12594,13 +12619,24 @@ def check_channel_derivations(
     stated_evaluable = re.search(r"(\d+) of the 71 now carry an evaluable", stated, re.I)
     stated_nodes = re.search(r"(\d+) more published channels read a coupling node", stated, re.I)
     stated_node_evaluable = re.search(r"(\d+) of those carry an evaluable", stated, re.I)
-    if not all((stated_same, stated_derived, stated_evaluable, stated_nodes, stated_node_evaluable)):
+    stated_owed = re.search(r"(\d+) of the prose rows declare", stated, re.I)
+    if not all(
+        (
+            stated_same,
+            stated_derived,
+            stated_evaluable,
+            stated_nodes,
+            stated_node_evaluable,
+            stated_owed,
+        )
+    ):
         report.refuse(
             "presentation.yaml:open_debts",
             "no longer states how many published channels are their own source state, how many are "
             "derived, how many of the derived ones now carry an evaluable `derivation`, how many read "
-            "a coupling node, and how many of *those* carry one — so the figures this check computes "
-            "have no declaration to be held to. A count with no reader does not have to be plausible",
+            "a coupling node, how many of *those* carry one, and how many prose rows declare "
+            "themselves owed — so the figures this check computes have no declaration to be held "
+            "to. A count with no reader does not have to be plausible",
         )
         return
     # **Five counts, and the last two are the node-sourced half.** A converted channel changes
@@ -12614,6 +12650,7 @@ def check_channel_derivations(
         (stated_evaluable, evaluable, "of the derived channels carry an evaluable `derivation`"),
         (stated_nodes, node_derived, "published channels read a coupling node and are not that node's unit"),
         (stated_node_evaluable, node_evaluable, "of those carry an evaluable `derivation`"),
+        (stated_owed, owed_rows, "of the prose rows declare in their own `owed` field what would close them"),
     ):
         if int(stated_count.group(1)) != computed:
             report.refuse(

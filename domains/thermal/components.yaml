@@ -827,6 +827,7 @@ load_budget:
 # What this domain still owes, and the one item that blocks the cabins.
 # --------------------------------------------------------------------------------------
 open_debts:
+  - "**The loop has no heat balance, and two published temperatures are waiting on it.** `thermal.coolant_return_c` and `thermal.radiator_inlet_c` both read `coolant_loop_t` — the *supply* state — and until round 34 both were prose rows that would have published the supply under their own names: return minus supply is the vehicle's heat load in one subtraction, and a subtraction of a number from itself is zero. The rise is `load_w / (mass_flow_kg_s * c_p_j_per_kg_k)`, and two of those three terms are declared nowhere: the fluid is named in `vehicle.yaml#thermal.loops` (62.5 % ethylene glycol / 37.5 % water) but its specific heat is prose inside `coolant_loop_t`'s relation ('about 3,600 J/kg-K'), and the loop's own collected load is a sum over this domain's `heat_inputs` that nothing evaluates. **The bands to hit are declared**, which is what makes this a debt rather than a search: `return_c: [5, 15]` and `radiator_inlet_c: [22.8, 23.9]` on `loop_primary`. What would close it: one `specific_heat_j_per_kg_k` field on the loop, and one state holding the loop's collected load — and the same two terms are what `thermal.radiator_rejection_w` needs."
 
   - "**The compartment each load heats WAS declared nowhere, and is now declared above.**
     `heat_inputs` gives every load a zone and the partition closes: 1,723 W of CSM load and

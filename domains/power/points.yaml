@@ -25,7 +25,11 @@ points:
   - channel: power.bus_a_current_a
     from: bus_a_load_w
     layer: measurement
-    derivation: "total enabled load on bus A divided by its voltage"
+    derivation:
+      expression: load_w / voltage_v
+      inputs:
+        load_w: bus_a_load_w
+        voltage_v: bus_a_v
     note: >-
       Apollo's range for this channel is 10-120 A (apollo_diode.md:75), which is wider than
       electrical_diode.md:251's 40 A continuous rating — the vehicle is apollo's, so the
@@ -33,7 +37,11 @@ points:
   - channel: power.source_1_current_a
     from: fuel_cell_power_w
     layer: measurement
-    derivation: "the first fuel cell's output divided by the bus voltage"
+    derivation:
+      expression: power_w / voltage_v
+      inputs:
+        power_w: fuel_cell_power_w
+        voltage_v: bus_a_v
     note: "an unexpected zero here is the fast signature of a source loss; an overload is the signature of a shorted load behind it"
   - channel: power.battery_soc_pct
     from: battery_charge_j

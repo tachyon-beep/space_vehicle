@@ -10,7 +10,11 @@ points:
   - channel: thermal.coolant_supply_c
     from: coolant_loop_t
     layer: measurement
-    derivation: "the loop temperature at the coldplate manifold"
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: coolant_loop_t
+        kelvin_offset: 273.15
     note: >-
       apollo's Apollo-anchored band: 2.8-7.2 C, which is where water-glycol leaving the
       evaporator sat (37-45 F, apollo_diode.md:97). Both a high and a low event, because a
@@ -19,6 +23,18 @@ points:
     from: coolant_loop_t
     layer: measurement
     derivation: "the loop temperature after the coldplates, before the radiator"
+    owed: >-
+      **the loop's heat balance.** Return minus supply is the vehicle's heat load in one
+      subtraction, and neither term of the subtraction exists: the loop's rise is
+      `load_w / (mass_flow_kg_s * specific_heat_j_per_kg_k)`, the flow is a reading, and
+      **`specific_heat_j_per_kg_k` and the loop's own load are declared nowhere** — the fluid is
+      named in `vehicle.yaml#thermal.loops` and its c_p is prose in `coolant_loop_t`'s relation
+      ("about 3,600 J/kg-K"), while the load is a sum over the thermal domain's `heat_inputs` that
+      nothing evaluates. Converting this row the obvious way would publish the *supply* under the
+      return's name, which is what the two rows did until round 34: they read one state and claimed
+      two different temperatures. What would close it: one `specific_heat_j_per_kg_k` field on the
+      loop and one state holding the loop's collected load, and the declared `return_c: [5, 15]`
+      in `vehicle.yaml#thermal.loops` is the band the result has to land in.
     note: >-
       Return minus supply is the vehicle's heat load made visible in one subtraction, and it
       is the channel that tells an agent whether a rising component temperature is a thermal
@@ -26,7 +42,13 @@ points:
   - channel: thermal.primary_flow_l_min
     from: coolant_flow_kg_s
     layer: measurement
-    derivation: "mass flow divided by the fluid's density, 1,050 kg/m3"
+    derivation:
+      expression: mass_flow_kg_s / density_kg_m3 * litres_per_m3 * seconds_per_minute
+      inputs:
+        mass_flow_kg_s: coolant_flow_kg_s
+        density_kg_m3: vehicle.yaml:thermal.loops.loop_primary.fluid_density_kg_m3
+        litres_per_m3: 1000
+        seconds_per_minute: 60
     note: "apollo's band is 1.3-1.7 L/min around the 24 gal/h Apollo order (apollo_diode.md:103)"
   - channel: "thermal.pump_[n]_speed_rpm"
     from: pump_1_speed_rpm
@@ -58,11 +80,19 @@ points:
   - channel: thermal.avionics_plate_c
     from: zone_csm_avionics_t
     layer: measurement
-    derivation: "the avionics coldplate's lumped temperature"
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: zone_csm_avionics_t
+        kelvin_offset: 273.15
   - channel: thermal.comm_amp_c
     from: comm_amp_t
     layer: measurement
-    derivation: "the communications amplifier's case temperature"
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: comm_amp_t
+        kelvin_offset: 273.15
     note: "the node the flagship chain overheats; its >60 C event is apollo's"
   - channel: "thermal.zone_[id]_t_c"
     from: [zone_csm_avionics_t, zone_csm_service_t, zone_lm_descent_t, zone_radiator_t]
@@ -77,7 +107,11 @@ points:
   - channel: thermal.loop_transport_c
     from: loop_transport_t
     layer: measurement
-    derivation: "the temperature arriving from the far end of the loop, 1,042 s behind the supply"
+    derivation:
+      expression: temperature_k - kelvin_offset
+      inputs:
+        temperature_k: loop_transport_t
+        kelvin_offset: 273.15
     note: >-
       This is the channel that exists only because the transport delay does. Without it, a
       component that starts overheating looks like it started overheating when the *radiator*
@@ -87,6 +121,13 @@ points:
     from: coolant_loop_t
     layer: measurement
     derivation: "the loop temperature entering the radiator"
+    owed: >-
+      **the radiator loop's own temperature, which is not the coldplate loop's.** `vehicle.yaml#`
+      `thermal.loops` declares `radiator_inlet_c: [22.8, 23.9]` for `loop_primary` — sixteen kelvin
+      above the `supply_c: 7.2` this row reads — so the two cannot be the same reading, and the
+      corpus holds one state for both loops. What would close it: the loop's heat balance (see
+      `coolant_return_c` above, which is the same missing relation one step earlier) and a
+      declaration of which loop this channel belongs to.
   - channel: thermal.radiator_rejection_w
     from: radiator_rejection_w
     layer: estimate

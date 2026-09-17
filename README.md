@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 135 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
 and every one of them named. **110 of the 135 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 135 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
@@ -189,8 +189,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **150** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **186** the plant
@@ -10191,6 +10191,65 @@ is what the `<20` threshold on that channel always meant.
 
 The debt count falls by one: the suit circuit's starting flow was owed and is now the ECS guide's
 figure. A real tick still advances 19 states and `--strict` still exits 2.
+
+## Three channels claimed three temperatures from one state, and two of them were the supply
+
+`thermal.coolant_supply_c`, `thermal.coolant_return_c` and `thermal.radiator_inlet_c` all read
+`coolant_loop_t` — the loop's supply state — and each declares a different band: 2.8–7.2, 5–15 and
+15–30 °C. **A subtraction of a number from itself is zero**, and the return channel's own note says
+what the pair is for: *"Return minus supply is the vehicle's heat load made visible in one
+subtraction."* All three were prose, so none of them published anything, and the obvious conversion —
+kelvin to Celsius, three times — would have published the *supply* under three names.
+
+What the three actually are, once the declarations are read together: `vehicle.yaml#thermal.loops`
+gives `loop_primary` a `supply_c` of 7.2 and a `radiator_inlet_c` of 22.8–23.9, sixteen kelvin higher.
+So the supply is the state and the other two are **a heat balance the vehicle has not got**: the rise
+is `load_w / (mass_flow_kg_s * c_p)`, the flow is a reading, and two of the three terms are declared
+nowhere — the fluid is named in the loops and its specific heat is *prose* inside `coolant_loop_t`'s
+relation ("about 3,600 J/kg-K"), and the loop's collected load is a sum over the domain's `heat_inputs`
+that nothing evaluates.
+
+### The conversion batch, and the two rows that say they are owed
+
+Nine channels that were prose are arithmetic now, and every one of them is held against a declaration
+rather than against my arithmetic:
+
+| channel | relation | the declaration it rests on |
+|---|---|---|
+| `thermal.coolant_supply_c`, `loop_transport_c`, `avionics_plate_c`, `comm_amp_c` | K − 273.15 | the channel's own `degC` against the state's `K` |
+| `thermal.primary_flow_l_min` | kg/s ÷ ρ × 1000 × 60 | `vehicle.yaml#thermal.loops.loop_primary.fluid_density_kg_m3` |
+| `eclss.cabin_pressure_psia`, `lm_cabin_pressure_psia` | Pa ÷ 6,894.757… | the psi, by definition |
+| `power.bus_a_current_a`, `source_1_current_a` | W ÷ V | `bus_a_v`, the bus's own reading |
+
+Three of the nine publish a value today — 7.2 °C, 7.2 °C and 1.44 L/min, all inside their bands — and
+the other six are waiting on states whose rules are still owed (`csm_cabin_pressure_pa` is `algebraic`
+with prose, `bus_a_v` is algebraic without a derivation, and the two zone lags have no `initial`). That
+is why the figure that moved is the debt's count **(4 → 13)** rather than the frame's.
+
+**And the two that cannot be computed now say so, in a field.** The corpus's prose derivations were two
+kinds wearing one name: an expression nobody had written yet, and one whose *terms do not exist*.
+`thermal.coolant_return_c` and `thermal.radiator_inlet_c` are the second, and each carries
+`owed:` — a sentence in the row naming what would close it and the bands the result has to land in
+(`return_c: [5, 15]`, `radiator_inlet_c: [22.8, 23.9]`). The linter reads the field three ways: an
+`owed` row that also carries an evaluable `derivation` is refused (the row computes its channel or it
+does not), an `owed` row whose sentence is a phrase is refused, and **the count of them is held to the
+debt's own sentence** — 2 of the prose rows. `domains/thermal/components.yaml#open_debts` carries the
+model: one `specific_heat_j_per_kg_k` field on the loop and one state holding its collected load, the
+same two terms `thermal.radiator_rejection_w` is waiting on.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | **262** |
+| derived channels carrying an evaluable `derivation` | 4 of 71 | **13 of 71** |
+| prose rows declaring themselves `owed` | — | **2** |
+| values a frame carries at tick 0 | 25 | **28** |
+| tests in `tests/test_vehicle_config.py` | 277 | **279** |
+
+The debt count rises by one because the loop's heat balance is now a sentence in the domain that owns
+it. Nothing else moves: 19 of 135 states still advance, the build order is still 27 · 25 · 14 · 69, and
+`--strict` still exits 2.
 
 ## The invariants, and which of them are enforced
 
