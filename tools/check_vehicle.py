@@ -12302,6 +12302,96 @@ def check_lag_drivers(root: Path, coupling: dict[str, Any], report: Report) -> N
             report.debt(f"coupling.yaml:edge {incoming[0].get('id')}", reason)
 
 
+def check_channel_derivations(root: Path, report: Report) -> None:
+    """The window's channels: how many are their source state, and how many are a sentence.
+
+    Round 23 built the frame's `values` from the points registry and found, by refusing to publish a
+    channel whose unit is not its source state's, that **only 63 of the 134 channels read from a state
+    are the state itself**. The other 71 are *derived* — a partial pressure from a mass and a volume,
+    a flow in litres per minute from a mass flow and a density — and their `derivation` is prose,
+    which nothing can evaluate. The frame omits them, the debt says so, and the two figures lived in
+    a sentence: exactly the shape this folder spends its rounds removing.
+
+    So they are counted here, from the registry and the states, and the debt's own sentence is held
+    to the count. It refuses when they disagree — which is what happens the moment a channel gains an
+    evaluable `derivation`, gains a unit, gains a state, or is added. The check cannot make the 71
+    evaluable; what it can do is make sure nobody has to count them by hand again.
+    """
+    presentation = load(root / "presentation.yaml", report) or {}
+    stated = " ".join(str(entry) for entry in presentation.get("open_debts") or [])
+    units = {str(row.get("id")): str(row.get("unit") or "") for row in walk_channels(root)}
+    methods: dict[str, tuple[str, str]] = {}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                methods[str(state["id"])] = (str(state.get("unit") or ""), str(state.get("method")))
+    same = derived = evaluable = 0
+    for path in sorted((root / "domains").glob("*/points.yaml")):
+        points = load(path, Report()) or {}
+        for row in points.get("points") or []:
+            if not isinstance(row, dict) or not row.get("from"):
+                continue
+            source = methods.get(str(row["from"]))
+            if source is None:
+                continue
+            unit = units.get(str(row.get("channel")), "")
+            if _units_agree(unit, source[0]):
+                same += 1
+                continue
+            derived += 1
+            derivation = row.get("derivation")
+            if isinstance(derivation, dict) and derivation.get("expression"):
+                evaluable += 1
+    # The debt's own sentence, which is the only place these figures live outside the registry.
+    stated_same = re.search(r"only (\d+) have the state's own unit", stated, re.I)
+    stated_derived = re.search(r"the other (\d+) are", stated, re.I)
+    if not stated_same or not stated_derived:
+        report.refuse(
+            "presentation.yaml:open_debts",
+            "no longer states how many published channels are their own source state and how many "
+            "are derived, so the figures this check computes have no declaration to be held to. A "
+            "count with no reader does not have to be plausible",
+        )
+        return
+    # **A channel that becomes evaluable must be published, not merely counted.** The plant omits a
+    # derived channel because prose cannot be applied; one that carries an `expression` over named
+    # inputs can be applied by the same evaluator that reads a state's `derivation`, so the frame
+    # omitting it is now a defect rather than a limit. Refused here rather than fixed silently,
+    # because the fix belongs in the emitter and this check's job is to say when it is due.
+    if evaluable:
+        report.refuse(
+            "presentation.yaml:open_debts",
+            f"has {evaluable} derived channel(s) carrying an evaluable `derivation`, and the frame "
+            "still omits them: what was prose is now arithmetic, so the emitter can publish them and "
+            "the debt's count is out of date. The check that reads this registry is the place that "
+            "says when the omission stops being a limit",
+        )
+    if int(stated_same.group(1)) != same or int(stated_derived.group(1)) != derived:
+        report.refuse(
+            "presentation.yaml:open_debts",
+            f"states {stated_same.group(1)} channels as their own source state and "
+            f"{stated_derived.group(1)} as derived, and the registry now has {same} and {derived}"
+            + (f" ({evaluable} of the derived ones carry an evaluable `derivation`)" if evaluable else "")
+            + ". A figure in prose that nothing recomputes is this folder's oldest finding",
+        )
+
+
+def _units_agree(channel_unit: str, state_unit: str) -> bool:
+    """Whether a channel and its source state are the same quantity, by their own declarations."""
+    return channel_unit.strip().lower() == state_unit.strip().lower()
+
+
+def walk_channels(root: Path) -> list[dict[str, Any]]:
+    """Every row of the channel registry, across its sections."""
+    channels = load(root / "channels.yaml", Report()) or {}
+    rows: list[dict[str, Any]] = []
+    for block in channels.values():
+        if isinstance(block, list):
+            rows.extend(row for row in block if isinstance(row, dict) and row.get("id"))
+    return rows
+
+
 def check_mass_properties(root: Path, report: Report) -> None:
     """The centre of mass and the inertia tensor, and the table they were read out of.
 
@@ -14972,6 +15062,7 @@ def main(argv: list[str] | None = None) -> int:
         root, presentation or {}, coupling or {}, mission or {}, report, channels
     )
     check_lag_drivers(root, coupling or {}, report)
+    check_channel_derivations(root, report)
     check_thermal_budget(root, report)
     # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
     # oxygen in it is what the compartment's own two alarms have to call habitable.

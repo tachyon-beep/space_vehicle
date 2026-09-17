@@ -9672,6 +9672,30 @@ the two whose values were wrong, and the four gas stocks that still cannot advan
 their edges rather than by the map. The `presentation.yaml` debt is rewritten to say what is left —
 the frame's keys — and that is the last thing between this vehicle and a window a fleet can gate on.
 
+## The window's channels are counted now, not described
+
+Round 23 found the split by refusing to publish a channel whose unit is not its source state's:
+**63 of the 134 channels read from a state are the state itself; the other 71 are derived**, and their
+`derivation` is prose. Those two figures went into the `presentation.yaml` debt as a sentence — and a
+count in prose with no reader is this folder's oldest finding, so they are recomputed on every run by
+`check_channel_derivations`, which reads the registry and the states and holds the sentence to them.
+
+The check refuses three things: a sentence that no longer states the figures, figures that disagree
+with the registry, and — the one that points forward — **a derived channel that has become
+*evaluable***. A `derivation` written as an `expression` over named inputs is arithmetic the linter
+evaluates and the plant can apply, so a channel that has one and is still omitted from the frame is a
+defect rather than a limit: what was prose is now arithmetic, and the refusal says the omission is due
+to end. That is the shape of the remaining work on the window — 71 channels, each one division or one
+subtraction away from the state it reads, and the instrument now says so on the run where it changes.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 247 | 247 |
+| the window's derived channels, counted | in prose | **71 of 134, machine-checked** |
+| tests in `tests/test_vehicle_config.py` | 265 | **266** |
+
 ## The invariants, and which of them are enforced
 
 
