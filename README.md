@@ -50,14 +50,34 @@ python3 tools/faults.py --list                              # every fault, its k
 # the vehicle's side of the frozen window, and the repository's own instrument against it
 python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --init
 python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --cycles 300 --poll 0.2
-python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll-seconds 1
+python3 ../../../contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll-seconds 1
 ```
+
+**The probe is one level out of this folder**, and the path says so: `contract/` is the repository's,
+not the vehicle's, because `docs/diode-contract.md` is the only thing the two halves share and the
+probe is the operator side's instrument against it. Run it from here with the path above, or from the
+repository root as `python3 contract/diode_probe.py --diode-dir
+docs/deep_research/vehicle/.scratch/diode --slug vehicle --poll-seconds 1` — `--diode-dir` is
+relative to wherever you stand, so the two forms differ in more than the script path.
 
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
 Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
+
+**The direction of travel, because the headline alone reads the wrong way.** The count went
+**247 → 261** across the last twelve hours of rounds, and ten of that +14 are obligations that were
+always there and previously invisible — the eleven `UNCONFIGURED` scalars in the two files nothing
+walked (round 46), a `debt:` key inside a block no tool read, three debts that were being counted
+twice. A number that goes *up* because the instrument got better is not a regression, and the line
+that carries the real movement is beside it: **19 → 28 of the 139 states advance in a real tick**,
+the build order's ready-now bucket went 25 → 37, and the states that owe a *rule* — the only class
+that is code rather than data — went 79 → 65. What falls is progress; what rises has to say why.
+
+The count also moved *down* twice in that window for the right reason: **C-25 and C-26** were put to
+the operator and closed, and C-26 re-derived the RCS chain rather than recording a disagreement — see
+the round section for what moved with it.
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
   under `--strict`
@@ -178,7 +198,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **25** of the 139 states against the build order's **33** ready — the second
+a real tick advances **28** of the 139 states against the build order's **37** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1595,7 +1615,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 68 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 65 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1786,13 +1806,13 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 139 states, by what blocks them:
 
-    33   24 %  ready now — the classes the reference plant can advance
+    37   27 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
-    13    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    68   49 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    65   47 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
-**Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
+**Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
 domain code the configuration deliberately does not carry, so the build order is mostly a list of
 missing *code* rather than missing numbers — which is the honest shape of the remaining work and was
 not visible anywhere before this view existed.
@@ -15257,6 +15277,86 @@ without either pretending to cover the other.
 **The vehicle did not change; three descriptions of it did.** This round closes no debt and advances
 no state, and that is the honest shape of it: the schedule was always 58, and what was missing was
 anyone reading the three sentences that disagreed about it.
+
+## The lag integrator ignored the conversion its own edge declared
+
+Four coupling edges state a conversion and the plant applied neither the unit nor the value:
+
+| edge | declares | what it is |
+|---|---|---|
+| `E-BUS-PUMP` | `kg/s per V`, 8.9998e-4 | the pump's speed-to-flow gain |
+| `E-PROP-ENG` | `kg/s per N`, 3.2423409e-4 | the SPS's flow at its rated thrust |
+| `E-RCSP-RCS` | `kg/s per N`, 3.5162628e-4 | the RCS's, derived from its own Isp |
+| `E-FC-HEAT` | `W per W`, 0.58336 | the fuel cell's waste-heat fraction |
+
+Each names both of its quantities in its own unit and carries the factor between them in its value,
+which is what a converter is. The lag integrator read `values[source]` and relaxed the state toward
+it untouched — and `lag_driver_basis`, the rule both tools share, had been written to *refuse*
+exactly that: the driver had to be the state's own quantity, one for one, scale 1, because "a scale
+the integrator does not apply is a scale that is not in the model". The rule was right about the
+integrator, and the integrator was the thing that was wrong.
+
+### One rule, two directions
+
+The fix is one multiplication in `plant.py` and one rewritten rule in `check_vehicle.py`, and the
+rule is now the one the *unit* makes checkable. Where the two ends are the same quantity the transfer
+is still the identity and the three original refusals are unchanged — numerator, denominator and
+scale. Where they differ the edge is a conversion, and four things have to hold: the unit names the
+state's quantity over the source's; the factor is finite and non-zero; and **the source carries the
+denominator's quantity rather than a stock's inventory**. The last clause is this round's own second
+finding, and the first three let it through.
+
+### The clause the first three rules let through
+
+`E-PROP-ENG` is `3.2423409e-4 kg/s per N` — a *flow* at a rated thrust — and the node it leaves is
+`prop_main`, which holds **18,508 kg of propellant**. Multiplying a level by a rate-per-unit does not
+give a thrust; it gives a number with three units in it. It would have been computed rather than
+refused the moment `bus_a_v` landed and the plant stopped refusing that branch for the wrong reason,
+which is the shape of this whole folder: **a rule that refuses for the wrong reason hides the defect
+it is refusing.** `thrust_main_n` now owes the propellant *flow* by name, and the worklist moved it
+from *owes a rule* to *owes an edge*, which is what it actually lacks.
+
+The same reading applies to `bus_a`: the pump's flow is no longer refused as a dimensional error, and
+what it says it needs is the bus voltage it reads. **A wall of refusals is not the same as a list of
+what is missing**, and three of the four edges here were refusing a conversion the corpus had already
+written down.
+
+### And the rule found a stale read that nothing else could see
+
+The same round taught a derivation that it may read another state — and the check that comes with it
+is the schedule: a reading is legal exactly when its producer advances first. Pointed at
+`propellant_estimate`'s new arithmetic, it refused the corpus:
+
+```
+reads 'impulse_total', which advances at or after it in the tick order (127 against 125)
+```
+
+The RCS domain's `internal_order` put the percentage *before* the stock it is computed from, so on
+every tick the estimate would have read last tick's impulse under this tick's name. **The sentinel is
+the one place no edge can reach**, which is why nothing had ever caught it: a node's order is checked
+against its edges, and the sentinel has none — so `internal_order` was the only declaration that
+could have been wrong and the only one nothing read. The order moved (`impulse_total` before
+`propellant_estimate`), the note says why, and the rule that found it is the one this round added.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order | 33 ready · 25 value · 13 edge · 68 rule | **37** · 25 · **12** · **65** |
+| states a tick advances | 25 of 139 | **28** of 139 |
+| `report.refuse` call sites | 774 | **777** |
+| tests in `tests/test_vehicle_config.py` | 293 | **297** |
+
+**Two states left the rule layer and one of them advances.** `coolant_flow_kg_s` is *ready* and still
+gapped by `bus_a_v`; `propellant_estimate` is computed on every tick; `thrust_main_n` moved to *owes
+an edge*, which is what it actually lacks — the propellant flow to relax toward. The conversion rule
+also un-refused `zone_csm_avionics_t` and `crew_workload`, which moved to *value* because what they
+were missing was never a rule either. And the new ordering rule found a defect nothing else could
+see: the RCS sentinel computed `propellant_estimate` from `impulse_total` **before** the stock had
+advanced, so the percentage would have read last tick's impulse under this tick's name. The sentinel
+has no edges, so `internal_order` was the only place that could have caught it and nothing had ever
+checked it against the derivations that read across it.
 
 ## The invariants, and which of them are enforced
 

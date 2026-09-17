@@ -220,10 +220,10 @@ state:
         commands is one service: a fleet that has spent the SM's propellant has spent the vehicle's,
         and a per-system stock would be four stocks for one tank farm
     quantum: 1.0e-5
-    min_flow_per_s: 0.1565
+    min_flow_per_s: 0.16335
     provenance:
       basis: derived
-      relation: "quantum 10 mg against a single thruster's flow, 445 N at Isp 290 s = 0.1565 kg/s. The minimum impulse bit is unpublished (vehicle.yaml#propulsion), so the finest *pulse* this stock can express is not yet known; the quantum is set by the flow, which is"
+      relation: "quantum 10 mg against a single thruster's flow, 445 N at Isp 277.8 s = 0.16335 kg/s. The minimum impulse bit is unpublished (vehicle.yaml#propulsion), so the finest *pulse* this stock can express is not yet known; the quantum is set by the flow, which is"
   - id: pressurant_he_kg
     node: pressurant_he
     method: stock
@@ -451,7 +451,7 @@ consumers:
   - id: rcs_firings
     stock: prop_rcs
     edge: E-RCSP-RCS
-    rate_kg_s: 0.1565
+    rate_kg_s: 0.16335
     derivation:
       expression: "thrust_n / (isp_s * g0)"
       inputs:
@@ -460,7 +460,7 @@ consumers:
         g0: 9.80665
     provenance:
       basis: derived
-      relation: "445 N at Isp 290 s, per thruster"
+      relation: "445 N at Isp 277.8 s, per thruster"
   - id: pressurant_blowdown
     stock: pressurant_he
     edge: E-PRESS-PROP

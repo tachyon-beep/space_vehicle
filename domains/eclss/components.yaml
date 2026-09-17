@@ -488,8 +488,28 @@ state:
     node: cabin_atm
     method: algebraic
     unit: Pa
+    # The field the arithmetic produces, named by the state's own id: what this state *is* is the
+    # number its law computes, not a parameter of it. `computes` has to name a field on the state so
+    # the linter has something to hold the arithmetic against, and for a state whose value is its
+    # rule there is no name better than the state's own.
+    csm_cabin_pressure_pa: 34473.783836
     provenance:
       basis: derived
+      computes: csm_cabin_pressure_pa
+      derivation:
+        expression: "(o2_mass / o2_molar + n2_mass / n2_molar + co2_mass / co2_molar + h2o_mass / h2o_molar) * gas_constant * cabin_temperature_k / cabin_volume_m3"
+        inputs:
+          o2_mass: csm_cabin_o2_kg
+          n2_mass: csm_cabin_n2_kg
+          co2_mass: csm_cabin_co2_kg
+          h2o_mass: csm_cabin_h2o_kg
+          o2_molar: domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol
+          n2_molar: domains/eclss/components.yaml:atmosphere_model.gases.n2.molar_mass_kg_per_mol
+          co2_molar: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+          h2o_molar: domains/eclss/components.yaml:atmosphere_model.gases.h2o.molar_mass_kg_per_mol
+          gas_constant: 8.314462618153
+          cabin_temperature_k: zone_csm_cabin_t
+          cabin_volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.csm
       relation: >-
         P = (sum of n_i) R T / V, from the four gas stocks and the cabin zone's temperature. Derived
         rather than stated, which is the whole reason the stocks exist. The thermal sensitivity is
@@ -497,13 +517,44 @@ state:
         because this is the state that computes it, and `E-ZONE-ATM` is the edge that declares it as
         this state's driver. A 1 K cabin change therefore moves the pressure by twice the
         instrument's 0.01 psia precision, which is what makes a leak and a cooling cabin the same
-        observation
+        observation. **The law is arithmetic now rather than the sentence above it**: four masses over
+        their molar masses, the model's own gas constant and volume, and the cabin zone's temperature
+        *as a reading* — the live state, not the 295 K it starts at — which the plant substitutes at
+        the tick it computes this, `cabin_zone_t` having advanced four nodes earlier in the derived
+        order
+      note: >-
+        **the `computes` field is the state's own id, and that is this round's one new spelling.**
+        Every other derived state produces a *parameter* — `total_w`, `tau_s`, `total_k` — because
+        its value is an input to some other rule. A pressure is not: what this state is, is what its
+        law says, so the state's own declared value is the only thing the arithmetic can be held
+        against and mean anything. The value beside it is the 5 psia design point at 295 K to full
+        precision, and the four gas stocks are *derived* from it, which is why the two agree to
+        2.6 mPa at MET 0 and to nothing at all in a leaking cabin — where the reading is the point
   - id: lm_cabin_pressure_pa
     node: lm_cabin_atm
     method: algebraic
     unit: Pa
+    # As the CSM compartment: the law is one relation applied twice, and each application names the
+    # gases and the volume of its own cabin. Nothing here is copied from the CSM's entry but the
+    # shape, and `test_the_two_cabins_compute_their_pressure_by_one_law` holds the two together.
+    lm_cabin_pressure_pa: 34473.786459
     provenance:
       basis: derived
+      computes: lm_cabin_pressure_pa
+      derivation:
+        expression: "(o2_mass / o2_molar + n2_mass / n2_molar + co2_mass / co2_molar + h2o_mass / h2o_molar) * gas_constant * cabin_temperature_k / cabin_volume_m3"
+        inputs:
+          o2_mass: lm_cabin_o2_kg
+          n2_mass: lm_cabin_n2_kg
+          co2_mass: lm_cabin_co2_kg
+          h2o_mass: lm_cabin_h2o_kg
+          o2_molar: domains/eclss/components.yaml:atmosphere_model.gases.o2.molar_mass_kg_per_mol
+          n2_molar: domains/eclss/components.yaml:atmosphere_model.gases.n2.molar_mass_kg_per_mol
+          co2_molar: domains/eclss/components.yaml:atmosphere_model.gases.co2.molar_mass_kg_per_mol
+          h2o_molar: domains/eclss/components.yaml:atmosphere_model.gases.h2o.molar_mass_kg_per_mol
+          gas_constant: 8.314462618153
+          cabin_temperature_k: zone_lm_cabin_t
+          cabin_volume_m3: domains/eclss/components.yaml:atmosphere_model.volume_m3.lm
       relation: >-
         as the CSM compartment, over the LM's own volume, and the same 116.86 Pa per kelvin. The LM's
         volume is 6.7 m3 against the CSM's 5.9, so the same kelvin moves the same pressure in a

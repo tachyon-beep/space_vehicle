@@ -11127,6 +11127,23 @@ def lag_driver_basis(
 
     Returns `(True, "")` when the driver can be integrated and `(False, reason)` otherwise. **Both
     tools call it**, so the plant's refusal and the linter's debt cannot come apart.
+
+    **And the conversion it refused is the one the corpus was already declaring.** The three rules
+    above are the *identity* transfer's three ways of being wrong, and they refused four edges that
+    are not wrong at all: `E-BUS-PUMP` (`kg/s per V`, 8.9998e-4), `E-PROP-ENG` (`kg/s per N`,
+    3.24234e-4), `E-RCSP-RCS` (`kg/s per N`, 3.51626e-4) and `E-FC-HEAT` (`W per W`, 0.58336). Each
+    one names its two quantities in its unit and carries the factor between them in its value, which
+    is exactly what a converter is: the pump's speed-to-flow gain, a rocket's thrust-to-flow
+    relation inverted, the cell's waste-heat fraction. The integrator simply did not multiply.
+
+    So the answer is not "the edge is an identity transfer" for those four — it is that the plant
+    now applies what the edge declares, and this function's job is to say **when that is
+    well-formed**. The conditions are the ones the unit already makes checkable, and each is
+    refused by name below: the edge states a unit, it converts *from* the source node's quantity
+    *to* the lag's, and the factor is finite and non-zero. Where the two ends are the same quantity
+    the transfer is still the identity — a *related* value rather than a converted one — and that is
+    the case the original three rules keep refusing, because a gain between two ends in the same
+    dimension is the proportional law `plant.md` §3 says a mode selection is not.
     """
     where = str(edge.get("id"))
     sensitivity = edge.get("sensitivity") or {}
@@ -11142,43 +11159,86 @@ def lag_driver_basis(
     source_unit = str(source_node.get("unit") or "")
     source_units = {_norm(part) for part in re.split(r"[+,]", source_unit) if part.strip()}
 
-    # 1. The two ends have to be the same quantity, because the integrator hands the driver over
-    #    unchanged: `relax toward values[source]` is the whole of the model.
-    if source_units and _norm(state_unit) not in source_units:
-        return False, (
-            f"{where} drives a lag in {state_unit!r} from `{edge.get('from')}`, which is "
-            f"denominated in {source_unit!r}. The lag integrator relaxes the state toward the "
-            "driver's raw value and applies no conversion, so a driver in a different quantity is "
-            "a dimensional error that produces a number rather than a refusal"
-        )
-
-    # 2. And the edge's own unit has to be the identity transfer between them, for the same reason:
-    #    a scale the integrator does not apply is a scale that is not in the model.
     sides = [part.strip() for part in unit.split(" per ")] if unit else []
     numerator = sides[0].split()[0] if sides and sides[0].split() else ""
     denominator = " ".join(sides[1:]).strip() if len(sides) > 1 else ""
-    if numerator and _norm(numerator) != _norm(state_unit):
+    same_quantity = not source_units or _norm(state_unit) in source_units
+
+    if same_quantity:
+        # The identity transfer, and its three refusals are unchanged: the ends are the same
+        # quantity, so the edge has to *be* the identity — numerator, denominator and scale.
+        if numerator and _norm(numerator) != _norm(state_unit):
+            return False, (
+                f"{where} declares {unit!r} and drives a lag in {state_unit!r}. The plant moves the "
+                "state toward the driver itself, so the edge's numerator and the state have to be the "
+                "same quantity — this one converts into something the state is not"
+            )
+        if denominator and source_units and _norm(denominator) not in source_units:
+            return False, (
+                f"{where} declares {unit!r} against a source node denominated in {source_unit!r}, so "
+                "the denominator names a quantity the driver is not: the transfer is against the wrong "
+                "end of the edge"
+            )
+        try:
+            scale = float(value)
+        except (TypeError, ValueError):
+            return False, f"{where} carries the sensitivity {value!r}, which is not a number"
+        if abs(scale - 1.0) > 1e-12:
+            return False, (
+                f"{where} carries a scale of {scale:g} between two ends in the same quantity. The lag "
+                "integrator multiplies a driver by the edge's value, so a gain here would make the "
+                "state settle somewhere other than its driver — and a mode selection applied as a "
+                "gain is the proportional law `plant.md` §3 refuses. Either the edge is an identity "
+                "transfer or the two ends are different quantities and the unit has to say which"
+            )
+        return True, ""
+
+    # A conversion, and the four things that make one well-formed. The unit is what carries the
+    # claim, so an edge without one is refused rather than trusted.
+    if not sides or not numerator:
         return False, (
-            f"{where} declares {unit!r} and drives a lag in {state_unit!r}. The plant moves the "
-            "state toward the driver itself, so the edge's numerator and the state have to be the "
-            "same quantity — this one converts into something the state is not"
+            f"{where} drives a lag in {state_unit!r} from `{edge.get('from')}`, which is denominated "
+            f"in {source_unit!r}, and declares no unit. A conversion has to name both of its "
+            "quantities — `<state unit> per <source unit>` — because the value alone cannot say "
+            "which end it converts"
         )
-    if denominator and source_units and _norm(denominator) not in source_units:
+    if _norm(numerator) != _norm(state_unit):
         return False, (
-            f"{where} declares {unit!r} against a source node denominated in {source_unit!r}, so "
-            "the denominator names a quantity the driver is not: the transfer is against the wrong "
-            "end of the edge"
+            f"{where} declares {unit!r} and drives a lag in {state_unit!r}, so the transfer's "
+            "numerator names a quantity the state is not"
+        )
+    if not source_units or _norm(denominator) not in source_units:
+        return False, (
+            f"{where} declares {unit!r} against a source node denominated in {source_unit!r}, so the "
+            "denominator names a quantity the driver is not: the conversion is against the wrong end "
+            "of the edge"
         )
     try:
         scale = float(value)
     except (TypeError, ValueError):
         return False, f"{where} carries the sensitivity {value!r}, which is not a number"
-    if abs(scale - 1.0) > 1e-12:
+    if not math.isfinite(scale) or scale == 0.0:
         return False, (
-            f"{where} carries a scale of {scale:g} that the lag integrator does not apply — it "
-            "relaxes toward the driver itself. Either the edge is an identity transfer or the plant "
-            "needs the rule that multiplies it, and until one of those is true the state would "
-            "advance by the wrong amount rather than not at all"
+            f"{where} carries the conversion {scale!r}, which multiplies every driver to nothing. A "
+            "zero or non-finite transfer is a state that can never move, which is a missing rule "
+            "wearing a number"
+        )
+    # And the source has to be a *level the edge converts*, not a stock's inventory. A conversion
+    # says "one unit of the source's quantity becomes this many of the state's", so the source node
+    # has to carry the quantity the denominator names — and a stock node carries an amount, not a
+    # flow. `E-PROP-ENG` is the case that made this necessary: 3.2423409e-4 kg/s per N is the SPS's
+    # flow at its rated thrust, and the node it leaves is `prop_main`, which is 18,508 **kg of
+    # propellant**. Multiplying a level by a rate-per-unit and calling the product a thrust is a
+    # number with three units in it, and it would have been computed the moment `bus_a_v` landed and
+    # the plant stopped refusing this branch for the wrong reason.
+    if str(source_node.get("kind") or "") == "stock" and source_units:
+        return False, (
+            f"{where} converts `{edge.get('from')}`'s {source_unit!r} into {state_unit!r}, and that "
+            "node is a **stock**: it carries an amount, not a rate. A lag relaxes toward a level of "
+            "its own quantity, so the driver here has to be the stock's *flow* — the declared rate "
+            "the tank is moving at — and not the tank's inventory multiplied by a conversion. What "
+            "this edge describes is a relation between two rates, and the rate is owed: a flow state "
+            "on the source node, or an edge whose driver is one"
         )
     return True, ""
 
@@ -11237,6 +11297,7 @@ def check_declared_derivation(
     subject: str,
     documents: dict[str, Any],
     report: Report,
+    readings: dict[str, float] | None = None,
 ) -> None:
     """One `derivation`, evaluated against the value it claims to produce.
 
@@ -11248,6 +11309,15 @@ def check_declared_derivation(
     twelve refusals is the defect this folder spends its rounds removing, so the second binding
     site calls this one instead. The five refusals that need no value moved to
     `check_derivation_bindings`, for the same reason and a third binding site.
+
+    **`readings` is the third kind of input, and it arrives here the same way it arrived in
+    `derivation_value`.** A bare name — no `file.yaml:` prefix — is *that state's value this tick*,
+    which a channel's derivation has been allowed to bind since the frame started publishing derived
+    channels. A *state's* derivation was restricted to numbers and sources because the caller that
+    evaluates one has no tick; the caller that supplies `readings` does. The names are checked
+    before they get here (they must be states, and states that advance first), so what this needs
+    from the mapping is only their numbers — and a name the caller did not supply is a refusal
+    rather than a zero, for the reason the rest of this file exists.
     """
     parsed = check_derivation_bindings(where, derivation, report)
     if parsed is None:
@@ -11263,6 +11333,9 @@ def check_declared_derivation(
             continue
         text = str(raw)
         if ":" not in text:
+            if readings is not None and text in readings:
+                values[key] = float(readings[text])
+                continue
             report.refuse(
                 f"{where}.inputs.{key}",
                 f"is {text!r}, which is neither a number nor a source. A source names its "
@@ -11848,8 +11921,78 @@ def check_same_as(documents: dict[str, Any], report: Report) -> None:
         walk(document, name)
 
 
+def state_advance_order(
+    root: Path, coupling: dict[str, Any], schedule: list[str]
+) -> dict[str, int]:
+    """Every state's position in the order a tick advances them, by state id.
+
+    One tick advances the scheduled nodes in the linter's frozen total order, and within each node
+    the states in that node's declared `state_order` — or, where the node declares `independent` or
+    nothing at all, in the sequence the plant's own frozen tiebreak uses. Then the `internal`
+    sentinel, which is not a node: its states advance with their domain, domains in name order and
+    within a domain in the `internal_order` that domain declares.
+
+    This exists because **a derivation may read a state, and a reading has to exist when it is
+    read.** `derivation_value` has always bound an input to a bare state id as *that state's value
+    this tick* — it is how a channel says "the live cabin temperature" rather than "295 K" — but a
+    *state's* derivation was restricted to numbers and `<file>.yaml:<dotted.path>` sources, because
+    the one caller that evaluates a state's arithmetic had no tick and no order to check a reading
+    against. The order is that check: a derivation binding a name whose position is not before its
+    own would compute last tick's value and call it this tick's, which is exactly the Gauss-Seidel
+    dependency the schedule exists to make explicit.
+
+    The position map is derived from the same two declarations the plant's `step` walks —
+    `state_order` per node and `internal_order` per domain — so the linter and the plant cannot
+    disagree about what is available when. Where a node or domain declares `independent`, the order
+    is the frozen lexicographic tiebreak, which is what the plant does with it.
+    """
+    by_node: dict[str, list[str]] = {}
+    by_domain: dict[str, list[str]] = {}
+    domain_of: dict[str, str] = {}
+    domains_dir = root / "domains"
+    if domains_dir.is_dir():
+        for path in sorted(p for p in domains_dir.iterdir() if p.is_dir()):
+            components = load(path / "components.yaml", Report()) or {}
+            for state in components.get("state") or []:
+                if not isinstance(state, dict) or not state.get("id"):
+                    continue
+                domain_of[str(state["id"])] = path.name
+                node = str(state.get("node"))
+                if node == "internal":
+                    by_domain.setdefault(path.name, []).append(str(state["id"]))
+                elif node:
+                    by_node.setdefault(node, []).append(str(state["id"]))
+    nodes = coupling.get("nodes") or {}
+    positions: dict[str, int] = {}
+    for node in schedule:
+        declared = (nodes.get(node) or {}).get("state_order")
+        producers = by_node.get(node) or []
+        # `independent` and an absent order are the same sequence here, and it is the one the plant
+        # uses: sorted by id. A node nobody reads from does not care, and a node somebody reads from
+        # is supposed to declare its order — `check_coupling` refuses one that does not when it
+        # carries more than one state.
+        ordered = (
+            [str(s) for s in declared] if isinstance(declared, list) else sorted(producers)
+        )
+        for state_id in ordered:
+            positions.setdefault(state_id, len(positions))
+    for domain in sorted(by_domain):
+        declared = None
+        components = load(domains_dir / domain / "components.yaml", Report()) or {}
+        declared = components.get("internal_order")
+        block = by_domain[domain]
+        if isinstance(declared, list):
+            position = {str(sid): i for i, sid in enumerate(declared)}
+            block = sorted(block, key=lambda sid: position.get(sid, len(position)))
+        else:
+            block = sorted(block)
+        for state_id in block:
+            positions.setdefault(state_id, len(positions))
+    return positions
+
+
 def check_provenance_derivations(
-    root: Path, documents: dict[str, Any], report: Report
+    root: Path, documents: dict[str, Any], schedule: list[str], report: Report
 ) -> None:
     """A `derived` value whose arithmetic reads the declarations rather than restating them.
 
@@ -11893,7 +12036,47 @@ def check_provenance_derivations(
     nothing to hold the arithmetic against and no value to compare it to. Moving it under
     `provenance` is not a workaround; it is the form every other state in the corpus already uses,
     and the plant reads that same key.
+
+    **And a state's derivation may read another state, which is the round after that one.** A bare
+    name has always meant *that state's value this tick* — it is how a channel's derivation says
+    "the live cabin temperature" instead of a literal 295 K — and states were restricted to numbers
+    and `<file>.yaml:<dotted.path>` sources only because nothing here had the tick order to check a
+    reading against. `state_advance_order` is that check, and it is the *whole* of it: a reading is
+    legal exactly when the state it names advances before the state that reads it, so the plant
+    substitutes this tick's value rather than last tick's. Two refusals come out of it — a name that
+    is no state at all, and a reading whose producer comes later in the schedule — and neither is
+    decidable without the derived order, which is why the check takes `schedule` now.
     """
+    positions = state_advance_order(root, documents.get("coupling.yaml") or {}, schedule)
+    all_states = [
+        state
+        for document in documents.values()
+        if isinstance(document, dict)
+        for state in document.get("state") or []
+        if isinstance(state, dict) and state.get("id")
+    ]
+    state_ids = {str(state.get("id")) for state in all_states}
+    # The number behind a bare name, where the corpus declares one. A state's tick-0 reading is,
+    # first, whatever its *method* integrates from — `initial` for a `lag` or a `stock` — and only
+    # then the field named by its own id or by its `provenance.computes`. The order is the method's
+    # and not a preference: `zone_csm_cabin_t` carries a `tau_s` of 2,880 s beside its `initial` of
+    # 295 K, and a reader that took the first number it found would check the gas law at 2,880 K —
+    # which is exactly the failure the corpus calls a plausible number nobody computed. A state with
+    # no such field is one the plant cannot advance at t=0 either — it is blocked on the very rule
+    # that would give it a value — and a reading of it is refused by name rather than bound to a zero.
+    readings: dict[str, float] = {}
+    for other in all_states:
+        subject = (other.get("provenance") or {}).get("computes")
+        integrated = other.get("method") in {"lag", "stock", "delay"}
+        candidates = (
+            (other.get("initial"), other.get(str(other.get("id"))), other.get(str(subject) or ""))
+            if integrated
+            else (other.get(str(other.get("id"))), other.get(str(subject) or ""), other.get("initial"))
+        )
+        for candidate in candidates:
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                readings[str(other["id"])] = float(candidate)
+                break
     for name, document in sorted(documents.items()):
         if not name.endswith("components.yaml"):
             continue
@@ -11946,6 +12129,47 @@ def check_provenance_derivations(
                     "each a number or a `<file>.yaml:<dotted.path>` source",
                 )
                 continue
+            # The bare names, before the arithmetic: a reading is a claim about *when* its producer
+            # runs, and `check_declared_derivation` would refuse one as "neither a number nor a
+            # source" — true of the binding, and silent about the two ways it can be wrong.
+            complete = True
+            for key, raw in sorted((derivation.get("inputs") or {}).items()):
+                if not isinstance(raw, str) or ":" in raw:
+                    continue
+                if raw not in state_ids:
+                    report.refuse(
+                        f"{where}.provenance.derivation.inputs.{key}",
+                        f"binds {raw!r}, which is no state in this vehicle. A bare name in a "
+                        "derivation means *that state's value this tick*, so it has to name one; "
+                        "everything else is a number or a `<file>.yaml:<dotted.path>` source",
+                    )
+                    complete = False
+                    continue
+                if raw not in readings:
+                    report.refuse(
+                        f"{where}.provenance.derivation.inputs.{key}",
+                        f"reads {raw!r}, which declares no value for this tick — no field named by "
+                        "its own id and no `initial` — so the arithmetic has nothing to be checked "
+                        "against at t=0. A state with no value is one the plant cannot advance "
+                        "either, and a derivation over it is a relation nothing can re-derive",
+                    )
+                    complete = False
+                    continue
+                # A state's own position is in the map by construction; a name that is a state but
+                # not in it would be a state on no node and in no domain, which nothing declares.
+                if positions.get(raw, -1) >= positions.get(str(state.get("id")), 0):
+                    report.refuse(
+                        f"{where}.provenance.derivation.inputs.{key}",
+                        f"reads {raw!r}, which advances at or after it in the tick order "
+                        f"({positions.get(raw, -1)} against {positions.get(str(state.get('id')), 0)}). "
+                        "A derivation reads this tick's values, so a reading whose producer has not "
+                        "run yet is last tick's number wearing this tick's name — declare the "
+                        "dependency as an edge and let the schedule order it, or read a declaration "
+                        "that does not move",
+                    )
+                    complete = False
+            if not complete:
+                continue
             check_declared_derivation(
                 f"{where}.provenance.derivation",
                 derivation,
@@ -11953,6 +12177,7 @@ def check_provenance_derivations(
                 f"{state.get('id')}.{subject}",
                 documents,
                 report,
+                readings=readings,
             )
 
 
@@ -15989,7 +16214,7 @@ def main(argv: list[str] | None = None) -> int:
     check_gnc_substepping(root, mission, report)
     check_mission_model(mission or {}, report)
     check_threshold_derivations(root, documents, report)
-    check_provenance_derivations(root, documents, report)
+    check_provenance_derivations(root, documents, schedule, report)
     check_edge_derivations(coupling or {}, documents, report)
     check_domain_reads(documents, report)
     check_perception_model(documents, report)

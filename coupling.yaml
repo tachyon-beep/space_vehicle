@@ -1197,7 +1197,7 @@ edges:
     to: rcs_thrust
     kind: rate
     sensitivity:
-      value: 0.0003516262803
+      value: 0.0003670684711943586
       # The article, not a system: all forty-four thrusters are `thruster_100lbf`, whose Isp is
       # declared **once** in `domains/rcs/components.yaml`, while `vehicle.yaml#propulsion` carries
       # it three times — once per system that flies it. Binding the single declaration is the
@@ -1209,13 +1209,13 @@ edges:
           isp_s: "domains/rcs/components.yaml:components.thruster_100lbf.isp_s"
       unit: "kg/s per N"
       basis: derived
-      relation: "as E-PROP-ENG, at the thruster: Isp 290 s gives 2843.9 N per kg/s, so the tank drains 1/2843.9 = 0.000351626 kg/s for every newton of thrust. The inverse is the RCS domain's own published figure, `capability.mass_flow_per_thruster` = 445/2843.9 = 0.15647 kg/s"
-      at: "Isp 290 s"
+      relation: "as E-PROP-ENG, at the thruster: Isp 277.8 s gives 2724.3 N per kg/s, so the tank drains 1/2724.3 = 0.00036707 kg/s for every newton of thrust. The inverse is the RCS domain's own published figure, `capability.mass_flow_per_thruster` = 445/2724.3 = 0.16335 kg/s — and that is C-26's resolution arriving here: the guide's measured 0.163293 kg/s, reproduced to 0.03 %, where the unsourced 290 s was 4.3 % away"
+      at: "Isp 277.8 s"
       note: >-
         closed by landing `domains/rcs/`. The edge was declared UNCONFIGURED while Isp was unset;
         Isp arrived with the Apollo 11 tables and the relation is a definition, so what remained
         was arithmetic. The inverse is the domain's own published figure —
-        `domains/rcs/components.yaml#capability.mass_flow_per_thruster` = 445/2843.9 = 0.15647
+        `domains/rcs/components.yaml#capability.mass_flow_per_thruster` = 445/2724.3 = 0.16335
         kg/s — and that is what makes delivered impulse convertible to propellant mass, which is
         what lets the RCS impulse estimate be compared against the consumables ledger at all
 
@@ -2600,7 +2600,7 @@ open_debts:
   - "A pack-voltage state on `battery_energy` (E-BAT-BUS, and the reason that edge cannot close). The node advances stored energy and nothing else, so an algebraic edge from it to `bus_a` has no quantity to be a function of. What is missing is the chain stored energy -> open-circuit voltage -> bidirectional converter -> bus (electrical_diode.md:250 gives the converter as 20-36 V battery to 28 V bus, >=94 %), and the honest OCV is flat enough over most of the usable band that the regulated bus barely moves: the coupling is closer to *availability* than to volts. Declared here rather than guessed, because adding a state changes the schedule and the schedule is derived."
   - "Every thermal time constant and conductance (tau on E-PUMP-COOL, E-TRANSPORT-PLATE, E-PLATE-*). thermal_diode.md:965 declares them all UNSPECIFIED and refuses to infer them."
   - "Loop transit delay in ticks (E-COOL-TRANSPORT). Needs loop volume and flow; apollo_diode.md:97 gives ~24 gal/h."
-  - "Throttle-to-thrust law for main propulsion (E-PROP-ENG). Isp and mass flow are supplied (vehicle.yaml#propulsion, Apollo 11 tables) and the RCS rate edge is now closed at 2843.9 N per kg/s; what main propulsion still owes is the shape — build-up, tailoff and the descent engine's 65-92.5 % non-operating region, which `domains/propulsion/` refuses to interpolate across."
+  - "Throttle-to-thrust law for main propulsion (E-PROP-ENG). Isp and mass flow are supplied (vehicle.yaml#propulsion, Apollo 11 tables) and the RCS rate edge is now closed at 2724.3 N per kg/s (C-26's 277.8 s); what main propulsion still owes is the shape — build-up, tailoff and the descent engine's 65-92.5 % non-operating region, which `domains/propulsion/` refuses to interpolate across."
   - "Inertia tensor and centre of mass, owed to `E-RCS-DYN` — and the thrusters' geometry, owed to `domains/rcs/`. **The docked stack's half is landed** (round 9: `vehicle.yaml#mass_properties`, from the Operational Data Book's Table 3.2-21, with the frame that made it usable), and four configurations' tensors are walkable `UNCONFIGURED`s there, each naming its own table. What is still missing is the other half and it is why this edge cannot close: forty-four unit thrust directions with their lever arms, which are what the allocator's wrench matrix is built from. The guidance-to-valve edge was named here as a third and does not belong: it carries a commanded selection one for one from the `guidance` service node, and the matrix is the allocator's rather than that edge's."
   - "Per-edge crisis-point gains for the power->thermal->power loop (E-BUS-PUMP especially). Required before the fidelity closure means anything at the crisis operating point."
   - "A `regimes` table for the four remaining bus-driven edges (E-BUS-GNC, E-BUS-INST, E-BUS-COMM) and E-BAT-BUS's availability half. `regimes:` now exists and is enforced: a `discrete` coupling leaving physical equipment must declare one, `E-BUS-RCS` and `E-STRUCT-PLATE` are converted, and the two `guidance` command edges want none at all — promoting `guidance` to a service node turned them into commands, which the command exception covers without a table, where before they coupled from `nav_state`, the navigation solution, to ask a question only a decision can answer. A consumer's draw is constant inside the 24-32 V envelope and then stops; that envelope is already the undervoltage ladder in domains/power/profiles.yaml, so a `1 per V` here would model a load that grows without bound as the bus sags, which is the opposite of what a load does. The closing move for the four is a `regimes:` table on a discrete edge whose bands are checked against the thresholds that already exist, which would connect the coupling graph to the ladders it currently ignores."

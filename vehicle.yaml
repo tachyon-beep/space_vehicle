@@ -1013,28 +1013,37 @@ propulsion:
     name: "Service Module reaction control"
     thrusters: 16
     thrust_n: 445
-    isp_s: 290
+    # **C-26 resolved, and against the figure this line carried.** The 290 s that stood here was
+    # sourced to nothing. `lm_propulsion_rcs_study_guide.pdf` PDF p. 90 states the Isp *and* the flow
+    # rates of the same thruster, and the two agree with each other: 0.24 + 0.12 lb/s = 0.36 lb/s =
+    # 0.163293 kg/s at 100 lbf gives 277.78 s against the page's own "275 seconds (approx)". The
+    # decision, taken by the operator and recorded in `../integration/reconciliation/
+    # 01-conflict-register.md`, is the guide's — a corroborated measurement beats an unsourced
+    # declaration. The figure is **277.8** rather than 275 because that is the reading where both
+    # published numbers agree: `capability.mass_flow_per_thruster` at 277.8 s is 0.163345 kg/s,
+    # 0.03 % from the page's measured 0.163293, where 275 s would be 0.5 % away.
+    isp_s: 277.8
     propellant: "MMH / N2O4"
     mass_kg: 608
     minimum_impulse_bit_ns: UNCONFIGURED
     provenance:
       basis: historical
-      source: "NR: 16 x 100 lbf in 4 quads; load 1,340 lb = 608 kg from A11 Tbl 8-XI. The minimum impulse *bit* is not published: a search of the mission report, the summary report and both news references returned zero hits for any impulse-bit figure. The minimum firing *time* is published — 10 ms, `domains/rcs/components.yaml#capability.minimum_firing_time` — and it bounds the bit from above rather than giving it, because a minimum pulse does not achieve the full 100 lbf and no source gives the curve that would integrate it"
+      source: "NR: 16 x 100 lbf in 4 quads; load 1,340 lb = 608 kg from A11 Tbl 8-XI; Isp **277.8 s** from `lm_propulsion_rcs_study_guide.pdf` PDF p. 90, whose 275 s (approx) and 0.36 lb/s at 100 lbf agree on 277.78 s. The minimum impulse *bit* is not published: a search of the mission report, the summary report and both news references returned zero hits for any impulse-bit figure. The minimum firing *time* is published — 10 ms, `domains/rcs/components.yaml#capability.minimum_firing_time` — and it bounds the bit from above rather than giving it, because a minimum pulse does not achieve the full 100 lbf and no source gives the curve that would integrate it"
   rcs_cm:
     name: "Command Module reaction control"
     thrusters: 12
     thrust_n: 445
-    isp_s: 290
+    isp_s: 277.8
     propellant: "MMH / N2O4"
     mass_kg: 112
     provenance:
       basis: historical
-      source: "NR: two systems of six thrusters; load 245.9 lb = 112 kg from A11 Tbl 8-XI"
+      source: "NR: two systems of six thrusters; load 245.9 lb = 112 kg from A11 Tbl 8-XI. Isp 277.8 s as `rcs_sm`: all forty-four thrusters are the same 100 lbf article"
   rcs_lm:
     name: "LM reaction control"
     thrusters: 16
     thrust_n: 445
-    isp_s: 290
+    isp_s: 277.8
     propellant: "Aerozine 50 / N2O4 (2:1)"
     mass_kg: 288
     minimum_impulse_bit_ns: UNCONFIGURED

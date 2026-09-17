@@ -224,6 +224,10 @@ class World:
     # Every YAML document a declared `derivation` may name, so an `algebraic` state's own arithmetic
     # can be evaluated at a tick. Loaded once, with the world.
     documents: dict[str, Any] = field(default_factory=dict)
+    # node id (and the `internal` sentinel) -> the ids of the states that advance it, in the order
+    # they advance. Derived once in `load_world` from `coupling.yaml#nodes.<node>.state_order`, which
+    # is the declaration `--order` prints and `plant.md:71` promises the scheduler obeys.
+    advance_order: dict[str, list[str]] = field(default_factory=dict)
     # channel id -> the row `domains/*/points.yaml` declares it in: what state it reads, whether it
     # is registered as a different quantity from that state, and — where the row carries one — the
     # arithmetic that turns the state into the channel. The frame's `values` is declared
@@ -378,7 +382,7 @@ def load_world(root: Path) -> World:
         for verb in (load_yaml(directory / "commands.yaml").get("commands")) or []:
             verbs[str(verb.get("verb"))] = verb
 
-    return World(
+    world = World(
         root=root,
         states=states,
         edges=edges,
@@ -431,6 +435,60 @@ def load_world(root: Path) -> World:
             )
         ),
     )
+
+    # --------------------------------------------------------------------------------------
+    # **The intra-node order, which this file declared and never read.**
+    #
+    # `coupling.yaml#nodes.<node>.state_order` is the order the states on a node advance in, and
+    # every multi-state node carries one with a note arguing it — `structure_config`'s says in as
+    # many words that `configuration` "is a projection of the separation and descent-stage machines"
+    # and "therefore has to read them after they have advanced". `--order` prints that order, and
+    # `plant.md:71` promises the scheduler "obeys it".
+    #
+    # It did not. `states_on` returned `[s for s in self.states if s.node == node]` — the order the
+    # *files* list the states in — and `step` walks that. Four of the vehicle's eleven multi-state
+    # nodes were running in an order nobody declared: `structure_config` advanced `lm_separation_state`
+    # and `configuration` before `pyro_fired`, `vehicle_dynamics` advanced `orbital_state` before
+    # `body_rate`, `link` advanced `link_snr` before `tx_power`, and `coolant_flow` advanced
+    # `coolant_flow_kg_s` before `pump_1_speed_rpm`. Two of those four are the *documented*
+    # tiebreak bug in writing order — `link_snr` before `tx_power` is the example `plant.md` uses to
+    # say the frozen lexicographic tiebreak "is wrong somewhere" — and here it was not even the
+    # tiebreak: it was the alphabet of another kind, the order the YAML happened to be written in.
+    #
+    # Nothing has been visibly wrong yet, and the reason is worth stating: the states that would
+    # expose it are the ones the plant cannot yet advance, so four nodes' worth of order has never
+    # been exercised. It is the same shape as the reversed node schedule the README records — a
+    # declaration nothing reads, agreeing with a promise in prose — and it is fixed the same way, by
+    # making the order derived *once* here so every reader of `states_on` gets the declared one.
+    #
+    # `independent` is not an order and falls to the frozen lexicographic tiebreak, which is what the
+    # linter's `order_report` prints for it and what `plant.md` says decides an undeclared group.
+    # --------------------------------------------------------------------------------------
+    for node in world.schedule:
+        declared = (world.nodes.get(node) or {}).get("state_order")
+        producers = [s for s in world.states if s.node == node]
+        if isinstance(declared, list):
+            position = {str(sid): i for i, sid in enumerate(declared)}
+            # The linter refuses an order naming a different set of states, so anything missing here
+            # is a state that arrived after the order was written; it sorts last rather than first.
+            ordered = sorted(producers, key=lambda s: position.get(s.id, len(position)))
+        else:
+            ordered = sorted(producers, key=lambda s: s.id)
+        world.advance_order[node] = [s.id for s in ordered]
+
+    # And `states` itself, in the order a tick walks it — so `states_on` needs no special case and a
+    # caller that concatenates it gets the schedule order rather than the file order. The sentinel is
+    # appended after the scheduled block, in `sentinel_states`' own order.
+    scheduled_states: list[State] = []
+    for node in world.schedule:
+        position = {sid: i for i, sid in enumerate(world.advance_order[node])}
+        scheduled_states.extend(
+            sorted((s for s in world.states if s.node == node), key=lambda s: position.get(s.id, 0))
+        )
+    sentinel_block, _ = world.sentinel_states()
+    world.states = scheduled_states + sentinel_block
+    world.advance_order["internal"] = [s.id for s in sentinel_block]
+    return world
 
 
 def gate_instantiations(
@@ -1192,6 +1250,24 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 f"reads {incoming[0].source!r}, which nothing supplies",
                 needs=incoming[0].source,
             )
+        # --------------------------------------------------------------------------------------
+        # **The conversion the edge declares and this branch did not apply.**
+        #
+        # `lag_driver_basis` used to require the driver edge to be an *identity* transfer — the
+        # state's quantity, one for one, scale 1 — because this branch read `values[source]` and
+        # relaxed toward it with neither the unit nor the value touched. Four edges were refused by
+        # that rule and none of them is an identity transfer: `E-BUS-PUMP` is the pump's
+        # volts-to-flow gain (8.9998e-4 kg/s per V), `E-PROP-ENG` and `E-RCSP-RCS` are a rocket's
+        # thrust-to-flow relation inverted (3.24e-4 and 3.52e-4 kg/s per N), and `E-FC-HEAT` is the
+        # cell's waste-heat fraction (0.58336 W per W). Each declares both of its quantities in its
+        # unit and carries the factor between them in its value, which is what a converter is.
+        #
+        # So the driver is the source's value *through the edge*: `value x values[source]`, in the
+        # state's own quantity by the rule's own check. An identity edge multiplies by 1.0 and is
+        # unchanged, which is why the twenty states that already advanced do not move.
+        # --------------------------------------------------------------------------------------
+        transfer = float((driver_edge.sensitivity or {}).get("value") or 1.0)
+        driver = float(driver) * transfer
         # **The state's own level, and a refusal when it has none.** This read
         # `state_level(values, state) or driver`, which invented a starting value two ways: a state
         # the plant had not seeded began at its *target* — so the two cabin zones started at their
@@ -1337,7 +1413,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         # the only way two readers cannot disagree about which declaration they are reading.
         derivation = (state.spec.get("provenance") or {}).get("derivation")
         if derivation is not None:
-            value, why = derivation_value(derivation, world.documents)
+            value, why = derivation_value(derivation, world.documents, readings=values)
             if value is None:
                 raise Unconfigured(f"{where}.derivation", f"cannot be evaluated: {why}")
             return state_values(world, state, value)

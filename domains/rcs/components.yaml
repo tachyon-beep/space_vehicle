@@ -92,14 +92,18 @@ capability:
   # UNCONFIGURED. Thrust and Isp are published (vehicle.yaml#propulsion.rcs_*, from the
   # Apollo 11 tables); g0 is a definition.
   mass_flow_per_thruster:
-    value: 0.15647
+    value: 0.16335
     unit: kg/s
     provenance:
       basis: derived
-      relation: "mdot = F / (Isp * g0) = 445 / (290 * 9.80665) = 0.15647 kg/s per thruster"
+      relation: "mdot = F / (Isp * g0) = 445 / (277.8 * 9.80665) = 0.16335 kg/s per thruster"
       note: >-
-        all three systems share the 100 lbf thruster and the same 290 s, so one figure serves
-        them all. The inverse is the edge sensitivity: 290 * 9.80665 = 2843.9 N per kg/s
+        all three systems share the 100 lbf thruster and the same 277.8 s, so one figure serves
+        them all. The inverse is the edge sensitivity: 277.8 * 9.80665 = 2724.3 N per kg/s.
+        **This is the number C-26 moved, and it is now the guide's own measurement reproduced**:
+        `lm_propulsion_rcs_study_guide.pdf` PDF p. 90 gives the flow as 0.24 + 0.12 lb/s =
+        0.163293 kg/s at 100 lbf, and 0.163345 is 0.03 % from it — where the 290 s this replaces
+        was 4.3 % away and sourced to nothing
   quantum_impulse:
     value: 0.000445
     unit: N*s
@@ -114,16 +118,18 @@ capability:
   impulse_capacity:
     unit: N*s
     values:
-      rcs_sm: 1729109
-      rcs_cm: 318520
-      rcs_lm: 819051
+      rcs_sm: 1656367
+      rcs_cm: 305120
+      rcs_lm: 784595
     provenance:
       basis: derived
       relation: "load * Isp * g0, loads from vehicle.yaml#propulsion.rcs_* (A11 Tbl 8-XI, 9-XV)"
       note: >-
         the total impulse each load can produce if every kilogram is burned through a 100 lbf
-        thruster — 1.729e6 N*s for the service module, 3.185e5 for the command module, 8.191e5
-        for the LM. It is an upper bound and the ceiling of `rcs.total_impulse_ns`, which is
+        thruster — 1.656e6 N*s for the service module, 3.051e5 for the command module, 7.846e5
+        for the LM, at C-26's 277.8 s (they were 1.729e6 / 3.185e5 / 8.191e5 at the unsourced
+        290 s: **the same tanks now price 4.2 % less impulse**, which is the direction the
+        decision moves the tightest load in the mission). It is an upper bound and the ceiling of `rcs.total_impulse_ns`, which is
         what makes the published total impulse checkable against the published load: a total
         impulse above this figure is not a thruster that has been busy, it is a spent tank. Most
         of it will be attitude control rather than translation, so the figure prices an
@@ -178,10 +184,10 @@ capability:
         are different duty, and a total of 1,000 s is their sum rather than a third allowance. What
         spends them is the mission's own firing time, which is not declared yet — the RCS budget is
         an open debt in this file — so this block is a rating with no counter today and says so
-        rather than pretending to be checked. The Isp in the block is **275 s (approx)** against
-        the 290 s this domain declares for the same thruster; the two figures come from different
-        documents, the flow rates on this page corroborate 275-278 s, and which is right is a
-        decision for the conflict register rather than a value to change here
+        rather than pretending to be checked. The Isp in the block is **275 s (approx)** and the
+        thruster now declares **277.8 s**: the page's two numbers — that Isp and the 0.36 lb/s flow
+        at 100 lbf — agree on 277.78 s, and C-26 was put to the operator and closed on the guide's
+        side rather than on this domain's unsourced 290 s
 
 # --------------------------------------------------------------------------------------
 # State. Twelve, of which only two advance a coupling node — the rest are the service.
@@ -190,12 +196,17 @@ capability:
 # can target it and the rules that would move these states are domain code — so this is a
 # decision about the rules rather than a consequence of them, and it is declared so the
 # frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
-internal_order: [mode, safety_state, authority_margin, attitude_error, deadband_latch, allocation_status, pulse_width, pulse_residual, propellant_estimate, feed_pressure, impulse_total]
+internal_order: [mode, safety_state, authority_margin, attitude_error, deadband_latch, allocation_status, pulse_width, pulse_residual, impulse_total, propellant_estimate, feed_pressure]
 internal_order_note: >-
   the control chain: the mode selects the authority, the authority bounds what the error may
   be, the error against the deadband decides whether a pulse is owed, the allocation decides
   which jets, the pulse width what they fire, and the residual and totals book what was
-  delivered.
+  delivered. **The totals now come before the estimate that reads them** — `propellant_estimate`
+  is `100 * (1 - impulse_total / capacity)`, so the stock has to have advanced in this tick before
+  the percentage is computed from it. It was the other way round until the linter learned to ask
+  a derivation which tick its readings come from: the sentinel has no edges, so nothing but this
+  list could ever have caught it, and the state would have reported last tick's impulse wearing
+  this tick's name.
 
 state:
 
@@ -347,8 +358,24 @@ state:
     node: internal
     method: algebraic
     unit: "%"
+    # The field the arithmetic produces, named by the state's own id — the second state in the
+    # corpus to use that spelling, after round 47's two cabin pressures: what this state *is* is
+    # what its relation says, so there is no parameter of it to name instead.
+    propellant_estimate: 100
     provenance:
       basis: derived
+      computes: propellant_estimate
+      derivation:
+        # **The relation was a sentence and every ingredient was declared.** `impulse_total` is the
+        # stock this domain already integrates, and `capability.impulse_capacity` is the
+        # load x Isp x g0 product the file derives for each of the three systems. One of them has to
+        # be chosen, and `rcs_sm` is the right one: the channel's own events and the consumables
+        # ledger's `rcs_firings` consumer are the service module's, and the other two are the same
+        # article with their own loads.
+        expression: "100 * (1 - impulse_used / capacity)"
+        inputs:
+          impulse_used: impulse_total
+          capacity: domains/rcs/components.yaml:capability.impulse_capacity.values.rcs_sm
       relation: "100 * (1 - impulse_total / (load * Isp * g0)), with load and Isp from vehicle.yaml#propulsion.rcs_*"
       note: >-
         `rcs.propellant_remaining_pct` is apollo's (:151, with 25 % and 10 % events) and it is
@@ -505,7 +532,7 @@ components:
     kind: flow
     class: thruster
     thrust_n: 445
-    isp_s: 290
+    isp_s: 277.8
     count: 44
     vehicle_keys: [rcs_sm, rcs_cm, rcs_lm]
     provenance:
@@ -514,13 +541,13 @@ components:
       note: >-
         one component for all forty-four because they are the same article at the same
         throttle, and forty-four near-identical entries would be forty-four places for the
-        arithmetic to differ. **The 290 s is not sourced, and the one page that does state an
-        Isp disagrees with it**: `lm_propulsion_rcs_study_guide.pdf` PDF p. 90 gives 275 seconds
-        (approx) and flow rates of 0.24 + 0.12 lb/s at 100 lbf, which is 277.9 s and 0.1633 kg/s
-        against this declaration's 0.15647. That is conflict **C-26** in
-        `../integration/reconciliation/01-conflict-register.md`, recorded rather than resolved:
-        moving it moves `E-RCSP-RCS`, `mass_flow_per_thruster` and the RCS propellant budget
-        together, and the mission's RCS load is one of the tighter ones
+        arithmetic to differ. **C-26 is closed and this article carries the guide's figure now**:
+        the 290 s that stood here was sourced to nothing, `lm_propulsion_rcs_study_guide.pdf` PDF
+        p. 90 states both an Isp (275 s approx) and the flow rates of the same thruster
+        (0.24 + 0.12 lb/s at 100 lbf), and those two agree with each other on 277.78 s. The
+        operator's decision is recorded in `../integration/reconciliation/01-conflict-register.md`;
+        what it moved is `E-RCSP-RCS`, `mass_flow_per_thruster` and the three `impulse_capacity`
+        figures, together and in one round
 
   - id: pulse_generator
     kind: discrete
