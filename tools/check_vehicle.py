@@ -13682,6 +13682,75 @@ def check_thermal_heat_inputs(root: Path, report: Report) -> None:
         # different comparison. Calling `rederive` here as well refused one wrong computation
         # twice.
 
+    # --------------------------------------------------------------------------------------
+    # **Each loop's collected load, which is the sum over the zones that name it.** The domain's
+    # own debt said this figure was "a sum over `heat_inputs` that nothing evaluates"; the zones
+    # now carry a heat rate each and a `cooled_by`, and the loop carries the state that sums them.
+    # The join is the zones' declaration rather than a list here, so a zone moved to another loop
+    # moves the sum instead of disagreeing with it.
+    #
+    # Three rules, in the order the declarations are read: an absent `load_state` is a debt (the
+    # state is owed, which is what round 38's zone rule already says about a missing `heat_state`),
+    # a `load_state` that does not resolve is a refusal, and the state's `total_w` must be the sum
+    # of the served zones' heat rates. A loop that no zone names is a **note** rather than a debt:
+    # `loop_secondary` is the case, and whether the second CSM circuit serves the same zones as the
+    # first or a different set is C-28's open question rather than a figure this check may invent.
+    # --------------------------------------------------------------------------------------
+    loops_by_id = {
+        str(row.get("id")): row
+        for row in (vehicle_doc.get("thermal") or {}).get("loops") or []
+        if isinstance(row, dict) and row.get("id")
+    }
+    served_by: dict[str, list[str]] = {loop_id: [] for loop_id in loops_by_id}
+    for zone in heat:
+        cooled = (zones_by_id.get(zone) or {}).get("cooled_by")
+        if cooled in served_by:
+            served_by[cooled].append(zone)
+    for loop_id, served in sorted(served_by.items()):
+        loop_where = f"vehicle.yaml#thermal.loops.{loop_id}"
+        if not served:
+            report.note(
+                f"{loop_where}.load_state",
+                "is not declared, and no zone names this loop, so there is no collected load to hold "
+                "— which zone each CSM circuit serves is C-28's open question rather than a figure",
+            )
+            continue
+        name = (loops_by_id[loop_id] or {}).get("load_state")
+        state = states.get(str(name))
+        if name is not None and state is None:
+            report.refuse(
+                f"{loop_where}.load_state",
+                f"names {name!r}, which is not a state in domains/thermal/components.yaml. The link "
+                "is what the figure is found by, so a link that does not resolve is a loop load "
+                "nothing carries",
+            )
+            continue
+        if state is None:
+            report.debt(
+                f"{loop_where}.load_state",
+                f"names no state carrying this loop's collected load, and {len(served)} zone(s) name "
+                f"the loop: {sorted(served)}. The load is the sum of their heat rates — the figure "
+                "the heat balance's rise is a function of — and nothing carries it",
+            )
+            continue
+        # The zones' heat rates are all resolved and checked above, so a zone that failed one of
+        # those rules has already been reported; the sum here is over the ones that resolved.
+        rates = []
+        for zone in served:
+            heat_state = states.get(str((zones_by_id.get(zone) or {}).get("heat_state")))
+            if heat_state is not None and isinstance(heat_state.get("total_w"), (int, float)):
+                rates.append(float(heat_state["total_w"]))
+        if len(rates) != len(served):
+            continue
+        if state.get("total_w") != sum(rates):
+            report.refuse(
+                f"domains/thermal/components.yaml:state {name}",
+                f"declares {state.get('total_w')!r} W and the zones that name `{loop_id}` — "
+                f"{', '.join(sorted(served))} — carry {sum(rates):g} W between them. A loop's "
+                "collected load is the sum over the zones it cools, so one of the two is a copy of a "
+                "number the other determines",
+            )
+
     for vehicle, total in sorted(by_vehicle.items()):
         expected = sum(
             int(row.get("demand_w") or 0)

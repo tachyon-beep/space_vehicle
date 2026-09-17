@@ -175,10 +175,10 @@ because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 136 states over 57 scheduled nodes, 142
+**All eleven domains have landed** — 148 channels, 138 states over 57 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
-and every one of them named. **111 of the 136 states are fully configured and 25 carry a debt**, and
-a real tick advances **20** of the 136 states against the build order's **28** ready — the second
+and every one of them named. **113 of the 138 states are fully configured and 25 carry a debt**, and
+a real tick advances **22** of the 138 states against the build order's **30** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -224,7 +224,7 @@ things in it are worth reading rather than skimming:
   observable, because such a fault cannot be diagnosed.
 
 `domains/thermal/` pays the debt `thermal_diode.md:965` created when it refused to infer a
-single TCS constant. It declares 21 states, 17 thresholds, 5 verbs, 11 faults — and the
+single TCS constant. It declares 23 states, 17 thresholds, 5 verbs, 11 faults — and the
 parameters are **derived** wherever a published geometry plus a standard material property
 determines them, with the relation stated so the linter can disagree:
 
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 69 of the 136 states need code. (This said *before the
+`internal` sentinel counted among them, so 69 of the 138 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1784,12 +1784,12 @@ stale build order is worse than none because it sends the next reader to work th
 sequence of tests the plant runs when it gets there — so the two cannot disagree.
 
 ```
-136 states, by what blocks them:
+138 states, by what blocks them:
 
-    28   21 %  ready now — the classes the reference plant can advance
+    30   22 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    69   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    69   50 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -10708,6 +10708,79 @@ the state goes back to owing a rule, because then there is code to write.
 The `rule` bucket did not move, which is the point: the state never belonged in it. What moved is one
 debt closed, one state advanced, one wrong instruction to the next implementer removed — and the
 worklist's own rule is now reachable from every state it applies to.
+
+## The loop's collected load was a sentence, and its every ingredient was already declared
+
+`domains/thermal/components.yaml#open_debts` has said, since the round that gave the zones their heat
+rates, that the loop's collected load is *"a sum over `heat_inputs` that nothing evaluates"*. Counted
+this round, the ingredients were all there:
+
+| zone | its heat rate | names |
+|---|---:|---|
+| `csm_cabin` | 733 W | `loop_primary` |
+| `csm_avionics_bay` | 360 W | `loop_primary` |
+| `csm_service_bay` | 630 W | `loop_primary` |
+| `lm_cabin` | 827 W | `loop_lm` |
+| `lm_descent_bay` | 180 W | `loop_lm` |
+
+Five rates, each held against the loads `heat_inputs` assigns, each on a zone that names its loop —
+and no figure that added them up. That is the third time this folder has found a join whose two
+halves both existed (`check_zone_nodes`' four links, the zone's `heat_state`, and now this), and the
+fix is the same shape: a state per loop, and a link the check reads rather than a convention it
+guesses.
+
+### What landed
+
+`loop_primary_load_w` **1,723 W** and `loop_lm_load_w` **1,007 W**, each an `algebraic` state on the
+`internal` sentinel whose derivation sums the heat rates of the zones that name it — which is also
+the CSM's and the LM's whole declared demand, because on this vehicle every heated zone is served by
+the loop it names. The loops declare the link:
+
+```yaml
+loop_primary:
+  load_state: loop_primary_load_w
+```
+
+and `check_thermal_heat_inputs` holds three things: a loop **no zone names** gets a *note* (not a
+debt: which of the two CSM circuits serves which zones is C-28's open question, and inventing a zone
+set for it would be inventing the answer); a loop that zones do name and that declares **no**
+`load_state` gets a **debt** naming the zones; and a `load_state` whose `total_w` is not the sum of
+those zones' heat rates is **refused**, because one of the two is a copy of a number the other
+determines. The zones are the declaration rather than a list inside the state, so **moving a zone to
+another loop moves both sums** — which is exactly what the fixture does, and both refuse.
+
+### The debt sentence, corrected rather than deleted
+
+The entry stays, because it still owes the specific heat; what changed is the half that is no longer
+true:
+
+> and the loop's own collected load **was** a sum over this domain's `heat_inputs` that nothing
+> evaluated — `loop_primary_load_w` and `loop_lm_load_w` are those sums now, held against the zones
+> that name each loop, so what this debt still owes is the specific heat alone.
+
+`check_debts_are_still_owed` refuses a standing debt that says its own obligation is answered, so the
+sentence had to move with the work rather than being left to drift.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| states | 136 | **138** |
+| states fully configured | 111 / 136 | **113 / 138** |
+| a real tick | 20 of 136 | **22 of 138** |
+| build order | 28 ready · 25 value · 14 edge · 69 rule | **30** · 25 · 14 · **69** |
+| tests in `tests/test_vehicle_config.py` | 288 | **289** |
+
+The two new states are counted **ready** rather than as owing code, which is round 40's classifier fix
+paying for itself: they are declared arithmetic on the sentinel, and both advance.
+
+**One observation that is not this round's fix.** The `internal` sub-map gains at most one computed
+sentinel state per tick: `_advance_into` stages with a shallow `dict.update`, so only the last
+sentinel state computed lands in `staged["internal"]`, and the commit merges that one entry into the
+previous map. Nothing is lost — every state's value is also at the top level under its own id, and
+`state_level` prefers that key — but a reader asking `values["internal"]["loop_primary_load_w"]` finds
+it only in the tick that computes it last. Making the staged merge deep is a finding of its own.
 
 ## The invariants, and which of them are enforced
 

@@ -58,13 +58,15 @@ writes: [coolant_flow, coolant_supply_t, coldplate_t, radiator_reject, loop_tran
 # can target it and the rules that would move these states are domain code — so this is a
 # decision about the rules rather than a consequence of them, and it is declared so the
 # frozen lexicographic tiebreak is not what decides. See `internal_order_note`.
-internal_order: [heater_bank_duty, comm_amp_t, avionics_bay_heat_w]
+internal_order: [heater_bank_duty, comm_amp_t, avionics_bay_heat_w, loop_primary_load_w, loop_lm_load_w]
 internal_order_note: >-
   the heater is a decision and the amplifier's temperature is what the decision is about;
   nothing on this sentinel feeds the other within a tick, and the order says which is read
   first when a rule eventually reads both. The avionics bay's heat rate is here and not on a
   coupling node for the reason its own entry gives: a heat rate is the wrong thing to land on a
-  lag's node, and the figure's reader is the loop's collected load rather than a temperature.
+  lag's node, and the figure's reader is the loop's collected load rather than a temperature. The
+  two loop loads are last and after the zone heat rates they sum: nothing on the sentinel feeds
+  another within a tick, and the order says which is read first when a rule eventually reads both.
 
 state:
   - id: cabin_heat_csm_w
@@ -261,6 +263,34 @@ state:
         state, so the equilibrium cannot be derived until that lookup lands. Until then this state's
         reader is the loop's collected load, and putting it on the sentinel says so: no edge can
         reach the sentinel, so nothing here is pretending to drive a temperature.
+  - id: loop_primary_load_w
+    node: internal
+    method: algebraic
+    unit: W
+    total_w: 1723
+    provenance:
+      basis: derived
+      computes: total_w
+      derivation:
+        expression: "cabin_heat_csm_w + service_bay_heat_w + avionics_bay_heat_w"
+        inputs:
+          cabin_heat_csm_w: domains/thermal/components.yaml:state.cabin_heat_csm_w.total_w
+          service_bay_heat_w: domains/thermal/components.yaml:state.service_bay_heat_w.total_w
+          avionics_bay_heat_w: domains/thermal/components.yaml:state.avionics_bay_heat_w.total_w
+      relation: >-
+        **the loop's collected load, which the domain's own debt said was "a sum over `heat_inputs`
+        that nothing evaluates".** It is the sum of the three zone heat rates whose zones name
+        `loop_primary` in `vehicle.yaml#thermal.zones[*].cooled_by` — the cabin's 733 W, the service
+        bay's 630 and the avionics bay's 360 — which is the CSM's whole declared demand, 1,723 W,
+        because on this vehicle the three CSM zones are all served by the one loop. The zones are
+        the declaration rather than the list: `check_thermal_heat_inputs` re-derives this sum from
+        `cooled_by`, so a zone moved to another loop moves this figure rather than disagreeing with
+        it
+      note: >-
+        **the numerator the heat balance was missing.** `radiator_inlet_c - supply_c` is the
+        vehicle's heat load in one subtraction and `load_w / (mass_flow_kg_s * c_p)` is the rise;
+        the flow is a published reading and this is the load, so what remains owed for the two
+        coolant temperature channels is one specific heat — see `open_debts`
   - id: zone_csm_cabin_t
     method: lag
     node: cabin_zone_t
@@ -543,6 +573,22 @@ state:
       basis: derived
       relation: "epsilon x sigma x A_eff x T^4, minus the absorbed environmental load; see the radiators block below"
       note: "algebraic because rejection is a function of the current surface temperature, not an integral of it — which is exactly why C-RAD-COOL is an algebraic loop solved to consistency rather than a delayed cycle"
+  - id: loop_lm_load_w
+    node: internal
+    method: algebraic
+    unit: W
+    total_w: 1007
+    provenance:
+      basis: derived
+      computes: total_w
+      derivation:
+        expression: "cabin_heat_lm_w + descent_bay_heat_w"
+        inputs:
+          cabin_heat_lm_w: domains/thermal/components.yaml:state.cabin_heat_lm_w.total_w
+          descent_bay_heat_w: domains/thermal/components.yaml:state.descent_bay_heat_w.total_w
+      relation: >-
+        as `loop_primary_load_w`, over the two zones that name `loop_lm`: the LM cabin's 827 W and
+        the descent stage's 180 W, which is the LM's whole declared demand, 1,007 W
   - id: heater_bank_duty
     method: algebraic
     node: internal
@@ -867,7 +913,7 @@ load_budget:
 # What this domain still owes, and the one item that blocks the cabins.
 # --------------------------------------------------------------------------------------
 open_debts:
-  - "**The loop has no heat balance, and two published temperatures are waiting on it.** `thermal.coolant_return_c` and `thermal.radiator_inlet_c` both read `coolant_loop_t` — the *supply* state — and until round 34 both were prose rows that would have published the supply under their own names: **radiator inlet minus supply is the vehicle's heat load** in one subtraction, and a subtraction of a number from itself is zero. (This sentence said *return minus supply* until round 37, and the station it named was the wrong one: the vehicle's return is the glycol coming back from the radiator, which the study guide's p. 74 mixes up to 45 F at the evaporator inlet — not the line leaving the coldplates, which is the radiator inlet and is published 16 K higher.) The rise is `load_w / (mass_flow_kg_s * c_p_j_per_kg_k)`, the drop is `rejection_w / (mass_flow_kg_s * c_p_j_per_kg_k)`, and two of those terms are declared nowhere: the fluid is named in `vehicle.yaml#thermal.loops` (62.5 % ethylene glycol / 37.5 % water) but its specific heat is prose inside `coolant_loop_t`'s relation ('about 3,600 J/kg-K'), and the loop's own collected load is a sum over this domain's `heat_inputs` that nothing evaluates. **The bands to hit are declared**, which is what makes this a debt rather than a search: `radiator_inlet_c: [22.8, 23.9]` for the loads' return and `radiator_outlet_c: [5, 15]` for the radiator's, both on `loop_primary`. What would close it: one `specific_heat_j_per_kg_k` field on the loop, and one state holding the loop's collected load — and the same two terms are what `thermal.radiator_rejection_w` needs."
+  - "**The loop has no heat balance, and two published temperatures are waiting on it.** `thermal.coolant_return_c` and `thermal.radiator_inlet_c` both read `coolant_loop_t` — the *supply* state — and until round 34 both were prose rows that would have published the supply under their own names: **radiator inlet minus supply is the vehicle's heat load** in one subtraction, and a subtraction of a number from itself is zero. (This sentence said *return minus supply* until round 37, and the station it named was the wrong one: the vehicle's return is the glycol coming back from the radiator, which the study guide's p. 74 mixes up to 45 F at the evaporator inlet — not the line leaving the coldplates, which is the radiator inlet and is published 16 K higher.) The rise is `load_w / (mass_flow_kg_s * c_p_j_per_kg_k)`, the drop is `rejection_w / (mass_flow_kg_s * c_p_j_per_kg_k)`, and two of those terms are declared nowhere: the fluid is named in `vehicle.yaml#thermal.loops` (62.5 % ethylene glycol / 37.5 % water) but its specific heat is prose inside `coolant_loop_t`'s relation ('about 3,600 J/kg-K'), and the loop's own collected load **was** a sum over this domain's `heat_inputs` that nothing evaluated — `loop_primary_load_w` and `loop_lm_load_w` are those sums now, held against the zones that name each loop, so what this debt still owes is the specific heat alone. **The bands to hit are declared**, which is what makes this a debt rather than a search: `radiator_inlet_c: [22.8, 23.9]` for the loads' return and `radiator_outlet_c: [5, 15]` for the radiator's, both on `loop_primary`. What would close it: one `specific_heat_j_per_kg_k` field on the loop, and one state holding the loop's collected load — and the same two terms are what `thermal.radiator_rejection_w` needs."
 
   - "**The compartment each load heats WAS declared nowhere, and is now declared above.**
     `heat_inputs` gives every load a zone and the partition closes: 1,723 W of CSM load and
