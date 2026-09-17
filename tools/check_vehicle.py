@@ -12919,6 +12919,52 @@ def check_lag_drivers(root: Path, coupling: dict[str, Any], report: Report) -> N
         if not ok:
             report.debt(f"coupling.yaml:edge {incoming[0].get('id')}", reason)
 
+    # --------------------------------------------------------------------------------------
+    # **And the same walk for a `delay`, whose rule is stricter and whose reason is different.**
+    #
+    # A delay stores the driver's raw value in a ring and hands it back `delay_ticks` later, so the
+    # slot holds a *sample of the source's quantity* while `state_values` writes it under a state
+    # whose unit is the state's. Where a lag's conversion is a number the integrator can multiply by,
+    # a delay's is not: scaling a stored temperature by 0.9 would make the buffer a record of
+    # something the pipe never carried, and the scale would be indistinguishable from the physics at
+    # every later tick. `E-COOL-TRANSPORT` is `K per K` = 1.0 and is the whole of this vehicle's
+    # delay, so the rule costs nothing now and is the one that keeps a second delay honest.
+    #
+    # The other half — that the residence is a whole number of ticks and at least one — is `dt`'s
+    # question rather than the corpus's, and the plant refuses both by name at the tick it walks.
+    # --------------------------------------------------------------------------------------
+    for state in (spec for spec in methods.values() if str(spec.get("method")) == "delay"):
+        incoming = [
+            e
+            for e in edges
+            if str(e.get("to")) == str(state.get("node"))
+            and e.get("kind") != CLAMP_KIND
+            and (e.get("advances") is None or str(e.get("advances")) == str(state.get("id")))
+        ]
+        if not incoming:
+            continue
+        edge = incoming[0]
+        value = (edge.get("sensitivity") or {}).get("value")
+        if value in (None, "UNCONFIGURED"):
+            continue
+        try:
+            transfer = float(value)
+        except (TypeError, ValueError):
+            report.refuse(
+                f"coupling.yaml:edge {edge.get('id')}",
+                f"carries the sensitivity {value!r}, which is not a number to store in a ring",
+            )
+            continue
+        if abs(transfer - 1.0) > 1e-12:
+            report.refuse(
+                f"coupling.yaml:edge {edge.get('id')}",
+                f"carries {transfer:g} into a `delay` state ({state.get('id')!r}), which stores the "
+                "driver's own value and hands it back unchanged. A delay is its history, so a scale "
+                "here would make the ring a record of a quantity the pipe never carried — and unlike "
+                "a lag's, this one cannot be applied later without inventing history. Either the "
+                "edge is an identity transfer or the element is a lag",
+            )
+
 
 def check_channel_derivations(
     root: Path, documents: dict[str, Any], report: Report

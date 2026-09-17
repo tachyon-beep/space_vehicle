@@ -71,9 +71,9 @@ Current state: **composes, with 261 declared debts.** A debt is reported and is 
 always there and previously invisible — the eleven `UNCONFIGURED` scalars in the two files nothing
 walked (round 46), a `debt:` key inside a block no tool read, three debts that were being counted
 twice. A number that goes *up* because the instrument got better is not a regression, and the line
-that carries the real movement is beside it: **19 → 28 of the 139 states advance in a real tick**,
-the build order's ready-now bucket went 25 → 37, and the states that owe a *rule* — the only class
-that is code rather than data — went 79 → 65. What falls is progress; what rises has to say why.
+that carries the real movement is beside it: **19 → 29 of the 139 states advance in a real tick**,
+the build order's ready-now bucket went 25 → 38, and the states that owe a *rule* — the only class
+that is code rather than data — went 79 → 64. What falls is progress; what rises has to say why.
 
 The count also moved *down* twice in that window for the right reason: **C-25 and C-26** were put to
 the operator and closed, and C-26 re-derived the RCS chain rather than recording a disagreement — see
@@ -198,7 +198,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **28** of the 139 states against the build order's **37** ready — the second
+a real tick advances **29** of the 139 states against the build order's **38** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1615,7 +1615,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 65 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 64 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1806,10 +1806,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 139 states, by what blocks them:
 
-    37   27 %  ready now — the classes the reference plant can advance
+    38   27 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    65   47 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    64   46 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -15357,6 +15357,81 @@ see: the RCS sentinel computed `propellant_estimate` from `impulse_total` **befo
 advanced, so the percentage would have read last tick's impulse under this tick's name. The sentinel
 has no edges, so `internal_order` was the only place that could have caught it and nothing had ever
 checked it against the derivations that read across it.
+
+## The seventh integrator class had no implementation at all
+
+`plant.md` §3 grew a seventh method when the first transport delay landed, and the reason is stated
+there: **a transport delay is not a lag.** A lag forgets its history exponentially while a delay *is*
+its history, and the difference is exactly what makes "the pump stalled just now" and "the pump has
+been degrading for an hour" two observations rather than one. The section also states the two
+implementation constraints as non-negotiable:
+
+- **a ring, not a chain of small nodes** — a chain of nodes each with a residence time below `dt`
+  reintroduces the stiffness the exponential map exists to remove;
+- **indexed by tick, not by accumulated wall time** — the delay is part of the state, so it is part
+  of the snapshot and the compare-point hash, and a delay stored as a float deadline is a replay
+  divergence waiting for a slow machine.
+
+The plant implemented neither, because it implemented nothing: `advance()` refused every delay with
+*"is a delay state and its rule is not in the configuration"*. Unlike every other state in that
+bucket, **nothing was missing from the configuration** — `loop_transport_t` declares its `initial`
+(280.35 K, with a derivation tying it to the loop's supply), its `delay_s` of 1,042 s and its driver
+edge `E-COOL-TRANSPORT` at `K per K` = 1.0. What was missing was the code, and it was the plant's
+rather than a domain's.
+
+### The ring, and the two things it is not
+
+The branch is `delay_s / dt` computed once into an integral number of ticks, and a list of slots in
+the value map under `<state>__delay` — the same place, and for the same reason, that a stock's
+Bresenham residual lives: §3's ring and §4's `acc` are both part of the state's *representation*, and
+the representation here is the map. A `None` slot means **a tick that has not happened yet**, which is
+not the same as a temperature of 0 K: for the first `delay_ticks` the state holds its declared
+`initial`, and for this state that is the right answer rather than a fallback — the pipe is full of
+supply-temperature coolant before anything moves, which is what its own `initial_provenance` says. The
+alternative, starting the buffer full of the initial value, is the same number arrived at by
+inventing history.
+
+Two refusals keep the class honest, and both are the corpus's rather than the plant's:
+
+| the corpus declares | the plant refuses with |
+|---|---|
+| a residence that is not a whole number of ticks | "`plant.md` §3 indexes a delay by tick, so the corpus has to say which tick it lands on" |
+| a residence below one tick | "a delay shorter than one tick is not a delay … a lag with tau = 0 wearing this class's name" |
+
+And the linter refuses a third thing at build time: **a delay whose edge carries a scale.** A delay
+stores the driver's own value and hands it back unchanged, so a scale here would make the ring a
+record of a quantity the pipe never carried — and unlike a lag's conversion, this one cannot be
+applied at the far end without inventing history. `E-COOL-TRANSPORT` is `K per K` = 1.0 and the
+vehicle's only delay, so the rule costs nothing today and is what keeps a second one honest.
+
+### The mistake the round made, and what caught it
+
+The first version wrote the ring before reading it and took `(next + 1) % depth` as the output slot.
+That is the same arithmetic **one tick out**: it yields a delay of `delay_ticks − 1`, which no real
+value of 52,100 ticks would ever show, and which a test on the corpus could not have found — the
+corpus's driver never moves, so a ring that is one tick wrong produces the same constant as a ring
+that is right. The test builds a world with a **driver it drives** (a staircase, one step every ten
+ticks) and a one-second pipe, so the ring is observed rather than assumed; it failed at index 59 of
+the staircase and the fix is the ordering — read the slot being overwritten, *then* write it.
+
+That is the shape worth recording: **a test on a constant cannot see a delay.** The fixture had to
+manufacture the change the plant had never been given.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order | 37 ready · 25 value · 12 edge · 65 rule | **38** · 25 · 12 · **64** |
+| states a tick advances | 28 of 139 | **29** of 139 |
+| `report.refuse` call sites | 777 | **779** |
+| tests in `tests/test_vehicle_config.py` | 297 | **298** |
+
+**One state, and it is the last of its class**: `loop_transport_t` was the only `delay` in the
+vehicle, so the seventh integrator now has an implementation and a state that exercises it — and the
+worklist had to be told, because it was still filing that state under *owes a rule: domain code* for
+a rule that was never missing. `ready` now admits **three** methods plus the arithmetic case, and
+`dynamics` is the one class left — four states.
 
 ## The invariants, and which of them are enforced
 

@@ -1390,6 +1390,125 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             f"{state.id}__shortfall": shortfall,
         }
 
+    if state.method == "delay":
+        # --------------------------------------------------------------------------------------
+        # **The seventh integrator class, which the reference plant could not advance at all.**
+        #
+        # `plant.md` §3 grew a seventh method when the first transport delay landed, and its two
+        # implementation constraints are stated there as non-negotiable: a **ring, not a chain of
+        # small nodes** (a chain of nodes each with a residence time below `dt` reintroduces the
+        # stiffness the exponential map exists to remove), and **indexed by tick, not by accumulated
+        # wall time** (the delay is part of the state, so it is part of the snapshot and the
+        # compare-point hash; a delay stored as a float deadline is a replay divergence waiting for a
+        # slow machine).
+        #
+        # This branch is that ring. `delay_s` becomes an integral number of ticks once, here, and the
+        # ring is a list of slots in the value map under `<state>__delay` — the same place, and for
+        # the same reason, that a stock's Bresenham residual lives: §4's `acc` and §3's ring are both
+        # part of the state's *representation*, and the representation here is the map. When the
+        # fixed-point mantissa and a real state struct land, both move inside them and both keys
+        # disappear.
+        #
+        # **A delay is not a lag, and the difference is the whole reason the class exists.** A lag
+        # forgets its history exponentially; a delay *is* its history — it hands back exactly what
+        # entered `delay_ticks` ago, unchanged. That is what makes "the pump stalled just now" and
+        # "the pump has been degrading for an hour" different observations, which is
+        # `review-findings.md` §12 arriving as an integrator.
+        #
+        # **And the buffer is not full at MET 0.** For the first `delay_ticks` ticks there is nothing
+        # `delay_ticks` ago to read, so the state holds its declared `initial` — which for the
+        # transport line is the *right* answer rather than a fallback: the pipe is full of
+        # supply-temperature coolant before anything moves, and that is what the state's own
+        # `initial_provenance` says. The alternative — starting the buffer full of the initial value
+        # — would be the same number arrived at by inventing history, so the ring is born empty and
+        # the initial stands until the first value that entered has travelled the whole pipe.
+        # --------------------------------------------------------------------------------------
+        spec = state.spec
+        driver_edge = canonical_contributors(incoming)[0]
+        ok, why = lag_driver_basis(
+            {
+                "id": driver_edge.id,
+                "from": driver_edge.source,
+                "to": driver_edge.target,
+                "kind": driver_edge.kind,
+                "sensitivity": driver_edge.sensitivity,
+            },
+            str(spec.get("unit") or ""),
+            {name: dict(node) for name, node in world.nodes.items()},
+        )
+        if not ok:
+            raise Unconfigured(f"coupling.yaml:edge {driver_edge.id}", why)
+        transfer = float((driver_edge.sensitivity or {}).get("value") or 1.0)
+        if abs(transfer - 1.0) > 1e-12:
+            # The linter refuses this too (`check_lag_drivers`), so a corpus carrying one is refused
+            # before it runs. This is the same rule at the only other place a delay is built, because
+            # a delay that multiplied would be a ring recording a quantity the pipe never carried.
+            raise Unconfigured(
+                f"coupling.yaml:edge {driver_edge.id}",
+                f"carries {transfer:g} into a delay, which stores the driver's own value and hands "
+                "it back unchanged. A delay is its history, so a scale here cannot be applied later "
+                "without inventing it",
+            )
+        driver = values.get(driver_edge.source)
+        if driver is None:
+            raise Unconfigured(
+                f"{where}",
+                f"reads {driver_edge.source!r}, which nothing supplies",
+                needs=driver_edge.source,
+            )
+        current_level = state_level(values, state)
+        if current_level is None:
+            raise Unconfigured(
+                f"{where}.initial",
+                "declares no starting value, for the ticks before its first sample has travelled "
+                "the whole pipe. The linter requires one of every integrator "
+                "(`INTEGRATOR_METHODS`) and the plant seeds it",
+                needs=f"{state.id}.initial",
+            )
+        residence = float(spec["delay_s"]) / dt
+        delay_ticks = int(round(residence))
+        # **The sub-tick case first, and the order matters for what a reader is told.** A delay of
+        # 0.4 ticks is not a delay at all and saying "not a whole number of them" about it would send
+        # the author to fix the arithmetic rather than the model.
+        if residence < 1.0:
+            raise Unconfigured(
+                f"{where}.delay_s",
+                f"is {spec['delay_s']!r} s, which is {residence:g} of a tick at this dt: a delay "
+                "shorter than one tick is not a delay, and reading the driver straight through would "
+                "be a lag with tau = 0 wearing this class's name",
+            )
+        if abs(residence - delay_ticks) > 1e-9:
+            # Not a rounding: a delay that is not a whole number of ticks has to be *decided*, and
+            # choosing which tick it lands on is the corpus's call rather than the plant's.
+            raise Unconfigured(
+                f"{where}.delay_s",
+                f"is {spec['delay_s']!r} s, which is {residence!r} ticks at this dt and not a whole "
+                "number of them. `plant.md` §3 indexes a delay by tick, so the corpus has to say "
+                "which tick it lands on rather than leaving the plant to round",
+            )
+        ring_key = f"{state.id}__delay"
+        carried = values.get(ring_key) or {}
+        slots = list(carried.get("slots") or [])
+        if len(slots) < delay_ticks:
+            # The ring is born empty and grows to its declared depth. `None` is "a tick that has
+            # not happened yet" rather than a temperature, so the reading below can tell the
+            # difference between a pipe full of 0 K and a pipe that has not been filled.
+            slots = slots + [None] * (delay_ticks - len(slots))
+        next_slot = int(carried.get("next") or 0)
+        # **Read the slot being overwritten, then write it — in that order.** The slot this tick
+        # lands on is the one that holds the value from `delay_ticks` ticks ago, which is exactly
+        # the age the modulo expresses; so the reading is that slot *before* the write, and doing it
+        # the other way round yields a delay of `delay_ticks - 1`. The first version of this branch
+        # wrote first and read `(next + 1) % depth`, which is the same arithmetic one tick out, and
+        # the test caught it at index 59 of a fifty-tick staircase.
+        oldest = slots[next_slot]
+        slots[next_slot] = float(driver) * transfer
+        delayed = float(current_level) if oldest is None else float(oldest)
+        return {
+            **state_values(world, state, delayed),
+            ring_key: {"next": (next_slot + 1) % delay_ticks, "slots": slots},
+        }
+
     if state.method == "algebraic":
         # **The rule the configuration does carry, and the plant would not read.** Thirteen
         # `algebraic` states declare their arithmetic as a `derivation` over named inputs — load
@@ -2041,6 +2160,16 @@ def build_order(world: World) -> dict[str, list[State]]:
                 if derivation is not None:
                     ready.append(state)
                     continue
+            if state.method == "delay" and isinstance(state.spec.get("delay_s"), (int, float)):
+                # **The seventh class joined the ones the plant can advance, and this classifier did
+                # not hear about it.** `loop_transport_t` declares its `initial`, its `delay_s` and
+                # its driver at `K per K` = 1.0, and round 49 gave `advance` the ring that walks it —
+                # so the worklist was still filing the one state whose rule was *never* missing under
+                # "owes a rule: domain code", which is the same defect as the `algebraic` case above
+                # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
+                # makes it the third method a configuration can carry on its own.
+                ready.append(state)
+                continue
             if state.node == "internal":
                 # Advanced with its domain, so its driver is code rather than an edge. This is the
                 # same distinction `check_domain` draws for `internal_order`.
