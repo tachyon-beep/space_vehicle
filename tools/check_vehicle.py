@@ -13142,6 +13142,84 @@ def check_thermal_lumps(root: Path, report: Report) -> None:
             )
 
 
+def check_bands_contain_their_source_s_starting_value(root: Path, report: Report) -> None:
+    """A band is a claim about the values a channel can read, held against the value the vehicle declares.
+
+    **Two of the 58 declared ranges were wrong and nothing was reading them.** A `band` says "this is
+    the range a reader should expect"; a state's `initial` says "this is the value it starts at". Where
+    the channel publishes its source state unchanged — same unit, no arithmetic — the two are claims
+    about the same number, and the registry carried a case where they disagreed: `prop.dps_throttle_pct`
+    declared the band `[10, 60]` while its own state's declared starting value is 0, because the
+    actuator parks at its closed stop whenever the engine is off. A band that excludes the vehicle's
+    own starting value reports a healthy parked engine as out of range, and the fix is one of two
+    things rather than a third: **the band is wrong** (re-anchor it on the figure that moved) or **the
+    channel can legitimately sit outside it, which makes the range a `scale`**.
+
+    The other case is the same finding with the opposite disposition, and it is why `eclss.
+    suit_loop_flow_cfm`'s band is 32-38: the recommended 27-33 had no source, the ECS study guide
+    publishes the suit compressor at 35 cubic feet per minute in normal space operations, and the
+    initial landed at the document's figure. Conflict C-27 in the reconciliation register is the
+    record.
+
+    **What this check cannot see, stated rather than implied.** A channel that carries an evaluable
+    `derivation` publishes the arithmetic's value rather than the state's, and a linter has no tick to
+    evaluate it at; a channel whose source is a coupling node has no state and therefore no `initial`;
+    and a state whose own `initial` is `UNCONFIGURED` is owed rather than declared. In all three cases
+    the band is unchecked here, and the *plant* is the reader that can still see it —
+    `test_no_published_frame_value_sits_outside_its_channel_s_band` runs every frame the reference
+    plant emits against every band the registry declares, which is the wider instrument this one is
+    the build-time half of.
+    """
+    channels = {str(row.get("id")): row for row in walk_channels(root)}
+    states: dict[str, dict[str, Any]] = {}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                states[str(state["id"])] = state
+    for path in sorted((root / "domains").glob("*/points.yaml")):
+        points = load(path, Report()) or {}
+        for row in points.get("points") or []:
+            if not isinstance(row, dict) or not isinstance(row.get("from"), str):
+                continue
+            state = states.get(str(row["from"]))
+            channel = channels.get(str(row.get("channel")))
+            if state is None or channel is None:
+                continue
+            if str(channel.get("range_kind")) != "band":
+                continue
+            rng = channel.get("range")
+            if not (
+                isinstance(rng, list)
+                and len(rng) == 2
+                and all(isinstance(bound, (int, float)) and not isinstance(bound, bool) for bound in rng)
+            ):
+                continue
+            initial = state.get("initial")
+            if not isinstance(initial, (int, float)) or isinstance(initial, bool):
+                continue
+            derivation = row.get("derivation")
+            if isinstance(derivation, dict) and derivation.get("expression"):
+                continue
+            # **The rule applies where the channel *is* the state.** A different unit means the
+            # published value is arithmetic over it, and the linter has no tick to evaluate that at;
+            # the plant's own test is the reader for those.
+            if not _units_agree(str(channel.get("unit") or ""), str(state.get("unit") or "")):
+                continue
+            if rng[0] <= float(initial) <= rng[1]:
+                continue
+            report.refuse(
+                f"channels.yaml:{row.get('channel')}.range",
+                f"is the band {rng} and its source `{state.get('id')}` declares an initial of "
+                f"{initial!r}, which is outside it. The channel publishes that state unchanged — same "
+                "unit, no arithmetic — so the two declarations are claims about one number, and a band "
+                "that excludes the vehicle's own starting value reports a healthy vehicle as out of "
+                "range. Either the band is wrong, and the figure that moved is what it should be "
+                "re-anchored on, or the value can legitimately sit outside it, which makes the range a "
+                "`scale`",
+            )
+
+
 def check_thermal_budget(root: Path, report: Report) -> None:
     """The rejection total is a closure, and it is a closure **per vehicle**.
 
@@ -15435,6 +15513,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     check_lag_drivers(root, coupling or {}, report)
     check_channel_derivations(root, documents, report)
+    # And the ranges: a band is a claim about the values a channel reads, and the value the vehicle
+    # starts at is the one a linter can hold it against without a tick.
+    check_bands_contain_their_source_s_starting_value(root, report)
     check_thermal_budget(root, report)
     # And the cabin's four gas masses, which are one mixture: their sum is the pressure, and the
     # oxygen in it is what the compartment's own two alarms have to call habitable.

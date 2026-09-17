@@ -196,9 +196,9 @@ points:
     from: absorber_capacity_csm
     layer: estimate
     derivation:
-      expression: man_hours / rating_man_hours * percent_per_unity
+      expression: (rating_man_hours - hours_spent) / rating_man_hours * percent_per_unity
       inputs:
-        man_hours: absorber_capacity_csm
+        hours_spent: absorber_capacity_csm
         rating_man_hours: vehicle.yaml:consumables.co2_removal.csm_element_man_hours
         percent_per_unity: 100
     note: >-
@@ -211,9 +211,9 @@ points:
     from: absorber_capacity_lm
     layer: estimate
     derivation:
-      expression: man_hours / rating_man_hours * percent_per_unity
+      expression: (rating_man_hours - hours_spent) / rating_man_hours * percent_per_unity
       inputs:
-        man_hours: absorber_capacity_lm
+        hours_spent: absorber_capacity_lm
         rating_man_hours: vehicle.yaml:consumables.co2_removal.lm_primary_man_hours
         percent_per_unity: 100
     note: >-

@@ -414,18 +414,28 @@ state:
     node: internal
     method: lag
     unit: ft3/min
-    initial: UNCONFIGURED
-    initial_note: >-
-      the suit circuit's flow at MET 0. The state is on the `internal` sentinel with no driver
-      edge, and `apollo_diode.md:92` publishes the operating band — 27-33 cfm with a <20 event —
-      rather than a starting value; this domain's own `open_debts` records that the circuit is
-      modelled as a single flow channel. What would close it: the suit circuit's published flow
-      (`csm_ecs_study_guide.pdf`, in the source library), or a decision that the fan starts at
-      the bottom of its band
+    initial: 35
+    initial_provenance:
+      basis: historical
+      source: >-
+        `csm_ecs_study_guide.pdf` **PDF p. 39** (printed p. 3-9), section III: "In normal space
+        operations, the operating compressor delivers approximately **35 cubic feet per minute** of
+        suit gas at a pressure rise of 10 inches of water within the conditions of 4.93 psia and
+        80 F. Under emergency operating conditions, the operating compressor delivers approximately
+        34.5 cubic feet per minute suit gas at a pressure rise of 6.9 inches of water". The circuit
+        circulates continuously — it is what the crew breathe through before and after launch — so
+        MET 0 is the normal-space delivery, and the compressor is the only thing that drives it
     tau_s: 5
     provenance:
       basis: chosen
-      reason: "the suit loop is a fan-driven circuit, so it spins up in seconds. apollo_diode.md:92 publishes the flow at 27-33 cfm with a <20 event, and five seconds is long enough that a fan commanded on cannot be declared failed within one tick."
+      reason: >-
+        the suit loop is a compressor-driven circuit, so it spins up in seconds. apollo's `<20` event
+        is what the time constant has to be short against — five seconds is long enough that a fan
+        cannot be declared failed within one tick, and short enough that a real stall is visible in
+        the same pass. **And the flow it settles at is not apollo's recommended range**: the diode's
+        27-33 cfm was a recommendation with no source, the ECS guide publishes 35 (normal) and 34.5
+        (emergency), and the range moved to 32-38 rather than the initial moving to fit it — conflict
+        C-27 is the record
   # Two removal rates, not one. This was a single state on the `internal` sentinel *reading both
   # counters*, so it converted the two beds' remaining capacity into one rate for one vehicle — and a
   # crew on the surface spent the CSM element while a crew back in the CM spent the LM cartridge,

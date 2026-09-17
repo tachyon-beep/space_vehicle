@@ -274,8 +274,21 @@ state:
     node: absorber_capacity_csm
     method: stock
     unit: man_hours
-    initial: 72
-    initial_source: "coupling.yaml:nodes.absorber_capacity_csm.exhausted_at"
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        **a consumption counter starts at nothing spent.** The node's own `accumulates`
+        says what this is — "`absorber_man_hours_csm` counts man-hours spent, so the
+        element is exhausted when the count reaches its rating and the remaining capacity is
+        a subtraction rather than a stock" — and a counter that began at its rating had
+        already spent the whole element before the mission started. **This row read the
+        rating itself** (`initial_source: coupling.yaml:nodes.absorber_capacity_csm.exhausted_at`):
+        two declarations that must not be equal, held equal by a check that compares them.
+        Round 33 found it through the window — the channel publishes `(rating - spent) /
+        rating`, so a counter starting at its rating published a capacity of 100 % before
+        the mission and fell to 0 % on the first tick, and the pair of them disagreed with
+        every threshold on the channel
     quantum: 1.0e-4
     min_flow_per_s: 2.78e-4
     provenance:
@@ -285,8 +298,21 @@ state:
     node: absorber_capacity_lm
     method: stock
     unit: man_hours
-    initial: 41
-    initial_source: "coupling.yaml:nodes.absorber_capacity_lm.exhausted_at"
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        **a consumption counter starts at nothing spent.** The node's own `accumulates`
+        says what this is — "`absorber_man_hours_lm` counts man-hours spent, so the
+        element is exhausted when the count reaches its rating and the remaining capacity is
+        a subtraction rather than a stock" — and a counter that began at its rating had
+        already spent the whole element before the mission started. **This row read the
+        rating itself** (`initial_source: coupling.yaml:nodes.absorber_capacity_lm.exhausted_at`):
+        two declarations that must not be equal, held equal by a check that compares them.
+        Round 33 found it through the window — the channel publishes `(rating - spent) /
+        rating`, so a counter starting at its rating published a capacity of 100 % before
+        the mission and fell to 0 % on the first tick, and the pair of them disagreed with
+        every threshold on the channel
     quantum: 1.0e-4
     min_flow_per_s: 5.56e-4
     provenance:

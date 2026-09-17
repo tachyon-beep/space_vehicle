@@ -473,7 +473,7 @@ eclss:
     precision: 0.5
     rate_hz: 1
     priority: P3
-    range: [27, 33]
+    range: [32, 38]
     # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
     # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
     # from the numbers alone, which is why this is declared rather than inferred.
@@ -481,8 +481,19 @@ eclss:
     events: ["<20"]
     event_class: alarm
     provenance:
-      basis: apollo
-      ref: "apollo_diode.md:92"
+      basis: historical
+      source: >-
+        `csm_ecs_study_guide.pdf` **PDF p. 39** (printed p. 3-9), section III, and the CSM's own suit
+        compressor: "Compressor output is dependent on the mode of operation. In normal space
+        operations, the operating compressor delivers approximately **35 cubic feet per minute** of
+        suit gas at a pressure rise of 10 inches of water within the conditions of 4.93 psia and 80
+        F. Under emergency operating conditions, the operating compressor delivers approximately
+        **34.5 cubic feet per minute** suit gas at a pressure rise of 6.9 inches of water". The band
+        is that design point with the width the earlier recommendation carried: the centre moved from
+        30 to the published 35 and the half-width stayed 3, because the width is a judgement about
+        normal variation and the centre is now a citation. **Conflict C-27** in
+        `../integration/reconciliation/01-conflict-register.md` is the record of both ranges; the
+        `<20` event below is apollo's either way
   - id: eclss.absorber_capacity_pct
     unit: "%"
     layer: estimate
@@ -1236,16 +1247,24 @@ propulsion:
     precision: 0.5
     rate_hz: 10
     priority: P2
-    range: [10, 60]
+    range: [0, 100]
     # `band` is an acceptable operating region and every alarm fires outside it; `scale` is the
     # quantity's full span, and a reserve alarm inside it is normal. The two are indistinguishable
     # from the numbers alone, which is why this is declared rather than inferred.
-    range_kind: band
+    range_kind: scale
     events: ["commanded into the 65-92.5 % non-operating region"]
     event_class: alarm
     provenance:
       basis: historical
-      source: "the DPS experience report: 10.5 % to 92.5 % with 65-92.5 % a NON-OPERATING region. The band matters more than the endpoints: a throttle command inside it is impossible rather than merely unwise, which the published channel makes visible"
+      source: >-
+        the DPS experience report: 10.5 % to 92.5 % with 65-92.5 % a NON-OPERATING region. **That is
+        an operating band and this is not a band**: the actuator parks at its closed stop, 0 %,
+        whenever the engine is off — which is where the state's declared `initial` is, and what round
+        33's check found. A band that excludes the vehicle's own starting value reports a healthy
+        parked engine as out of range, so the range is the full percentage scale and the *operating*
+        band stays where it belongs:
+        `domains/propulsion/components.yaml#components[dps].operating_band_pct` and
+        `non_operating_band_pct`, which the event above is judged against
   - id: prop.cutoff_mode
     unit: "enum[duration,plan,gnc_request,dv_target,abort,depletion]"
     layer: service
@@ -2631,10 +2650,14 @@ open_debts:
   - "**`service` covers two things a fault treats differently.** The layer holds both a *decision* (`rcs.mode`, `power.load_shed_class`, `controls.switches`: something the crew or an agent set, which no physical mechanism writes) and a *conclusion* (`avionics.sensor_health_[class]`, `avionics.redundancy_disagreement`, `avionics.computer_mode`: something the vehicle computed, which a fault moves immediately), and the split across the fault line is what shows it: **most of the registry's `service` channels are perturbed and a quarter of them are not.** The counts are `coverage` above rather than here, because they were here and two of the three were wrong. The epistemic mapping is right that both are \"an A with a different subject\" for the contract's purposes, and the contract is not where the difference bites; fault injection is. What would separate them is a field — `origin: commanded | derived` — and until it exists the only way to say a channel is untouchable by any fault is to list it in a `coverage.unperturbed`, which is what all eleven domains now do."
   - "**Half of the LM's atmosphere registry gap is closed; the other half is now a question rather than a list.** `eclss.lm_absorber_capacity_pct` exists as of round 42, because the vehicle turned out to have two absorbers sharing one counter and the LM's was unobservable — the counter split (`coupling.yaml:absorber_capacity_lm`) and the channel followed it. `lm_cabin_regulator_state` still does not exist, and the reason has changed. It is no longer that the registry has no room: it is that the corpus publishes ONE `cabin_regulator_state` (apollo_diode.md:95) with no vehicle qualifier and says nothing about how the LM's pressure control is built — a two-position regulator like the CSM's, a relief valve, or a continuous bleed. ECL-13, ECL-14 and ECL-19 are injectable without it, because their effect on pressure and ppO2 is observable; what is missing is the easy diagnosis, so on the LM a regulator fault has to be inferred from its signature where the CSM reads a mode. Adding the channel now would mean inventing the mechanism; the question that closes it is which of the three the LM's cabin pressure control is."
   - "**`range_kind` is declared and the check it enables is written; what remains is the judgement
-    inside it.** 58 channels carry the field — 44 `band`, 14 `scale` — and the values were assigned
-    by evidence rather than by taste: a range with an alarm strictly inside it cannot be a band, so
-    it is a scale. What that rule cannot see is a channel whose range is a band *and wrong*, and
-    one was found that way. `thermal.zone_[id]_t_c` declared `[5, 40]` while four of its thresholds
+    inside it.** 58 channels carry the field — 43 `band`, 15 `scale` — and the values were
+    assigned by evidence rather than by taste: a range with an alarm strictly inside it cannot be a
+    band, so it is a scale. **That rule reads the alarms; a second one reads the values**, and round
+    33 found the case that passed the first and failed the second: `prop.dps_throttle_pct` declared
+    the band `[10, 60]` while its own state's declared starting value is 0 — the actuator parks at
+    its closed stop — so the band reported a healthy parked engine as out of range, and it is a scale
+    now. What neither rule can see is a channel whose range is a band *and wrong*, and one was found
+    that way. `thermal.zone_[id]_t_c` declared `[5, 40]` while four of its thresholds
     asserted inside it and `lm_descent_freeze` asserted below minus five — because the channel is a
     six-zone template and no single band describes six zones: the cabins live at 10-30 and the
     descent stage freezes below zero. A template channel's per-instance bands are its thresholds'

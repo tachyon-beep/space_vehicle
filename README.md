@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 262 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,8 +176,8 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 135 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 262 declared debts
-and every one of them named. **109 of the 135 states are fully configured and 26 carry a debt**, and
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
+and every one of them named. **110 of the 135 states are fully configured and 25 carry a debt**, and
 a real tick advances **19** of the 135 states against the build order's **27** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
@@ -189,14 +189,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **262** is every obligation the linter can name:
-**113** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **187** the plant
+the missing charging efficiency, the pump-speed conversion). The **186** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 187 is the linter's 113 **plus** the graph's unset edge
+`coupling.yaml` included, so its 186 is the linter's 112 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1595,7 +1595,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 68 of the 135 states need code. (This said *before the
+`internal` sentinel counted among them, so 69 of the 135 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1787,9 +1787,9 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 135 states, by what blocks them:
 
     27   20 %  ready now — the classes the reference plant can advance
-    26   19 %  owes a value — the cheapest to close, and the debt count already tracks them
+    25   19 %  owes a value — the cheapest to close, and the debt count already tracks them
     14   10 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    68   50 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    69   51 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -10113,6 +10113,84 @@ it has one, and what is owed is how it moves.
 The debt count rises by three — the state's time constant, its provenance basis, and the prose
 obligation for its rule — and every one of the three is a thing the vehicle now *says* it owes rather
 than a gap a reader had to notice. A real tick still advances 19 states and `--strict` still exits 2.
+
+## A band is a claim about the values a channel reads, and three of them were wrong
+
+The registry declares 43 `band` ranges and 15 `scale` ranges, and one rule had been applied to them:
+*a range with an alarm strictly inside it cannot be a band, so it is a scale*. That rule reads the
+**alarms**. Nothing read the **values** — and a band is a claim about what a channel should read, while
+a state's `initial` is the value it starts at, so where a channel publishes its source unchanged the
+two are claims about one number. The round added that reader and it found three defects, each with its
+own cause:
+
+| channel | declared | the value | what was wrong |
+|---|---|---|---|
+| `eclss.suit_loop_flow_cfm` | band 27–33 `**Sim**` | **35 cfm** | the band had no source and excluded the figure the only document publishes |
+| `prop.dps_throttle_pct` | band `[10, 60]` | **0 %** | a *band* where the range is a scale: the actuator parks below its operating band |
+| `eclss.absorber_capacity_pct` | band `[20, 100]` | **100.07 %** a minute after launch | the counter counts man-hours **spent** while its channel publishes capacity **left** |
+
+### The suit loop: the recommendation moved, not the figure
+
+`apollo_diode.md:92`'s 27–33 cfm carries the table's own `**Sim**` marker — *recommended nominal /
+expected range* — and no source. `csm_ecs_study_guide.pdf` **PDF p. 39** (printed p. 3-9, §III)
+publishes the suit compressor: *"In normal space operations, the operating compressor delivers
+approximately **35 cubic feet per minute** of suit gas at a pressure rise of 10 inches of water …
+Under emergency operating conditions … approximately **34.5 cubic feet per minute**."* A band centred
+on 30 sits five cfm below what the circuit delivers, so a healthy suit loop would read at the top of
+its own band. **Conflict C-27** records both, and the disposition is the published figure for the
+state and the band re-anchored at **32–38** — the design point as the centre, the recommendation's own
+half-width of 3 retained, because the width is a judgement about normal variation and the centre is
+now a citation. The LM's 12 cfm is a *per-suit* flow in the LM's own circuit; the register says so and
+does not pretend to reconcile it.
+
+### The throttle: a band that reports a parked engine as out of range
+
+`prop.dps_throttle_pct` declared the DPS's *operating* band, `[10, 60]`, and its own state's declared
+starting value is **0** — the actuator's closed stop, which is where it sits whenever the engine is
+off. That passed the alarm rule, because the alarm ("commanded into the 65–92.5 % non-operating
+region") is outside it. The operating band belongs on the component, where `operating_band_pct` and
+`non_operating_band_pct` already carry it, and the channel's range is now the full percentage **scale**
+— so the parked engine is in range and the *event* still fires where it should.
+
+### The absorbers: a counter that grew capacity
+
+This one the plant found, not the linter: a 60-second tick published
+`eclss.absorber_capacity_pct: 100.069`. The counter's node says what it is — *"a **consumption
+counter**, not a tank: it counts man-hours spent, so the element is exhausted when the count reaches
+its rating and the remaining capacity is a subtraction rather than a stock"* — and the edge's positive
+sensitivity agrees. But the state's `initial` was **72**, the rating itself, with
+`initial_source: coupling.yaml:nodes.absorber_capacity_csm.exhausted_at`: **two declarations that must
+not be equal, held equal by a check that compares them.** And the channel divided rather than
+subtracted, so a counter starting at its rating published a *full* element that had already spent
+everything. The fix is three lines and one direction: the counter starts at 0, the channel publishes
+`(rating − spent) / rating`, and the element now reads 100 % at MET 0 and falls as it is used — which
+is what the `<20` threshold on that channel always meant.
+
+### The instruments
+
+- **The linter** holds the three declarations the registry already had against each other —
+  `range`, `range_kind`, `from`, and the state's `initial` — and refuses when a band excludes the value
+  its own source starts at, naming both fixes (*the band is wrong* or *the range is a scale*). What it
+  cannot see is stated in its docstring: a channel carrying an evaluable `derivation` publishes
+  arithmetic rather than the state, and a linter has no tick.
+- **The plant's frame test** is that half's reader, and it is the wider instrument: every value the
+  reference plant publishes, at t=0 and after a tick, against every band in the registry. It is what
+  caught the absorbers, and it is DoD #5's own sentence — *no live declaration contradicts another* —
+  applied to the window the fleet actually reads.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | **261** |
+| `UNCONFIGURED` scalars (linter / plant) | 113 / 187 | **112 / 186** |
+| states fully configured | 109 / 135 | **110 / 135** |
+| build order | 27 · 26 · 14 · 68 | **27 · 25 · 14 · 69** |
+| conflicts recorded | 26 | **27** (C-27; C-25 and C-26 still open) |
+| tests in `tests/test_vehicle_config.py` | 275 | **277** |
+
+The debt count falls by one: the suit circuit's starting flow was owed and is now the ECS guide's
+figure. A real tick still advances 19 states and `--strict` still exits 2.
 
 ## The invariants, and which of them are enforced
 
