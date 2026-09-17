@@ -10297,6 +10297,36 @@ def check_thermal_bindings(root: Path, vehicle: dict[str, Any], report: Report) 
                     "outside its own band. The two figures are one flow in two units, and the "
                     "density is the conversion between them",
                 )
+        # --------------------------------------------------------------------------------------
+        # **The coolant's specific heat, re-derived from the loop's own published three terms.**
+        # `Q = m_dot * c_p * dT` is exact physics and every term but the property is published: the
+        # heat-rejection requirement (TN D-6718, PDF p. 17: the 4,850-Btu/hr requirement for an
+        # average earth-orbital environment), the flow (PDF p. 11: 200 lb/hr) and the rise (45 F
+        # mixed supply to the 73-75 F radiator inlet). The corpus carried the property as prose —
+        # "about 3,600 J/kg-K" inside a relation — until round 44, and this is the arithmetic that
+        # replaces the sentence. A field that says 3,600 beside a derivation that says 3,626 is the
+        # shape this check exists for.
+        # --------------------------------------------------------------------------------------
+        cp = one.get("specific_heat_j_per_kg_k")
+        requirement = one.get("heat_rejection_requirement_w")
+        rise = one.get("thermal_rise_k")
+        lb_per_h = one.get("nominal_flow_lb_per_h")
+        if all(isinstance(v, (int, float)) for v in (cp, requirement, rise, lb_per_h)):
+            m_dot = float(lb_per_h) * LB_TO_KG / 3600.0
+            derived_cp = float(requirement) / (m_dot * float(rise))
+            if not agrees_with_derivation(float(cp), derived_cp):
+                report.refuse(
+                    f"{where}.{loop_id}.specific_heat_j_per_kg_k",
+                    f"declares {cp} J/kg-K and the loop's own published terms give {derived_cp:,.1f}: "
+                    f"{requirement} W over {m_dot:.9f} kg/s and {rise} K. `Q = m_dot * c_p * dT` is "
+                    "exact, so one of the four is a copy of a number the other three determine",
+                )
+        elif any(v is not None for v in (cp, requirement, rise)):
+            report.debt(
+                f"{where}.{loop_id}.specific_heat_j_per_kg_k",
+                "states some of the terms of `Q = m_dot * c_p * dT` and not all of them, so the "
+                "coolant's specific heat cannot be re-derived from the loop's own figures",
+            )
         if volume is not None and two.get("volume_l") is not None and volume != two["volume_l"]:
             report.refuse(
                 f"{where}.{loop_id}",

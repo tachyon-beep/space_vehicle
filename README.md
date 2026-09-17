@@ -10866,6 +10866,82 @@ unread, and TN D-6718 itself does not carry one.
 | tests in `tests/test_vehicle_config.py` | 289 | **290** |
 | the linter's refusal call sites (held by the changelog row) | 769 | **771** |
 
+## The coolant's specific heat was prose, and the document derives it from the loop's own three terms
+
+`coolant_loop_t`'s relation has said "with c_p about 3,600 J/kg-K" since the loop landed. It is the
+term the heat balance has been missing since round 34, and the one nothing could check: a number in
+a sentence, inside a relation, with no source behind it and no arithmetic in front of it.
+
+`Q = m_dot * c_p * dT` is exact, and **TN D-6718 publishes all three of the other terms for this
+loop**:
+
+| term | the document | the figure |
+|---|---|---|
+| `Q` | PDF p. 17 — the Blk I radiator's 3,700-Btu/hr capability against "the **4850-Btu/hr requirement** for an average earth-orbital environment" | 1,421.4 W |
+| `m_dot` | PDF p. 11 — "a centrifugal pump to circulate **200 lb/hr** of coolant" | 0.025199576 kg/s |
+| `dT` | PDF p. 11 — the 45 °F mixed supply to the 73–75 °F radiator inlet the entry's source already cites from NR | 28 °F = 15.5556 K |
+
+1,421.4 ÷ (0.025199576 × 15.5556) = **3,626.1 J/kg·K** — inside the range a 62.5/37.5 glycol-water
+mixture can have, and **0.7 % from the prose figure**, which is the corroboration: the sentence was a
+remembered number and this is the arithmetic behind it. The field is declared `derived`, and
+`check_thermal_bindings` re-derives it from the three declared terms, so it cannot drift from its own
+relation the way a prose figure can.
+
+### What the declaration unblocked
+
+With the property declared, the first of the two coolant temperatures that have waited since round 34
+becomes arithmetic:
+
+```yaml
+thermal.radiator_inlet_c:
+  expression: "(temperature_k + load_w / (mass_flow_kg_s * specific_heat_j_per_kg_k)) - kelvin_offset"
+```
+
+— `supply + load_w / (m_dot * c_p)` over four declarations (the `coolant_loop_t` reading, the loop's
+collected load from round 41, the published flow, and the specific heat). A tick publishes
+**26.06 °C** where the frame published a gap, and the frame's post-tick value count goes 28 → **29**.
+
+The corpus's own instruments noticed the conversion before the test suite did: `presentation.yaml`'s
+debt sentence states how many derived channels carry an evaluable `derivation` and how many prose
+rows declare what would close them, and `check_channel_derivations` refused the run until those two
+figures moved with the work — 13 → **14** and 2 → **1**. That check was written for exactly this
+round, and this is the first time a conversion has had to pay it.
+
+### The conflict the derivation exposed: C-29
+
+The loop's *collected load* is 1,723 W — the zones' electrical demand, summed in round 41 — and the
+requirement is 1,421.4 W. Over the document's flow and rise, the first needs a specific heat of
+**4,394 J/kg·K**: above water's 4,182, and impossible for any aqueous glycol mixture. The second
+gives 3,626. So the loop's **thermal** load is not its zones' electrical demand, and the 302 W
+between them is real — the S-band amplifier's radiated power, light through the windows, and a
+requirement that is an average rather than a peak.
+
+That is recorded rather than reconciled (C-29), because the consequence is a *reading* and not an
+error: with c_p = 3,626.1 the inlet is `7.2 + 1,723 / (0.0252 × 3,626.1)` = **26.06 °C**, above the
+loop's declared `radiator_inlet_c: [22.8, 23.9]` **design** band and below the channel's own 35 °C
+caution. The band is the point at which the radiator carries the requirement alone; a vehicle at its
+full electrical demand makes the **evaporator** take the difference, which is what
+`thermal.evaporator_rejection_w` (2,345 W) and the `water_cooling` budget are for. What would settle
+the gap is a heat-fraction per load or a peak-load figure for the lunar mission; neither is in any
+document read so far, and `loop_primary_load_w` keeps its meaning in the meantime.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 262 | 262 |
+| the loop's specific heat | prose, "about 3,600" | **3,626.1 J/kg-K, derived and re-derived** |
+| derived channels with an evaluable `derivation` | 13 of 71 | **14 of 71** |
+| prose rows declaring what would close them | 2 | **1** |
+| the frame's post-tick values | 28 | **29** |
+| numeric conflicts recorded | 28 | **29** (C-29) |
+| tests in `tests/test_vehicle_config.py` | 290 | **291** |
+
+What is still owed on this loop is the **other half of the balance**: `thermal.coolant_return_c` is
+`radiator_inlet_c − rejection_w / (m_dot * c_p)`, and `radiator_rejection_w`'s rule — ε σ A T⁴ minus
+the absorbed environmental load — is still domain code, so the return stays a prose row with one
+`owed` sentence rather than two.
+
 ## The invariants, and which of them are enforced
 
 

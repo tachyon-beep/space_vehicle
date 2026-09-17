@@ -123,18 +123,29 @@ points:
   - channel: thermal.radiator_inlet_c
     from: coolant_loop_t
     layer: measurement
-    derivation: "the loop temperature leaving the coldplates and entering the radiator — the loads' return"
-    owed: >-
-      **the loop's heat balance.** This is the station the corpus's prose called the return until
-      round 37, and the figures always disagreed with that prose: the published inlet is 73-75 F
-      while `thermal.coolant_return_c`'s band is 5-15 C with a >20 C warning, so a vehicle at the
-      published operating point would have tripped the return's warning continuously. The two are
-      different stations of one loop — the loads' return, and the radiator's return — and they wait
-      on the same terms. What would close it: a `specific_heat_j_per_kg_k` on the loop and a state
-      holding the loop's collected load, since the rise is `supply_c + load_w / (mass_flow_kg_s *
-      c_p)`. The band the result has to land in is
-      `vehicle.yaml#thermal.loops.loop_primary.radiator_inlet_c: [22.8, 23.9]`, which is the one
-      figure here with a published source.
+    derivation:
+      expression: "(temperature_k + load_w / (mass_flow_kg_s * specific_heat_j_per_kg_k)) - kelvin_offset"
+      inputs:
+        temperature_k: coolant_loop_t
+        load_w: loop_primary_load_w
+        mass_flow_kg_s: coolant_flow_kg_s
+        specific_heat_j_per_kg_k: vehicle.yaml:thermal.loops.loop_primary.specific_heat_j_per_kg_k
+        kelvin_offset: 273.15
+    note: >-
+      **arithmetic since round 44, and the relation is the loop's own.** The station is the loads'
+      return: the supply the coolant leaves the evaporator at, plus the rise its collected load
+      causes — `supply + load_w / (m_dot * c_p)` — over four declarations: the `coolant_loop_t`
+      reading, `loop_primary_load_w` (1,723 W, the sum over the zones that name the loop),
+      `coolant_flow_kg_s` (the published 200 lb/hr) and the loop's `specific_heat_j_per_kg_k`
+      (3,626.1 J/kg-K, itself derived from TN D-6718's own load, flow and rise).
+
+      It reads **26.06 C** at MET 0: 7.2 C plus the 18.86 K that 1,723 W puts into 0.0252 kg/s of
+      this coolant. That is above the loop's declared `radiator_inlet_c: [22.8, 23.9]` band and
+      below the channel's own caution at 35 C, and the gap is the vehicle and not an error — the
+      band is the *design* point, where the radiator carries the 4,850 Btu/hr requirement on its
+      own, and a vehicle at its full 1,723 W electrical demand makes the evaporator take the
+      difference. Round 37's prose had this station and `thermal.coolant_return_c` as one; they are
+      two, and this one is now computed.
   - channel: thermal.radiator_rejection_w
     from: radiator_rejection_w
     layer: estimate
