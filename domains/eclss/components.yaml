@@ -610,7 +610,11 @@ components:
         than read — and the rate that produces it is owed. `csm_ecs_study_guide.pdf` PDF p. 16 does
         give the setpoint the exchanger holds: "the water content of the gas in excess of a **50 F dew
         point** condenses on the plates of the heat exchanger and is removed". A dew point is a
-        partial pressure and not a rate, so it bounds the cabin's humidity without giving the rate
+        partial pressure and not a rate, so it bounds the cabin's humidity without giving the rate.
+        **Searched:** `lunar_module_environmental_control_subsystem.pdf` item 109, the centrifugal
+        water separator — its performance table gives the drum's gas-driven speed and no removal
+        rate — and `csm_ecs_study_guide.pdf`, which describes the separator and publishes no rate
+        either
         the crew's respiration and perspiration arrive at. Searched, and none has it: `csm_ecs_study_guide.pdf`, `lm_ecs_study_guide.pdf`, `lunar_module_environmental_control_subsystem.pdf`, `ApolloTrainingElectricalPowerSystemStudyGuide.pdf`, `lm_propulsion_rcs_study_guide.pdf`, `Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` and the CSM/LM Operational Data Book Volume III — the seven documents this folder has acquired and extracted. That is a bounded search rather than an exhaustive one, and naming it is what makes it checkable.
   - id: ventilation_fan
     kind: flow
@@ -619,7 +623,7 @@ components:
     cfm: UNCONFIGURED
     provenance:
       basis: UNCONFIGURED
-      note: "the cabin fan's flow is not published. main_propulsion_diode.md:165's principle applies here in a different form: what matters is not the fan's rating but that the same ECS caution light can mean a glycol pump, a water separator or a suit fan (apollo_diode.md:84), so the domain needs a ventilation state without needing its rated flow."
+      note: "the cabin fan's flow is not published. main_propulsion_diode.md:165's principle applies here in a different form: what matters is not the fan's rating but that the same ECS caution light can mean a glycol pump, a water separator or a suit fan (apollo_diode.md:84), so the domain needs a ventilation state without needing its rated flow. **Searched:** `lunar_module_environmental_control_subsystem.pdf` and `csm_ecs_study_guide.pdf` — the only flow either publishes is the suit circuit's 12 cfm at 3.5 psia, which is the suit fan rather than the cabin fan, and the cabin fan's own rating is a motor figure (13,000 rpm, 30 W) with no flow beside it."
   - id: lm_water_separator
     kind: flow
     class: exchanger
@@ -634,7 +638,9 @@ components:
         the same debt for the CSM. It exists as a separate article because ECL-21 is a *separate*
         fault from ECL-11: the LM has its own exchanger, the crew have nowhere else to go while it
         fails, and a shared component would have made a surface humidity failure the same
-        injectable fault as an outbound one
+        injectable fault as an outbound one. **Searched:** `lunar_module_environmental_control_subsystem.pdf`
+        item 109 and its figure 4-4 — the separator's own performance table gives the drum's speed
+        and the gas flow it is driven by, not a condensate rate — and `lm_ecs_study_guide.pdf`
 
 # --------------------------------------------------------------------------------------
 # The atmosphere model, stated so the plant can implement it and the linter can check the

@@ -96,8 +96,12 @@ state:
         usable energy is the stored charge times a derating that falls with temperature, and **no
         source publishes the curve**: `electrical_diode.md:341` names the effect — "radiator
         isolation / poor attitude raises battery temperature and derates usable capacity" — and gives
-        no numbers. So the shape is declared and the scalar is owed, rather than a plausible
-        capacity-fade curve being invented for a vehicle whose batteries are Apollo's
+        no numbers. **Searched:** `ApolloTrainingElectricalPowerSystemStudyGuide.pdf` end to end for
+        a capacity-versus-temperature curve — it publishes the battery capacities, the 40 Ah entry
+        cells and the LM's 400/296 Ah, and no derating table — and ODB Vol III, whose electrical
+        sections are loading requirements rather than performance. So the shape is declared and the
+        scalar is owed, rather than a plausible capacity-fade curve being invented for a vehicle
+        whose batteries are Apollo's
   - id: fc_o2_draw_kg_s
     node: fc_o2_draw
     method: algebraic

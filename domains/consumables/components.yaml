@@ -228,9 +228,30 @@ state:
     node: pressurant_he
     method: stock
     unit: kg
-    initial: UNCONFIGURED
+    initial: 39.73469
+    initial_derivation:
+      expression: "sps_bottles_lb * lb_to_kg"
+      inputs:
+        sps_bottles_lb: 87.6
+        lb_to_kg: 0.45359237
+    initial_provenance:
+      basis: derived
+      relation: >-
+        the table's own 87.6 lb, converted by the international pound: 87.6 x 0.45359237 =
+        39.73469 kg
     initial_note: >-
-      no source gives a helium charge. `vehicle.yaml#propulsion.sps.pressurant` states the system and its pressures (3,600 psia nominal, regulated to 186) and no mass, which is why the node's `preloaded` note can say the stock is constant for the whole mission without ever saying what it holds
+      **the charge is published, and this entry said for a hundred rounds that it was not.** The
+      Operational Data Book's own loading table for this mission — "MISSION J-2", Table 3.2-10,
+      PDF p. 571 — lists the CSM's helium and nitrogen charge line by line: "Helium - SPS Bottles
+      3600 [psia] 70 [F] 87.6 [lb] 87.6 [earth launch weight]", "Helium - Fuel Tanks 178 ... 5.4",
+      "Helium - SM/RCS Quads A-D 4150 ... 6.0", "Helium - CM/RCS Systems A,B 4150 ... 1.0", and
+      "Nitrogen - SM 2500 ... 1.3". The stock is the **SPS bottles' 87.6 lb = 39.73469 kg**, because
+      that is the charge whose destination is this node's only edge (`E-PROP-PRESS` into
+      `prop_main`); the other three helium charges total 12.4 lb and are published with different
+      destinations (the fuel-cell reactant tanks and the two RCS systems) that this vehicle models
+      as other stocks or not at all. **The LM's charge is published too**, in its own table —
+      "LM-II - Helium & Nitrogen": APS tanks 6.6 + 6.6 lb, RCS tanks 1.05 + 1.05, DPS supercritical
+      51.2, DPS ambient 1.1 — and no LM helium stock exists in this corpus for it to fill
     quantum: 1.0e-5
     quantum_placeholder: >-
       chosen against a *quantum and minimum-flow* rule this entry cannot satisfy: the stock's
@@ -240,8 +261,15 @@ state:
       source gives it
     min_flow_per_s: UNCONFIGURED
     provenance:
-      basis: UNCONFIGURED
-      note: "the helium load and its regulated flow are not published for either vehicle; apollo_diode.md:139 gives pressurant_pressure_psi as 'vehicle dependent'. The stock exists so the F-09 trapped-line chain has somewhere to happen, and its magnitudes are owed"
+      basis: historical
+      source: "ODB Vol III (SNA-8-D-027(III) Rev 3) Table 3.2-10, MISSION J-2, 'Helium and Nitrogen' loading requirements, PDF p. 571: Helium - SPS Bottles, 3600 psia at 70 F, 87.6 lb required and 87.6 lb at earth launch"
+      note: >-
+        the value is the loading requirement and the launch weight, which the table gives as the
+        same number — the bottles are charged to 3,600 psia and that is what the vehicle carries to
+        orbit. **The regulated flow is still owed** and is a different quantity: the table gives
+        the storage pressures (3,600 psia in the bottles, 178 in the fuel tanks, 4,150 in the RCS)
+        and no mass flow, and the displacement ratio this stock feeds is `E-PROP-PRESS`'s own
+        `UNCONFIGURED` sensitivity
   - id: absorber_man_hours_csm
     node: absorber_capacity_csm
     method: stock

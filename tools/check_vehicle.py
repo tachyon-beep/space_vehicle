@@ -1331,6 +1331,20 @@ SEARCH_RECORD = re.compile(
     r"|\bpp?\.\s*\d",                                     # a page
     re.I,
 )
+# **Which documents count as a search.** The contract is what the vehicle must satisfy; the
+# archive is what it is sourced *from*, and a negative over a library cannot be established by
+# reading the specification that library is being used to fill in. Round 13 found the helium
+# charge declared "not published for either vehicle" with `apollo_diode.md:139` as its whole
+# search record — and the figure is in the Operational Data Book's own loading table, in the text
+# layer, at a page the manifest's section index already pointed at.
+CONTRACT_DOCUMENT = re.compile(
+    r"(?:^|/)_?[a-z0-9_]*_diode\.md$"           # the frozen diode corpus
+    r"|(?:^|/)diode-contract\.md$"
+    r"|(?:^|/)plant\.md$|(?:^|/)README\.md$"   # the vehicle's own prose
+    r"|deep_research/integration/",               # the reconciliation's own documents
+    re.I,
+)
+FILENAME = re.compile(r"[A-Za-z0-9_\-]+\.(?:pdf|md)\b", re.I)
 
 
 def check_unavailability_claims(documents: dict[str, Any], report: Report) -> None:
@@ -1373,6 +1387,21 @@ def check_unavailability_claims(documents: dict[str, Any], report: Report) -> No
             if not UNAVAILABILITY_CLAIM.search(note):
                 continue
             if SEARCH_RECORD.search(note):
+                # And the search has to have been made *somewhere in the archive*: a record that
+                # names only the contract, the vehicle's own prose or the reconciliation's
+                # documents is a claim about the wrong library.
+                files = FILENAME.findall(note)
+                archive = [f for f in files if not CONTRACT_DOCUMENT.search(f)]
+                without_files = FILENAME.sub(" ", note)
+                if files and not archive and not SEARCH_RECORD.search(without_files):
+                    report.refuse(
+                        where,
+                        f"claims the figure is not published and its whole search record is the "
+                        f"contract's own documents ({', '.join(sorted(set(files)))}). The diode "
+                        "corpus is what this vehicle has to satisfy, not the library it is sourced "
+                        "from: a negative over the archive has to name something in the archive, "
+                        "or the manifest's own record of where it looked",
+                    )
                 continue
             report.refuse(
                 where,

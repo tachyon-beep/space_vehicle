@@ -254,7 +254,10 @@ components:
     provenance:
       basis: UNCONFIGURED
       note: >-
-        the CM's proof and burst pressures are not published in any source reached. What matters
+        the CM's proof and burst pressures are not published in any source reached — **searched:**
+        the Operational Data Book's mass-property and consumables sections (`ODB3.txt`, all 967
+        pages of it) for a pressure-vessel qualification table, and the CSM ECS guide, which
+        publishes the relief valve's 6.0 psid and 25 inH2O limits and no vessel rating. What matters
         for the simulation is the differential limit and the leak, both of which are published;
         the vessel's qualification pressures would matter for a structural failure model, and
         `apollo_diode.md:753` puts finite-element structural mechanics out of scope.
@@ -335,7 +338,9 @@ components:
     provenance:
       basis: UNCONFIGURED
       note: >-
-        the docking tunnel's volume is not published. It matters because the tunnel is a third
+        the docking tunnel's volume is not published — **searched:** the Operational Data Book
+        (`ODB3.txt`, whole) for the word "tunnel", which appears nowhere in it, and the CSM ECS
+        guide, whose station table lists the tunnel's hatches and no volume. It matters because the tunnel is a third
         atmosphere: pressurised or not, it is what a crew pass through, and `apollo_diode.md:207`'s
         hatch interlock is really a statement about three volumes and two hatches.
 

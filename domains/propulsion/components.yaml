@@ -162,7 +162,7 @@ state:
       that reconciles them
     provenance:
       basis: UNCONFIGURED
-      note: "the regulator's transfer function is not published for either vehicle; apollo_diode.md:139 marks the channel vehicle-dependent. The five-second constant is a placeholder in shape only and the magnitudes are owed — PRP-03 is seeded against this and cannot be evaluated until they exist"
+      note: "the regulator's transfer function is not published for either vehicle — **searched:** ODB Vol III's loading tables (Table 3.2-10 gives the storage pressures, 3,600/178/4,150 psia, and no dynamics) and `mission_e_consumables.txt` (a regulator appears only as a 3 psi unit in a different assembly); apollo_diode.md:139 marks the channel vehicle-dependent. The five-second constant is a placeholder in shape only and the magnitudes are owed — PRP-03 is seeded against this and cannot be evaluated until they exist"
 
   - id: accumulated_dv_m_s
     node: internal

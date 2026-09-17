@@ -56,7 +56,7 @@ python3 contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 253 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 251 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 - a value that is needed and unset (`UNCONFIGURED`) — reported, naming what wants it, and fatal
@@ -176,7 +176,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 134 states over 57 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 253 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 251 declared debts
 and every one of them named. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
 places across three rounds while the commit messages stayed right — which is this folder's own
@@ -184,14 +184,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **253** is every obligation the linter can name:
-**104** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **251** is every obligation the linter can name:
+**102** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **178** the plant
+the missing charging efficiency, the pump-speed conversion). The **176** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 178 is the linter's 104 **plus** the graph's unset edge
+`coupling.yaml` included, so its 176 is the linter's 102 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -9289,6 +9289,66 @@ The debt count is unchanged and the reason is worth stating: the round closed on
 re-opened nothing, but that element was counted in prose, and prose obligations are counted per
 paragraph rather than per element. What moved is the trajectory itself, which was nine per cent wrong
 in its semi-major axis.
+
+## Eight claims of "not published" whose whole search was the contract
+
+The folder's most productive defect has been a debt that says *no source publishes this* while the
+source sits in the manifest. Round 5 built `check_unavailability_claims` for it, and the rule it
+enforces is the one the evidence supports: **a provenance that says the figure is not to be had must
+name a document it looked in.** What it accepted as a document was any filename — including the
+diode corpus, which is the specification the vehicle has to *satisfy*, not the library it is sourced
+*from*. A negative over 8,954 archive titles cannot be established by reading the contract.
+
+So the rule is narrowed: a search record has to name something in the archive — an acquired
+document, the manifest, or one of the corpus's own references (`A11`, `PSR`, `NR`, a table, a page).
+**Eight entries failed the narrowed rule**, and they are the same defect eight times:
+
+| entry | what it claimed | what the archive had |
+|---|---|---|
+| `consumables.pressurant_he_kg` | "the helium load and its regulated flow are not published for either vehicle" | **it is published**: ODB Vol III Table 3.2-10, MISSION J-2, in the text layer |
+| `E-BUS-BAT.sensitivity` | the converter's efficiency floor, contract-only | the EPS study guide: the rating, the bus tiers, no transfer function |
+| `eclss.ventilation_fan` | the cabin fan's flow | the ECS subsystem spec: the *suit* circuit's 12 cfm, a motor speed with no flow |
+| `eclss.lm_water_separator` | the LM separator's removal rate | item 109's own table: drum speed, no condensate rate |
+| `power.battery_usable_j_j` | no derate curve exists | the EPS guide and the ODB: neither has a capacity/temperature table |
+| `propulsion.pressurant_pressure_psi` | the regulator's transfer function | the ODB: storage pressures, no dynamics |
+| `structure.pressure_vessel_csm` | the CM vessel's proof and burst pressures | the ODB, whole: not there |
+| `structure.tunnel` | the docking tunnel's volume | the ODB, whole: the word "tunnel" does not appear |
+
+Seven of the eight are still owed and seven now say where they were looked for, which is what makes
+the next round able to ask whether that is enough. **The eighth is a value.**
+
+### The helium charge was there, with the pressures beside it
+
+```
+Helium - SPS Bottles    3600 psia   70 F    87.6 lb   87.6 lb earth launch weight
+Helium - Fuel Tanks      178 psia   70 F     5.4 lb
+Helium - SM/RCS A-D     4150 psia   70 F     6.0 lb
+Helium - CM/RCS A,B     4150 psia   70 F     1.0 lb
+Nitrogen - SM           2500 psia   85 F     1.3 lb
+```
+
+The stock takes the **SPS bottles' 87.6 lb = 39.73469 kg** — the charge whose destination is this
+node's only edge, `E-PROP-PRESS` into `prop_main`; the other three helium loads the same table
+publishes go to the reactant tanks and the two RCS systems, which are other stocks or none. The
+table's *pressures* are what `vehicle.yaml#propulsion.sps.pressurant` already declared (3,600 psia
+regulated to 186) — so the corpus had the pressure from one place and denied the mass beside it for a
+hundred rounds. And the **LM's charge is published too**, in its own table ("LM-II — Helium &
+Nitrogen": APS 6.6 + 6.6 lb, RCS 1.05 + 1.05, DPS supercritical 51.2, DPS ambient 1.1), for a
+vehicle this corpus gives no helium stock to.
+
+The regulated **flow** stays owed and is a different quantity: the table has storage pressures and no
+mass flow, and the displacement ratio this stock feeds is `E-PROP-PRESS`'s own `UNCONFIGURED`
+sensitivity.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 253 | **251** |
+| literal `UNCONFIGURED` scalars | 104 | **102** |
+| `UNCONFIGURED scalars` the plant counts | 178 | **176** |
+| `report.refuse` call sites in the linter | 744 | **745** |
+| tests in `tests/test_vehicle_config.py` | 257 | **259** |
 
 ## The invariants, and which of them are enforced
 

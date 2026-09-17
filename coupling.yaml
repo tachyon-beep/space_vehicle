@@ -748,7 +748,10 @@ edges:
         figure a crew would want is not the converter's number. So the floor is 0.94 J per W per s
         and the value is above it. Getting this wrong is not academic — it sets how long the
         vehicle can run on batteries after the cells stop, which is the same class of number as
-        the oxygen duration and is owed for the same reason
+        the oxygen duration and is owed for the same reason. **Searched for the archive's half of
+        this:** `ApolloTrainingElectricalPowerSystemStudyGuide.pdf` for the converter's dynamic
+        response — it publishes the fuel cell's rating, the bus tiers and the charger's duty
+        figure, and no converter transfer function
   - id: E-BAT-BUS
     from: battery_usable_j
     to: bus_a
