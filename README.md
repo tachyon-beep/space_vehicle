@@ -60,6 +60,14 @@ repository root as `python3 contract/diode_probe.py --diode-dir
 docs/deep_research/vehicle/.scratch/diode --slug vehicle --poll-seconds 1` — `--diode-dir` is
 relative to wherever you stand, so the two forms differ in more than the script path.
 
+**And it needs a console that is still running.** The three lines are three commands, not three steps
+of one: `--init` creates the directory and stops, the second *is* the window, and the probe has to
+attach to a window that is still being republished. Run against a console that has already exited it
+prints its header and exits 0, having checked nothing — which is this folder's oldest trap wearing the
+probe's clothes, and the reason `--cycles 0` (run until interrupted) is the form to use when the
+probe is what you are there for. The service in `docker-compose.yml` is the same loop with the same
+flag.
+
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
@@ -15808,6 +15816,128 @@ its `finally`.
 
 **Criterion 3c, and no corpus figure moved.** The window now holds all six of the contract's files,
 every one of them generated from the configuration, and the probe's baseline holds on it.
+
+## The window was a slot, and nobody had filled it
+
+`docker-compose.yml`'s `diode` service runs `/opt/diode/diode.py`, and the comment above it says what
+that is:
+
+> The implementation is mounted in by whoever builds the vehicle; without it the stack still runs —
+> the diode volume is simply an empty directory and nothing in the fleet can leave.
+
+Fifty-five rounds built the vehicle and no round built the thing that serves it, so the reference
+stack did exactly what that comment promised: every agent was handed `DIODE_DUTY_DIR=/diode/<slug>`
+from the roster, every one of those directories held nothing, and the only conclusion available to a
+fleet was that the window was silent. Criterion 3d is the missing half — **a servable diode
+entrypoint** — and this round adds it as a `vehicle` service.
+
+### Three ways a service can be a working implementation of nothing
+
+The first one is the reason this round's first build failed, and it is invisible until somebody tries
+it:
+
+| what was wrong | what it looks like | what caught it |
+|---|---|---|
+| `.dockerignore` excludes `docs/`, and the vehicle lives under it | `docker build` fails with `failed to compute cache key: "/docs/deep_research/vehicle": not found` — the `COPY` the service needs is never reached | the build itself, one commit after the `COPY` was added |
+| the window published into a directory of its own | the console runs, the window is complete, no agent can see it — everything works and nothing is read | the mount list, compared to the one the agents are given |
+| one slug named by the service rather than the roster | nine of ten agents read an empty directory while the vehicle reports a healthy window | the sweep below, and the gate's break case for it |
+
+The second is the one worth naming: a vehicle serving into `/diode/vehicle` while the agents read
+`/diode/mackerel` is not a broken service, it is a *successful* one that implements nothing. So the
+service mounts the same bind the fleet has — `./volumes/diode:/diode`, the identical line, not a copy
+of its value — and publishes inside the agents' own mount.
+
+### The `vehicle` service, and the one hard rule
+
+A new service rather than a filled-in `diode`, because the two are alternatives: two publishers into
+one `<slug>` is two vehicles wearing one name. `diode` stays the slot for whatever implementation an
+operator brings (profile `diode`), and `vehicle` is the one this repository carries (profile
+`vehicle`), so a bare `docker compose up` still starts neither.
+
+It is on **`worknet` alone**. AGENTS.md's hard rule is that agents join `worknet` and nothing else —
+and a vehicle with a route to `modelnet` would be a vehicle that could reach the fleet's mind, which
+is the one thing the frozen window exists to make impossible. The rule cuts both ways, so this side
+obeys it too. The rest of the block is the same containment the other services carry: `read_only`,
+`tmpfs: [/tmp]`, `cap_drop: [ALL]`, `no-new-privileges`, a 512 MB limit, and `unless-stopped`,
+because a publisher that exits takes the window down with it.
+
+The image carries the configuration at `/opt/vehicle` (`COPY docs/deep_research/vehicle/`) and the
+loop at `/usr/local/bin/serve_vehicle.sh`. It is baked rather than mounted for the same reason the
+services are: the image is self-contained, the copy is read-only, and the thing serving the window
+cannot be edited by anything reading it. The rest of `docs/` stays out of the build context on
+purpose — it is evidence, not runtime — so `.dockerignore` needs an `!` line after its `docs/`
+exclusion, and that line is the difference between an image with a vehicle in it and a failed build.
+
+### Which windows to serve, and why the answer is a roster
+
+The console serves one `<slug>` per process. The fleet's agents are each given their own by
+`scripts/roster.py`, which draws them into `.env` as `FLEET_N_SLUG` — names compose reads with no
+flags and hands to each agent as `DIODE_DUTY_DIR`. `serve_vehicle.sh` therefore sweeps three sources,
+in the order they win:
+
+1. `VEHICLE_SLUGS`, an explicit comma-separated list, which the compose file defaults to
+   `${FLEET_SLUGS:-vehicle}` — the roster's whole list, never one `FLEET_N_SLUG`;
+2. otherwise the directories that already exist under `$DIODE_DIR`, because an agent directory that
+   exists is an agent that will look;
+3. and always `vehicle`, because that is the window a hand-run probe points at — it costs one process
+   to keep it there, and the copy is deduplicated so a roster that already names it gets one console.
+
+One console per slug, all of them backgrounded, and the shell ends in `wait`: a service that forked
+and returned would be a service whose container exits while its workers keep publishing into a volume
+nothing supervises. `--cycles 0` rather than a count, because a window that stops republishing is not
+a mirror any more. A typo in `VEHICLE_SCENARIO` stops the service with the console's own message
+naming the three postures, rather than running a nominal mission under a crisis label.
+
+### The mistake: a fixture the daemon could not see
+
+Round 56's verifier mounted a bind source created by `tempfile.mkdtemp()`, and case 3 reported that
+**all three windows were missing** — `vehicle`, `mackerel` and `cinnabar`, every file of every one.
+The service was fine. This harness runs each command in a private `/tmp`, and the daemon resolves a
+bind source in *its* own namespace, so the container came up with an empty `/diode` and published
+into a directory nothing on the host would ever read. The manual run that had worked an hour earlier
+used a workspace-local `mkdir -p` + `chmod 777`, and that was the whole difference.
+
+It is this folder's *"a check that cannot run is not a check that passed"* arriving from the other
+side: a check that ran, failed, and was reporting on its own fixture rather than on the vehicle. The
+fixture is workspace-local now, and the case passes against the container.
+
+### The gate: four shapes, and the copies that prove it refuses
+
+One test, `test_the_vehicle_is_servable_from_the_compose_file`, holds the four shapes the service can
+fail into. Two of its assertions are worth naming because they are not "the file contains a string":
+
+- it reads `.dockerignore` **the way the builder does** — last match wins, `!` re-includes, a pattern
+  matches the path or any directory above it — so it tests the exclusion rather than that somebody
+  typed the path. The rest of `docs/` must still come out;
+- it **runs the serve script** against a stub vehicle and a diode directory holding one real agent
+  directory, three roster names in the environment, and one plain file. The roster's names are swept,
+  the live directory is swept, the file is not an agent, and the four windows that appear are exactly
+  the four that should. The stub holds each window open for two seconds, which is how the test can
+  tell `wait` from a fork: the script returns in under a tenth of a second without it.
+
+`.scratch/r56/verify_service.py` breaks copies of the four artefacts — `.dockerignore`,
+`Dockerfile.agent`, `docker-compose.yml`, `containers/serve_vehicle.sh` — one break per case, and
+runs the gate against the fixture with `REPO` repointed at it. Five breaks, five refusals, and the
+unbroken copy passing: the `!` line removed, the mount moved beside the agents', `windowside` added
+to the network list, the slug default narrowed to `vehicle`, and the roster sweep deleted.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order · a real tick | 42 · 25 · 12 · 60 · 33 of 139 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 306 | **307** |
+| the diode probe | 14 passed · 0 failed · 1 skipped, hand-run | **the same, against a window served by a container** |
+| compose profiles that parse | `fleet`, `diode` | **`fleet`, `diode`, `vehicle`** |
+| `sh scripts/verify_containment.sh --all` | 15 passed · 0 failed · 2 skipped | **unchanged, with the vehicle up** |
+
+**Criterion 3d, and criterion 3 with it.** The four parts are landed: a run can say which scenario it
+is (round 53), the ring is bounded and accounts for its losses (round 54), the window's sixth file is
+generated (round 55), and the window is now something the stack can serve. What is left of the
+handover is criterion 4 — the folder moving to its own repository with its history, and `space_chassis`
+keeping only a pointer and the frozen contract — for which the plan is
+`.scratch/apollo/CRITERION-4-PLAN.md`, and the rule layer, which is where the states are.
 
 ## The invariants, and which of them are enforced
 
