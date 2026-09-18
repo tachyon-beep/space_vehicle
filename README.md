@@ -71,7 +71,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 260 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 273 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -204,7 +204,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 260 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 273 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
 a real tick advances **36** of the 139 states, and the build order's **36** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -16658,6 +16658,108 @@ Correcting the bucket totals turned up a status sentence that was wrong four way
 The count is 64 of 139, and the "134" was round 62's figure in a sentence round 58 had already
 stopped describing. It is the same defect the last four rounds have been finding, arriving in the
 paragraph that explains the worklist.
+
+## Thirteen edges multiply by a number that does not exist
+
+Round 63 left a note saying the three stocks it had just reattributed were the cheapest edge-bucket
+win on the board, and that the fix was one `advances` per edge. This round went to collect it. **The
+note was wrong, and finding out why is the round.**
+
+### What the note missed
+
+`E-CREW-ATM` is `kg/h per crew`, from `crew_state` to `cabin_atm`. Its own note says *"the count comes
+from the configuration"*, and `E-FC-DRAW-O2` next door — same crowded source node, same shape — is
+read happily by the plant. So the obvious move was to make the plant read the state an edge names,
+and the round did that: `advances` was handed to `stock_flux` as the driver.
+
+```
+stock_flux(world, edge, values, dt, driver_node=edge.advances)
+```
+
+Two states started advancing and the build order's first line went from 36 to 39 — and then the
+classifier still filed both under *owes an edge*, which is the one disagreement `build_order`'s first
+line forbids. Reading the value told the story: `advances` names the state on the **target** node a
+flux is integrated into. On `E-CREW-ATM` it is `csm_cabin_co2_kg` — the stock's own name — so the
+plant was multiplying the crew's per-crew rate by the cabin's CO2 mass. A plausible number, of the
+wrong quantity, which is this folder's oldest sentence. The change was reverted.
+
+**`advances` speaks for one end of an edge and the driver is the other end.** `E-FC-DRAW-O2` looked
+like a counter-example because its `advances: fc_o2_draw_kg_s` *is* a state name the plant reads —
+but that state is on the target node, and `state_level` finds it because the target is where it
+lives. Nothing about the field names the source.
+
+### The question nobody was asking
+
+`drains` asks the outbound half of a stock edge which state the flow leaves. `advances` asks the
+inbound half which state it feeds. **Neither asks whether the value the sensitivity multiplies exists
+at all** — and on a node carrying more than one state it does not, because `state_values` writes a
+node key only when one state owns the node. So the check now asks the source end:
+
+> `coupling.yaml:edge E-FC-BUS: reads fuel_cell, which carries 2 states (['fuel_cell_power_w',
+> 'source_converter_v']), and a node carrying more than one state publishes no value under its own
+> name — so the driver this flux multiplies by is `None` on every tick rather than late on this one.`
+
+| source node | states | edges |
+|---|---:|---|
+| `fuel_cell` | 2 | `E-FC-BUS`, `E-FC-BUSB`, `E-FC-HEAT`, `E-FC-DRAW-O2`, `E-FC-DRAW-H2`, `E-RAD-THERM` |
+| `link` | 2 | `E-AMP-LOAD`, `E-LINK-TEL` |
+| `vehicle_dynamics` | 3 | `E-DYN-GNC`, `E-DYN-GEOM` |
+| `cabin_atm`, `lm_cabin_atm` | 5 each | `E-CABIN-CO2-REMOVAL`, `E-LM-CABIN-CO2-REMOVAL` |
+| `crew_state` | 3 | `E-CREW-ATM`, `E-LM-CREW-ATM` |
+
+**Five of the thirteen are latent, and that is the finding.** Eight land on states a tick already
+refuses, so the build order reports their targets' blockers and an implementer reaches them in the
+end. The other five land on states that are advancing — `fc_o2_draw_kg_s`, `fc_h2_draw_kg_s`,
+`co2_removal_csm_kg_s`, `co2_removal_lm_kg_s`, and `published_evidence`, which is a sink and carries
+no state at all:
+
+| latent edge | target | why nothing fails |
+|---|---|---|
+| `E-FC-DRAW-O2` | `fc_o2_draw` | `fc_o2_draw_kg_s` is *ready* — it is `algebraic` with a derivation, so it never asks the edge for a driver |
+| `E-FC-DRAW-H2` | `fc_h2_draw` | the same, for hydrogen |
+| `E-CABIN-CO2-REMOVAL` | `co2_removal_csm` | `co2_removal_csm_kg_s` derives its own value |
+| `E-LM-CABIN-CO2-REMOVAL` | `co2_removal_lm` | the same, at the LM |
+| `E-LINK-TEL` | `published_evidence` | a sink, which is read back by nothing |
+
+So nothing is failing today, nothing was counting them, and the day somebody made one of those
+targets *need* its edge — or read `published_evidence` back — the flux would refuse with a message
+about a driver that never existed. A count that only moves when something breaks is a count that
+arrives too late.
+
+**The eight that are not latent are still worth counting**, and for the opposite reason: their
+targets are blocked on something else, so the worklist reports that other thing and the edge debt is
+invisible behind it. Both halves of the family are defects the report was not showing.
+
+### A debt rather than a refusal, and why
+
+The repair is a **decision between two repairs that are not equivalent**: give the source node a
+state that *is* the quantity the edge wants — the cell's output power on `fuel_cell`, a crew count on
+`crew_state` — or add a field naming which state on a crowded source an edge reads. The first changes
+what the vehicle models; the second changes what an edge may say, and would mean amending `plant.md`
+§2 and the linter together. Eleven edges across five domains ride on the answer, so it is recorded in
+`coupling.yaml#open_debts` and in `domains/crew/components.yaml#open_debts` with both options named,
+rather than chosen by a round that would be deciding the graph's shape for four domains it was not
+looking at.
+
+**This is the first round in five that increased the debt count rather than decreasing it**, and that
+is the honest direction: eleven defects were always there and were being reported as zero.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 260 | **273** |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 23 | 23 |
+| build order · owes an edge | 16 | 16 |
+| build order · owes a rule | 64 | 64 |
+| `report.refuse` call sites | 790 | 790 |
+| tests | 315 | **316** |
+
+Thirteen new debts — eleven from the check and two from the `open_debts` sentences that record the
+decision. **No state moved and no figure the objective watches changed**, because this round found a
+family of defects that were invisible rather than one that was breaking something.
 
 ## The invariants, and which of them are enforced
 

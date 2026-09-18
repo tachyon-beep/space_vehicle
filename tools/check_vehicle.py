@@ -2221,6 +2221,55 @@ def check_coupling(
                 f"({sorted(candidates)})",
             )
 
+    # --------------------------------------------------------------------------------------
+    # **And the same question at the other end: a source node that publishes no value key.**
+    #
+    # `state_values` writes a node key only when one state owns the node, so an edge whose *source*
+    # carries more than one state multiplies its sensitivity by `None` — on every tick, forever. The
+    # `drains` rule above asks the outbound half of this for stocks and `advances` asks the inbound
+    # half for the state being integrated; neither asks whether the value the flux *reads* exists.
+    #
+    # Fourteen edges are in that position today and four of them are what round 65 found: `E-CREW-ATM`
+    # and `E-LM-CREW-ATM` (`kg/h per crew` off `crew_state`, which carries three states), `E-FC-HEAT`
+    # (`W per W` off `fuel_cell`, which carries two), and `E-CABIN-CO2-REMOVAL` and its LM twin
+    # (`kg CO2 per kg CO2` off the five-state cabin nodes). The rest are the same shape in the
+    # electrical and GNC domains — `E-FC-BUS`, `E-RAD-THERM`, `E-AMP-LOAD`, `E-DYN-GNC` and the two
+    # `E-FC-DRAW-*` edges.
+    #
+    # **A debt rather than a refusal, and the reason is that the repair is a decision.** Two are
+    # available and they are not equivalent: give the source node a state that *is* the quantity the
+    # edge wants — a crew count on `crew_state`, the cell's output power on `fuel_cell` — or declare
+    # a field naming which state the flux reads. The first changes what the vehicle models; the
+    # second changes what an edge may say. Choosing between them is a decision about the graph, and
+    # the corpus's rule is that a decision goes in `open_debts` as a sentence rather than into a
+    # check as a default. So the debt is counted, named, and left where the next round will find it.
+    #
+    # `E-FC-DRAW-*` is the case worth reading twice, because it *looks* like a counter-example: its
+    # `advances: fc_o2_draw_kg_s` is the name of a state, but the state is on the edge's **target**
+    # node, not its source, and the plant reads it because `state_level` prefers `values[state.id]`.
+    # That is the target's value being read, not the source's, and it is why an `advances` that
+    # names a state on the target cannot be reused here as the driver's name: the field speaks for
+    # one end of the edge, and the ends are different quantities.
+    # --------------------------------------------------------------------------------------
+    for edge in edges:
+        source = str(edge.get("from"))
+        if edge.get("kind") == CLAMP_KIND:
+            continue
+        if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
+            continue
+        sharers = (states_by_node_map or {}).get(source) or []
+        if len(sharers) < 2:
+            continue
+        report.debt(
+            f"coupling.yaml:edge {edge.get('id')}",
+            f"reads {source}, which carries {len(sharers)} states ({sorted(sharers)}), and a node "
+            "carrying more than one state publishes no value under its own name — so the driver this "
+            "flux multiplies by is `None` on every tick rather than late on this one. What is owed is "
+            "one of two repairs and they are not equivalent: give the node a state that *is* the "
+            "quantity this edge wants, or declare which state the flux reads. The first changes what "
+            "the vehicle models and the second changes what an edge may say",
+        )
+
     for edge in edges:
         if edge.get("to") not in stock_nodes and edge.get("from") not in stock_nodes:
             continue
