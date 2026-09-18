@@ -206,12 +206,11 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **36** of the 139 states, every one of them inside the build order's **38** ready
-— the second of those is the objective's own second completion criterion, and both are read
-out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The two the bucket
-promises that no tick reaches are blocked by another state's debt rather than their own —
-`coolant_flow_kg_s` by `bus_a_v`'s missing rule and `prop_rcs_kg` by `thruster_thrust`'s — which is
-the distinction `plant.py --readiness` draws between a gap and its root. The sentence above claimed
+a real tick advances **36** of the 139 states, and the build order's **36** ready are that same set
+— the second of those figures is the objective's own second completion criterion, and both
+are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
+58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
+which declarations look complete, which is what makes the two equal rather than merely close. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
 figures that measure the remaining work were neither stated here nor asserted anywhere. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -1626,7 +1625,8 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 60 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 62 of the 139 states need code — 60 when this round was
+written, and the move is round 58's bucket attribution rather than two more classes of code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1811,21 +1811,23 @@ on a stock node while driving something else, **but only on the inbound side mat
 The folder's answer to "what do I implement first" is now a **derived** view, for the same reason
 `--order` and `--phases` are: an authored worklist drifts the moment anybody lands anything, and a
 stale build order is worse than none because it sends the next reader to work that is already done.
-`plant.py --build-order` classifies every state by `advance()`'s own refusal order — the same
-sequence of tests the plant runs when it gets there. **The two *can* disagree**, and for nine states
-they did until round 57: the classifier asks what is missing from a definition and a tick asks what
-it can compute right now, and a state whose own declaration is complete but whose driver's is not
-answers those two questions differently. What the bucket now guarantees is the second question's
-half of it — nothing in *ready now* is blocked on its own declaration, which
-`test_the_tick_can_read_what_the_build_order_promises` holds against a real tick's own gap list.
+`plant.py --build-order` classifies every state by a **real tick's own gap list**, run once at t=0 —
+and files each blocked state under what its *root* owes, following `needs` to the state an
+implementer should open first. That is round 58's change, and it replaced a second classifier: the
+worklist used to run its own sequence of tests over each state's spec and answer a different question
+from the one a tick answers, which left nine states filed *ready now* and refused by the first tick
+in round 57 and two more still after it. `test_the_build_order_is_the_ticks_own_gap_list` holds the
+two sets equal, and `--readiness` still counts what a *declaration* is missing: 25 states carry a
+debt, and the three that differ from this bucket are the ones a tick cannot reach because a value
+their producer is missing has not moved them.
 
 ```
 139 states, by what blocks them:
 
-    38   27 %  ready now — the classes the reference plant can advance
-    25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
-    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    60   43 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    36   26 %  ready now — the states a real tick advances
+    28   20 %  owes a value — the cheapest to close, and the debt count already tracks them
+    13    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    62   45 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -16071,7 +16073,92 @@ would have to start, and a finding of its own.
 | `report.refuse` call sites | 780 | **781** |
 | the diode probe | 14 passed · 0 failed · 1 skipped | unchanged |
 
-## The invariants, and which of them are enforced
+## The worklist was a second classifier, and it promised two states no tick could reach
+
+`plant.py --build-order` printed four buckets, and the first line was a promise:
+
+```
+    38   27 %  ready now — the classes the reference plant can advance
+```
+
+Two of those thirty-eight — `coolant_flow_kg_s` and `prop_rcs_kg` — were refused by a real tick.
+Their own declarations are complete: the lag has its `tau_s`, the stock its `quantum`, both have
+their drivers. What stops them is a state they *read*: `bus_a_v` owes an `algebraic` rule and
+`thruster_thrust` a `dynamics` one. Nine more were in the same position until round 57, three of them
+the tick's own *roots*.
+
+The report was not wrong about the question it was answering. `build_order` ran its own sequence of
+tests over each state's spec and asked *what is missing from this definition*, while `advance` asked
+*can I compute this right now* — and the docstring said so, at length, with a ledger of the
+thirty-six states where the two landed in different buckets. That sentence was true and it was not a
+defence: a worklist's entire job is to send an implementer to the right file, and a bucket marked
+*ready now* that no tick can reach sends them nowhere at all.
+
+### The classification is the tick now
+
+`build_order` runs **one tick**, at t=0, and its gap list is the classification:
+
+- **ready** — a real tick advanced it. Not "its declaration looks complete": advanced.
+- **owes a value / an edge / a rule** — the state is blocked, and the bucket is the one its **root**
+  belongs to, where the root is found by following `needs` — the producer this state could not read —
+  until a state that is blocked on its own declaration.
+
+The per-state tests survive as `_classify`, and they are still the whole of a root's verdict: the
+parameter the method owes, the driver it needs, the rule its class is. What changed is *which state*
+they are asked about — the one that owns the debt, rather than the one being filed.
+
+**And the chain is `needs`, not `roots()`.** `roots()` answers a reporting question — which gaps are
+independent of each other — and it counts a sentinel state as a consequence of the sibling before it,
+because the sentinel's states are sequenced. That is true about a tick and useless as a worklist:
+attributed that way, fifty-two of the vehicle's states blame one `discrete` state on the sentinel,
+and an implementer would go and write `computer_mode` expecting to unblock a third of the vehicle.
+Each of those fifty-two owes its own rule. The two relations are named separately for that reason,
+and the largest blame group under the honest one is four.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 38 | **36** |
+| build order · owes a value | 25 | **28** |
+| build order · owes an edge | 16 | **13** |
+| build order · owes a rule | 60 | **62** |
+
+Nothing about the vehicle moved: the same 36 states advance and the same 261 declarations are owed.
+What moved is where the worklist says to start — and two figures that used to look like a
+disagreement now read as one number stated twice.
+
+**The `--readiness` count is deliberately not this one.** It says 25 states carry a declaration debt,
+because that is what it counts; this report says 28 states are blocked behind a value, because three
+of them are blocked behind a value *somebody else* has not supplied. Both are true, they answer
+different questions, and the README now states them side by side rather than expecting them to agree.
+
+### The tests
+
+`test_the_build_order_and_advance_disagree_only_the_two_documented_ways` is gone, and its subject
+with it: it ran `advance` over every state with a permissive value map — a map with a key for every
+node — and pinned five kinds of disagreement between the two classifiers. Its replacement,
+`test_the_build_order_is_the_ticks_own_gap_list`, asserts the sets are equal in both directions,
+follows each gap to its root and checks the bucket against the root's own verdict, and pins the four
+totals as the guard the disagreement counters used to be.
+
+One figure from the old ledger is worth keeping: **`counted_more` was 21 and is 0**, and its
+emptiness is the round rather than a deletion. Those twenty-one states carry an `UNCONFIGURED` the
+integrator never reads, so the permissive-map comparison saw a "value debt" that `advance` computed
+through — and a tick-driven classification never asks the per-state tests about a state it advanced,
+so no state can be both. The declarations those twenty-one owe are still counted, by `--readiness`,
+which is where a *declaration's* debts belong.
+
+`test_the_tick_can_read_what_the_build_order_promises` — round 57's test — is strengthened rather
+than replaced: it asserted that no ready state was blocked on its own declaration and pinned the two
+that remained; it now asserts that the ready bucket and the tick's advanced set are equal.
+
+**And the bucket's title says what it means.** "ready now — the classes the reference plant can
+advance" described a class; "ready now — the states a real tick advances" describes the set.
+
+## The invariants, and which of them are enforced## The invariants, and which of them are enforced
 
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

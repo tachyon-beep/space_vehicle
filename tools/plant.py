@@ -2286,7 +2286,7 @@ def report_build_order(world: World) -> None:
     buckets = build_order(world)
     total = sum(len(v) for v in buckets.values())
     titles = {
-        "ready": "ready now — the classes the reference plant can advance",
+        "ready": "ready now — the states a real tick advances",
         "value": "owes a value — the cheapest to close, and the debt count already tracks them",
         "edge": "owes an edge — a coupling with no sensitivity, or a state nothing drives",
         "rule": "owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code",
@@ -2305,6 +2305,258 @@ def report_build_order(world: World) -> None:
             print(f"  domains/{state.domain}/components.yaml:state {state.id} ({state.method})")
 
 
+
+
+def _classify(world: World, state: State) -> str:
+    """What this state's *own* declaration is missing: `value`, `edge`, `rule`, or nothing.
+
+    This is the sequence of tests `build_order` has run since the worklist existed — the parameter
+    the method owes, the driver it needs, the rule its class is — lifted out of the loop so the
+    worklist can ask it of a state **other than the one it is filing**. Round 58 attributes every
+    blocked state to the *root* of its input chain, and the bucket an implementer should open is the
+    root's.
+    """
+    owed = OWED.get(state.method)
+    if state.owed or (owed and state.spec.get(owed[0]) in (None, "UNCONFIGURED")):
+        return "value"
+    incoming = [
+        e
+        for e in world.edges
+        if e.target == state.node
+        and e.id not in world.back_edges
+        and (e.advances is None or e.advances == state.id)
+    ]
+    # ------------------------------------------------------------------------------
+    # **Two ways this disagreed with `advance()`, which the docstring above says it
+    # cannot.** The classification is supposed to be the same sequence of tests the plant
+    # runs when it gets there, and it ran two tests the plant does not.
+    #
+    # A tank filled at the pad has no incoming edge *on purpose*, and `advance` exempts it
+    # by name — "without this exemption the plant refuses `water_cooling`, `o2_lm`,
+    # `prop_rcs` and `pressurant_he` — four stocks that are correctly declared and simply
+    # drain". This classifier did not have the exemption, so `o2_csm_kg`, `o2_lm_kg` and
+    # `h2_csm_kg` were reported as owing a driver they do not need and cannot have. Their
+    # outbound drains are all usable, so the plant integrates them happily: they are
+    # **ready**, and the worklist was telling an implementer to go and build three edges
+    # that must not exist.
+    #
+    # And a state on the `internal` sentinel cannot be reached by *any* edge, because the
+    # sentinel is not a node — `coupling.yaml#nodes` does not declare it and nothing can
+    # target it. So "no incoming edge" is not a gap in the graph for those states; it is
+    # what the sentinel means, and the thing they need is the domain code that advances
+    # them. Reporting them as owing a coupling sent an implementer to the wrong file for
+    # thirteen states.
+    # ------------------------------------------------------------------------------
+    preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
+    # **Declared arithmetic first, sentinel or not.** This test used to sit below the
+    # sentinel routing, and the routing `continue`s — so the one rule that asks "is the
+    # rule already in the configuration?" was unreachable for every state on the sentinel.
+    # `avionics_bay_heat_w`, the fifth heat rate, is what exposed it: its arithmetic is a
+    # `derivation` over three dotted paths, the linter re-derives it, the plant evaluates it
+    # in a real tick — and the worklist filed it under "owes a rule: domain code" and sent
+    # an implementer to write a rule that exists. The sentinel means "advanced with its
+    # domain", which is a statement about *where the driver comes from*, not about whether
+    # one is declared; a state whose inputs are all named has nothing left to write.
+    #
+    # **And it reads the same key `advance` does, which it did not until the round that
+    # found the disagreement.** This was `state.spec.get("derivation") or provenance...`,
+    # the same expression `advance` carried — so a state declaring its arithmetic only at
+    # the state level was called *ready* for a tick that the linter's own rule could not
+    # see, and the state at the top of this bucket's list was reported as implemented for
+    # a rule declared nowhere a check looks. A worklist that reads a different declaration
+    # than the checker is the "two readers, two answers" defect this function's own
+    # docstring is about.
+    if state.method == "algebraic":
+        derivation = (state.spec.get("provenance") or {}).get("derivation")
+        if derivation is not None:
+            return "ready"
+    if state.method == "delay" and isinstance(state.spec.get("delay_s"), (int, float)):
+        # **The seventh class joined the ones the plant can advance, and this classifier did
+        # not hear about it.** `loop_transport_t` declares its `initial`, its `delay_s` and
+        # its driver at `K per K` = 1.0, and round 49 gave `advance` the ring that walks it —
+        # so the worklist was still filing the one state whose rule was *never* missing under
+        # "owes a rule: domain code", which is the same defect as the `algebraic` case above
+        # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
+        # makes it the third method a configuration can carry on its own.
+        return "ready"
+    if (
+        state.method == "dynamics"
+        and state.spec.get("driven_by") is not None
+        and isinstance(state.spec.get("mass_kg"), (int, float))
+        and isinstance(state.spec.get("initial"), (int, float))
+    ):
+        # **The sixth class, one state at a time.** `accumulated_dv_m_s` is the scalar shape
+        # the plant's `dynamics` branch implements — a named driver, a mass to divide by, and
+        # a zero to accumulate from — so the worklist has to call it ready for the same reason
+        # it calls a `delay` with a `delay_s` ready: the rule is in the configuration. The
+        # 6-DOF states are not, and the three conditions are what tells them apart rather than
+        # a list of names.
+        return "ready"
+    if state.node == "internal":
+        # Advanced with its domain, so its driver is code rather than an edge. This is the
+        # same distinction `check_domain` draws for `internal_order`.
+        return "rule"
+    # **A state with no input at all owes an edge, whatever its method.**
+    #
+    # This test used to name four methods, on the reasoning that a `lag` or a `stock` is
+    # the kind of state an edge drives and an `algebraic` one is domain code. But the
+    # question a *worklist* answers is what is missing from the definition, and for a state
+    # with no inbound edge, no `preloaded` exemption and no sibling on its node, the answer
+    # is an input — no rule can be written without one.
+    #
+    # `bus_b_v` is the case, and it is the state the plant stops at. `power.dc_bus_b_v` is
+    # published, has an undervoltage threshold, three faults that perturb it and a place on
+    # a crew panel — and `bus_b` has **no inbound edge in the whole graph**. The tie is
+    # declared B -> tie -> A, so bus B is a *source* for bus A, while the state's own note
+    # calls it "second bus, cross-supported through the tie". `check_power_inventory` says
+    # the quiet part out loud — "which bus a source feeds is a routing decision the tie
+    # makes and the file does not state" — so the configuration knows, and the worklist was
+    # still sending an implementer to write code for a state that has nothing to read.
+    #
+    # `discrete` and `hazard` are excluded because they are exceptions in fact rather than
+    # by convention: a mode is moved by a command, an event or the domain's own logic, which
+    # `moved_by` declares, and a hazard is drawn rather than computed.
+    # **And the driver has to be one the integrator can use.** `lag_driver_basis` is the
+    # rule round 18 added, and this classifier has to ask it for the same reason it asks
+    # `usable`: a lag whose driver edge is in a different quantity is not "ready now" — it
+    # is a coupling that cannot be integrated, and the bucket an implementer should read is
+    # the edge. Without this the build order called four states ready that `advance` refuses
+    # by name, which is precisely the disagreement this function's docstring says cannot
+    # happen.
+    if state.method == "lag" and incoming:
+        node_map = {name: dict(node) for name, node in world.nodes.items()}
+        ok, _ = lag_driver_basis(
+            {
+                "id": incoming[0].id,
+                "from": incoming[0].source,
+                "to": incoming[0].target,
+                "kind": incoming[0].kind,
+                "sensitivity": incoming[0].sensitivity,
+            },
+            str(state.spec.get("unit") or ""),
+            node_map,
+        )
+        if not ok:
+            return "edge"
+    siblings = [o for o in world.states_on(state.node) if o.id != state.id]
+    # **Either form of declared arithmetic counts, and `derivation` is the stronger one.**
+    # This tested only `computation`, so the round that converted twelve literal
+    # computations into derivations moved five states — `cabin_heat_csm_w`,
+    # `cabin_heat_lm_w`, `service_bay_heat_w`, `descent_bay_heat_w` and
+    # `environment_heat_w` — out of "owes a rule" and into "owes an edge", which is the
+    # opposite of what happened: their inputs went from being *restated as literals* to
+    # being *named by dotted path*. A classifier keyed on one spelling of a declaration
+    # reads the other spelling as absence, which is this folder's oldest finding arriving
+    # in the worklist that exists to send an implementer to the right file.
+    provenance = state.spec.get("provenance") or {}
+    declares_own_inputs = bool(
+        provenance.get("computation")
+        or provenance.get("derivation")
+        or state.spec.get("computation")
+    )
+    if not incoming and not preloaded:
+        # A `lag`, `stock`, `delay` or `dynamics` with no driver owes an edge wherever it
+        # sits — an integrator has to be integrated from something.
+        if state.method in {"lag", "stock", "delay", "dynamics"}:
+            return "edge"
+        # And an `algebraic` one with no driver, no sibling and **no computation of its
+        # own** owes an edge too. The computation is the distinguisher, and the corpus
+        # draws it: `cabin_heat_csm_w` carries `total_w: 733` with a `computation` summing
+        # the loads `heat_inputs` assigns, so its inputs are declared outside the graph and
+        # it needs no edge. `bus_b_v` carries nothing — its own reason says it is "the same
+        # nodal solve over a *different source and load set*", and the load set is the part
+        # that exists.
+        if state.method == "algebraic" and not siblings and not declares_own_inputs:
+            return "edge"
+    # The bucket asks whether the *coupling is declared*, and the corpus has two complete
+    # forms. This asked `usable`, which is the integrator's narrower question — can I
+    # multiply by it — so a `discrete` edge carrying the `regimes` table the linter
+    # *requires* of it ("a mode selection is a table rather than a sensitivity") read as a
+    # missing coupling. `load_shed_class` is the case, and it moved buckets when its edge
+    # was retargeted from the scalar form to the table form: the vehicle had not lost a
+    # coupling, the edge had changed shape. Only the two methods `advance()` integrates need
+    # a value it can apply; everything else on a node is domain code and needs the coupling
+    # to be *stated*.
+    integrated = state.method in {"lag", "stock"}
+    if any(not (e.usable if integrated else e.declared) for e in incoming):
+        return "edge"
+    # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
+    # else, so a delay state is domain code like the rest. Classifying it as ready would
+    # have promised the plant a state it cannot advance.
+    if state.method in {"algebraic", "discrete", "dynamics", "hazard", "delay"}:
+        return "rule"
+    # **A driver that no reader can ever see is a coupling, not a value that is late.**
+    # `state_values` publishes a node key only for a node with one state, so a flux whose
+    # driver is a multi-state node is unreadable on every tick rather than this one — and
+    # this classifier called four such states ready while the tick refused each by name:
+    # `water_cooling_kg` (through `radiator_reject`, which carries a lag in K and a rejection
+    # in W) and the three cabin-gas stocks that discharge against `crew_state`, which carries
+    # three. The bucket is the edge, because what is missing is the declaration of *which*
+    # state the flux reads — the same shape as an edge with no sensitivity, arriving through
+    # the other end of the read.
+    unreadable = [
+        node for node in driver_nodes(world, state) if len(world.states_on(node)) > 1
+    ]
+    if unreadable:
+        return "edge"
+    return "ready"
+
+
+
+def tick_seconds(world: World) -> float:
+    """The mission's declared tick, or a named refusal — the clock a build order has to share.
+
+    `--determinism` has read `mission.yaml`'s `tick_hz` since it existed, and it is the only clock
+    the vehicle has: a stock's quantum is compared against a flow *per tick*, and a build order that
+    ran its one tick at some other rate would classify states against arithmetic no run performs.
+    """
+    tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
+    if not isinstance(tick_hz, (int, float)) or tick_hz <= 0:
+        raise Unconfigured("mission.yaml", "declares no numeric tick_hz, so there is no tick to run")
+    return 1.0 / float(tick_hz)
+
+
+def blame(world: World, gaps: list[Gap]) -> dict[str, Gap]:
+    """For every gap, the gap an implementer should fix first — its root, by following `needs`.
+
+    **This is a different relation from `roots()`, and the difference is the whole point.** `roots()`
+    answers *which gaps are independent of each other*, which is a reporting question, and it counts
+    a sentinel state as a consequence of the sibling before it — the sentinel's states are sequenced,
+    so a tick that cannot advance the first of them cannot stage a value for the second. That is true
+    about a *tick* and useless as a worklist: attributed that way, fifty-two of the vehicle's states
+    blame one `discrete` state on the sentinel, and an implementer would go and write `computer_mode`
+    expecting to unblock a third of the vehicle. Each of those fifty-two is blocked on its **own**
+    missing rule, and this relation says so.
+
+    So the chain followed here is the input chain only — `needs`, the node whose value a state could
+    not read — and a state whose `needs` names a node with no gap on it is its own root. A state
+    blocked on its own declaration is always its own root, which is what makes the returned bucket
+    the one to open.
+    """
+    by_node: dict[str, list[Gap]] = {}
+    for gap in gaps:
+        if gap.state.node != "internal":
+            by_node.setdefault(gap.state.node, []).append(gap)
+    order = {state.id: index for index, state in enumerate(
+        [s for node in world.schedule for s in world.states_on(node)] + world.sentinel_states()[0]
+    )}
+    for rows in by_node.values():
+        rows.sort(key=lambda gap: order.get(gap.state.id, 0))
+    fixed: dict[str, Gap] = {}
+    for gap in gaps:
+        seen: set[str] = set()
+        current = gap
+        while current.state.id not in seen:
+            seen.add(current.state.id)
+            if not current.needs or current.needs == current.state.node:
+                break
+            candidates = by_node.get(current.needs) or []
+            if not candidates:
+                break
+            current = candidates[0]
+        fixed[gap.state.id] = current
+    return fixed
+
 def build_order(world: World) -> dict[str, list[State]]:
     """What blocks every state, in the order the schedule reaches them — **derived, never authored**.
 
@@ -2313,252 +2565,59 @@ def build_order(world: World) -> dict[str, list[State]]:
     anybody lands anything, and a stale build order is worse than none because it sends the next
     reader to work that is already done.
 
-    **The classes are `advance()`'s refusal order, and this is deliberately *stricter* than it.**
-    The sentence here used to claim the two "cannot disagree", and they can: run `advance` over
-    every state with a permissive value map and thirty-six of them land somewhere else. Every one
-    is one of two kinds, and neither is a defect —
+    **The buckets are the *tick's own gaps*, attributed to the state that owns each one.** Until
+    round 58 they were a second classifier: a sequence of tests over each state's own spec, run
+    independently of `advance()`, which answered "what is missing from this definition". That is a
+    useful question and it is not the one a worklist is for — and the two answers came apart. Nine
+    states were filed **ready now** and refused by the very first tick; `coolant_flow_kg_s` and
+    `prop_rcs_kg` still were after round 57, because their own declarations are complete and what
+    blocks them is a state they read. A reader who trusts the first line of this report would go and
+    write code for states that need somebody else's code first, and one who does not cannot use the
+    report at all.
 
-      * **twenty-three are this classifier counting more.** `advance` refuses on the parameter its
-        *method* needs (`tau_s`, `quantum`, `delay_s`, `lambda_per_h`) and on nothing else; this
-        walks the whole spec, so a state whose `initial` or `moved_by` or `basis` is unset is
-        reported as owing a value even where the plant would advance it from a number it was
-        handed. That is the honest direction for a *worklist*: the spec is incomplete and the
-        bucket says so.
-      * **thirteen are the `internal` sentinel**, which this routes to `rule` and `advance` calls a
-        missing edge. No edge can reach the sentinel — it is not a node — so its driver is domain
-        code, and `rule` is the file an implementer should open.
+    So the tick runs, once, at t=0, and its gap list *is* the classification:
 
-    So the two describe different questions on purpose: `advance` answers *"can I compute this
-    right now"*, and this answers *"what is missing from the definition"*. What the classification
-    must not do is send a reader somewhere the answer is not — and it did, for sixteen states,
-    until the `preloaded` exemption and the sentinel routing above were added. The same sequence of
-    tests, then, with two deliberate differences:
+      * **ready** — a real tick advanced it. Not "its declaration looks complete": advanced.
+      * **owes a value / an edge / a rule** — the state is blocked, and the bucket is the one its
+        **root** belongs to, where the root is found by following `needs` — the producer this state
+        could not read — until a state that is blocked on its own declaration. That is the gap an
+        implementer should fix first, which is what `--readiness`'s root count has always meant.
 
-      * **a value** — the method's named parameter is unset, or the state carries an `UNCONFIGURED`
-        anywhere in its spec. These are the cheapest to close and the ones the debt count already
-        tracks.
-      * **an edge** — a state driven by an edge that carries no sensitivity. Closing these means
-        supplying the coupling, and rounds 48 to 51 established what most of them need: a flow node.
-      * **a rule** — `algebraic`, `discrete`, `dynamics` or `hazard`. The configuration deliberately
-        does not carry these, so each is a piece of domain code rather than a number, and they are
-        the largest class by construction.
+    The per-state tests survive as `_classify`, and they are still the whole of the root's own
+    verdict: the parameter the method owes, the driver it needs, the rule its class is. What changed
+    is *which state* they are asked about.
 
-    `lag` and `stock` with everything they need are ready, and they are the only classes the
-    reference plant can actually advance.
+    A state a tick advances is ready even where its spec carries an `UNCONFIGURED` the integrator
+    never reads — the twenty-one `counted_more` states, whose declarations the debt count already
+    tracks and which no longer appear to be blocking anything. The two figures answer different
+    questions on purpose and always did: `--readiness` counts what the *declaration* is missing,
+    this counts what a *tick* cannot do.
     """
-    blocking_value: list[State] = []
-    blocking_edge: list[State] = []
-    blocking_rule: list[State] = []
-    ready: list[State] = []
+    gaps: list[Gap] = []
+    step(world, initial_values(world), tick_seconds(world), gaps)
+    first = {gap.state.id: gap for gap in gaps}
+    blamed = blame(world, gaps)
     # The scheduled nodes first, then the states on the `internal` sentinel — they are advanced with
     # their domain rather than in the tick order, but they are 59 of the vehicle's 120 states and a
     # build order that omitted half the work would be a build order for the other half.
     ordered = list(world.schedule) + sorted(
         {s.node for s in world.states if s.node not in set(world.schedule)}
     )
+    buckets: dict[str, list[State]] = {"ready": [], "value": [], "edge": [], "rule": []}
     for node in ordered:
         for state in world.states_on(node):
-            owed = OWED.get(state.method)
-            if state.owed or (owed and state.spec.get(owed[0]) in (None, "UNCONFIGURED")):
-                blocking_value.append(state)
+            if state.id not in first:
+                buckets["ready"].append(state)
                 continue
-            incoming = [
-                e
-                for e in world.edges
-                if e.target == state.node
-                and e.id not in world.back_edges
-                and (e.advances is None or e.advances == state.id)
-            ]
-            # ------------------------------------------------------------------------------
-            # **Two ways this disagreed with `advance()`, which the docstring above says it
-            # cannot.** The classification is supposed to be the same sequence of tests the plant
-            # runs when it gets there, and it ran two tests the plant does not.
-            #
-            # A tank filled at the pad has no incoming edge *on purpose*, and `advance` exempts it
-            # by name — "without this exemption the plant refuses `water_cooling`, `o2_lm`,
-            # `prop_rcs` and `pressurant_he` — four stocks that are correctly declared and simply
-            # drain". This classifier did not have the exemption, so `o2_csm_kg`, `o2_lm_kg` and
-            # `h2_csm_kg` were reported as owing a driver they do not need and cannot have. Their
-            # outbound drains are all usable, so the plant integrates them happily: they are
-            # **ready**, and the worklist was telling an implementer to go and build three edges
-            # that must not exist.
-            #
-            # And a state on the `internal` sentinel cannot be reached by *any* edge, because the
-            # sentinel is not a node — `coupling.yaml#nodes` does not declare it and nothing can
-            # target it. So "no incoming edge" is not a gap in the graph for those states; it is
-            # what the sentinel means, and the thing they need is the domain code that advances
-            # them. Reporting them as owing a coupling sent an implementer to the wrong file for
-            # thirteen states.
-            # ------------------------------------------------------------------------------
-            preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
-            # **Declared arithmetic first, sentinel or not.** This test used to sit below the
-            # sentinel routing, and the routing `continue`s — so the one rule that asks "is the
-            # rule already in the configuration?" was unreachable for every state on the sentinel.
-            # `avionics_bay_heat_w`, the fifth heat rate, is what exposed it: its arithmetic is a
-            # `derivation` over three dotted paths, the linter re-derives it, the plant evaluates it
-            # in a real tick — and the worklist filed it under "owes a rule: domain code" and sent
-            # an implementer to write a rule that exists. The sentinel means "advanced with its
-            # domain", which is a statement about *where the driver comes from*, not about whether
-            # one is declared; a state whose inputs are all named has nothing left to write.
-            #
-            # **And it reads the same key `advance` does, which it did not until the round that
-            # found the disagreement.** This was `state.spec.get("derivation") or provenance...`,
-            # the same expression `advance` carried — so a state declaring its arithmetic only at
-            # the state level was called *ready* for a tick that the linter's own rule could not
-            # see, and the state at the top of this bucket's list was reported as implemented for
-            # a rule declared nowhere a check looks. A worklist that reads a different declaration
-            # than the checker is the "two readers, two answers" defect this function's own
-            # docstring is about.
-            if state.method == "algebraic":
-                derivation = (state.spec.get("provenance") or {}).get("derivation")
-                if derivation is not None:
-                    ready.append(state)
-                    continue
-            if state.method == "delay" and isinstance(state.spec.get("delay_s"), (int, float)):
-                # **The seventh class joined the ones the plant can advance, and this classifier did
-                # not hear about it.** `loop_transport_t` declares its `initial`, its `delay_s` and
-                # its driver at `K per K` = 1.0, and round 49 gave `advance` the ring that walks it —
-                # so the worklist was still filing the one state whose rule was *never* missing under
-                # "owes a rule: domain code", which is the same defect as the `algebraic` case above
-                # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
-                # makes it the third method a configuration can carry on its own.
-                ready.append(state)
-                continue
-            if (
-                state.method == "dynamics"
-                and state.spec.get("driven_by") is not None
-                and isinstance(state.spec.get("mass_kg"), (int, float))
-                and isinstance(state.spec.get("initial"), (int, float))
-            ):
-                # **The sixth class, one state at a time.** `accumulated_dv_m_s` is the scalar shape
-                # the plant's `dynamics` branch implements — a named driver, a mass to divide by, and
-                # a zero to accumulate from — so the worklist has to call it ready for the same reason
-                # it calls a `delay` with a `delay_s` ready: the rule is in the configuration. The
-                # 6-DOF states are not, and the three conditions are what tells them apart rather than
-                # a list of names.
-                ready.append(state)
-                continue
-            if state.node == "internal":
-                # Advanced with its domain, so its driver is code rather than an edge. This is the
-                # same distinction `check_domain` draws for `internal_order`.
-                blocking_rule.append(state)
-                continue
-            # **A state with no input at all owes an edge, whatever its method.**
-            #
-            # This test used to name four methods, on the reasoning that a `lag` or a `stock` is
-            # the kind of state an edge drives and an `algebraic` one is domain code. But the
-            # question a *worklist* answers is what is missing from the definition, and for a state
-            # with no inbound edge, no `preloaded` exemption and no sibling on its node, the answer
-            # is an input — no rule can be written without one.
-            #
-            # `bus_b_v` is the case, and it is the state the plant stops at. `power.dc_bus_b_v` is
-            # published, has an undervoltage threshold, three faults that perturb it and a place on
-            # a crew panel — and `bus_b` has **no inbound edge in the whole graph**. The tie is
-            # declared B -> tie -> A, so bus B is a *source* for bus A, while the state's own note
-            # calls it "second bus, cross-supported through the tie". `check_power_inventory` says
-            # the quiet part out loud — "which bus a source feeds is a routing decision the tie
-            # makes and the file does not state" — so the configuration knows, and the worklist was
-            # still sending an implementer to write code for a state that has nothing to read.
-            #
-            # `discrete` and `hazard` are excluded because they are exceptions in fact rather than
-            # by convention: a mode is moved by a command, an event or the domain's own logic, which
-            # `moved_by` declares, and a hazard is drawn rather than computed.
-            # **And the driver has to be one the integrator can use.** `lag_driver_basis` is the
-            # rule round 18 added, and this classifier has to ask it for the same reason it asks
-            # `usable`: a lag whose driver edge is in a different quantity is not "ready now" — it
-            # is a coupling that cannot be integrated, and the bucket an implementer should read is
-            # the edge. Without this the build order called four states ready that `advance` refuses
-            # by name, which is precisely the disagreement this function's docstring says cannot
-            # happen.
-            if state.method == "lag" and incoming:
-                node_map = {name: dict(node) for name, node in world.nodes.items()}
-                ok, _ = lag_driver_basis(
-                    {
-                        "id": incoming[0].id,
-                        "from": incoming[0].source,
-                        "to": incoming[0].target,
-                        "kind": incoming[0].kind,
-                        "sensitivity": incoming[0].sensitivity,
-                    },
-                    str(state.spec.get("unit") or ""),
-                    node_map,
-                )
-                if not ok:
-                    blocking_edge.append(state)
-                    continue
-            siblings = [o for o in world.states_on(state.node) if o.id != state.id]
-            # **Either form of declared arithmetic counts, and `derivation` is the stronger one.**
-            # This tested only `computation`, so the round that converted twelve literal
-            # computations into derivations moved five states — `cabin_heat_csm_w`,
-            # `cabin_heat_lm_w`, `service_bay_heat_w`, `descent_bay_heat_w` and
-            # `environment_heat_w` — out of "owes a rule" and into "owes an edge", which is the
-            # opposite of what happened: their inputs went from being *restated as literals* to
-            # being *named by dotted path*. A classifier keyed on one spelling of a declaration
-            # reads the other spelling as absence, which is this folder's oldest finding arriving
-            # in the worklist that exists to send an implementer to the right file.
-            provenance = state.spec.get("provenance") or {}
-            declares_own_inputs = bool(
-                provenance.get("computation")
-                or provenance.get("derivation")
-                or state.spec.get("computation")
-            )
-            if not incoming and not preloaded:
-                # A `lag`, `stock`, `delay` or `dynamics` with no driver owes an edge wherever it
-                # sits — an integrator has to be integrated from something.
-                if state.method in {"lag", "stock", "delay", "dynamics"}:
-                    blocking_edge.append(state)
-                    continue
-                # And an `algebraic` one with no driver, no sibling and **no computation of its
-                # own** owes an edge too. The computation is the distinguisher, and the corpus
-                # draws it: `cabin_heat_csm_w` carries `total_w: 733` with a `computation` summing
-                # the loads `heat_inputs` assigns, so its inputs are declared outside the graph and
-                # it needs no edge. `bus_b_v` carries nothing — its own reason says it is "the same
-                # nodal solve over a *different source and load set*", and the load set is the part
-                # that exists.
-                if state.method == "algebraic" and not siblings and not declares_own_inputs:
-                    blocking_edge.append(state)
-                    continue
-            # The bucket asks whether the *coupling is declared*, and the corpus has two complete
-            # forms. This asked `usable`, which is the integrator's narrower question — can I
-            # multiply by it — so a `discrete` edge carrying the `regimes` table the linter
-            # *requires* of it ("a mode selection is a table rather than a sensitivity") read as a
-            # missing coupling. `load_shed_class` is the case, and it moved buckets when its edge
-            # was retargeted from the scalar form to the table form: the vehicle had not lost a
-            # coupling, the edge had changed shape. Only the two methods `advance()` integrates need
-            # a value it can apply; everything else on a node is domain code and needs the coupling
-            # to be *stated*.
-            integrated = state.method in {"lag", "stock"}
-            if any(not (e.usable if integrated else e.declared) for e in incoming):
-                blocking_edge.append(state)
-                continue
-            # `delay` belongs here: `advance()` implements `lag` and `stock` and refuses everything
-            # else, so a delay state is domain code like the rest. Classifying it as ready would
-            # have promised the plant a state it cannot advance.
-            if state.method in {"algebraic", "discrete", "dynamics", "hazard", "delay"}:
-                blocking_rule.append(state)
-                continue
-            # **A driver that no reader can ever see is a coupling, not a value that is late.**
-            # `state_values` publishes a node key only for a node with one state, so a flux whose
-            # driver is a multi-state node is unreadable on every tick rather than this one — and
-            # this classifier called four such states ready while the tick refused each by name:
-            # `water_cooling_kg` (through `radiator_reject`, which carries a lag in K and a rejection
-            # in W) and the three cabin-gas stocks that discharge against `crew_state`, which carries
-            # three. The bucket is the edge, because what is missing is the declaration of *which*
-            # state the flux reads — the same shape as an edge with no sensitivity, arriving through
-            # the other end of the read.
-            unreadable = [
-                node for node in driver_nodes(world, state) if len(world.states_on(node)) > 1
-            ]
-            if unreadable:
-                blocking_edge.append(state)
-                continue
-            ready.append(state)
-    return {
-        "value": blocking_value,
-        "edge": blocking_edge,
-        "rule": blocking_rule,
-        "ready": ready,
-    }
+            bucket = _classify(world, blamed[state.id].state)
+            if bucket == "ready":
+                # The per-state tests cannot see what stopped this one. A *root* gap is by
+                # construction not advanceable, so the tick's own refusal is the last word on which
+                # file to open: an edge it could not read, or a rule nobody has written.
+                where = str(first[state.id].where)
+                bucket = "edge" if where.startswith("coupling.yaml:edge") else "rule"
+            buckets[bucket].append(state)
+    return buckets
 
 
 def short(owed: str) -> str:
