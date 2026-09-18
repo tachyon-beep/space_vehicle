@@ -2372,6 +2372,27 @@ def _classify(world: World, state: State) -> str:
     """
     owed = OWED.get(state.method)
     if state.owed or (owed and state.spec.get(owed[0]) in (None, "UNCONFIGURED")):
+        # --------------------------------------------------------------------------------------
+        # **`moved_by: UNCONFIGURED` is not a value, and this filed it as one for two rounds.**
+        # `state.owed` reports it because `unset_paths` walks the spec and the key is literally set
+        # to the string — so `crew_location` and `crew_availability`, the vehicle's only two states
+        # whose mover nobody has decided, landed in *owes a value*: the bucket whose own title calls
+        # itself "the cheapest to close".
+        #
+        # What those two owe is not a number. `domains/crew/components.yaml#open_debts` says it in as
+        # many words — *"Nothing declares what moves the crew"* — and names the shape the rule would
+        # take: egress gated on the phase being `surface`, the hatch being open and the suit loop
+        # running, ingress on the hatch closing, with the state's 30-second dwell as the transit
+        # time. That is domain code, and the command/event surface that would drive it does not exist
+        # yet. A reader sent to "close the cheapest debt" would find no value to write.
+        #
+        # The test is narrow on purpose: the state's owed list is *exactly* `moved_by` and nothing
+        # else. A discrete state that also owes a `command_value` mapping has a value it can be given
+        # without deciding the mover, so it stays where it is — `bus_tie_closed`, `telemetry_rate`
+        # and the three `command_value.selects` states are that case, and they are correctly filed.
+        # --------------------------------------------------------------------------------------
+        if state.owed == ["moved_by"] and state.method == "discrete":
+            return "rule"
         return "value"
     incoming = [
         e
@@ -2586,6 +2607,16 @@ def blame(world: World, gaps: list[Gap]) -> dict[str, Gap]:
     not read — and a state whose `needs` names a node with no gap on it is its own root. A state
     blocked on its own declaration is always its own root, which is what makes the returned bucket
     the one to open.
+
+    **And a node that publishes no value is not a link in the chain.** A gap whose `owed` is *"which
+    carries three states … and therefore publishes no value under its own name"* is a state whose
+    input is **shared**, and no state on that node holds what it could not read — so none of them is
+    its root. Following `needs` into such a node blames whichever of its states sorts first in the
+    schedule, which is how three stocks came to be filed under `crew_location`: the chain ran
+    `csm_cabin_co2_kg → crew_state → crew_location`, and an implementer sent there would have written
+    the crew's movement rule and watched `csm_cabin_co2_kg` refuse again. The node's side of that
+    join is an `advances` nobody wrote on an edge; the state's side is which sibling it meant.
+    Neither is a state that happens to sort first.
     """
     by_node: dict[str, list[Gap]] = {}
     for gap in gaps:
@@ -2603,6 +2634,12 @@ def blame(world: World, gaps: list[Gap]) -> dict[str, Gap]:
         while current.state.id not in seen:
             seen.add(current.state.id)
             if not current.needs or current.needs == current.state.node:
+                break
+            # **A name that is a node carrying more than one state has no key in the value map**, so
+            # no state on it can be the sibling that holds what this gap could not read. Stopping here
+            # is what keeps the chain honest: the root an implementer is sent to must be a state whose
+            # own declaration would fix this one, and a neighbour chosen by schedule order is not.
+            if len(world.states_on(current.needs)) > 1:
                 break
             candidates = by_node.get(current.needs) or []
             if not candidates:

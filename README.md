@@ -1623,12 +1623,13 @@ document.
 
 The reference plant's `advance()` implements two of `plant.md` §3's seven integrator classes —
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
-this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
-`delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 62 of the 139 states need code — 60 when this round was
-written, and the move is round 58's bucket attribution rather than two more classes of code. (This said *before the
-plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
-of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
+this was written, and the split is worth stating plainly: **`algebraic`, `discrete` and `dynamics`
+are rules the configuration deliberately does not carry** — `delay` *is* carried, as a `delay_s` and
+a ring, and the vehicle's one delay state is in *ready now* — and counting them together with the
+states a tick cannot reach because a coupling is missing, so 64 of the 139 states need code.
+(This said *before the plant can walk a whole tick*, which was true when it was written and is not
+now: a tick walks all 139 of them and records what it cannot advance. See *The tick stopped at its
+first debt* below.)
 
 But the load-bearing finding is about the 24 it claims to implement. **The schedule stops at the
 first `algebraic` state, so the stock integrator had never executed.** Written, reviewed, and never
@@ -1825,9 +1826,9 @@ their producer is missing has not moved them.
 139 states, by what blocks them:
 
     36   26 %  ready now — the states a real tick advances
-    28   20 %  owes a value — the cheapest to close, and the debt count already tracks them
-    13    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    62   45 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    23   17 %  owes a value — the cheapest to close, and the debt count already tracks them
+    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    64   46 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -16577,6 +16578,86 @@ gate. No completeness figure moved, because nothing about the vehicle changed �
 rounds in a row where the defect was in a sentence rather than in the arithmetic. This folder has
 found more wrong with its own prose than with its own numbers, and the prose is where the readers
 were missing.
+
+## The worklist blamed the wrong state, and sent an implementer to write a rule that would not help
+
+Round 62's own advice to the next round was to stop sweeping prose and take the worklist. Doing that
+found two defects in the attribution, and the second one is the kind that costs a day.
+
+### First: `moved_by: UNCONFIGURED` is not a value
+
+`state.owed` walks the spec for unset keys, and `crew_location`’s `moved_by` is *literally* the
+string `"UNCONFIGURED"` — so the vehicle's only two states whose mover nobody has decided were filed
+in **owes a value: the cheapest to close, and the debt count already tracks them**.
+
+What they owe is not a number. `domains/crew/components.yaml#open_debts` says so in as many words —
+*"Nothing declares what moves the crew"* — and names the rule's shape: egress gated on the phase
+being `surface`, the hatch being open and the suit loop running; ingress on the hatch closing; the
+state's 30-second dwell as the transit time. A reader sent to "close the cheapest debt" would find
+no value to write.
+
+The test is narrow on purpose: the owed list is *exactly* `["moved_by"]`. A discrete state that also
+owes a `command_value` mapping can be given that value without deciding its mover, so `bus_tie_closed`
+and `telemetry_rate` stay where they are.
+
+### Second, and this is the one that matters: `blame` followed `needs` into a node with no value
+
+Moving those two exposed three stocks that had been filed under `crew_location` — and they were
+**not** blocked by it:
+
+```
+csm_cabin_co2_kg → crew_state → crew_location
+```
+
+`blame` follows `needs` until it reaches a state blocked on its own declaration, and `crew_state`
+carries three states, so `crew_location` — first in the schedule — absorbed the blame. But look at
+what the tick actually refused them for:
+
+> drives `cabin_atm` and reads `crew_state`, **which carries 3 states … and therefore publishes no
+> value under its own name**
+
+A node carrying more than one state publishes **no key in the value map**. So *no* state on
+`crew_state` holds what `csm_cabin_co2_kg` could not read — none of them is its root. The chain was
+following a name that cannot be a link: an implementer sent to `crew_location` would have written
+the crew's movement rule and watched the stock refuse again, for exactly the same reason.
+
+`blame` now stops when the name it is about to follow is a node carrying more than one state. The
+three stocks become their own roots, and the bucket they land in is the one that names their real
+problem — *owes an edge*, because the node's side of that join is an `advances` nobody wrote on
+`E-CREW-ATM`, `E-LM-CREW-ATM` and `E-CREW-WATER`, and the state's side is which sibling it meant.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 260 | 260 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 28 | **23** |
+| build order · owes an edge | 13 | **16** |
+| build order · owes a rule | 62 | **64** |
+| `report.refuse` call sites | 790 | 790 |
+| tests | 314 | **315** |
+
+**No state changed what blocks it, and that is the honest reading.** Two states moved out of *value*
+because they were mislabelled, three moved out of *rule* and into *edge* because they were
+misattributed, and the edge/rule totals are the arithmetic of those two corrections. One test was
+added: the relation, not the three names, so a fourth state reading a crowded node is caught the day
+it is written. What changed is
+which file the worklist sends someone to — for two states, from "write a rule" to "decide the mover";
+for three, from "write `crew_location`" to "say which state that edge advances".
+
+### And one more sentence, found by the pins
+
+Correcting the bucket totals turned up a status sentence that was wrong four ways at once:
+
+> `algebraic`, `discrete`, `dynamics` **and `delay`** are rules the configuration deliberately does
+> not carry … so **62** of the 139 states need code … a tick walks all **134** of them
+
+`delay` *is* carried — a `delay_s` and a ring, and the vehicle's one delay state is in *ready now*.
+The count is 64 of 139, and the "134" was round 62's figure in a sentence round 58 had already
+stopped describing. It is the same defect the last four rounds have been finding, arriving in the
+paragraph that explains the worklist.
 
 ## The invariants, and which of them are enforced
 
