@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import inspect
 import math
 import re
 import sys
@@ -13149,11 +13150,19 @@ def check_channel_derivations(
     """The window's channels: how many are their source state, and how many are a sentence.
 
     Round 23 built the frame's `values` from the points registry and found, by refusing to publish a
-    channel whose unit is not its source state's, that **only 63 of the 134 channels read from a state
+    channel whose unit is not its source state's, that **only 64 of the 135 channels read from a state
     are the state itself**. The other 71 are *derived* — a partial pressure from a mass and a volume,
     a flow in litres per minute from a mass flow and a density — and their `derivation` is prose,
     which nothing can evaluate. The frame omits them, the debt says so, and the two figures lived in
     a sentence: exactly the shape this folder spends its rounds removing.
+
+    **And this paragraph carried its own copy of those figures, which is why the round after round 61
+    is about it.** It said "only 63 of the 134" while `presentation.yaml#open_debts` — the sentence
+    this function validates, four hundred lines below — said 64, and the registry has 135. Two
+    files stating one quantity and disagreeing is this folder's oldest finding; what makes it
+    worth a round is *where* the stale copy was, because a check's docstring is the paragraph an
+    implementer reads before deciding what the check does. The figures here are now held against the
+    same three counters the sentence is, by `CHANNEL_DERIVATION_FIGURES` below.
 
     **The decision the conversion needs, made here rather than by the first batch's author.** A
     channel is a *reading*, so its inputs may be readings: an input bound to a bare state id (no
@@ -13313,6 +13322,12 @@ def check_channel_derivations(
     stated_nodes = re.search(r"(\d+) more published channels read a coupling node", stated, re.I)
     stated_node_evaluable = re.search(r"(\d+) of those carry an evaluable", stated, re.I)
     stated_owed = re.search(r"(\d+) of the prose rows declare", stated, re.I)
+    # **And the total, which nothing stated until this round.** The sentence gives the two halves —
+    # "only N have the state's own unit … the other M are derived" — and never their sum, so
+    # `134` in the check's docstring was the one place the whole was written down and no reader could
+    # disagree with it. A total that is derived from the two counts it is made of is not a second
+    # declaration; a total written in prose is.
+    stated_total = re.search(r"of the (\d+) channels read from a state", stated, re.I)
     if not all(
         (
             stated_same,
@@ -13321,6 +13336,7 @@ def check_channel_derivations(
             stated_nodes,
             stated_node_evaluable,
             stated_owed,
+            stated_total,
         )
     ):
         report.refuse(
@@ -13344,6 +13360,7 @@ def check_channel_derivations(
         (stated_nodes, node_derived, "published channels read a coupling node and are not that node's unit"),
         (stated_node_evaluable, node_evaluable, "of those carry an evaluable `derivation`"),
         (stated_owed, owed_rows, "of the prose rows declare in their own `owed` field what would close them"),
+        (stated_total, same + derived, "channels read from a state"),
     ):
         if int(stated_count.group(1)) != computed:
             report.refuse(
@@ -13352,6 +13369,56 @@ def check_channel_derivations(
                 "A figure in prose that nothing recomputes is this folder's oldest finding, and this "
                 "one moves with every channel the conversion lands",
             )
+    # The same three counts, held against **this function's own docstring**, which is the second
+    # place they were written down and the one that had drifted. The refusal is made here rather
+    # than in `check_tool_docstrings` for two reasons: the counts come from the registry and the
+    # states, not from the documents that walk is handed, and a second count computed there would be
+    # one more declaration to drift — which is the defect, not the fix.
+    CHANNEL_DERIVATION_COUNTS.update(
+        {"same": same, "derived": derived, "total": same + derived, "evaluable": evaluable}
+    )
+    # **And the frame's two totals, which have no reader in the corpus at all.** How many states the
+    # vehicle has, and how many nodes a tick is scheduled to walk, are stated in `README.md`'s
+    # status line — which a *test* holds — and quoted in the docstrings of `tools/`, `plant.md` and
+    # the gate itself, and nothing wrote them down where the prose could be held to them: this file
+    # walks *documents*, and this function is the one place in it that already counts states. A count
+    # with no reader does not have to be plausible, and it was not: `walks all 134 states` sat in the
+    # gate's own docstring, and a whole test docstring, while the vehicle had 139.
+    #
+    # The schedule is *derived* rather than taken from `coupling.yaml#nodes`, and the difference is
+    # four nodes: the graph declares the executive and the published-evidence sink, and a tick walks
+    # neither. Counting the declaration would have published 60 under a sentence that says 58 — the
+    # same one-quantity-two-copies defect, arriving in the paragraph about it.
+    CHANNEL_DERIVATION_COUNTS.update(
+        {
+            "states": len(methods),
+            "scheduled_nodes": len(
+                derive_schedule(documents.get("coupling.yaml") or {}, Report())
+            ),
+        }
+    )
+    docstring = (inspect.getdoc(check_channel_derivations) or "")
+    match = CHANNEL_DERIVATION_FIGURES.search(docstring)
+    if match is None:
+        report.refuse(
+            "tools/check_vehicle.py:check_channel_derivations",
+            "no longer states how many channels are their own source state and how many there are "
+            "in the form this check can read, so the figures in the paragraph an implementer reads "
+            "before deciding what this check does are unchecked",
+        )
+    else:
+        for stated_text, live, what in (
+            (match.group(1), same, "published channels are their own source state"),
+            (match.group(2), same + derived, "channels read from a state"),
+        ):
+            if int(stated_text) != live:
+                report.refuse(
+                    "tools/check_vehicle.py:check_channel_derivations",
+                    f"states {stated_text} {what}, and the registry has {live}. This docstring and "
+                    "`presentation.yaml#open_debts` are two copies of one quantity, which is the "
+                    "defect this whole check exists to remove — and this copy sat in the paragraph "
+                    "that says what the check is for",
+                )
 
 
 def check_channel_derivation_inputs(
@@ -16325,6 +16392,22 @@ NODE_COUNT_FIGURES = re.compile(r"\b(\d+)-node tick order\b|\b(\d+) nodes?\b")
 # correction and a note.
 MULTI_STATE_NODE_FIGURES = re.compile(r"\b([A-Za-z0-9-]+) nodes carry more than one state\b")
 SENTINEL_STATE_FIGURES = re.compile(r"\b([A-Za-z0-9-]+) states live on it\b")
+
+# **One quantity, two files, and the check's own docstring was the copy that drifted.**
+# `check_channel_derivations` computes how many published channels are their own source state, how
+# many are derived, and their total; `presentation.yaml#open_debts` states the first two in a
+# sentence, and that function holds the sentence to the counters. What it did *not* hold was its own
+# docstring, which said "only 63 of the 134" while the sentence said 64 and the registry has 135 —
+# and the docstring is the paragraph an implementer reads before deciding what the check does.
+#
+# The counter is filled by the function that computes it, because the figures come from the registry
+# and the states rather than from the documents `check_tool_docstrings` already walks, and a second
+# count computed here would be one more declaration to drift. The refusal is made by the function
+# that owns the number, so the message can name both the stated figure and the live one.
+CHANNEL_DERIVATION_COUNTS: dict[str, int] = {}
+CHANNEL_DERIVATION_FIGURES = re.compile(
+    r"\*\*only (\d+) of the (\d+) channels read from a state\s+are the state itself\*\*"
+)
 
 # The number *words* a count claim can be written in, so a sentence that spells its figure out is
 # read rather than skipped. `NODE_COUNT_FIGURES` records the opposite choice and names the gap it

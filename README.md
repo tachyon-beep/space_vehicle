@@ -16494,6 +16494,90 @@ build order states moved, because nothing about the vehicle's completeness chang
 about the sentences that describe it, which is the one thing this folder has found to be wrong more
 often than any of its arithmetic.
 
+## The check that counts the channels carried its own copy, and the copy was stale
+
+Round 61 gave readers to count claims in `tools/` and `plant.md` and found every claim it sampled
+was correct. This round found four more that were not — and the first one is the interesting one,
+because of *where* it was.
+
+`check_channel_derivations` computes how many published channels are their own source state, how
+many are derived, and holds `presentation.yaml#open_debts`'s sentence to both. Its own docstring
+said:
+
+> …found, by refusing to publish a channel whose unit is not its source state's, that **only 63 of
+> the 134 channels read from a state are the state itself**.
+
+The sentence it validates said **64 of 134**, and the registry has **64 of 135**. Two files stating
+one quantity and disagreeing is this folder's oldest finding; what makes it a round is that the stale
+copy sat in the paragraph an implementer reads *before deciding what the check does*.
+
+### The figure neither file held to anything
+
+The sentence gives the two halves — *"only N have the state's own unit … the other M are derived"* —
+and **never their sum**. So `134` was written down in exactly one place, the docstring, and no reader
+could contradict it. A total derived from the two counts it is made of is not a second declaration;
+a total in prose is. The sentence now states it, and `check_channel_derivations` holds it:
+
+```
+- presentation.yaml:open_debts: states that 134 channels read from a state, and the registry now has 135.
+```
+
+That refusal fired on the first run against the corpus, on the debt sentence itself — which is the
+check doing its job on the file that had been carrying the wrong total all along.
+
+### Three more, in the gate's own docstrings
+
+The same sweep found **134 states** in three docstrings in `tests/test_vehicle_config.py` — one of
+them while quoting the status line that says 139 — and **57 scheduled nodes** where the schedule has
+58.
+
+The linter cannot patrol that file: `tests/` is not under the vehicle root, so `check_tool_docstrings`
+never sees it, and a linter that walks documents has no world to ask for a state count anyway. So
+`check_channel_derivations` now publishes the two totals it already counts states for —
+`CHANNEL_DERIVATION_COUNTS['states']` and `['scheduled_nodes']` — and a new test in the gate walks
+**its own** docstrings with `ast`, against those figures and the plant's world, using the linter's
+own claim patterns rather than a fourth copy of the rule. The two instruments are asserted to agree,
+because a linter counting states from `domains/*/components.yaml` and a plant building a world are
+two ways of asking one question.
+
+**The schedule total is the one worth naming.** It is `derive_schedule`'s 58, not
+`coupling.yaml#nodes`' 60: the graph declares the executive and the published-evidence sink, and a
+tick walks neither. Counting the declaration would have published a figure that disagreed with the
+status line by two — the same one-quantity-two-copies defect, arriving in the paragraph about it.
+
+### What this round got wrong first, twice
+
+**The first reader refused thirteen correct docstrings.** The pattern was `\b(\d+) states\b`, which
+matches "two states", "four states" and "twenty-one states" — every sentence about *some* states —
+and it reported every one as a claim that the vehicle has that many. A count is a claim about the
+whole only when the sentence says so: `all N states`, `N states over M scheduled nodes`, `the
+vehicle's N states`. The corrected patterns read three claims in the whole file, and the assertion
+says so rather than being relaxed until it passed.
+
+**And the docstrings it was written to protect were quietly de-fanged by the fix.** Correcting "A
+real tick advanced exactly two of the 134 states" to "…two of the states" removed a countable claim,
+and the walk dropped to three. Rewriting it as "two of the vehicle's 139 states" put the claim back
+*and* made the sentence better: the figure was doing no work in the original, and now it does.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 260 | 260 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 28 | 28 |
+| build order · owes an edge | 13 | 13 |
+| build order · owes a rule | 62 | 62 |
+| `report.refuse` call sites | 788 | **790** |
+| tests | 313 | **314** |
+
+Six prose figures corrected across three files, one new refusal in the linter and one new test in the
+gate. No completeness figure moved, because nothing about the vehicle changed — and that is now four
+rounds in a row where the defect was in a sentence rather than in the arithmetic. This folder has
+found more wrong with its own prose than with its own numbers, and the prose is where the readers
+were missing.
+
 ## The invariants, and which of them are enforced
 
 
