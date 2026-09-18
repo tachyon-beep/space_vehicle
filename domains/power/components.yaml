@@ -168,54 +168,58 @@ state:
     node: fc_o2_draw
     method: algebraic
     unit: kg O2/s
-    per_joule_kg: 8.8619e-08
+    draw_kg_s: 0.000152690537
     provenance:
       basis: derived
-      computes: per_joule_kg
+      computes: draw_kg_s
       derivation:
-        expression: h2_lb_per_h_per_a * lb_to_kg / seconds_per_hour / output_v / h2_per_o2
+        expression: fuel_cell_power_w * per_joule_kg
         inputs:
-          h2_lb_per_h_per_a: vehicle.yaml:electrical.fuel_cells.h2_lb_per_h_per_a
-          lb_to_kg: 0.45359237
-          seconds_per_hour: 3600
-          output_v: vehicle.yaml:electrical.fuel_cells.output_v
-          h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
+          fuel_cell_power_w: fuel_cell_power_w
+          per_joule_kg: coupling.yaml:edges.E-FC-DRAW-O2.sensitivity.value
       relation: >-
-        the cell draws 0.00257 lb of hydrogen per hour for every ampere of stack current
-        (`Apollo_Mission_E_Spacecraft_Reference_Trajectory_Vol4_Consumables_Analysis.pdf` PDF p. 16),
-        and a stack ampere is the module's 29 V (`ApolloTrainingElectricalPowerSystemStudyGuide.pdf`
-        PDF p. 14), so the hydrogen is 0.00257 lb/hr / 29 V = 1.116602e-8 kg per joule. The oxygen is
-        that number over the reaction's 0.126 mass ratio, which is what a joule of electrical output
-        costs: **8.861920e-8 kg O2/J**, or 0.3190 kg O2 per kWh. The corpus's own bound
-        [6.747e-08, 1.105e-07] was the per-cell thermodynamic relation over a 0.75-1.229 V cell, and
-        the derived value sits inside it; the rated +- 2 V narrows that to 8.36e-8 .. 9.59e-8
+        the cell's oxygen draw is what a joule of output costs times the power the cell is making, and
+        the cost is `E-FC-DRAW-O2`'s own figure rather than a second copy of it: one home for
+        8.8619e-8 kg O2 per joule, which is that edge's `kg/s per W` written the other way round. The
+        power is a *reading* of the cell's state, which the schedule reaches first (node `fuel_cell` is
+        fifth, this node nineteenth), so the draw is this tick's operating point rather than last
+        tick's. At the declared 1,723 W demand it is 1.526905e-4 kg/s, which is what
+        `domains/consumables/components.yaml#consumers.fuel_cell_o2` states for the budget
       note: >-
-        **the last unknown in the reactant chain, and it was never an unknown.** This state's
-        provenance said "the per-joule figure is not published" while three published numbers sat a
-        division away: the reactant rate per ampere, the module's rated voltage, and the reaction's
-        mass ratio. The debt's own note asked for "the cell voltage under load" as the one missing
-        scalar, and that scalar is the module's *rated* output — 29 +- 2 VDC — which
-        `vehicle.yaml#electrical.fuel_cells.bus_v` had been carrying as a 27-31 V *band* since the
-        block was written. The hydrogen draw is the same arithmetic without the ratio step, and the
-        waste heat is the enthalpy balance over the same operating point
+        **the field this state computed was a coefficient wearing a rate's unit.** The unit has said
+        `kg O2/s` since the state was written and the arithmetic produced kilograms per *joule*;
+        nothing compared the two, because a unit and a field name were the only places the quantity was
+        written down and no reader looked at either. The difference is the whole operating point --
+        8.8619e-8 is what a joule costs, 1.526905e-4 kg/s is what the cell draws at 1,723 W -- and it
+        is not academic: the tank's discharge edge (`E-O2-DRAW`, `kg O2 per kg O2`) reads this node as
+        the rate it drains at, so the coefficient was a plausible number one multiplication away from
+        being used as a flow
   - id: fc_h2_draw_kg_s
     node: fc_h2_draw
     method: algebraic
     unit: kg H2/s
-    ratio_of_o2_draw: 0.126
+    draw_kg_s: 1.9239018000000003e-05
     provenance:
       basis: derived
-      computes: ratio_of_o2_draw
+      computes: draw_kg_s
       derivation:
-        expression: "h2_per_o2"
+        expression: fuel_cell_power_w * per_joule_kg
         inputs:
-          h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
+          fuel_cell_power_w: fuel_cell_power_w
+          per_joule_kg: coupling.yaml:edges.E-FC-DRAW-H2.sensitivity.value
       relation: >-
-        the cell consumes 7.9365 kilograms of oxygen for every kilogram of hydrogen — the exact
-        stoichiometric mass ratio of 2 H2 + O2 -> 2 H2O, which the corpus rounded to 8:1 as `0.125`
-        until its own molar-mass arithmetic was read for the reaction, which `E-H2-FC` has declared since it was written and
-        `vehicle.yaml#consumables` corroborates at 279 kg O2 against 24.5 kg H2 loaded. Grounded, and
-        the only grounded figure in the chain until the oxygen draw lands
+        as the oxygen draw: the power the cell is making times what a joule of hydrogen costs, and that
+        cost is `E-FC-DRAW-H2`'s own figure -- the oxygen edge's cost through the reaction's 0.126 mass
+        ratio -- so the hydrogen draw is the oxygen draw over 7.9365 *by construction* rather than by a
+        second arithmetic that could drift from it. At the declared demand it is 1.923902e-5 kg/s,
+        0.069 kg H2 per hour
+      note: >-
+        **and this one computed a mass ratio**, 0.126 kg H2 per kg O2, under a unit of `kg H2/s`. The
+        number was right and the quantity was wrong, which is the harder of the two to see: the tank's
+        discharge edge would have drained 0.126 kg/s of hydrogen -- six thousand times the true draw,
+        from the 24.5 kg the vehicle loads and the 13.2 kg the mission spends -- and every figure in
+        that sentence is declared somewhere. The two reactant states were one defect in two spellings,
+        which is why the fix is one relation in two places rather than two
   - id: battery_charge_j
     method: stock
     node: battery_energy

@@ -1490,9 +1490,13 @@ edges:
       unit: "kg/s per W"
       basis: derived
       derivation:
-        expression: per_joule_kg
+        expression: h2_lb_per_h_per_a * lb_to_kg / seconds_per_hour / output_v / h2_per_o2
         inputs:
-          per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+          h2_lb_per_h_per_a: vehicle.yaml:electrical.fuel_cells.h2_lb_per_h_per_a
+          lb_to_kg: 0.45359237
+          seconds_per_hour: 3600
+          output_v: vehicle.yaml:electrical.fuel_cells.output_v
+          h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
       at: nominal
       relation: >-
         the consume side of E-O2-FC: one kilogram of oxygen per kilogram of oxygen, at the rate the
@@ -1526,7 +1530,7 @@ edges:
       derivation:
         expression: per_joule_kg * h2_per_o2
         inputs:
-          per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+          per_joule_kg: coupling.yaml:edges.E-FC-DRAW-O2.sensitivity.value
           h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
       at: nominal
       relation: >-

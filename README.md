@@ -206,9 +206,12 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **33** of the 139 states against the build order's **42** ready — the second
-of those is the objective's own second completion criterion, and both are read out of
-`tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
+a real tick advances **36** of the 139 states, every one of them inside the build order's **38** ready
+— the second of those is the objective's own second completion criterion, and both are read
+out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The two the bucket
+promises that no tick reaches are blocked by another state's debt rather than their own —
+`coolant_flow_kg_s` by `bus_a_v`'s missing rule and `prop_rcs_kg` by `thruster_thrust`'s — which is
+the distinction `plant.py --readiness` draws between a gap and its root. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
 figures that measure the remaining work were neither stated here nor asserted anywhere. Every figure in this sentence is derived by the tools and asserted
 against this file by `test_the_readme_status_matches_the_tools`, because it had drifted in three
@@ -1809,14 +1812,19 @@ The folder's answer to "what do I implement first" is now a **derived** view, fo
 `--order` and `--phases` are: an authored worklist drifts the moment anybody lands anything, and a
 stale build order is worse than none because it sends the next reader to work that is already done.
 `plant.py --build-order` classifies every state by `advance()`'s own refusal order — the same
-sequence of tests the plant runs when it gets there — so the two cannot disagree.
+sequence of tests the plant runs when it gets there. **The two *can* disagree**, and for nine states
+they did until round 57: the classifier asks what is missing from a definition and a tick asks what
+it can compute right now, and a state whose own declaration is complete but whose driver's is not
+answers those two questions differently. What the bucket now guarantees is the second question's
+half of it — nothing in *ready now* is blocked on its own declaration, which
+`test_the_tick_can_read_what_the_build_order_promises` holds against a real tick's own gap list.
 
 ```
 139 states, by what blocks them:
 
-    42   30 %  ready now — the classes the reference plant can advance
+    38   27 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
-    12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     60   43 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -15938,6 +15946,130 @@ generated (round 55), and the window is now something the stack can serve. What 
 handover is criterion 4 — the folder moving to its own repository with its history, and `space_chassis`
 keeping only a pointer and the frozen contract — for which the plan is
 `.scratch/apollo/CRITERION-4-PLAN.md`, and the rule layer, which is where the states are.
+
+## The reactant draw was a coefficient wearing a rate's unit
+
+`fc_o2_draw_kg_s` is the oxygen the fuel cell consumes. Its declaration opens like this:
+
+```yaml
+  - id: fc_o2_draw_kg_s
+    node: fc_o2_draw
+    method: algebraic
+    unit: kg O2/s
+```
+
+and its `provenance.derivation` computed **8.8619e-8 kilograms per joule** — a per-joule cost, which
+is what `per_joule_kg` names and what the arithmetic produces. Its sibling `fc_h2_draw_kg_s` declared
+`unit: kg H2/s` and computed `ratio_of_o2_draw`, 0.126 kilograms of hydrogen per kilogram of oxygen.
+Both numbers are grounded, both are cited, and both are the wrong *quantity* for the node they are
+the value of. Nothing objected, and nothing could: the unit string and the field name were the only
+places either quantity was written down, and no check read either one. The difference is the whole
+operating point — 8.8619e-8 is what a joule costs, 1.527e-4 kg/s is what the cell draws at its rated
+1,723 W — and it was not academic, because a tank's discharge reads the **node** as the rate it
+drains at:
+
+```yaml
+id: E-H2-DRAW
+from: h2_csm
+to: fc_h2_draw
+kind: rate
+sensitivity: {value: 1.0, unit: kg H2 per kg H2}   # one for one, at the cell's draw
+```
+
+So the coefficient was a plausible number one multiplication away from being used as a flow. In the
+hydrogen's case it would have drained 0.126 kg/s — six thousand times the true draw, from the 24.5 kg
+the vehicle loads and the 13.2 kg the mission is budgeted to spend — and every figure in that
+sentence is declared somewhere in this corpus.
+
+### Where each number went
+
+The coefficient belongs on the edge, whose own unit says so: `E-FC-DRAW-O2` is `kg/s per W`, which is
+8.8619e-8 kg per joule written the other way round. It carries the published arithmetic now — the
+reactant rate per ampere, the module's rated 29 V, the reaction's mass ratio, one division — and each
+state computes the rate from the cell's own power:
+
+| declaration | before | after |
+|---|---|---|
+| `fc_o2_draw_kg_s` | `computes: per_joule_kg` under `kg O2/s` | `computes: draw_kg_s` = `fuel_cell_power_w x per_joule_kg` |
+| `fc_h2_draw_kg_s` | `computes: ratio_of_o2_draw` under `kg H2/s` | `computes: draw_kg_s` = `fuel_cell_power_w x per_joule_kg` |
+| `E-FC-DRAW-O2.sensitivity` | read the state's `per_joule_kg` | carries the division, and the state reads it |
+| `E-FC-DRAW-H2.sensitivity` | read the state's `per_joule_kg` | reads `E-FC-DRAW-O2`'s figure through the 0.126 ratio |
+| the three `consumers` entries | read the state's `per_joule_kg` | read the edge's figure, same arithmetic |
+
+The **budget** rate and the **live** rate are still two quantities and are now named as such: a
+consumer's `rate_kg_s` is the draw at the *declared* 1,723 W demand, which is what a consumption
+ledger should carry, while the state is this tick's power. At nominal they agree to the edge's own
+rounding, and the four declarations that have to agree about one number are asserted together —
+`H2 x 7.9365 = O2`, from the reaction's own mass ratio rather than from a second arithmetic.
+
+### And the tick could not read it anyway
+
+Fixing the quantity exposed the second half. Nine states the build order called **ready now** were
+refused by the very first tick, and `plant.roots()` called three of them *roots* — `h2_csm_kg`,
+`o2_csm_kg` and `o2_lm_kg`, whose debt was their own missing value and not a consequence of anyone
+else's. Two causes, and both are now closed:
+
+- **The plant computes declared arithmetic only during a tick, in the frozen order.** A tank
+  scheduled before the node whose rate drains it found nothing on tick one, and on tick two it was
+  reading last tick's number. `resolve_declared_states` evaluates every `algebraic` state whose rule
+  is a declaration — in the same order the tick walks, through the same `derivation_value` the linter
+  checks it with — so the map a tick starts from is the one its own first step would produce. It is
+  one pass, not a fixed point: two passes would let a state read a value produced after it, which is
+  what the declared back-edges exist to express.
+- **A node carrying more than one state publishes no value under its own name.** `state_values`
+  writes a node key only where a single state owns the node, so `water_cooling_kg`'s discharge into
+  `radiator_reject` (a lag in K and a rejection in W) and the three cabin-gas stocks discharging
+  against `crew_state` (three states) were not *late*, they were unreadable on every tick. The
+  refusal says which of the two it is now, and the build order files those four under *owes an
+  edge* — what is missing is the declaration of *which* state the flux reads.
+
+The result is the first time the two views agree about every state they can agree about:
+
+| | before | after |
+|---|---|---|
+| a real tick advances | 33 of 139 | **36** of 139 |
+| build order · ready now | 42 | **38** |
+| build order · owes an edge | 12 | **16** |
+| a state in *ready now* blocked on its own declaration | 3 | **0** |
+| declared debts | 261 | 261 |
+
+Two states in the ready bucket are still gapped and are pinned by name: `coolant_flow_kg_s` behind
+`bus_a_v`'s missing `algebraic` rule and `prop_rcs_kg` behind `thruster_thrust`'s missing `dynamics`
+one. They are *consequences* — a real tick cannot reach them because a state they read is blocked,
+not because their own declaration is — and the test that holds this is
+`test_the_tick_can_read_what_the_build_order_promises`. Closing those two means either implementing
+the classes they wait on or making the ready bucket transitive; the second is the honest reading of
+the handover's criterion and is the next round's finding, not a line in this one.
+
+### The rule that would have caught it
+
+`check_provenance_derivations` now refuses a state whose `unit` declares a **rate** and whose
+`provenance.computes` names a field that is not named as one:
+
+> `fc_o2_draw_kg_s.provenance.computes` names `per_joule_kg`, and this state's unit is `kg O2/s` — a
+> rate. A derivation's field has to be named for the quantity the unit declares…
+
+It reads one dimension rather than all of them, deliberately: whether a quantity is a rate is the
+half that can be decided from the two declarations that exist, and it is the half that was wrong. A
+method's own parameter is exempt — `tau_s` is a *lag*'s, and three thermal zones derive theirs under
+a `unit: K` — because a parameter says how a state integrates rather than what it carries. The two
+predicates and the parameter list are shared with the check that asks a `lag` for its time constant,
+so the two cannot come apart.
+
+**And the exemption is where a full check would go.** The rule reads names; it cannot read units. A
+derivation over `consumables.leak.csm_kg_per_h` has its unit in the field's *name* and nowhere a tool
+can compare, which is true of 107 of the corpus's dotted-path inputs — the place a dimensional check
+would have to start, and a finding of its own.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order · a real tick | 42 · 25 · 12 · 60 · 33 of 139 | **38 · 25 · 16 · 60 · 36 of 139** |
+| tests in `tests/test_vehicle_config.py` | 307 | **309** |
+| `report.refuse` call sites | 780 | **781** |
+| the diode probe | 14 passed · 0 failed · 1 skipped | unchanged |
 
 ## The invariants, and which of them are enforced
 

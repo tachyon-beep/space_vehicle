@@ -1155,6 +1155,25 @@ def stock_flux(
     source = driver_node or edge.source
     driver = values.get(source)
     if driver is None:
+        # **A node that carries two states publishes no value under its own name.** `state_values`
+        # writes the node key only when one state owns the node, and `_refuse_shared_node` says why:
+        # two states on one node would overwrite each other in a node-keyed map. So a drain whose
+        # driver is such a node cannot be read *ever* — not "this tick" — and the difference is the
+        # whole distance between a coupling that is late and one that does not exist.
+        # `water_cooling_kg` drains through `E-WATER-RAD` into `radiator_reject`, which carries
+        # `zone_radiator_t` (a lag in K) and `radiator_rejection_w` (the rejection in W the edge's
+        # own `kg/s per W` names); the drain reads the node, the node has no key, and six rounds of
+        # "nothing supplies this tick" read like a timing problem rather than a missing declaration.
+        sharers = [other.id for other in world.states_on(source)]
+        if len(sharers) > 1:
+            raise Unconfigured(
+                where,
+                f"drives {edge.target} and reads {source!r}, which carries {len(sharers)} states "
+                f"({', '.join(sharers)}) and therefore publishes no value under its own name — the "
+                "map keeps a node key only for a node with one state, so this is not a value that "
+                "is late, it is a driver that was never declared. Name the state this flux reads",
+                needs=source,
+            )
         raise Unconfigured(
             where,
             f"drives {edge.target} and reads {source!r}, which nothing supplies this tick",
@@ -1699,6 +1718,46 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
     )
 
 
+
+def driver_nodes(world: World, state: State) -> list[str]:
+    """The nodes whose values this state's flux reads, in the order the plant reads them.
+
+    A `lag` or a `delay` relaxes toward its canonical driver's **source**; a `stock` integrates its
+    inbound edges from their sources and subtracts its outbound edges against their **targets** — the
+    consumer sets a discharge's rate, which is why `stock_flux` is handed `driver_node=edge.target`.
+    Both halves are here because both are read the same way: as `values[node]`.
+    """
+    if state.method in {"lag", "delay"}:
+        incoming = [
+            e
+            for e in world.edges
+            if e.target == state.node
+            and e.id not in world.back_edges
+            and (e.advances is None or e.advances == state.id)
+        ]
+        if not incoming:
+            return []
+        return [canonical_contributors(incoming)[0].source]
+    if state.method == "stock":
+        nodes = [
+            e.source
+            for e in world.edges
+            if e.target == state.node
+            and e.id not in world.back_edges
+            and (e.advances is None or e.advances == state.id)
+            and e.kind != "limit"
+        ]
+        nodes += [
+            e.target
+            for e in world.edges
+            if e.source == state.node
+            and e.kind != "limit"
+            and (e.drains is None or e.drains == state.id)
+        ]
+        return nodes
+    return []
+
+
 def state_values(world: World, state: State, value: Any) -> dict[str, Any]:
     """The map entries one state's new value belongs under.
 
@@ -1826,7 +1885,59 @@ def initial_values(world: World) -> dict[str, Any]:
     # empty rather than absent — the same distinction `state.json`'s gate map draws for a closed
     # gate and an unnamed one.
     values.setdefault("internal", {})
+    resolve_declared_states(world, values)
     return values
+
+
+def resolve_declared_states(world: World, values: dict[str, Any]) -> list[str]:
+    """Every `algebraic` state whose rule *is* a declaration, computed at t=0 in tick order.
+
+    **The plant could not take its first step for the states it had already learned to compute.**
+    `advance()` evaluates an `algebraic` state's `provenance.derivation` — the round that made a
+    declared relation a rule the plant can run — but only *during* a tick, and the tick reaches the
+    states in the frozen order. So a state scheduled late has no value when an earlier state reads
+    its node, and nine states the build order called **ready now** were refused by the very first
+    tick: `h2_csm_kg`, `o2_csm_kg` and `o2_lm_kg` (each draining into a draw or supply node whose
+    producer is scheduled later) among them, and `plant.roots()` called three of those nine *roots*
+    — a debt that is nobody's declaration.
+
+    The rule is the one the class already states: an `algebraic` state has no memory, so its value
+    at t=0 is a function of declarations and of the values the order has already produced. This
+    walks the same order the tick walks and evaluates each such derivation against the map so far,
+    through the same `derivation_value` the linter checks it with and `advance()` computes it with.
+    Nothing is invented: a derivation whose inputs include a reading that is not yet there is left
+    *absent*, exactly as the tick leaves it, and the tick names the debt.
+
+    **It is one pass in tick order, not a fixed point.** Two passes would let a state read a value
+    produced after it — which is what the Gauss-Seidel rule forbids and the declared back-edges
+    exist to express — and would make t=0 arithmetic differ from every later tick's.
+
+    The returned names are the states resolved, which is what the check beside this asserts against
+    the build order's ready bucket.
+    """
+    resolved: list[str] = []
+    sequence = [s for node in world.schedule for s in world.states_on(node)]
+    sequence += world.sentinel_states()[0]
+    for state in sequence:
+        if state.method != "algebraic":
+            continue
+        derivation = (state.spec.get("provenance") or {}).get("derivation")
+        if derivation is None:
+            continue
+        value, _ = derivation_value(derivation, world.documents, readings=values)
+        if value is None:
+            continue
+        entries = state_values(world, state, value)
+        # **The sentinel is a sub-map, so replacing its key loses the others** — the same defect
+        # `step()`'s commit had, and this resolver is the second writer of that key. Merged here for
+        # the same reason it is merged there: a *stage* is a partial view of the sentinel and only a
+        # commit sees both halves. Taking the merge out loses eleven of the twelve accumulators the
+        # seed put there, which is how the stock-seeding test found it.
+        if state.node == "internal" and isinstance(values.get("internal"), dict):
+            entries["internal"] = {**values["internal"], **entries["internal"]}
+        values.update(entries)
+        resolved.append(state.id)
+    return resolved
 
 
 def step(
@@ -2425,6 +2536,21 @@ def build_order(world: World) -> dict[str, list[State]]:
             # have promised the plant a state it cannot advance.
             if state.method in {"algebraic", "discrete", "dynamics", "hazard", "delay"}:
                 blocking_rule.append(state)
+                continue
+            # **A driver that no reader can ever see is a coupling, not a value that is late.**
+            # `state_values` publishes a node key only for a node with one state, so a flux whose
+            # driver is a multi-state node is unreadable on every tick rather than this one — and
+            # this classifier called four such states ready while the tick refused each by name:
+            # `water_cooling_kg` (through `radiator_reject`, which carries a lag in K and a rejection
+            # in W) and the three cabin-gas stocks that discharge against `crew_state`, which carries
+            # three. The bucket is the edge, because what is missing is the declaration of *which*
+            # state the flux reads — the same shape as an edge with no sensitivity, arriving through
+            # the other end of the read.
+            unreadable = [
+                node for node in driver_nodes(world, state) if len(world.states_on(node)) > 1
+            ]
+            if unreadable:
+                blocking_edge.append(state)
                 continue
             ready.append(state)
     return {

@@ -4359,10 +4359,10 @@ def check_domain(
                 )
             claimed[node] = claimed.get(node, 0) + 1
         owed = {
-            "lag": ("tau_s", "has no time constant, so it cannot be advanced"),
-            "stock": ("quantum", "has no quantum, so its conservation cannot be exact"),
-            "delay": ("delay_s", "has no delay, so there is nothing to store"),
-            "hazard": ("lambda_per_h", "has no hazard rate"),
+            "lag": (METHOD_PARAMETERS[0], "has no time constant, so it cannot be advanced"),
+            "stock": (METHOD_PARAMETERS[1], "has no quantum, so its conservation cannot be exact"),
+            "delay": (METHOD_PARAMETERS[2], "has no delay, so there is nothing to store"),
+            "hazard": (METHOD_PARAMETERS[3], "has no hazard rate"),
         }.get(method)
         # An owed parameter is owed whether it is absent or explicitly declared unset; the
         # difference is only whether somebody has thought about it yet.
@@ -12015,6 +12015,30 @@ def state_advance_order(
     return positions
 
 
+
+# The parameter each integrator class owes, by name, in one place: the state check asks a `lag` for
+# its `tau_s` and the derivation check exempts a field named `tau_s` from the rate rule, and a second
+# list is how those two would come apart.
+METHOD_PARAMETERS = ("tau_s", "quantum", "delay_s", "lambda_per_h")
+
+# What a unit string says about a *time denominator*, and what a field name says about one. The
+# vocabulary is the corpus's: a rate is written `/s`, `/h`, `per_second`, `per_hour`, `per_crew_day`
+# or `/min`, and a field is named `_kg_s`, `_per_h`, `_ms`, `_kg_per_crew_day`. The comparison reads
+# one dimension on purpose — see the rule that uses it for why that half is the decidable one.
+_RATE_IN_UNIT = ("/s", "/h", "/ms", "/min", "per_second", "per_hour", "per_minute", "per_day", "per_crew_day")
+_RATE_IN_NAME = ("_s", "_h", "_ms", "_min", "_hour", "_day")
+
+
+def _reads_as_a_rate(unit: str) -> bool:
+    """Whether a declared unit has a time denominator in it."""
+    return any(token in unit for token in _RATE_IN_UNIT)
+
+
+def _named_as_a_rate(field: str) -> bool:
+    """Whether a field name carries a time unit, which is how this corpus names a rate."""
+    return any(field.endswith(token) or f"{token}_" in field for token in _RATE_IN_NAME)
+
+
 def check_provenance_derivations(
     root: Path, documents: dict[str, Any], schedule: list[str], report: Report
 ) -> None:
@@ -12193,6 +12217,47 @@ def check_provenance_derivations(
                     )
                     complete = False
             if not complete:
+                continue
+            # ----------------------------------------------------------------------------------
+            # **A rate's field has to be named as a rate**, and this is the check that would have
+            # caught the reactant draw.
+            #
+            # `fc_o2_draw_kg_s` declares `unit: kg O2/s` and computed `per_joule_kg` — 8.8619e-8
+            # kilograms per *joule* — since the day it was written; `fc_h2_draw_kg_s` declares
+            # `kg H2/s` and computed `ratio_of_o2_draw`, 0.126 kilograms of hydrogen per kilogram of
+            # oxygen. Nothing compared the two, because the unit and the field name were the only
+            # places either quantity was written down and no reader looked at either. The difference
+            # is the whole operating point: 8.8619e-8 is what a joule costs and 1.527e-4 kg/s is
+            # what the cell draws at its rated 1,723 W. And it was not academic — the tank's
+            # discharge edge (`kg O2 per kg O2`, the driver being the draw node) reads that node as
+            # the rate it drains at, so a coefficient is a plausible number one multiplication away
+            # from being used as a flow, at six thousand times the true draw.
+            #
+            # The rule reads one dimension rather than all of them, deliberately: whether the
+            # quantity is a rate is the half that can be decided from the two declarations that
+            # exist (the unit string and the field name), and it is the half that was wrong. A
+            # method's own parameter is exempt — `tau_s` is a *lag*'s, and the three thermal zones
+            # derive theirs under a `unit: K` — because a parameter is a property of how the state
+            # integrates rather than the quantity it carries.
+            # ----------------------------------------------------------------------------------
+            if (
+                _reads_as_a_rate(str(state.get("unit") or ""))
+                and str(subject) not in METHOD_PARAMETERS
+                and not _named_as_a_rate(str(subject))
+            ):
+                report.refuse(
+                        f"{where}.provenance.computes",
+                        f"names {subject!r}, and this state's unit is {state.get('unit')!r} — a "
+                        "rate. A derivation's field has to be named for the quantity the unit "
+                        "declares, because the name is the only other place that quantity is "
+                        "written: `fc_o2_draw_kg_s` computed kilograms per *joule* under `kg O2/s` "
+                        "for as long as the state existed, and the tank discharging through that "
+                        "node would have read the coefficient as a flow, at six thousand times the "
+                        "true draw. Name the field for the rate it is, or — if the arithmetic "
+                        "really produces a coefficient — declare the coefficient where its own "
+                        "unit says it belongs (`kg/s per W` is a coupling edge's sensitivity) and "
+                    "let the state compute the rate from it",
+                )
                 continue
             check_declared_derivation(
                 f"{where}.provenance.derivation",

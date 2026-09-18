@@ -41,7 +41,8 @@ natural_rate_hz: 1
 # counters this domain writes and eclss drains.
 #
 # `fuel_cell` stays, and it is a different read: this domain's own `fuel_cell_o2` consumer is the
-# cell's reactant draw at the declared demand, which is now derived from `per_joule_kg` and
+# cell's reactant draw at the declared demand, which is now derived from the draw edges' per-joule
+# figures and
 # `load_budget.csm_total_demand_w` rather than quoted. It was UNCONFIGURED for as long as the
 # corpus believed the kg-per-kWh figure was unpublished.
 reads: [fuel_cell, fc_o2_draw, radiator_reject, crew_state, thrust_main, rcs_thrust,
@@ -332,7 +333,7 @@ consumers:
     derivation:
       expression: per_joule_kg * demand_w
       inputs:
-        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+        per_joule_kg: coupling.yaml:edges.E-FC-DRAW-O2.sensitivity.value
         demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
     provenance:
       basis: derived
@@ -341,19 +342,18 @@ consumers:
         1.526905e-4 kg/s, which is 0.550 kg O2 per hour. **This entry said the kg-per-kWh figure was
         "NOT published" and it was one division from three published numbers** — the reactant rate
         per ampere, the module's rated 29 V and the reaction's mass ratio — see
-        `domains/power/components.yaml#state fc_o2_draw_kg_s.per_joule_kg`. What changed the entry
+        `coupling.yaml#edge E-FC-DRAW-O2.sensitivity`. What changed the entry
         rather than only the claim is that `rate_kg_s` is an absolute rate and it needs a load:
         `load_budget.csm_total_demand_w` supplies it, so the draw is a product of two declarations
         instead of a fourth place for one number
   - id: fuel_cell_h2
     stock: h2_csm
     edge: E-H2-DRAW
-    rate_kg_s: 1.92390077e-05
+    rate_kg_s: 1.9239018e-05
     derivation:
-      expression: per_joule_kg * h2_per_o2 * demand_w
+      expression: per_joule_kg * demand_w
       inputs:
-        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
-        h2_per_o2: coupling.yaml:edges.E-H2-FC.sensitivity.value
+        per_joule_kg: coupling.yaml:edges.E-FC-DRAW-H2.sensitivity.value
         demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
     provenance:
       basis: derived
@@ -368,7 +368,7 @@ consumers:
     derivation:
       expression: per_joule_kg * demand_w * kg_water_per_kg_o2
       inputs:
-        per_joule_kg: domains/power/components.yaml:state.fc_o2_draw_kg_s.per_joule_kg
+        per_joule_kg: coupling.yaml:edges.E-FC-DRAW-O2.sensitivity.value
         demand_w: domains/power/components.yaml:load_budget.csm_total_demand_w
         kg_water_per_kg_o2: coupling.yaml:edges.E-FC-WATER.sensitivity.value
     provenance:
