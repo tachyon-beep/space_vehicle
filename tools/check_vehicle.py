@@ -2245,22 +2245,55 @@ def check_coupling(
     for edge in edges:
         source = str(edge.get("from"))
         candidates = stocks_per_node.get(source) or []
-        if len(candidates) < 2:
-            continue
         where = f"coupling.yaml:edge {edge.get('id')}"
         drains = edge.get("drains")
         if drains is None:
+            if len(candidates) >= 2:
+                report.refuse(
+                    where,
+                    f"leaves {source}, which carries {len(candidates)} stock states "
+                    f"({sorted(candidates)}), and declares no `drains`. The stock discharges through "
+                    "its outbound edges, so without this every one of them loses this edge's flow",
+                )
+            continue
+        if str(drains) in candidates:
+            continue
+        # --------------------------------------------------------------------------------------
+        # **`drains` was only checked where the source node carried more than one stock.**
+        #
+        # The two branches above ask *which* of several stocks an outbound edge drains, and the
+        # guard that opens them is `len(candidates) < 2: continue` — so on a node with one stock, or
+        # with none, the field was never read at all. What that let through is not a missing
+        # declaration but a *false* one: an edge may name any state in the vehicle as the stock it
+        # drains, including a state on a node it does not leave.
+        #
+        # `E-ATM-ABSORB` is the case, and its twin. It runs `co2_removal_csm -> absorber_capacity_csm`
+        # — the removal rate converted into the man-hours the counter is spent at — and declares
+        # `drains: csm_cabin_co2_kg`, which lives on `cabin_atm`. The CO2 left that cabin one edge
+        # earlier, through `E-CABIN-CO2-REMOVAL`, which drains the same state from the node it
+        # actually leaves. So one outflow was drained twice, and the second drain's driver is the
+        # **man-hour counter** — a level where a flow belongs — so its flux is `26.37 x man_hours`,
+        # a man-hours-squared-per-kilogram quantity. That it evaluates to zero today is a property of
+        # the number the counter happens to hold, not of the declaration, and a counter that starts
+        # at zero is not a defence.
+        #
+        # The rule is the one the field's name already states: **an edge discharges the stock it
+        # leaves**, so `drains` names a state on the edge's own `from` node, and a stock at that.
+        # --------------------------------------------------------------------------------------
+        on_source = (states_by_node_map or {}).get(source) or []
+        if str(drains) not in on_source:
             report.refuse(
                 where,
-                f"leaves {source}, which carries {len(candidates)} stock states "
-                f"({sorted(candidates)}), and declares no `drains`. The stock discharges through its "
-                "outbound edges, so without this every one of them loses this edge's flow",
+                f"declares `drains: {drains!r}`, which is not a state on its own source node "
+                f"`{source}`. An edge discharges the stock it leaves, so the stock a flow drains has "
+                "to be on the node the flow starts from — a drain on any other node is a second "
+                "subtraction from a stock something else already emptied",
             )
-        elif str(drains) not in candidates:
+        else:
             report.refuse(
                 where,
-                f"declares `drains: {drains!r}`, which is not one of {source}'s stock states "
-                f"({sorted(candidates)})",
+                f"declares `drains: {drains!r}`, which is a state on `{source}` and is not a stock. "
+                "Only a stock discharges through its outbound edges",
             )
 
     # --------------------------------------------------------------------------------------

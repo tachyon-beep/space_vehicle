@@ -8072,6 +8072,67 @@ def test_a_stock_that_carries_two_states_says_which_one_drains(tmp_path):
     assert "declares no `drains`" in result.stdout
 
 
+def test_the_linter_refuses_a_drain_on_a_node_the_edge_does_not_leave(tmp_path):
+    """`drains` was checked only where the source node carried *several* stocks, so it could name anything.
+
+    Both branches of the rule above open with `if len(candidates) < 2: continue` — the field was read
+    only to choose between candidate stocks, never to ask whether the named state is on the edge's own
+    node at all. What that admitted is a *false* declaration rather than a missing one:
+    `E-ATM-ABSORB` runs `co2_removal_csm -> absorber_capacity_csm`, converting the removal rate into
+    the man-hours the cartridge is spent at, and it declared `drains: csm_cabin_co2_kg` — a state on
+    `cabin_atm`, a node it does not leave. The CO2 had already left that cabin one edge earlier,
+    through `E-CABIN-CO2-REMOVAL`, which drains the same state from the node it does leave.
+
+    **So one outflow was subtracted twice**, and the second subtraction's driver is the man-hour
+    counter — a level where a flow belongs — making its flux `26.37 x man_hours`: a
+    man-hours-squared-per-kilogram quantity. That it evaluates to zero today is a property of the
+    counter's current value and not of the declaration, which is the distinction that makes this a
+    defect rather than a curiosity.
+
+    The rule is the one the field's name states: **an edge discharges the stock it leaves.** The
+    control is the pair that drains correctly — `E-CABIN-CO2-REMOVAL` and its LM twin, each naming a
+    state on its own `from` node — which is why the corpus composes as it stands.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1500:]
+
+    def refusal(name: str, old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        path = definition / "coupling.yaml"
+        text = path.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        path.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1500:]}"
+
+    # The defect itself, restored: the drain the round removed, one node away from its own edge.
+    refusal(
+        "drain-off-node",
+        "  - id: E-ATM-ABSORB\n",
+        "  - id: E-ATM-ABSORB\n    drains: csm_cabin_co2_kg\n",
+        "which is not a state on its own source node `co2_removal_csm`",
+    )
+    # And the other half of the widening: a state that *is* on the source node but is not a stock.
+    # `co2_removal_csm_kg_s` is the node's only state and it is an `algebraic` rate, not a tank.
+    refusal(
+        "drain-not-a-stock",
+        "  - id: E-ATM-ABSORB\n",
+        "  - id: E-ATM-ABSORB\n    drains: co2_removal_csm_kg_s\n",
+        "which is a state on `co2_removal_csm` and is not a stock",
+    )
+    # The control the assertion above already made, stated where a reader of *this* rule will look:
+    # every `drains` in the vehicle names a state on the node its own edge leaves.
+    coupling = yaml.safe_load((VEHICLE / "coupling.yaml").read_text())
+    owner = {
+        state["id"]: state["node"]
+        for path in sorted((VEHICLE / "domains").glob("*/components.yaml"))
+        for state in (yaml.safe_load(path.read_text()) or {}).get("state") or []
+    }
+    for edge in coupling["edges"]:
+        if edge.get("drains"):
+            assert owner[edge["drains"]] == edge["from"], edge["id"]
+
+
 def test_a_ratio_refusal_names_the_flow_that_would_fix_it():
     """A refusal that names the missing node is worth more than one that describes the symptom.
 

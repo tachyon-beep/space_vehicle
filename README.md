@@ -16998,6 +16998,80 @@ time. One state advances. The debt count rose by thirteen, which is what a round
 turns a silent exemption into a named obligation — the same direction round 64 chose, and for the
 same reason: **the obligations were always there and were being reported as zero.**
 
+## One outflow was drained twice, and the check that would have caught it only read half the field
+
+`drains` is `advances` for the outbound side: an edge that leaves a stock node has to say which stock
+it discharges. The rule was written the round the plant learned that tanks only filled, and it was
+written for the case that was in front of it — **a node carrying several stocks**, where the field is
+what chooses between them. Both of its branches open with
+
+```python
+if len(candidates) < 2:
+    continue
+```
+
+so on a node carrying one stock, or none, the field was never read. What that admitted is not a
+missing declaration but a **false** one: `drains` could name any state in the vehicle, including one
+on a node the edge does not leave.
+
+### The two edges that did
+
+| edge | runs | declared | where that state lives |
+|---|---|---|---|
+| `E-ATM-ABSORB` | `co2_removal_csm` → `absorber_capacity_csm` | `drains: csm_cabin_co2_kg` | `cabin_atm` |
+| `E-CABIN-CO2-REMOVAL` | `cabin_atm` → `co2_removal_csm` | `drains: csm_cabin_co2_kg` | `cabin_atm` |
+
+The second is right and the first is the duplicate. The cabin's CO₂ leaves through
+`E-CABIN-CO2-REMOVAL`, which is the edge that leaves the cabin; `E-ATM-ABSORB` is the *next* edge in
+the chain, converting that removal rate into the man-hours the cartridge is spent at, and it declared
+the cabin's stock as its own drain — **one outflow subtracted from one stock twice.**
+
+The second subtraction's driver is the man-hour counter, a *level* where a flow belongs, so its flux
+is `26.37 × man_hours` per tick — a man-hours-squared-per-kilogram quantity. That it contributes zero
+today is a property of the number the counter happens to hold, not of the declaration, and a counter
+that starts at zero is not a defence. `E-LM-ATM-ABSORB` is the same edge at the LM.
+
+### The rule the field's name already stated
+
+**An edge discharges the stock it leaves.** The widened check refuses a `drains` that names a state
+off the edge's own `from` node, and refuses one that names a state which is on that node and is not a
+stock — the two ways the old guard let something through. The corpus fix is the removal of two lines:
+`drains` disappears from `E-ATM-ABSORB` and `E-LM-ATM-ABSORB`, because what they discharge is the
+counter they feed and a counter is not a tank.
+
+**The fix moves no number, and that is the point.** The debt count stays at 286, the build order at
+37 · 34 · 16 · 52, and the two cabin CO₂ stocks stay exactly where they were — because the flow they
+lose is below their quantum and the Bresenham residual has been absorbing it. A latent defect whose
+repair changes nothing visible is the kind that has to be found by reading, which is why the field
+that was never read is the finding.
+
+### The two mistakes this round made
+
+**The first refusal was about the wrong thing, and it was written before the edges were read.** It
+refused *any* unity dimensionless transfer whose driver is the state it drains — on the reading that
+`1.0 kg CO2 per kg CO2` applied to a level is a decay with a one-tick time constant. That is what
+`stock_flux` refuses for an inbound edge, and it is not what these two edges do: `E-CABIN-CO2-REMOVAL`'s
+driver node is `co2_removal_csm`, whose only state is `co2_removal_csm_kg_s` — a *rate* in kg/s — so
+the transfer is one and the flux is the removal. The rule would have refused the **correct** edge and
+passed the wrong one, and the only reason it did not land is that the sentence it would have printed
+("the driver is a level") did not match the graph. **A refusal is a claim about the corpus, and this
+one was a claim about a shape.**
+
+**And the first attempt to undo it cut three thousand lines out of the linter**, because the revert
+was done by slicing the file between two anchors and the second anchor precedes the first in one of
+the two edits. `git checkout` and a second, narrower edit is what fixed it; the lesson is the one the
+painting of the bike shed is for — a scripted edit to a file this size wants the diff read before the
+next command, not after.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 286 | 286 |
+| build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
+| `report.refuse` call sites | 800 | **801** |
+| tests | 316 | **317** |
+
 ## The invariants, and which of them are enforced
 
 

@@ -814,8 +814,14 @@ edges:
   # re-pointed, and the relation it carried is now stated once, in the state that computes it
   # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
   # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
+  # `drains` was declared here until round 68 and it named the *cabin's* CO2, not this edge's
+  # source: the CO2 leaves the cabin one edge earlier, through `E-LM-CABIN-CO2-REMOVAL`, which
+  # drains it from the node it actually leaves. This edge converts that removal rate into the
+  # man-hours the cartridge is spent at, so what it discharges is the counter it feeds — and a
+  # drain declared here subtracted the same outflow from the cabin a second time, from a driver
+  # that is a man-hour *level*. An edge discharges the stock it leaves; `check_coupling` refuses
+  # one that drains anything else now, which is how this line was found.
   - id: E-LM-ATM-ABSORB
-    drains: lm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
       # The rating and the metabolic rate are both declared elsewhere, so they are bound rather
@@ -873,8 +879,9 @@ edges:
   # re-pointed, and the relation it carried is now stated once, in the state that computes it
   # (`domains/eclss/components.yaml`), which is where it was being implemented all along. The
   # figure survives there: 5 psia at 295 K is 116.86 Pa per kelvin.
+  # As `E-LM-ATM-ABSORB`: the cabin's CO2 is drained by the edge that leaves the cabin, and this
+  # one carries the removal rate into the counter.
   - id: E-ATM-ABSORB
-    drains: csm_cabin_co2_kg   # the absorber removes CO2 from this compartment's air
     sensitivity:
       value: 26.37
       # As E-LM-ATM-ABSORB, at the CSM's rating. The two edges read the same number because a
