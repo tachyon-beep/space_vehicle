@@ -15268,12 +15268,43 @@ def check_perception_model(documents: dict[str, Any], report: Report) -> None:
             )
 
 
+def crew_station_vocabulary(root: Path) -> set[str] | None:
+    """The stations `crew.crew_location` can actually hold, or `None` if the state is not there.
+
+    Found by **shape** rather than by id, the same way `check_domain` finds it: a per-crew-member
+    state whose `unit` is `map[crew_id,enum[...]]`. A check that goes silent when somebody renames
+    the state is a check that has already failed once.
+
+    This exists because the state is the *last* link in a chain that had never been joined end to
+    end. `mission.yaml#crew.positions[].stations` names a station per person; `channels.yaml`
+    `#crew_positions` describes what a person standing there can perceive; and `crew_location`
+    holds where they are — which is what selects the bound at runtime. Mission declares, channels
+    describes, the state holds. Two of the three joins existed and the third did not, and the
+    absence had a debt written about it.
+    """
+    path = root / "domains" / "crew" / "components.yaml"
+    if not path.exists():
+        return None
+    components = load(path, Report()) or {}
+    for state in components.get("state") or []:
+        if not isinstance(state, dict):
+            continue
+        unit = str(state.get("unit") or "")
+        if "crew_id" not in unit:
+            continue
+        enum = re.findall(r"enum\[([^\]]*)\]", unit)
+        if enum:
+            return {member.strip() for member in enum[0].split(",")}
+    return None
+
+
 def check_crew_bindings(
     mission: dict[str, Any],
     vehicle: dict[str, Any],
     registry: dict[str, dict[str, Any]],
     report: Report,
     station_ids: set[str] | None = None,
+    held_stations: set[str] | None = None,
 ) -> None:
     """The crew are described twice, in two files, and nothing had ever compared the two.
 
@@ -15283,6 +15314,25 @@ def check_crew_bindings(
     question a fleet can ask, and **all five fields were read by nothing**: not by a tool, not by
     the other file, not by a sentence in any document. Four checks, each of which is a way the two
     could disagree while both looking complete.
+
+    **And the third join, which is the one this round is about.** `stations` maps each person to a
+    station per vehicle, and the station is the *index into the perception bound* — so the state
+    that holds where a person is has to be able to hold the station the mission puts them at. Two
+    of those three joins already existed: `check_domain` holds `crew_positions` against
+    `crew_location`'s vocabulary, and the first half of this function holds `station_ids` against
+    the registry. What nothing did was hold the *person's declared station* against the state. A
+    person whose station the state cannot hold is a person the vehicle can place nowhere, and
+    `crew.location_[id]` would publish a value outside its own vocabulary — while both of the
+    other two joins stay green.
+
+    **And it is not load-bearing on this corpus**, which is worth writing down rather than leaving
+    for the next reader to discover. Because `check_domain` keeps the state's enum and the registry
+    equal and this function keeps the mission inside the registry, a mission value the state cannot
+    hold is already outside the registry and is caught one step earlier. Three fixtures were needed
+    to establish that, and the only break this join catches on its own is one where the first two
+    are quiet — which is a real case and not a reachable one today. It stays because the guarantee
+    was transitive and three declarations in a row with the last one unjoined is how the next
+    defect starts.
     """
     crew = mission.get("crew") or {}
     positions = crew.get("positions") or []
@@ -15317,6 +15367,47 @@ def check_crew_bindings(
             f"configurations is {max(aboard)}. A crew size no configuration can hold is a number "
             "nobody is standing in",
         )
+    # --------------------------------------------------------------------------------------
+    # **An id is a key, so two people cannot share one.**
+    #
+    # `crew.crew_location` is `map[crew_id,...]`: the id is not a label on a person, it is the
+    # namespace the vehicle holds "where this person is" in, and `crew.location_[id]` publishes one
+    # value per key. Two positions with one id are therefore two people the vehicle cannot tell
+    # apart — and the failure is silent and *partial*, which is what makes it worth a check of its
+    # own. `plant.crew_placement` builds one entry per id, so the second person overwrites the
+    # first and the vehicle can place one fewer person than it declares, while `size`,
+    # `surface_party` and `crew_aboard` all keep agreeing because none of them counts ids.
+    #
+    # Measured on a fixture: give the LM pilot the commander's id and leave their stations alone,
+    # and the linter composes (exit 0) while `crew_placement` holds **two** people for a vehicle
+    # that declares three. Give the duplicate the *same* station as well and the linter refuses —
+    # but that is `seats` firing, and it is firing about the perception bound, which is a different
+    # claim. A duplicate at a station nobody else occupies is invisible to every check in this
+    # file. `fault_policy.yaml`'s fault ids have had exactly this rule for rounds, for exactly this
+    # reason — *"fault ids are unique across the whole vehicle, because they key the randomness"* —
+    # and the crew ids key the location map.
+    # --------------------------------------------------------------------------------------
+    seen_ids: dict[str, int] = {}
+    for index, person in enumerate(positions):
+        if not isinstance(person, dict):
+            continue
+        pid = person.get("id")
+        if pid is None:
+            report.refuse(f"mission.yaml#crew.position[{index}]", "declares no `id`")
+            continue
+        name = str(pid)
+        if name in seen_ids:
+            report.refuse(
+                f"mission.yaml#crew.position {name}",
+                f"is declared twice (entries {seen_ids[name]} and {index} of `positions`). The id "
+                "is the key `crew.crew_location` holds a person's position under and the index "
+                "`crew.location_[id]` publishes them at, so two people with one id are one entry "
+                "in that map — the second overwrites the first and the vehicle can place fewer "
+                "people than it declares, while `size` and `crew_aboard` go on agreeing because "
+                "neither counts ids",
+            )
+            continue
+        seen_ids[name] = index
     # Where a crew member is when nothing else says. **The field names a vehicle, not a station**,
     # and the distinction is the point of checking it: `location_phase_default: csm` is answered
     # against `crew_in`'s vocabulary (`csm`, `lm`), while `channels.yaml#crew_positions` names
@@ -15392,6 +15483,28 @@ def check_crew_bindings(
                     f"declares station {station!r}, which is not in "
                     "`channels.yaml#crew_positions` — so it names a place with no panels and no "
                     "perception bound",
+                )
+                continue
+            # **And the state has to be able to hold it**, which is a different question from
+            # whether the registry describes it. `crew_location` is what a fleet's question is
+            # answered *from*: its value selects the bound, and `crew.location_[id]` publishes it.
+            # So a station the state's vocabulary omits is a person the vehicle can place nowhere —
+            # and both other joins stay green while it happens, because the registry describes the
+            # station and the mission names it and neither is the thing that holds it.
+            #
+            # This is the join a debt said could not be made. The debt was written when the mapping
+            # did not exist; the mapping landed, the debt stayed, and neither of the two readers
+            # that existed compared the person's station to the state. A debt is not a check, and a
+            # mapping nobody joins to the state it feeds is three declarations standing in a row.
+            if held_stations and station not in held_stations:
+                report.refuse(
+                    where,
+                    f"declares station {station!r} for {vehicle!r}, and `crew.crew_location` — the "
+                    f"state that holds where a person is — cannot take it. Its vocabulary is "
+                    f"{sorted(held_stations)}. Every other join is satisfied: the station is in "
+                    "`channels.yaml#crew_positions` and the vehicle is one a configuration carries "
+                    "crew in, so the only thing that disagrees is the state a fleet would be "
+                    "answered from",
                 )
         # A crew member who does not go to the surface has no station in the LM, and one who does
         # has both. Either way the map covers exactly the vehicles they can be in.
@@ -16489,6 +16602,7 @@ def main(argv: list[str] | None = None) -> int:
                     registry,
                     report,
                     {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
+                    crew_station_vocabulary(root),
                 )
         check_scenario_postures(mission, report)
         check_blackout(mission, report)

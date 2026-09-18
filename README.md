@@ -71,7 +71,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 261 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 260 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -204,7 +204,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 260 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
 a real tick advances **36** of the 139 states, and the build order's **36** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -219,8 +219,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **261** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **149** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **260** is every obligation the linter can name:
+**112** literal `UNCONFIGURED` scalars and **148** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **186** the plant
@@ -16284,6 +16284,122 @@ artifact rather than the one that reads your description of it.
 Nothing about the vehicle's completeness moved, and that is the honest reading: this round fixed a
 writer and made a level explicit. The three new refusal sites are the check's two halves plus the
 converse, and the two new tests are the writer's shape and the refusal's three broken copies.
+
+## Two crew members could share an id, and the vehicle would hold where only one of them is
+
+The round started at the top of the worklist and found the guard one step to the left of where the
+debt pointed. `mission.yaml#open_debts` carried this:
+
+> Nothing maps a crew member to a *station*. … The linter now refuses a `location_phase_default`
+> that is not a vehicle any configuration carries crew in, and it cannot go further because which
+> CSM station each person occupies is undeclared: the corpus gives three stations for three people
+> and never says who sits where.
+
+**That was false when it was read.** Every position carries the map the debt says does not exist:
+
+```yaml
+    - id: commander
+      stations:
+        csm: csm_commander
+        lm: lm_commander
+      stations_provenance:
+        basis: chosen
+        reason: >-
+          the only pairing the corpus leaves no room to argue with: `csm_commander`'s own note calls
+          it "the left seat", the commander's station, and `lm_commander` is the LM's.
+```
+
+Three readers had been built on it since: `check_crew_bindings` validates each station against
+`channels.yaml#crew_positions` and refuses a station in a vehicle the person never boards,
+`check_domain` holds `crew_location`'s vocabulary against the same registry, and `plant.py --crew`
+projects the whole thing per phase and configuration. The debt was written when the map did not
+exist, the map landed, and the sentence stayed — telling the next reader to stop looking at the one
+thing that answers the question.
+
+**So the round retired it, and then went looking for the guard that should have caught it.** The map
+is a *decision*, and a decision is not a check; what the debt's own claim pointed at was a join
+nobody had made. Measuring for it found one that fails silently.
+
+### The id is a key
+
+`crew.crew_location` is `map[crew_id,...]`. The id is not a label on a person — it is the namespace
+the vehicle holds *where this person is* in, and `crew.location_[id]` publishes one value per key.
+Two positions with one id are two people the vehicle cannot tell apart, and nothing refused it.
+
+On a fixture that gives the LM pilot the commander's id and leaves their stations alone:
+
+```
+$ python3 tools/check_vehicle.py --dir <fixture>     # exit 0 — COMPOSES
+$ python3 tools/plant.py --crew --dir <fixture>
+      commander    csm_lower_equipment_bay     <- which of the two is this?
+      csm_pilot    csm_navigator
+```
+
+Three people declared, **two** placed. `plant.crew_placement` builds `placement[id]`, so the second
+person overwrites the first, and every other count in the corpus goes on agreeing: `size` is 3,
+`surface_party` matches the two `goes_to_surface` entries, `max(crew_aboard)` is 3. None of them
+counts ids.
+
+**There is already a check that catches a duplicate, and it is not this one.** `seats` refuses two
+crew at one station — *"one station means one perception bound"* — which is a true and different
+claim. Give the duplicate the *same* station as the person it copies and the linter refuses; give it
+an unoccupied station and nothing in the file objects. That is what a guard-by-accident looks like:
+the rule that fired was about the perception bound, and it happened to be downstream of the thing
+that was actually wrong.
+
+`fault_policy.yaml`'s fault ids have had exactly this rule for rounds — *"fault ids are unique
+across the whole vehicle, because they key the randomness"* — and the crew ids key the location map.
+
+### The three declarations, and the join that was missing
+
+| declaration | says |
+|---|---|
+| `mission.yaml#crew.positions[].id` | who the crew are |
+| `mission.yaml#crew.positions[].stations` | which station each occupies, per vehicle |
+| `channels.yaml#crew_positions` | what a person at that station can perceive |
+| `crew.crew_location` | where each person is — the state a report is answered *from* |
+
+The third and fourth were joined by `check_domain`; the first and second were joined by
+`check_crew_bindings`; the second and fourth were joined by nothing. So `crew_station_vocabulary`
+finds the state by **shape** (a `map[crew_id,enum[...]]`, the same way `check_domain` finds it, so a
+rename cannot silence it) and `check_crew_bindings` refuses a person standing at a station the state
+cannot hold.
+
+**And it is worth saying plainly that this join is not load-bearing.** It took three attempts to
+find a break for it, and the first two failed for instructive reasons. Putting `csm: tunnel` in the
+mission composed, correctly, because `tunnel` is in the state's vocabulary. Dropping the station
+from the *state* is caught — by `check_domain`, one step earlier. `check_domain` keeps the state's
+enum and the registry equal and the older half of `check_crew_bindings` keeps the mission inside the
+registry, so a mission value the state cannot hold is already outside the registry and is caught
+transitively. The join turns a transitive guarantee into a direct edge; it does not add a guarantee.
+It stays because three declarations in a row with the last one unjoined is how the next defect
+starts, and because it refuses on its own terms when the other two are quiet.
+
+The round's guard is the id, not the join.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | **260** |
+| prose obligations | 149 | **148** |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 28 | 28 |
+| build order · owes an edge | 13 | 13 |
+| build order · owes a rule | 62 | 62 |
+| `report.refuse` call sites | 784 | **787** |
+| tests | 311 | **312** |
+
+The debt count falls by one because a false obligation is not an obligation. The build order does
+not move, and that is the honest reading of the queue item this round invalidated: `crew_location`
+was listed as blocked by "crew names to stations", and it never was — its own blocker is the missing
+mover rule in `domains/crew/components.yaml#open_debts`, which is a `discrete` rule and stays owed.
+
+**And `location_phase_default` is still a vehicle rather than a station**, which the old debt was
+right about and buried under a claim that was wrong. The mapping answers it per vehicle and the
+perception bound is per station, so the two are reconcilable — but the field is one step short of
+the index a bound needs, and that is recorded in the crew domain rather than here.
 
 ## The invariants, and which of them are enforced
 
