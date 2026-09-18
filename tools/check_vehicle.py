@@ -255,6 +255,47 @@ METHODS = {"algebraic", "lag", "stock", "delay", "dynamics", "discrete", "hazard
 # Neither exemption is silent: both are stated in `check_initial_values`'s docstring, in the README
 # section that landed this rule, and in `.scratch/apollo/SOURCES.md`.
 INTEGRATOR_METHODS = ("stock", "lag", "delay")
+
+
+def command_only_movers(state: dict[str, Any]) -> list[str]:
+    """The verbs whose command is the *whole* rule for this state, or `[]` where something else moves it.
+
+    **The predicate is written once, here, and the plant imports it**, because it is the question two
+    readers now ask and this folder's oldest finding is two spellings of one rule. `plant.advance`
+    holds a `discrete` state whose every mover is `command:<verb>` — the transition belongs to the
+    effect path (`apply_command`, step 1–2 of `plant.md` §9, with `command_dwell` as its guard) and
+    the tick's whole job is to carry the value the command left — and it refuses the rest by naming
+    the mover that owes the code. `check_initial_values` asks the same predicate for a different
+    reason: a mode the tick carries needs a position to carry, and the three classes the initial
+    rule used to cover were chosen when the plant refused *every* mode.
+
+    A state with no `moved_by` at all is not carried. That is deliberate rather than an oversight:
+    silence is a debt the `moved_by` rule already counts, and `[]` here would make an undeclared
+    machine look like a commanded one.
+    """
+    movers = [str(m) for m in state.get("moved_by") or []]
+    if not movers or any(not m.startswith("command:") for m in movers):
+        return []
+    return sorted({m.split(":", 1)[1] for m in movers})
+
+
+def unit_vocabulary(unit: Any) -> set[str] | None:
+    """Every value a state's `unit` says it can hold, or `None` where the unit is not a vocabulary.
+
+    `enum[a,b,c]` and `map[key,enum[a,b,c]]` are the two shapes a mode declares, and the values are
+    the same list in both — the key space says which elements hold one, not what the values are. A
+    numeric unit (`bit/s`, `V`, `-`) returns `None`, because "which values may this hold" is not a
+    question a scale answers.
+    """
+    matches = re.findall(r"enum\[([^\]]*)\]", str(unit or ""))
+    if not matches:
+        return None
+    values: set[str] = set()
+    for match in matches:
+        values.update(part.strip() for part in match.split(","))
+    return values
+
+
 # S0 is the service-owned safety kernel; A0..A3 are the agent ladder (vocabulary V-08).
 AUTHORITIES = {"S0", "A0", "A1", "A2", "A3"}
 # The eleven domains the corpus has specifications for, so the linter can name what is still
@@ -4332,20 +4373,54 @@ def check_initial_values(where: str, components: dict[str, Any], report: Report)
     over named inputs, or its own `initial_provenance` block — because a number with none of the
     three is a guess wearing a unit. An owed starting value is `UNCONFIGURED` with an
     `initial_note`, which is a declaration and is counted like one.
+
+    **And the `discrete` exemption was narrower than its own reason, which is this round's finding.**
+    The comment on `INTEGRATOR_METHODS` says a mode is outside the rule because "the plant refuses a
+    `discrete` state outright ('its rule is domain code'), so nothing invents one; and an initial
+    that arrives with the rule is what the implementer of that rule owes". The premise is stated in
+    the exemption: *the plant refuses a discrete state*. The plant no longer refuses the ones whose
+    every mover is a command — `advance` holds them, because that is what "latched" means and the
+    transition is the effect path's — so for those states the exemption had become a hole with a
+    reason that no longer applied. A mode the tick carries needs a position to carry; a mode the
+    tick still refuses does not, and keeps the exemption with the reason restated to be about *the
+    rule* rather than about the class.
+
+    The shape is the second half, and it is why the exemption said "a different vocabulary" rather
+    than "later". A mode's position is a member of its own `enum`, and a keyed mode's is a map over
+    the elements that hold one; neither is a number, so the numeric grounding below does not apply.
+    What does apply is the rule underneath it: **a starting position is a value the state can hold,
+    and it says where it came from.** A position outside the state's own vocabulary is a mode the
+    vehicle is in and cannot report, which is the defect three earlier rounds found arriving through
+    a type instead of a sentence.
     """
     for state in components.get("state") or []:
-        if not isinstance(state, dict) or state.get("method") not in INTEGRATOR_METHODS:
+        if not isinstance(state, dict):
             continue
         sid = str(state.get("id"))
         method = str(state.get("method"))
         swhere = f"{where}:state {sid}"
+        carried = command_only_movers(state) if method == "discrete" else []
+        if method in INTEGRATOR_METHODS:
+            carried = []
+        elif not carried:
+            continue
         if "initial" not in state:
-            report.refuse(
-                f"{swhere}.initial",
-                f"is a {method} and declares no initial condition. A {method} carries a value "
-                "across ticks — that is what its method means — so its starting value is a number "
-                "the plant must have before it can advance anything from it",
-            )
+            if carried:
+                report.refuse(
+                    f"{swhere}.initial",
+                    f"is a `discrete` state whose every mover is a command ({carried}), so a tick "
+                    "carries it — the effect path writes the transition and the tick holds the value "
+                    "between commands. A latched mode with no starting position is a machine the "
+                    "plant has nothing to hold: declare where it is at MET 0, or `UNCONFIGURED` "
+                    "with the `initial_note` that says what would answer it",
+                )
+            else:
+                report.refuse(
+                    f"{swhere}.initial",
+                    f"is a {method} and declares no initial condition. A {method} carries a value "
+                    "across ticks — that is what its method means — so its starting value is a number "
+                    "the plant must have before it can advance anything from it",
+                )
             continue
         initial = state.get("initial")
         if initial == "UNCONFIGURED":
@@ -4354,6 +4429,41 @@ def check_initial_values(where: str, components: dict[str, Any], report: Report)
                     f"{swhere}.initial",
                     "is UNCONFIGURED with no `initial_note`. An owed starting amount is a decision "
                     "about the mission, and the note is where what would close it is written",
+                )
+            continue
+        if carried:
+            # A mode's position, in whatever shape its `unit` declares. The vocabulary check is the
+            # one this rule adds over the numeric half: a position the state cannot hold is not a
+            # starting value, it is a value the vehicle would be in and unable to publish.
+            vocabulary = unit_vocabulary(state.get("unit"))
+            held = initial if isinstance(initial, dict) else {sid: initial}
+            for element, position in held.items():
+                if vocabulary is not None and str(position) not in vocabulary:
+                    report.refuse(
+                        f"{swhere}.initial",
+                        f"puts {element!r} in {position!r}, which its `unit` "
+                        f"({state.get('unit')!r}) cannot hold — the vocabulary is "
+                        f"{sorted(vocabulary)}. A latched mode's starting position is a member of "
+                        "its own enum, and one that is not is a mode the vehicle is in and cannot "
+                        "report",
+                    )
+                elif not isinstance(position, (str, int, float)):
+                    report.refuse(
+                        f"{swhere}.initial",
+                        f"puts {element!r} in {position!r}, which is neither a value nor "
+                        "`UNCONFIGURED`",
+                    )
+            if not (
+                state.get("initial_source")
+                or state.get("initial_derivation") is not None
+                or isinstance(state.get("initial_provenance"), dict)
+            ):
+                report.refuse(
+                    f"{swhere}.initial",
+                    f"is {initial!r} with none of `initial_source`, `initial_derivation` or "
+                    "`initial_provenance`. The mode the vehicle is in at MET 0 is a decision about "
+                    "the mission like any other value, and the grounding is what separates it from "
+                    "a plausible-looking launch configuration",
                 )
             continue
         if not isinstance(initial, (int, float)):

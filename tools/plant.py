@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 273 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 286 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -68,6 +68,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
     INTEGRATOR_METHODS,
     Report,
+    command_only_movers,
     derivation_value,
     derive_schedule,
     lag_driver_basis,
@@ -414,7 +415,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 273 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 286 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1699,6 +1700,61 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 raise Unconfigured(f"{where}.derivation", f"cannot be evaluated: {why}")
             return state_values(world, state, value)
 
+    if state.method == "discrete":
+        # **The class whose rule is that it holds, and the plant was refusing fourteen states whose
+        # rule it already had in two halves.** `plant.md` §3 puts trips, dwell timers, hysteresis,
+        # valve states, staging and pulse modulation under one method — *"discrete / latched"* — and
+        # the whole of "latched" is that the value does not move between the events that move it. A
+        # commanded mode is the largest such family: `set_bus_tie` sets the tie, `set_hatch_valve`
+        # sets a hatch, and between two commands the mode is whatever the last one left. The plant
+        # implements that transition — `apply_command` and `command_effect` are step 1–2's half of
+        # §9, and `command_dwell` is the guard that stops a fleet re-commanding inside the mode's
+        # own floor — and then `advance` reached this point and said the rule "is not in the
+        # configuration", which was false in the way round 42 found for the `algebraic` class: the
+        # rule was in the configuration and in the code beside it, and the one reader that would not
+        # read it was this function.
+        #
+        # **So the branch is a hold, and a hold is a value.** A tick's job for a latched state is to
+        # say what the state is this tick, and for a mode that is what it already was: step 1 wrote
+        # the command's value into the map before step 4 walked the nodes, so returning the current
+        # value here is what carries a commanded transition *through* a tick rather than losing it.
+        # A `discrete` state that *did* something on every tick would be a state that oscillates on
+        # its own, which is the failure `hysteresis` and `dwell` exist to prevent.
+        #
+        # **The family is exactly the commanded one, and the boundary is the declaration's own
+        # vocabulary rather than a list here.** A state whose every mover is `command:<verb>` is one
+        # the effect path owns: nothing else can write it, so holding is the complete rule. A state
+        # with a `logic:`, `trigger:` or `event:` mover is a machine whose next value follows from
+        # something the plant does not compute — the undervoltage ladder, a FDIR conclusion, a
+        # geometric occultation, an irreversible event — and it still refuses, by name, with the
+        # mover that owes the code rather than a sentence about the class. That is the same
+        # distinction `check_domain` draws when it refuses a hysteresis band on a commanded machine:
+        # a band answers "has the quantity crossed", and a command does not cross anything.
+        movers = [str(m) for m in (state.spec.get("moved_by") or [])]
+        commanded = command_only_movers(state.spec)
+        elsewhere = sorted(m for m in movers if not m.startswith("command:"))
+        if commanded and not elsewhere:
+            held = state_level(values, state)
+            if held is None:
+                raise Unconfigured(
+                    f"{where}.initial",
+                    f"is moved only by {commanded} and holds no value yet, so there is nothing for "
+                    "the tick to carry. A latched state's starting value is where the machine was "
+                    "left — an `enum[...]` unit is not one, and a mode with no position is a mode "
+                    "the vehicle cannot report",
+                    needs=f"{state.id}.initial",
+                )
+            return state_values(world, state, held)
+        raise Unconfigured(
+            where,
+            f"is a discrete state moved by {', '.join(elsewhere) or 'nothing'}"
+            + (f" as well as by {commanded}" if commanded else "")
+            + ". A commanded mode holds between commands and the effect path owns the transition, "
+            "so this plant advances one; what is domain code is the mover named here — the ladder "
+            "position, the FDIR conclusion, the occultation, the allocation verdict. `logic` is a "
+            "claim about the vehicle's own machinery and it needs the rule that computes it",
+        )
+
     if state.method == "hazard":
         raise Unconfigured(
             where,
@@ -1872,6 +1928,35 @@ def initial_values(world: World) -> dict[str, Any]:
     """
     values: dict[str, Any] = {}
     for state in world.states:
+        if state.method == "discrete" and command_only_movers(state.spec):
+            # **A latched mode's starting position, which is not a number and is not nothing.** The
+            # tick's hold reads the state's current value, so a mode the plant carries needs a
+            # position at t=0 for the same reason a stock needs a level: without one the first tick
+            # has nothing to hold, which is the refusal `advance` now makes by name. The shape is the
+            # state's own — a member of its `enum`, or a map over the elements that hold one — so it
+            # is written through `state_values` exactly as an advance is, and a keyed state's map
+            # goes into that state's own sub-map rather than beside the scalars.
+            initial = (state.spec or {}).get("initial")
+            if initial is None or initial == "UNCONFIGURED":
+                continue
+            if isinstance(initial, dict):
+                current = dict(values.get(state.id) or {})
+                current.update({str(k): v for k, v in initial.items()})
+                entries = state_values(world, state, current)
+            else:
+                entries = state_values(world, state, initial)
+            # **The sentinel's sub-map is merged rather than replaced, and getting that wrong is how
+            # this branch was written first.** `state_values` returns a *fresh* `{"internal": {id: …}}`
+            # for a state on the sentinel, so `values.update(entries)` replaced the whole sub-map
+            # with the one state being seeded — and since this loop walks the states in declaration
+            # order, every earlier sentinel state's value was wiped by the next one. The symptom was
+            # twelve sentinel entries becoming one, which the seed test caught immediately; the
+            # cause is that `state_values` answers "what are this state's entries" and the caller is
+            # the one that knows whether the answer is a patch or a replacement.
+            if state.node == "internal":
+                entries["internal"] = {**(values.get("internal") or {}), **entries["internal"]}
+            values.update(entries)
+            continue
         if state.method not in SEEDED_METHODS:
             continue
         initial = (state.spec or {}).get("initial")
@@ -2242,6 +2327,14 @@ def _stage_element(
     elements[element] = value
     outer[state.id] = elements
     staged[key] = outer
+    # **And the state's own key, which is the one `state_level` reads first.** `state_values` writes
+    # every value under the state's own id, and under its node's as well when the node carries one
+    # state; this function wrote only the container, so a keyed command's effect lived in
+    # `values[node][state.id]` while `values[state.id]` kept whatever it held before the command.
+    # `state_level` prefers the state's own key, so the next tick's hold would put the old map back.
+    # What made it visible is the hold itself: until a `discrete` state could be carried, nothing
+    # re-read a commanded state's value at all, and the two key spaces could disagree in silence.
+    staged[state.id] = elements
 
 
 def apply_command(
@@ -2330,8 +2423,13 @@ def apply_command(
             sentinel = dict(staged.get("internal") or values.get("internal") or {})
             sentinel[state.id] = value
             staged["internal"] = sentinel
+            # The sentinel keeps the flat key too, for the reason `_stage_element` now writes it:
+            # `state_level` reads the state's own id before the sub-map, and a command that moved
+            # only the sub-map left the flat key stale for the next tick to read back.
+            staged[state.id] = value
         else:
             staged[state.node] = value
+            staged[state.id] = value
     return staged
 
 
@@ -2453,6 +2551,15 @@ def _classify(world: World, state: State) -> str:
         # "owes a rule: domain code", which is the same defect as the `algebraic` case above
         # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
         # makes it the third method a configuration can carry on its own.
+        return "ready"
+    if state.method == "discrete" and command_only_movers(state.spec):
+        # **And the fourth class a configuration can carry on its own, which this classifier was
+        # most confident could not exist.** A commanded mode's rule is the *hold*, and the
+        # transition is the effect path's; the predicate is the same function `advance` and
+        # `check_initial_values` read, so the worklist, the checker and the tick cannot come apart
+        # over what "carried" means. A mode that still owes its starting position never reaches
+        # here — `initial: UNCONFIGURED` is a literal unset scalar, so the value branch above files
+        # it, which is the right bucket for a state that is one field away.
         return "ready"
     if (
         state.method == "dynamics"

@@ -175,6 +175,13 @@ state:
     # express `eleven of twelve engaged`, and `eleven of twelve` is the state a crew has to reason
     # about". The registry has carried `map[...]` channels since `controls.breakers`.
     unit: "map[hatch_id,enum[closed,latched,open]]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      each hatch's position at MET 0. The state is a map over `hatch_id` and its three values are
+      `closed`, `latched` and `open`; the vehicle is pressurised at the epoch, which says the
+      hatches are not `open` and does not distinguish `closed` from `latched` — and that
+      distinction is the whole of `apollo_diode.md:207`'s "incompatible with pressure"
+      interlock. What would close it: the launch configuration's hatch list
     moved_by:
       - "command:set_hatch_valve"
     command_value:
@@ -219,6 +226,18 @@ state:
     node: internal
     method: discrete
     unit: "enum[auto,open,isolated]"
+    initial: auto
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        the position the valve is in at MET 0, and the corpus answers it in one
+        phrase rather than in a number: this state's own provenance says it is "normally
+        closed, with an 'unexpected opening' event" (`apollo_diode.md:213`). Of the three
+        members, `open` is the state that event reports and `isolated` is a deliberate
+        removal of the relief function, so `auto` is the only one that is closed and still
+        regulated — which is what "normally closed" describes. The basis is `chosen` rather
+        than `derived` because the vocabulary has no `closed` member for a relation to
+        land on: the mapping from the source's word to this enum is the decision
     moved_by:
       - "command:set_relief_valve"
     dwell:

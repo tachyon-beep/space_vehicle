@@ -555,6 +555,12 @@ class Console:
                         # Qualified, because the sentinel is not a node and a bare state id
                         # would be indistinguishable from a node of the same name.
                         changed.append(f"internal:{state_id}={value[state_id]}")
+            elif node not in self.world.nodes:
+                # **The third shape of key the staged map carries, and it is not reported.** A state
+                # whose node carries exactly one state is written under the state's own id *and* the
+                # node's, because `state_level` reads the state's key first; the node key is the one
+                # a reader of this record wants, and the alias would report one change twice.
+                continue
             elif self.values.get(node) != value:
                 changed.append(f"{node}={value}")
         self.values.update(staged)

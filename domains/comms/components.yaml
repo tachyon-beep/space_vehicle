@@ -325,6 +325,12 @@ state:
     node: internal
     method: discrete
     unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the selected antenna at MET 0. The four members are exactly `vehicle.yaml#comms.antennas`, and
+      which one is selected at the epoch is a property of the ground-station geometry at the pad
+      rather than of the vehicle. What would close it: the launch-network plan, or one decision
+      that the vehicle begins on an omni antenna because no pointing has been commanded
     moved_by:
       - "command:select_antenna"
     dwell:
@@ -345,6 +351,12 @@ state:
     node: internal
     method: discrete
     unit: "enum[sband_high,sband_low,vhf,none]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the link mode at MET 0. The four members are `apollo_diode.md:161`'s and `vhf` is not an Earth
+      link at all, so which one the vehicle starts in is a statement about the launch and ascent
+      communications plan, not a measurement. What would close it: the communications plan's
+      launch configuration
     moved_by:
       - "command:set_comm_mode"
     dwell:
@@ -385,6 +397,13 @@ state:
     node: internal
     method: discrete
     unit: bit/s
+    initial: UNCONFIGURED
+    initial_note: >-
+      the rate at MET 0. `vehicle.yaml#comms.rates` declares `low` at 1,600 bit/s and `high` at 51,200,
+      both from `apollo_diode.md:7, :165`, and the state is a *rate* rather than a mode, so its
+      starting position is one of those numbers rather than a member of an enum. Which profile the
+      mission opens on is not declared anywhere. What would close it: the flight plan's initial
+      telemetry configuration, or one decision that the vehicle begins at the low rate
     moved_by:
       - "command:set_telemetry_profile"
     command_value:

@@ -362,6 +362,15 @@ state:
     node: cabin_regulator
     method: discrete
     unit: "enum[closed,primary,emergency,isolated]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the regulator's position at MET 0. `apollo_diode.md:95` gives the vocabulary and its
+      "unexpected mode" event and no source reached says which of the three the vehicle launches
+      in: `primary` is what the crew select once the cabin is on the regulator, `emergency` is a
+      selection made under a fault, and `closed` is the launch configuration. Which one is right
+      is a statement about the mission's start rather than a measurement. What would close it: a
+      launch configuration list, or one decision that the regulator begins closed because nothing
+      has opened it
     moved_by:
       - "command:set_cabin_regulator"
     dwell:

@@ -760,7 +760,7 @@ def test_the_build_order_is_the_ticks_own_gap_list():
         len(buckets["value"]),
         len(buckets["edge"]),
         len(buckets["rule"]),
-    ) == (36, 23, 16, 64), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
+    ) == (37, 34, 16, 52), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
 
 
 def test_the_worklist_never_blames_a_state_whose_node_publishes_no_value():
@@ -2802,7 +2802,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
     # One block deleted is one debt added: the corpus stands at 273, so the ablation is 274.
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 287 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2824,7 +2824,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 287 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2838,7 +2838,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 287 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6494,7 +6494,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     assert result.returncode == 0, result.stdout[-800:]
     # The corpus stands at 273; removing this file's own prose obligations takes the headline down
     # by the number of entries that file carries, which is one here.
-    assert "with 272 declared debt(s)" in result.stdout
+    assert "with 285 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6905,7 +6905,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 287 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7011,7 +7011,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 287 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -8164,8 +8164,19 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # and round 49 taught it the **`delay`** ring, so a state whose rule is a `delay_s` is ready too.
     # The sentence the bucket prints changed with the first of those: "the two classes" became "the
     # classes". `dynamics` is in it now, for the one state whose shape is a scalar accumulator;
-    # the 6-DOF half of that class is what is left.
-    assert {s.method for s in buckets["ready"]} <= {"lag", "stock", "algebraic", "delay", "dynamics"}
+    # the 6-DOF half of that class is what is left. **And `discrete` joined it**, which is the
+    # class this list was most confident about: a mode's rule *is* code — the ladder position, the
+    # FDIR conclusion, the allocation verdict — except where the movers are commands, and there the
+    # code is the effect path's and the tick's whole rule is the hold. The class is not the
+    # question; the movers are, and the set below is checked against what a tick did.
+    assert {s.method for s in buckets["ready"]} <= {
+        "lag",
+        "stock",
+        "algebraic",
+        "delay",
+        "dynamics",
+        "discrete",
+    }
     # And a state that owes a rule is never also counted as ready.
     assert not ({s.id for s in buckets["rule"]} & {s.id for s in buckets["ready"]})
 
@@ -8212,7 +8223,10 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # declarations are complete and which no tick can reach, leave it for the rule their producers
     # owe. The two figures this test used to compare (`counted_more`, `six_dof`) are now the totals
     # below, because a state a tick advances cannot be filed as owing anything.
-    assert len(buckets["ready"]) == 36
+    # 36 -> 37 when the plant learned to hold a commanded mode: `relief_valve_state` is the one
+    # whose starting position the corpus could source («normally closed», `apollo_diode.md:213`),
+    # so it is the one of the fourteen that reaches *ready* rather than *owes a value*.
+    assert len(buckets["ready"]) == 37
     # `rule` went 71 -> 69 -> 82 across two rounds. The first move was `moved_by`: the two still
     # owed put an `UNCONFIGURED` in their spec and `walk_unset` counts any unset scalar as a value
     # the plant wants, so they left this bucket without the code they need going away. The second
@@ -8242,7 +8256,12 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # 62 -> 64 in round 63, and this one is not a recount: `crew_location` and `crew_availability`
     # were in *owes a value* because `moved_by: UNCONFIGURED` is an unset key, and what they owe is
     # the mover rule — the cheapest-to-close bucket had a state in it with no value to write.
-    assert len(buckets["rule"]) == 64, "just under half the vehicle is domain code"
+    # 64 -> 52 in round 67, and it is the largest single move this bucket has made: twelve of the
+    # fourteen commanded modes left it. What they were filed under was never code — `moved_by` named
+    # the verb, `command_value` mapped its argument and `dwell` guarded the re-command — and what
+    # the plant owed was the *hold* between commands. Eleven of the twelve moved to `value` because
+    # the mode's starting position is owed; the twelfth is `relief_valve_state`, which reaches ready.
+    assert len(buckets["rule"]) == 52, "just over a third of the vehicle is domain code"
     # Two more moved *in* when a discrete state began owing a value by field name rather than
     # owing the code that would set it: `telemetry_rate` and `bus_tie_closed`, whose
     # `command_value` mappings name profiles and a mode no source prices.
@@ -8271,7 +8290,9 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # value debt are filed here with it. `--readiness` still counts the declarations: 25 states
     # carry one, and the three that differ are the ones a tick cannot reach because a value their
     # producer is missing has not moved them.
-    assert len(buckets["value"]) == 23
+    # 23 -> 34 in round 67: eleven commanded modes whose starting position no source answers. The
+    # narrow bucket is where they belong — each is one field — and the count is the shopping list.
+    assert len(buckets["value"]) == 34
     # Two of the twenty-eight "owed an edge" were not owed one at all: the three preloaded tanks
     # are advanceable, and the thirteen `internal` states need code. Three more left the bucket
     # when it stopped asking the integrator's question — a `regimes` table is a *declared*
@@ -9645,7 +9666,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 286 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -9741,7 +9762,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 286 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -10620,18 +10641,25 @@ def test_every_stock_declares_where_it_starts():
     # state id that is not the sentinel's own name.
     # 53 -> 54 in round 33: `suit_loop_flow_cfm` is seeded at the ECS guide's 35 cfm, so its own id
     # joins this map beside the sentinel's sub-map.
-    assert len(on_nodes) == 55, f"{len(on_nodes)} node keys carry a value"
+    # 55 -> 56 in round 67: `relief_valve_state`, the one commanded mode whose starting position
+    # the corpus could source. It is a sentinel state, so it is seeded under its own id *and* in
+    # the sentinel's sub-map — and this counts the ids beside the sub-map, which is why one state
+    # moves the figure by one.
+    assert len(on_nodes) == 56, f"{len(on_nodes)} node keys carry a value"
     # And the map a tick actually starts from is that seed plus the declared arithmetic, so the
     # resolved states are a strict superset and every one of them is `algebraic`.
     assert seeded_integrators.keys() < seeded.keys(), "the resolution added nothing to the seed"
     resolved = set(seeded) - set(seeded_integrators)
     assert all(s.method == "algebraic" for s in world.states if s.id in resolved), sorted(resolved)
     assert "fc_o2_draw_kg_s" in resolved and "fc_h2_draw_kg_s" in resolved
-    assert len(seeded_integrators["internal"]) == 12, sorted(seeded_integrators["internal"])
+    # 12 -> 13 in round 67, with `relief_valve_state`: the sentinel gains a *mode* beside its
+    # twelve accumulators, which is the same one state the node-key count above moved for and a
+    # different map — this one is the sub-map rather than the ids beside it.
+    assert len(seeded_integrators["internal"]) == 13, sorted(seeded_integrators["internal"])
     # Six of the sentinel's `algebraic` states resolve at t=0 as well — the bus load, the bay heat,
     # the cabin pressure differential and three more — so the sentinel's sub-map is the same map the
     # tick commits, merged rather than replaced.
-    assert len(seeded["internal"]) == 18, sorted(seeded["internal"])
+    assert len(seeded["internal"]) == 19, sorted(seeded["internal"])
     # The map is keyed by node and holds one value per key, so this is **not** a stock count and
     # stopped being one in round 8: four stocks share `cabin_atm` and four share `lm_cabin_atm`, so
     # six of the twenty-four declared values are the last of their key rather than a key of their
@@ -10689,6 +10717,11 @@ def test_every_stock_declares_where_it_starts():
         # value — not an accumulator's origin and not a published constant, but the zero an
         # integrator has to start from — and it is listed here rather than folded into either.
         "accumulated_dv_m_s",
+        # Round 67: the fourth kind, and the one this list could not have anticipated — a *mode*
+        # rather than a level. `relief_valve_state` is `auto` because the source that gives its
+        # three members also says the valve is normally closed, and it is here rather than in a
+        # list of its own because the sentinel's sub-map does not care what shape a value has.
+        "relief_valve_state",
     }, sorted(seeded_integrators["internal"])
     # **And the six `algebraic` states the resolver adds**, the sentinel's half of the declared
     # arithmetic: the bus load, the bay heat rate, the cabin pressure differential, the two loops'
@@ -10703,8 +10736,9 @@ def test_every_stock_declares_where_it_starts():
         "propellant_estimate",
     }
     # Zero everywhere except the supply tank's pressure, which is the one seeded sentinel value that
-    # is not an accumulator's origin.
-    assert set(seeded_integrators["internal"].values()) == {0.0, 35.0, 900.0}
+    # is not an accumulator's origin — and, from round 67, `auto`, which is not a number at all and
+    # is the reason the value assertions below name their states rather than ranging over the map.
+    assert set(seeded_integrators["internal"].values()) == {0.0, 35.0, 900.0, "auto"}
     assert seeded["internal"]["o2_supply_pressure_psi"] == 900.0
     assert seeded["internal"]["suit_loop_flow_cfm"] == 35.0
 
@@ -12513,7 +12547,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 273 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 286 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -12664,7 +12698,11 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # the one heated zone that has none: its 360 W is assigned to a compartment and carried by
     # nothing.
 
-    assert owed == "273", "the view must agree with the headline count"
+    # 273 -> 286 in round 67, and the whole of the move is one class: thirteen commanded modes
+    # whose starting position no source answers, each a literal `UNCONFIGURED` scalar and therefore
+    # in *both* views — the headline and this one — which is what makes them countable rather than
+    # merely named.
+    assert owed == "286", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -13594,12 +13632,19 @@ def test_every_command_that_writes_a_state_can_be_applied_or_refuses_by_name():
         applied.append(verb)
         # A verb that writes a state must put it somewhere the map can hold.
         assert staged, f"{verb} writes {[s.id for s in targets]} and staged nothing"
-        for node in staged:
-            # The key is a node the world declares, or the sentinel. It is not necessarily a key
-            # `initial_values` seeded: only *stocks* have declared starting amounts, so a mode node
-            # like `engine_main` is absent from the seed and appears the first time a command
-            # writes it.
-            assert node == "internal" or node in world.nodes, node
+        # **There are three shapes of key and there used to be two.** A node the world declares, the
+        # sentinel, and — from round 67 — the *state's own id*, which `state_values` writes beside
+        # the node's because `state_level` reads it first. The node key is not the state key even on
+        # a node that carries one state: `bus_tie_closed` lives on `bus_tie` and
+        # `cabin_regulator_position` on `cabin_regulator`, so a command that wrote only the node left
+        # `values[<state>]` holding the pre-command value, and the tick's hold read that first and put
+        # it back. Which is the round's own finding arriving in the assertion that guards the map.
+        for key in staged:
+            # The key is a node the world declares, or the sentinel, or a state those commands write.
+            # It is not necessarily a key `initial_values` seeded: only *stocks* have declared
+            # starting amounts, so a mode node like `engine_main` is absent from the seed and appears
+            # the first time a command writes it.
+            assert key == "internal" or key in world.nodes or any(s.id == key for s in targets), key
     # **Fourteen apply and seven are owed**, and the eighth moved across in round 33: a
     # rule-computed state is changed through an *input*, and `select_antenna`'s input
     # (`comms.antenna_selection`) is a state that exists and declares the same verb — so the command
@@ -13624,10 +13669,18 @@ def test_every_command_that_writes_a_state_can_be_applied_or_refuses_by_name():
 
     # And the mapping itself, on the two links that prove the key space and the key argument.
     staged = plant.apply_command(world, values, "set_rcs_mode", {"mode": "manual"})
-    assert staged == {"internal": {**values["internal"], "mode": "manual"}}, staged
+    # Two keys, and the second is the state's own — `state_level` reads it before the sentinel's
+    # sub-map, so a command that wrote only the sub-map left the flat key holding the pre-command
+    # value for the next tick to read back. Round 67's finding, in the map this test guards.
+    assert staged == {
+        "internal": {**values["internal"], "mode": "manual"},
+        "mode": "manual",
+    }, staged
     staged = plant.apply_command(world, values, "set_hatch_valve",
                                  {"vehicle": "csm", "hatch": "hatch_crew_lm", "state": "open"})
     assert staged["internal"]["hatch_state"] == {"hatch_crew_lm": "open"}, staged
+    # The keyed state's element has the same second key, one level down, and for the same reason.
+    assert staged["hatch_state"] == {"hatch_crew_lm": "open"}, staged
     # And the rule-computed half: the command writes its *input*, and the state the rule owns is
     # left alone rather than guessed at.
     staged = plant.apply_command(world, values, "select_antenna", {"antenna": "high_gain"})
@@ -13844,12 +13897,12 @@ def test_a_computed_effect_names_the_input_the_command_changes(tmp_path):
     refusal(
         "disagrees",
         "domains/comms/components.yaml",
-        '    unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"\n'
-        "    moved_by:\n"
-        '      - "command:select_antenna"\n',
-        '    unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"\n'
-        "    moved_by:\n"
-        '      - "logic:the crew throw it"\n',
+        '    moved_by:\n'
+        '      - "command:select_antenna"\n'
+        "    dwell:\n",
+        '    moved_by:\n'
+        '      - "logic:the crew throw it"\n'
+        "    dwell:\n",
         "which does not declare 'select_antenna' as a `command:` mover",
     )
     refusal(
@@ -14338,7 +14391,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 286 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -14346,7 +14399,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 286 declared debt(s)",
         composes=True,
     )
 
@@ -14361,7 +14414,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-300:]
+    assert "with 287 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -14520,7 +14573,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-400:]
+    assert "with 287 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -14667,7 +14720,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-400:]
+    assert "with 287 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -14677,7 +14730,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 286 declared debt(s)",
         composes=True,
     )
 
@@ -14819,7 +14872,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 286 declared debt(s)",
         composes=True,
     )
 
@@ -14953,6 +15006,150 @@ def test_the_linter_refuses_a_tool_docstring_whose_fault_counts_have_drifted(tmp
     result = run_linter(definition)
     assert result.returncode == 1
     assert "states 118 declared faults" in result.stdout, result.stdout[-900:]
+
+
+def test_the_linter_asks_a_carried_mode_where_it_starts_and_not_a_code_moved_one(tmp_path):
+    """The `discrete` exemption's premise was *the plant refuses a discrete state*, and it stopped being true.
+
+    `INTEGRATOR_METHODS` names the three classes the initial-value rule covers and exempts `dynamics`
+    and `discrete` by name, each with a reason. The `discrete` reason is written in the exemption:
+    *"the plant refuses a `discrete` state outright ('its rule is domain code'), so nothing invents
+    one; and an initial that arrives with the rule is what the implementer of that rule owes."* The
+    premise is the first clause. `plant.advance` now **holds** every `discrete` state whose movers
+    are all `command:<verb>` — the transition belongs to the effect path, which `apply_command`,
+    `command_effect` and `command_dwell` already implement, and a latched mode's value between
+    commands is what it already was — so for those fourteen states the premise had lapsed and the
+    exemption had become a hole with a reason that no longer applied. A mode the tick carries needs
+    a position to carry.
+
+    **The narrowing is the finding, and so is the boundary.** A `discrete` state moved by `logic:`
+    is still refused by the plant, so it still needs no initial and the corpus says why. And a
+    mode's position is not a number: it is a member of the state's own `enum`, or a map over the
+    elements that hold one, which is why the exemption called it "a different vocabulary" rather
+    than "later". What survives from the numeric half is the rule underneath — a starting value
+    says where it came from — and what is new is that it has to be a value the state can hold.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1500:]
+
+    def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        target = definition.joinpath(*path)
+        text = target.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        target.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1500:]}"
+
+    eclss = ("domains", "eclss", "components.yaml")
+    # The position removed outright: this is the fourteen-state finding in one edit.
+    refusal(
+        "carried-mode-unset",
+        eclss,
+        "    unit: \"enum[closed,primary,emergency,isolated]\"\n    initial: UNCONFIGURED\n",
+        "    unit: \"enum[closed,primary,emergency,isolated]\"\n",
+        "is a `discrete` state whose every mover is a command (['set_cabin_regulator'])",
+    )
+    # A position the state cannot hold. `cabin_regulator_position` has no `auto` member — that is
+    # the bus tie's vocabulary — so this is a mode the vehicle would be in and could not report.
+    refusal(
+        "carried-mode-outside-the-enum",
+        eclss,
+        "    initial: UNCONFIGURED\n",
+        "    initial: auto\n",
+        "which its `unit` ('enum[closed,primary,emergency,isolated]') cannot hold",
+    )
+    # A position with no grounding, which is the numeric rule's own requirement arriving in the new
+    # vocabulary: `chosen` needs a reason, and the reason is what the checker is asking for.
+    structure = ("domains", "structure", "components.yaml")
+    refusal(
+        "carried-mode-ungrounded",
+        structure,
+        "    initial_provenance:\n",
+        "    unmoved_initial_provenance:\n",
+        "with none of `initial_source`, `initial_derivation` or `initial_provenance`",
+    )
+
+    # A **keyed** mode, where the position is a map over the elements that hold one. The shape is
+    # why the exemption called this "a different vocabulary" rather than "later": the numeric rule
+    # could not have held it, and a map is the second shape the check has to read.
+    refusal(
+        "keyed-carried-mode-outside-the-enum",
+        structure,
+        "    initial: UNCONFIGURED\n    initial_note: >-\n",
+        "    initial:\n      hatch_crew_csm: ajar\n    initial_note: >-\n",
+        "which its `unit` ('map[hatch_id,enum[closed,latched,open]]') cannot hold",
+    )
+
+    # **And the control, which is what keeps this a narrowing rather than a rule about the class.**
+    # `load_shed_class` is moved by `logic:` and refused by the plant, so it declares no initial —
+    # and the `run_linter(VEHICLE)` at the top of this test is what asserts that composing. That is
+    # the exemption's *surviving* half, and it is a control rather than a comment because the
+    # tempting over-correction is to ask every discrete state for a position, which would refuse a
+    # state the plant cannot advance and whose position nothing carries.
+
+
+def test_a_commanded_mode_holds_its_value_through_a_tick_and_a_code_moved_one_does_not(tmp_path):
+    """The rule the exemption's premise was about, fired rather than described.
+
+    A `discrete` state whose movers are all commands is *latched*: `plant.md` §3 puts it under
+    "discrete / latched", and the whole of "latched" is that the value does not move between the
+    events that move it. So the tick's job is to carry what the command left — step 1 of §9's loop
+    writes the effect into the value map and step 4 walks the nodes, so the hold is what carries a
+    commanded transition *through* a tick rather than losing it — and `apply_command` is where the
+    transition itself is computed.
+
+    **The two halves are asserted together on purpose.** A hold that no command can change is a
+    constant, and a command whose value the next tick discards is a command that did nothing; the
+    test is that a value written by `apply_command` is still there after `step()`, which is the
+    property the fourteen states were refused for not having. And the boundary is asserted with it:
+    a mode moved by `logic:` is still refused, by name, with the mover that owes the code.
+    """
+    # The tool path, the way every plant test in this file reaches it: there is no conftest,
+    # because this suite must stay runnable against a bare checkout of the configuration.
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    world = plant.load_world(VEHICLE)
+    values = plant.initial_values(world)
+    # The one mode whose starting position the corpus could source: `auto`, from the relief valve's
+    # own "normally closed, with an 'unexpected opening' event" (`apollo_diode.md:213`).
+    assert values["relief_valve_state"] == "auto", values.get("relief_valve_state")
+
+    # The hold: a tick that carries the declared position rather than refusing the state.
+    gaps = []
+    after = plant.step(world, values, plant.tick_seconds(world), gaps)
+    assert after["relief_valve_state"] == "auto", after.get("relief_valve_state")
+    assert not [g for g in gaps if g.state.id == "relief_valve_state"], [
+        str(g.where) for g in gaps if g.state.id == "relief_valve_state"
+    ]
+
+    # The transition, through the effect path the plant already had: `set_relief_valve`'s argument
+    # is the state's own vocabulary, so the values are the identity.
+    # `apply_command` stages a sentinel state inside `values["internal"]`, which is the sentinel's
+    # own key space rather than a slot beside the scalars; the tick then writes it under the state's
+    # own id as well, because `state_values` is the one place that decides what a state's entries are.
+    delta = plant.apply_command(world, after, "set_relief_valve", {"state": "open"})
+    assert delta["internal"]["relief_valve_state"] == "open", delta
+    # The caller commits it, and `console.py` commits it exactly this way: `values.update(staged)`.
+    # The sentinel's sub-map arrives whole rather than as a patch, which is what makes one `update`
+    # enough for a key space that is a map rather than a slot.
+    commanded = dict(after)
+    commanded.update(delta)
+    carried = plant.step(world, commanded, plant.tick_seconds(world), [])
+    assert carried["relief_valve_state"] == "open", carried.get("relief_valve_state")
+    assert carried["internal"]["relief_valve_state"] == "open", carried["internal"]
+
+    # And the boundary: `load_shed_class` is moved by the undervoltage ladder, so the tick still
+    # refuses it with the mover named rather than a sentence about the class.
+    refused = []
+    plant.step(world, values, plant.tick_seconds(world), refused)
+    ladder = [g for g in refused if g.state.id == "load_shed_class"]
+    assert ladder, [g.state.id for g in refused][:20]
+    assert "moved by" in ladder[0].owed, ladder[0].owed
 
 
 def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(tmp_path):
@@ -16947,7 +17144,9 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # states whose rule is a declaration, in the tick's own order, so the node a tank drains against
     # has a value before the tick that reads it — `resolve_declared_states`, and the three states it
     # unblocked are the whole of this move.
-    assert len(advanced) == 36, sorted(advanced)
+    # 36 -> 37 in round 67, with `relief_valve_state`: the plant holds a commanded mode, and the
+    # relief valve's starting position is the one the corpus could source.
+    assert len(advanced) == 37, sorted(advanced)
 
     # The arithmetic is the corpus's, at the values the corpus declares.
     assert values["cabin_heat_csm"] == 733.0
@@ -17005,7 +17204,9 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # `avionics_bay_heat_w`, `cabin_dp_psi`, the two loops' loads) join the eleven seeded values and
     # `accumulated_dv_m_s`. The staged merge inside a tick is still shallow — this is a *seed*, not a
     # deeper stage — so a sentinel state that cannot resolve at t=0 still lands by the old path.
-    assert len(values["internal"]) == 18, sorted(values["internal"])
+    # 18 -> 19 in round 67, with `relief_valve_state`: the sentinel's first *mode*, seeded by the
+    # same branch that seeds a level and merged into the sub-map rather than replacing it.
+    assert len(values["internal"]) == 19, sorted(values["internal"])
     assert values["loop_primary_load_w"] == 1723.0 and values["loop_lm_load_w"] == 1007.0
 
 
@@ -18702,4 +18903,4 @@ def test_the_tick_can_read_what_the_build_order_promises():
 
     # The figures this rests on, so a round that moves them has to say so here.
     assert len(world.states) == 139
-    assert len(ready) == 36 and len(advanced) == 36
+    assert len(ready) == 37 and len(advanced) == 37

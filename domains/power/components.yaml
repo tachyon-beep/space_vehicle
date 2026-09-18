@@ -293,6 +293,13 @@ state:
     method: discrete
     node: bus_tie
     unit: "enum[open,closed,tripped]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the tie's position at MET 0. `apollo_diode.md:79` gives `open/closed/tripped` and this state's
+      own note gives the latch direction ("it latches open on a ground fault"); neither says
+      whether the two buses are tied at the pad, which is a launch bus-configuration decision.
+      What would close it: the launch-day bus configuration, or one decision that the tie begins
+      open because nothing has yet asked the two buses to work together
     moved_by:
       - "command:set_bus_tie"
     command_value:

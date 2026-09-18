@@ -507,6 +507,12 @@ state:
     node: internal
     method: discrete
     unit: "enum[auto,manual,free_drift]"
+    initial: UNCONFIGURED
+    initial_note: >-
+      the RCS mode at MET 0. `apollo_diode.md:147` gives the three modes and this state's own note
+      argues `manual`'s weight — in it the crew are the controller — so the starting mode decides
+      who is flying the attitude loop before anything is commanded. What would close it: the
+      mission's attitude-control plan for the early coast
     moved_by:
       - "command:set_rcs_mode"
     dwell:

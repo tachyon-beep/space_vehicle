@@ -76,7 +76,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 273 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 286 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -209,9 +209,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 273 declared debts
-and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **36** of the 139 states, and the build order's **36** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 286 declared debts
+and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
+a real tick advances **37** of the 139 states, and the build order's **37** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -224,14 +224,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **260** is every obligation the linter can name:
-**112** literal `UNCONFIGURED` scalars and **148** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **286** is every obligation the linter can name:
+**199** literal `UNCONFIGURED` scalars and **87** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **186** the plant
+the missing charging efficiency, the pump-speed conversion). The **199** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 186 is the linter's 112 **plus** the graph's unset edge
+`coupling.yaml` included, so its 199 is the linter's 199 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1631,7 +1631,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete` and `dynamics`
 are rules the configuration deliberately does not carry** — `delay` *is* carried, as a `delay_s` and
 a ring, and the vehicle's one delay state is in *ready now* — and counting them together with the
-states a tick cannot reach because a coupling is missing, so 64 of the 139 states need code.
+states a tick cannot reach because a coupling is missing, so 52 of the 139 states need code.
 (This said *before the plant can walk a whole tick*, which was true when it was written and is not
 now: a tick walks all 139 of them and records what it cannot advance. See *The tick stopped at its
 first debt* below.)
@@ -1830,10 +1830,10 @@ their producer is missing has not moved them.
 ```
 139 states, by what blocks them:
 
-    36   26 %  ready now — the states a real tick advances
-    23   17 %  owes a value — the cheapest to close, and the debt count already tracks them
+    37   27 %  ready now — the states a real tick advances
+    34   24 %  owes a value — the cheapest to close, and the debt count already tracks them
     16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    64   46 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    52   37 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -16876,6 +16876,127 @@ made as `degraded` and resumed as `crisis --seed 7`, and the mirror, the record 
 follow the caller — and `test_a_restart_may_not_re_bound_the_ring_and_says_so` is the refusal, with
 the agreeing bound and the fresh window as its controls. The three values the console remembers are
 now tellable from their own defaults, and the linter refuses the next one that is not.
+
+## The exemption that excused the modes rested on the plant refusing them
+
+`INTEGRATOR_METHODS` names the three classes the initial-value rule covers — `stock`, `lag`,
+`delay` — and exempts two by name with a reason each. The `discrete` reason is the one this round
+is about, and it is written inside the exemption:
+
+> **`discrete`** — a mode rather than a number, so its starting value is an `enum[...]` string
+> rather than a scalar — forty-three states, the same shape question in a different vocabulary.
+> **The plant refuses a `discrete` state outright ("its rule is domain code"), so nothing invents
+> one**; and an initial that arrives with the rule is what the implementer of that rule owes.
+
+The premise is the bolded clause, and it stopped being true the moment the plant learned to hold a
+commanded mode. What was left was a hole with a reason that no longer applied: **fourteen states
+whose rule the plant could run, and no tool asking any of them where they start.**
+
+### The rule the plant already had in two halves
+
+`plant.md` §3 puts trips, dwell timers, hysteresis, valve states, staging and pulse modulation under
+one method — *discrete / latched* — and the whole of "latched" is that the value does not move
+between the events that move it. A commanded mode is the largest such family, and both halves of
+its rule were already implemented and neither was in the tick:
+
+| half | where it was |
+|---|---|
+| the transition — a command sets the value its argument maps to | `apply_command` and `command_effect`, §9's steps 1–2 |
+| the guard — a mode may not be re-commanded inside its own floor | `command_dwell`, enforced in `console.py` |
+| **the hold — the value between two commands** | nowhere: `advance` said the rule "is not in the configuration" |
+
+That sentence was false the way round 42 found it false for `algebraic`: the rule was in the
+configuration and in the code beside it, and the one reader that would not read it was the tick.
+So `advance` holds a `discrete` state whose every mover is `command:<verb>` — step 1 wrote the
+command's value into the map before step 4 walked the nodes, so returning the current value is what
+carries a commanded transition *through* a tick rather than losing it — and refuses the rest by
+naming the mover that owes the code, which is `logic:`, `trigger:` or `event:` for the twenty-nine
+that remain.
+
+The predicate is one function, `check_vehicle.command_only_movers`, imported by `plant.py`: the
+tick, the initial-value rule and the worklist's classifier all ask the same question, because three
+spellings of "is this mode carried by its commands" is three answers.
+
+### The key space the hold exposed
+
+Writing the test found the second half. `apply_command` staged a sentinel state's value into
+`values["internal"][<id>]` and left `values[<id>]` — the flat key `state_values` also writes, and
+the one `state_level` reads **first** — holding whatever it held before the command. Nothing read it
+back, because nothing re-read a commanded state's value at all: the tick refused every one of them.
+The hold is what reads it, so the hold is what put the old value back on the next tick. Both of
+`apply_command`'s write paths now write the state's own key too, which is the rule `state_values`
+already stated — *"every state's value is written under its own id"* — reaching the one writer that
+had not heard it. A keyed command's element had the same hole, one level down.
+
+### The narrowing, and the fourteen positions
+
+`check_initial_values` asks a carried mode for a starting position, in the shape its own `unit`
+declares: a member of its `enum`, or a map over the elements that hold one. A position outside that
+vocabulary is refused — that is a mode the vehicle is in and cannot report, which is the defect
+three earlier rounds found arriving through a type instead of a sentence — and `UNCONFIGURED` with
+an `initial_note` is the owed form, counted like any other debt.
+
+**Thirteen of the fourteen positions are owed, and none was invented.** The corpus publishes the
+vocabularies and not the launch positions: `apollo_diode.md:95` gives the cabin regulator three
+modes and does not say which one the vehicle launches in, `:161` gives four link modes with no
+starting one, and `vehicle.yaml#comms.rates` prices two telemetry profiles without saying which the
+mission opens on. Each of the thirteen now says so in one sentence that names what would close it.
+
+**The fourteenth is sourced, and it is the one that moves.** `relief_valve_state`'s own provenance
+has said since it landed that the valve is *"normally closed, with an 'unexpected opening' event"*
+(`apollo_diode.md:213`); of its three members `open` is the state that event reports and `isolated`
+is a deliberate removal of the relief function, so `auto` is the only one that is closed and still
+regulated. The basis is `chosen` rather than `derived` because the vocabulary has no `closed`
+member for a relation to land on — the mapping from the source's word to this enum is the decision,
+and it is recorded as one.
+
+### The two mistakes this round made, both caught before they landed
+
+**The seeding replaced the sentinel's sub-map.** `state_values` answers "what are this state's
+entries", and for a state on the sentinel the answer is a *fresh* `{"internal": {<id>: …}}` — so
+seeding `relief_valve_state` with `values.update(entries)` wiped every sentinel value seeded before
+it in the loop. Twelve entries became one, and `test_every_stock_declares_where_it_starts` said so
+on the first run. The caller is the one that knows whether the answer is a patch or a replacement;
+the seeding branch merges now, and the comment says why rather than leaving the next reader to
+rediscover it.
+
+**And the first version of the hold read `moved_by` itself.** The tick's predicate and the
+initial-value rule's were two spellings of "carried" for the length of one edit — the defect this
+folder names most often — and the fix was to move the predicate into `check_vehicle` and import it,
+which is also what let the worklist's classifier ask the same question rather than a third one.
+
+### The classifier that routed on a count and not on a rule
+
+`_classify` — the worklist's per-state verdict — had to hear about the hold too, and its own
+docstring says why: *"the classification is supposed to be the same sequence of tests the plant runs
+when it gets there."* It routed every state on the `internal` sentinel to *owes a rule* on the
+grounds that "its driver is code rather than an edge", which is a statement about **where a driver
+comes from** and not about whether the rule is written. The same reasoning had already been fixed
+once for `algebraic` and once for `delay`; this is the third class it was wrong about, and the fix
+is the shared predicate rather than a fourth special case.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 273 | **286** |
+| build order · ready now | 36 | **37** |
+| build order · owes a value | 23 | **34** |
+| build order · owes an edge | 16 | 16 |
+| build order · owes a rule | 64 | **52** |
+| a real tick advances | 36 of 139 | **37 of 139** |
+| states fully configured | 114 / 139 | 103 / 139 |
+| states with a debt | 25 / 139 | 36 / 139 |
+| UNCONFIGURED scalars | 186 | **199** |
+| `report.refuse` call sites | 796 | **800** |
+| tests | 314 | **316** |
+
+**This is the largest single move the rule bucket has made**, and it went the honest direction
+rather than the flattering one: twelve states left *owes a rule* because the rule was never missing,
+eleven of them arriving in *owes a value* as the position they need becomes countable for the first
+time. One state advances. The debt count rose by thirteen, which is what a round looks like when it
+turns a silent exemption into a named obligation — the same direction round 64 chose, and for the
+same reason: **the obligations were always there and were being reported as zero.**
 
 ## The invariants, and which of them are enforced
 
