@@ -44,7 +44,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
 from plant import (  # noqa: E402
     Unconfigured,
@@ -141,8 +144,26 @@ class Console:
         *,
         phase: str,
         tripped_interlocks: set[str] | None = None,
+        scenario: str = "nominal",
+        seed: int = 0,
     ) -> None:
         self.world = world
+        # **Which scenario this run is, and it is two fields rather than a story.** Criterion 3
+        # asks for a runner that "plays nominal, degraded and crisis", and `mission.yaml` already
+        # declares the three: a posture is a row of `apollo_diode.md:370-374`'s difficulty scaling
+        # (hazard ×1/×5/×10, demand failure ×1/×5/×20) plus a selector over which faults are
+        # *placed* rather than left to chance. `tools/faults.py` has consumed both since the round
+        # that found the difficulty knob doing nothing; what no tool had was a run's identity — so
+        # two crisis runs were indistinguishable in the record and neither could be replayed.
+        #
+        # The pair is recorded rather than narrated, on purpose. `mission.yaml`'s own debt says it:
+        # *"the pool is a set of faults, the guaranteed seed is drawn from it, and the chain that
+        # results is whichever one that fault realises — so a `crisis` run is a crisis, and not
+        # necessarily the crisis a chain names."* Naming a chain here would be answering a question
+        # the vehicle deliberately leaves to the experiment, so this file records the two things
+        # that make a run reproducible and nothing more.
+        self.scenario = scenario
+        self.seed = int(seed)
         # The value map the frames carry, seeded once from the stocks' declared initial
         # conditions. It lives on the console rather than being rebuilt per frame because it is
         # the thing a tick will advance: `step()` takes it and returns it committed, so when the
@@ -249,10 +270,16 @@ class Console:
                 self.dwell = {
                     str(k): v for k, v in restored["dwell"].items() if isinstance(v, dict)
                 }
-            for key in ("ticks", "seq"):
+            for key in ("ticks", "seq", "seed"):
                 value = restored.get(key)
                 if isinstance(value, int) and value >= 0:
                     setattr(self, key, value)
+            # **A resumed console keeps its scenario unless the caller names another.** The whole
+            # point of recording the pair is that the record describes the run; a restart that
+            # silently reset it to `nominal` would make the second half of a crisis run report
+            # itself as a nominal one.
+            if isinstance(restored.get("scenario"), str) and restored["scenario"]:
+                self.scenario = restored["scenario"]
             if isinstance(restored.get("boot_id"), str) and restored["boot_id"]:
                 self.boot_id = restored["boot_id"]
         self.publish()
@@ -761,7 +788,17 @@ class Console:
                 "oldest_expires_in_seconds": 3600 - int((utc_now() - self.started).total_seconds()),
             },
             "queue_depth": len(self.deferred),
-            "vehicle": {"phase": self.phase, "posture": "", "abort_latched": False},
+            # `posture` is the *execution* machine's posture (`mission.yaml#postures`), which the
+            # console does not drive and which stays empty; `scenario` is the run's difficulty
+            # identity and is the one this file owns. Two names because they are two things, and
+            # putting the scenario in the posture's slot would make the mirror claim a state the
+            # execution machine never entered.
+            "vehicle": {
+                "phase": self.phase,
+                "posture": "",
+                "scenario": self.scenario,
+                "abort_latched": False,
+            },
             "capability": rows,
         }
         write_json_atomic(self.state, state)
@@ -775,6 +812,12 @@ class Console:
                 "ticks": self.ticks,
                 "seq": self.seq,
                 "boot_id": self.boot_id,
+                # The run's identity lives in the vehicle's own record rather than in the mirror,
+                # for the reason `ticks` and `seq` do: `state.json` is published state and the
+                # contract says it is never read back as input, so anything a restart has to
+                # remember is `vehicle -> vehicle`.
+                "scenario": self.scenario,
+                "seed": self.seed,
             },
         )
         self.write_frame()
@@ -845,6 +888,31 @@ def main(argv: list[str] | None = None) -> int:
         help="an interlock that is currently tripped, by threshold id; repeatable",
     )
     parser.add_argument("--init", action="store_true", help="create the directory and stop")
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="print what this scenario and seed decide — the scheduled faults, the placed ones and "
+        "the factors — and stop, without running a cycle",
+    )
+    parser.add_argument(
+        "--plan-json",
+        action="store_true",
+        help="the same plan as JSON, for a caller that wants to store or diff it",
+    )
+    parser.add_argument(
+        "--scenario",
+        default="nominal",
+        metavar="POSTURE",
+        help="the run's difficulty identity: a `mission.yaml#scenario_postures` id "
+        "(nominal, degraded, crisis). Recorded in the mirror and in the vehicle's own record",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="the run's master seed, for the fault streams `tools/faults.py` draws from. "
+        "A scenario and a seed together are what make a run reproducible",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -853,12 +921,75 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"the configuration cannot be loaded: {exc}\n")
         return 3
 
+    # **A scenario that names no posture is refused rather than accepted and ignored**, which is
+    # the failure mode `mission.yaml`'s own debt records one level up: the difficulty knob existed
+    # for rounds and did nothing, because the scheduler read the policies and never the postures.
+    # The list comes from the mission file through the module that already consumes it, so there is
+    # one declaration of what the scenarios are.
+    try:
+        postures = load_postures(Path(args.dir))
+    except Exception as exc:  # noqa: BLE001 - a refusal is the answer here too
+        sys.stderr.write(f"the scenario postures cannot be loaded: {exc}\n")
+        return 3
+    if args.scenario not in postures:
+        sys.stderr.write(
+            f"scenario {args.scenario!r} is not one of the vehicle's "
+            f"{len(postures)}: {sorted(postures)}\n"
+        )
+        return 3
+
+    # **`--plan` answers "what will this run be" before it is run**, which is the half of criterion
+    # 3a that a console cannot answer for itself: the console is the window, and the faults are the
+    # adversary's. Both read the same `scenario_report`, so the plan a run announces and the plan it
+    # flies are one computation rather than two that agree until somebody edits one.
+    if args.plan or args.plan_json:
+        faults = load_faults(Path(args.dir))
+        if not faults:
+            sys.stderr.write(f"no faults under {Path(args.dir) / 'domains'}\n")
+            return 3
+        phases = [
+            float(row.get("duration_h", 0))
+            for row in (yaml.safe_load((Path(args.dir) / "mission.yaml").read_text()) or {}).get(
+                "phases"
+            )
+            or []
+        ]
+        hours = sum(phases)
+        try:
+            plan = scenario_report(Path(args.dir), faults, postures, args.scenario, args.seed, hours)
+        except Exception as exc:  # noqa: BLE001 - the refusal is the answer
+            sys.stderr.write(f"the scenario cannot be planned: {exc}\n")
+            return 3
+        plan.pop("_armed_faults", None)
+        if args.plan_json:
+            json.dump(plan, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            return 0
+        print(
+            f"scenario {plan['posture']!r} at seed {plan['master_seed']}, over {plan['hours']:g} h"
+        )
+        print(
+            f"  hazard x{plan['hazard_factor']:g}, demand x{plan['on_demand_factor']:g}"
+            f"  ·  seeded: {plan['seeded_faults']}"
+        )
+        print(f"  {len(plan['events'])} scheduled event(s), {len(plan['armed'])} armed fault(s)")
+        for event in plan["events"][:10]:
+            print(
+                f"    MET {event['met_h']:8.3f} h  {event['fault']:38} {event['kind']:22} "
+                f"-> {', '.join(event['perturbs'][:2])}"
+            )
+        if len(plan["events"]) > 10:
+            print(f"    … and {len(plan['events']) - 10} more")
+        return 0
+
     console = Console(
         world,
         Path(args.diode_dir) / args.slug,
         args.slug,
         phase=args.phase,
         tripped_interlocks=set(args.closed_interlock),
+        scenario=args.scenario,
+        seed=args.seed,
     )
     console.initialise()
     if args.init:
@@ -867,6 +998,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"[console] {console.root} slug={args.slug} phase={args.phase} "
+        f"scenario={console.scenario} seed={console.seed} "
         f"poll={args.poll}s cycles={args.cycles or 'until interrupted'}",
         flush=True,
     )

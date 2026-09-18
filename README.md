@@ -15620,6 +15620,63 @@ caught it by holding thrust for one tick and reading the result.
 `dynamics` (scalar) and the `internal` seeding — with the 6-DOF half of `dynamics` and all of
 `discrete` and `hazard` still owing code. The rule layer is at 60, from 79 six rounds ago.
 
+## A run can say which scenario it is
+
+Criterion 3 asks for *"a scenario runner that plays nominal, degraded and crisis through
+`tools/console.py`"*, and this round builds its smallest honest part: **the run's identity**.
+
+`mission.yaml` has declared three scenario postures since it was written — hazard ×1/×5/×10, demand
+failure ×1/×5/×20, and a selector over which faults are *placed* rather than left to chance — and
+`tools/faults.py` has scaled by them since the round that found the difficulty knob doing nothing.
+What no tool had was a way to say which scenario a run **was**. Two `crisis` runs were
+indistinguishable in the record and neither could be replayed, which is the difference between an
+experiment and an anecdote.
+
+### Two fields, and deliberately not a third
+
+```sh
+python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --scenario crisis --seed 42
+python3 tools/console.py --plan --scenario crisis --seed 42          # what that pair decides
+python3 tools/console.py --plan-json --scenario degraded --seed 7    # …as data
+```
+
+A scenario is a **posture and a seed**, and the pair is recorded in both places a restart needs it:
+`state.json`'s vehicle block carries the scenario beside the phase, and `pending.json` — the
+vehicle's own record, which *is* read back — carries the pair beside `ticks` and `seq`. A restart that
+names neither keeps them, because a second half that reset itself to `nominal` would make a crisis
+run report itself as a nominal one.
+
+**What is deliberately not recorded is a chain.** `mission.yaml`'s own debt says why: *"the pool is a
+set of faults, the guaranteed seed is drawn from it, and the chain that results is whichever one that
+fault realises — so a `crisis` run is a crisis, and not necessarily the crisis a chain names."*
+Naming a chain in the runner would answer a question the vehicle leaves to the experiment, so the
+runner records the two things that make a run reproducible and stops there. That is the design
+decision the plan file flagged, and this is it being made rather than deferred.
+
+### One implementation of "what this scenario decides"
+
+`--plan` prints the rates the posture scales, the faults it *places*, and every spontaneous event over
+the mission — and it reads the **same `scenario_report`** the scheduler's own `--json` does, which the
+test holds key for key. A second implementation would be a second answer that agrees until somebody
+edits one of them, which is the defect this folder spends its rounds removing.
+
+The refusal is the other half: a scenario the vehicle does not declare exits 3 and names the three it
+has. That sounds like manners and is not — the difficulty knob's own history is a name that resolved
+to nothing and silently did nothing for rounds.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order · a real tick | 42 · 25 · 12 · 60 · 33 of 139 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 302 | **304** |
+| the diode probe | 14 passed · 0 failed · 1 skipped | **unchanged, on a scenario-driven window** |
+
+**No corpus figure moved, because this round is not corpus work** — which is exactly why criterion 3
+needed its own budget. What it bought is that the probe's 14/0/1 baseline now holds on a window a
+*scenario* drives, and that a run of any posture can be replayed from two numbers.
+
 ## The invariants, and which of them are enforced
 
 

@@ -404,6 +404,76 @@ def check_name_keying(faults: list[Fault], master_seed: int, hours: float) -> in
     return 0
 
 
+def scenario_report(
+    root: Path,
+    faults: list[Fault],
+    postures: dict[str, Posture],
+    posture_id: str,
+    seed: int,
+    hours: float,
+    *,
+    include_sensor_defect: bool = False,
+) -> dict[str, Any]:
+    """One scenario's whole plan, as data: what the hazard rates make and what the posture places.
+
+    **The join criterion 3 asks for, and the reason it is a function rather than a flag.** The
+    scheduler has scaled rates by the postures since the round that found the difficulty knob doing
+    nothing, and `--json` has printed the result since — but a *run* could not say which scenario it
+    was: two crisis runs were indistinguishable in the record and neither could be replayed. A
+    scenario is a posture and a seed, and this returns everything those two decide, so the console
+    and the scheduler cannot disagree about what a run was because there is one implementation of
+    the answer.
+
+    The shape is deliberately the same as `--json`'s, because it *is* `--json`'s: the flag now calls
+    this. What is new is that another tool can.
+
+    `include_sensor_defect` is the crisis posture's optional latent instrument defect — *"the GM's
+    call, not a draw"* — and it is a parameter rather than a draw for that reason.
+    """
+    if posture_id not in postures:
+        raise Unconfigured(
+            "mission.yaml#scenario_postures",
+            f"has no posture {posture_id!r}; the vehicle declares {sorted(postures)}",
+        )
+    posture = postures[posture_id]
+    nominal = postures.get("nominal", posture)
+    events, armed = schedule(faults, seed, hours, posture=posture, nominal=nominal)
+    extras = [
+        found
+        for found in (
+            guaranteed_seed(faults, posture, seed, hours, nominal=nominal),
+            optional_sensor_defect(
+                faults,
+                posture,
+                seed,
+                hours,
+                nominal=nominal,
+                include=include_sensor_defect,
+            ),
+        )
+        if found
+    ]
+    for extra in extras:
+        extra["scaled_by"] = posture_id
+    events.extend(extras)
+    events.sort(key=lambda e: (e["met_h"], e["fault"]))
+    return {
+        "master_seed": seed,
+        "hours": hours,
+        "posture": posture_id,
+        "hazard_factor": posture.hazard_factor(nominal),
+        "on_demand_factor": posture.on_demand_factor(nominal),
+        "seeded_faults": posture.seeded_faults,
+        "events": events,
+        "armed": [{"fault": f.id, "domain": f.domain, "trigger": f.trigger} for f in armed],
+        # **The objects, beside the data.** A caller that wants to print or schedule the armed
+        # faults needs the `Fault`s themselves, and rebuilding them from the three fields above is
+        # how the first version of this function broke `--json`: `Fault` has eleven fields and the
+        # summary carries three. So they travel as a private key that `--json` strips.
+        "_armed_faults": armed,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent))
@@ -490,44 +560,24 @@ def main(argv: list[str] | None = None) -> int:
             f"posture {args.posture!r} is not one of {sorted(postures)} in mission.yaml\n"
         )
         return 3
-    posture = postures[args.posture]
-    nominal = postures.get("nominal", posture)
     try:
-        events, armed = schedule(faults, args.seed, args.hours, posture=posture, nominal=nominal)
-        extras = [
-            found
-            for found in (
-                guaranteed_seed(faults, posture, args.seed, args.hours, nominal=nominal),
-                optional_sensor_defect(
-                    faults,
-                    posture,
-                    args.seed,
-                    args.hours,
-                    nominal=nominal,
-                    include=args.sensor_defect,
-                ),
-            )
-            if found
-        ]
-        for extra in extras:
-            extra["scaled_by"] = args.posture
-            events.append(extra)
+        report = scenario_report(
+            root,
+            faults,
+            postures,
+            args.posture,
+            args.seed,
+            args.hours,
+            include_sensor_defect=args.sensor_defect,
+        )
     except Unconfigured as exc:
         sys.stderr.write(f"{exc}\n")
         return 3
-    events.sort(key=lambda e: (e["met_h"], e["fault"]))
+    events = report["events"]
+    armed = report.pop("_armed_faults")
     if args.json:
         json.dump(
-            {
-                "master_seed": args.seed,
-                "hours": args.hours,
-                "posture": args.posture,
-                "hazard_factor": posture.hazard_factor(nominal),
-                "on_demand_factor": posture.on_demand_factor(nominal),
-                "seeded_faults": posture.seeded_faults,
-                "events": events,
-                "armed": [{"fault": f.id, "domain": f.domain, "trigger": f.trigger} for f in armed],
-            },
+            report,
             sys.stdout,
             indent=2,
         )
@@ -537,14 +587,14 @@ def main(argv: list[str] | None = None) -> int:
     by_domain = collections.Counter(e["domain"] for e in events)
     print(f"master seed {args.seed} over {args.hours} h, posture {args.posture!r}")
     print(
-        f"  hazard x{posture.hazard_factor(nominal):g}, demand x{posture.on_demand_factor(nominal):g}"
-        f"  ·  seeded faults: {posture.seeded_faults}"
+        f"  hazard x{report['hazard_factor']:g}, demand x{report['on_demand_factor']:g}"
+        f"  ·  seeded faults: {report['seeded_faults']}"
     )
     print(
         f"  {len(faults)} declared faults: {len(faults) - len(armed)} stochastic, {len(armed)} armed"
     )
     print(f"  {len(events)} scheduled event(s) across {len(by_domain)} domain(s)")
-    if posture.id == "crisis":
+    if report["posture"] == "crisis":
         offered = sum(1 for f in faults if f.kind == "instrument")
         print(
             f"  the crisis posture also offers one latent sensor defect from {offered} instrument "
