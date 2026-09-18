@@ -15677,6 +15677,66 @@ to nothing and silently did nothing for rounds.
 needed its own budget. What it bought is that the probe's 14/0/1 baseline now holds on a window a
 *scenario* drives, and that a run of any posture can be replayed from two numbers.
 
+## The telemetry ring was unbounded, and had nothing to account for
+
+`docs/diode-contract.md:183-189` asks for one thing about frames, and it is careful about why:
+
+> **Publish a ring, not a snapshot.** An agent that was blocked inside one long conversation turn
+> wakes up blind if all it has is the latest frame: it cannot distinguish a stall from a shut-down, or
+> a trend from a transient. A bonded ring of recent frames with a **fixed slot count** is
+> self-describing about its own cadence and its own losses — and it teaches the agents to reason
+> about missed frames, which is the correct epistemology for telemetry.
+
+Two of those sentences were unmet. `write_frame` wrote `NNN.json` and removed none, so the ring was
+unbounded and grew for the length of the mission; and because nothing was ever lost, **"its own
+losses" was a field with no possible value**. `presentation.yaml#ring` declares the cadence structure
+and declines the count on purpose — *"a slot count is a memory decision"* — so the bound belongs to
+the run, and this round is where the run declares it:
+
+```sh
+python3 tools/console.py --ring-slots 300 --scenario crisis --seed 42
+```
+
+### Three numbers, and one of them is derived
+
+The mirror now describes the ring rather than only publishing into it:
+
+```json
+"ring": {"slots": 300, "held": 300, "losses": 17, "newest_seq": 316}
+```
+
+**`held + losses` is what the vehicle has produced**, and `losses` is *computed* from the files rather
+than counted beside them — `seq` is how many frames were written, the directory is what is held, and
+the difference is what fell out of the far end. A counter kept next to the files would be a second
+declaration of something the files already answer, and it would be the one that drifted the first time
+a frame was removed by hand.
+
+### Names are sequence numbers, so the bound is a deletion rather than a wrap
+
+A ring that reused filenames would make "a new frame arrived" and "an old frame was overwritten" the
+same observation — and the probe's own check reads exactly that distinction: it passes on
+`len(second) > len(first) **or** set(second) != set(first)`, and on a full ring only the second half
+is true. The names are also **not** zero-padded to a fixed width, which is a trap this round found by
+thinking about it rather than by hitting it: `f"{seq:03d}"` stops padding at 1000, the sort is
+lexicographic, and a 192-hour mission at one frame per cycle passes 1000 easily — a fixed width would
+order `1000.json` before `999.json` and the ring would delete the *newest* frame.
+
+A restart keeps the bound for the reason `ticks` and `seq` are kept: a resumed run that silently
+re-bounded its own ring, or renumbered, would collide with the frames already on disk.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order · a real tick | 42 · 25 · 12 · 60 · 33 of 139 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 304 | **305** |
+| the diode probe | 14 passed · 0 failed · 1 skipped | **unchanged, on a ring that is full and rotating** |
+
+**The probe's telemetry check passes on a ring at its bound** — 40 frames held, 19 lost, and the frame
+*set* still changing every cycle, which is the half of that check that matters once the count stops
+growing. No corpus figure moved; this is criterion 3b.
+
 ## The invariants, and which of them are enforced
 
 

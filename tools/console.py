@@ -34,6 +34,7 @@ different claims, and conflating them here would hide which one this file is mak
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -146,8 +147,22 @@ class Console:
         tripped_interlocks: set[str] | None = None,
         scenario: str = "nominal",
         seed: int = 0,
+        ring_slots: int = 300,
     ) -> None:
         self.world = world
+        # **The ring's slot count, which the contract demands and nothing bounded.**
+        # `docs/diode-contract.md:183-189`: "**Publish a ring, not a snapshot.** An agent that was
+        # blocked inside one long conversation turn wakes up blind if all it has is the latest frame
+        # ... A bonded ring of recent frames with a **fixed slot count** is self-describing about its
+        # own cadence and its own losses — and it teaches the agents to reason about missed frames,
+        # which is the correct epistemology for telemetry."
+        #
+        # `presentation.yaml#ring` declares the cadence *structure* and deliberately declines to set
+        # the count — "a slot count is a memory decision" — and `write_frame` wrote `NNN.json` and
+        # never removed one, so the ring was unbounded and nothing accounted for a loss. The bound is
+        # the runner's, which is where the plan says it belongs: the vehicle declares the structure,
+        # the run declares the memory it is willing to spend on it.
+        self.ring_slots = max(1, int(ring_slots))
         # **Which scenario this run is, and it is two fields rather than a story.** Criterion 3
         # asks for a runner that "plays nominal, degraded and crisis", and `mission.yaml` already
         # declares the three: a posture is a row of `apollo_diode.md:370-374`'s difficulty scaling
@@ -280,6 +295,13 @@ class Console:
             # itself as a nominal one.
             if isinstance(restored.get("scenario"), str) and restored["scenario"]:
                 self.scenario = restored["scenario"]
+            # **A restart may not silently re-bound the ring.** `ticks` and `seq` are restored
+            # because a reset counter makes the record lie; the slot count is restored for the same
+            # reason, and the file on disk is what settles it: whatever is there is kept and pruned
+            # to this run's bound, so the count on disk, the accounting and the declaration cannot
+            # disagree about how many frames exist.
+            if isinstance(restored.get("ring_slots"), int) and restored["ring_slots"] > 0:
+                self.ring_slots = restored["ring_slots"]
             if isinstance(restored.get("boot_id"), str) and restored["boot_id"]:
                 self.boot_id = restored["boot_id"]
         self.publish()
@@ -788,6 +810,18 @@ class Console:
                 "oldest_expires_in_seconds": 3600 - int((utc_now() - self.started).total_seconds()),
             },
             "queue_depth": len(self.deferred),
+            # **The ring, described rather than only published.** The contract's one sentence about
+            # the ring is the one it is most careful with — "self-describing about its own cadence
+            # and its own losses" — and until this key existed there was nothing to describe: the
+            # ring was unbounded and no frame was ever lost, so "losses" was a field with no possible
+            # value. The three numbers are the bound, what is held, and what fell out of the far end,
+            # and `held + losses` is what the vehicle has produced.
+            "ring": {
+                "slots": self.ring_slots,
+                "held": len(self.ring_frames()),
+                "losses": self.ring_losses(),
+                "newest_seq": max(0, self.seq - 1),
+            },
             # `posture` is the *execution* machine's posture (`mission.yaml#postures`), which the
             # console does not drive and which stays empty; `scenario` is the run's difficulty
             # identity and is the one this file owns. Two names because they are two things, and
@@ -818,12 +852,39 @@ class Console:
                 # remember is `vehicle -> vehicle`.
                 "scenario": self.scenario,
                 "seed": self.seed,
+                # The ring's own accounting: what it is bounded to, and what it has lost. Derived
+                # from the files at write time, so a reader that trusts `pending.json` and a reader
+                # that counts the directory get the same answer.
+                "ring_slots": self.ring_slots,
+                "ring_losses": self.ring_losses(),
             },
         )
         self.write_frame()
 
+    def ring_frames(self) -> list[Path]:
+        """The frames the ring holds, oldest first. One scan, used by both the pruner and a reader."""
+        return sorted(self.telemetry.glob("*.json"), key=lambda path: path.name)
+
+    def ring_losses(self) -> int:
+        """Frames this vehicle has produced that the ring no longer holds.
+
+        **Derived rather than counted, and that is the property that makes it self-describing.** The
+        sequence number is how many frames have been written; the ring holds some of them; the
+        difference is what fell out of the far end. A counter kept beside the files would be a second
+        declaration of a quantity the files already answer — and it would be the one that drifted
+        the first time a frame was removed by hand.
+        """
+        return max(0, self.seq - len(self.ring_frames()))
+
     def write_frame(self) -> None:
-        """Append one frame to the ring. `NNN.json`, zero-padded, never overwritten."""
+        """Append one frame to the ring, and drop the ones that fall out of the far end.
+
+        `NNN.json` is the *sequence* number, so a name is never reused and a reader can always tell
+        a new frame from a rewritten one. The names are not zero-padded to a fixed width on purpose:
+        `f"{seq:03d}"` stops padding at 1000 and the sort is lexicographic, so a fixed width would
+        order 1000 before 999 the moment a run was long enough — which a 192-hour mission at one
+        frame per cycle is.
+        """
         frame = {
             "schema": "aurora.capsule.telemetry.v1",
             "seq": self.seq,
@@ -846,6 +907,16 @@ class Console:
         }
         write_json_atomic(self.telemetry / f"{self.seq:03d}.json", frame)
         self.seq += 1
+        # **The bound, and it is a deletion rather than a wrap.** A ring that reused names would make
+        # "a new frame arrived" and "an old frame was rewritten" the same observation, which is the
+        # one distinction a reader of a ring has to be able to make. So the names stay monotone and
+        # the *oldest* file is removed, which also means the directory listing is the ring.
+        held = self.ring_frames()
+        for stale in held[: max(0, len(held) - self.ring_slots)]:
+            # A reader can unlink between the listing and this, and that is not an error: the frame
+            # is gone either way, which is the only thing the prune is for.
+            with contextlib.suppress(FileNotFoundError):
+                stale.unlink()
 
     def help_text(self) -> str:
         """`HELP.md`, from the one generator, because a second one is a second source of truth.
@@ -888,6 +959,15 @@ def main(argv: list[str] | None = None) -> int:
         help="an interlock that is currently tripped, by threshold id; repeatable",
     )
     parser.add_argument("--init", action="store_true", help="create the directory and stop")
+    parser.add_argument(
+        "--ring-slots",
+        type=int,
+        default=300,
+        metavar="N",
+        help="how many frames the telemetry ring holds. `docs/diode-contract.md:186` requires a "
+        "fixed slot count and `presentation.yaml#ring` declines to set it — 'a slot count is a "
+        "memory decision' — so the run declares it",
+    )
     parser.add_argument(
         "--plan",
         action="store_true",
@@ -990,6 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
         tripped_interlocks=set(args.closed_interlock),
         scenario=args.scenario,
         seed=args.seed,
+        ring_slots=args.ring_slots,
     )
     console.initialise()
     if args.init:
@@ -998,7 +1079,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"[console] {console.root} slug={args.slug} phase={args.phase} "
-        f"scenario={console.scenario} seed={console.seed} "
+        f"scenario={console.scenario} seed={console.seed} ring={console.ring_slots} "
         f"poll={args.poll}s cycles={args.cycles or 'until interrupted'}",
         flush=True,
     )
