@@ -16287,6 +16287,82 @@ FAULT_DOCSTRING_FIGURES = (
 # rule look wider than it is.
 NODE_COUNT_FIGURES = re.compile(r"\b(\d+)-node tick order\b|\b(\d+) nodes?\b")
 
+# **Two more shapes of the same claim, and the round that found them.** The fault figures and the
+# schedule size were given readers; what was left was every *other* count a tool's prose states
+# about the corpus it walks, and two of them had drifted.
+#
+# `plant._refuse_shared_node` put the number of shared nodes at twelve while the vehicle has eleven,
+# and `plant.initial_values` set the sentinel's population at forty-eight while fifty-nine states
+# live there. Both were right when written. Neither had a reader, and the vehicle moved out from
+# under them one node and eleven states at a time — the sentinel sentence is the worse of the two,
+# because the shape of the whole value map is explained by it: a reader who believed it would size
+# the sentinel's sub-map from a figure that had been wrong for most of the folder's life.
+#
+# **The patterns below match a claim, so this comment cannot quote one.** Writing the two stale
+# figures out in the form the patterns read made this file refuse *itself* — the first run of the
+# check reported two faults and one of them was the paragraph explaining the check. It is the same
+# limitation `NODE_COUNT_FIGURES` records above, arriving one pattern later, and the answer is the
+# same: describe the figure rather than restating it, and let the round log (which no pattern reads)
+# hold the numbers. A text-scoped reader that its own documentation can trip is still worth having;
+# it just means the documentation is written about the rule and not in its vocabulary.
+#
+# These two patterns are anchored to the noun the count is *about*, so the check reads the claim
+# rather than a number near it. Every other count in `tools/` that this round looked at — the
+# thirty-three dwell declarations, the fifteen commanded states that carry one, the twenty-four
+# command→state links and the eight of them on the sentinel, the thirty-seven verbs that move no
+# state of the fifty-eight, the eleven domains — was **correct**, and is left unpatrolled on
+# purpose: a pattern per true sentence is a second corpus to maintain, and this round's finding is
+# that a figure needs a reader, not that every figure needs a rule.
+#
+# **One drifted figure is deliberately left unpatrolled, and the boundary is worth stating.**
+# `plant.resolve_declared_states` says how many sentinel accumulators a removed merge would cost,
+# and that ratio was wrong too — it read "eleven of the twelve" over a seed and a resolver that
+# have since moved. It is *not* patrolled because it is a **counterfactual**: it describes what
+# breaks if a line is deleted, not what the vehicle is, and the counts it needs come from running
+# `initial_values` and the resolver rather than from the documents this check walks. Making the
+# linter run the plant to police one sentence is a worse trade than correcting the sentence and
+# saying so here. A claim about the vehicle gets a reader; a claim about a deleted line gets a
+# correction and a note.
+MULTI_STATE_NODE_FIGURES = re.compile(r"\b([A-Za-z0-9-]+) nodes carry more than one state\b")
+SENTINEL_STATE_FIGURES = re.compile(r"\b([A-Za-z0-9-]+) states live on it\b")
+
+# The number *words* a count claim can be written in, so a sentence that spells its figure out is
+# read rather than skipped. `NODE_COUNT_FIGURES` records the opposite choice and names the gap it
+# leaves — a spelled-out node count slips past it — because none of those figures ever was a word.
+# These two were: one of the two stale claims this round fixed was "twelve" and the other
+# "forty-eight", so a digits-only reader would have caught neither, which is the whole finding.
+COUNT_WORDS = {
+    word: index
+    for index, word in enumerate(
+        [
+            "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+            "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen",
+            "seventeen", "eighteen", "nineteen", "twenty",
+        ]
+    )
+}
+COUNT_WORDS.update(
+    {
+        f"{tens}-{unit}": tens_value + unit_value
+        for tens, tens_value in (
+            ("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50), ("sixty", 60),
+            ("seventy", 70), ("eighty", 80), ("ninety", 90),
+        )
+        for unit, unit_value in (
+            ("one", 1), ("two", 2), ("three", 3), ("four", 4), ("five", 5),
+            ("six", 6), ("seven", 7), ("eight", 8), ("nine", 9),
+        )
+    }
+)
+
+
+def _counted_number(token: str) -> int | None:
+    """A count claim's figure, in digits or in words, or `None` if it is neither."""
+    text = str(token).strip().lower()
+    if text.isdigit():
+        return int(text)
+    return COUNT_WORDS.get(text)
+
 
 def check_tool_docstrings(
     root: Path, documents: dict[str, Any], schedule: list[str], report: Report
@@ -16379,6 +16455,51 @@ def check_tool_docstrings(
                     "figures on purpose — so a count here that no tool reads is a count that has "
                     "already drifted. Quote the figure as a quotation if it is history, or state "
                     "the derived one",
+                )
+
+    # ---- the shape of the value space, and how many states are on the sentinel ---------------
+    #
+    # Counted from the domains rather than from `plant`, so the reader and the thing it reads do not
+    # share a bug: `check_vehicle` has no world to ask, and importing the tool it is checking would
+    # make one of the two the authority on the other's behalf. The two agree — every domain's
+    # `components.yaml` declares each state's `node` outright — and a disagreement between them
+    # would be a finding in its own right rather than something this check should paper over.
+    on_node: dict[str, list[str]] = {}
+    sentinel_states = 0
+    for components in (documents or {}).values():
+        if not isinstance(components, dict) or "state" not in components:
+            continue
+        for state in components.get("state") or []:
+            if not isinstance(state, dict):
+                continue
+            node = str(state.get("node") or "")
+            if node == "internal":
+                sentinel_states += 1
+            elif node:
+                on_node.setdefault(node, []).append(str(state.get("id")))
+    shared_nodes = sum(1 for holders in on_node.values() if len(holders) > 1)
+    shape_figures = {
+        "multi-state nodes": (shared_nodes, MULTI_STATE_NODE_FIGURES),
+        "states on the sentinel": (sentinel_states, SENTINEL_STATE_FIGURES),
+    }
+    for path in sorted([root / "plant.md", *(root / "tools").glob("*.py")]):
+        if not path.is_file():
+            continue
+        name = path.relative_to(root).as_posix()
+        text = path.read_text()
+        for label, (live, pattern) in sorted(shape_figures.items()):
+            for match in pattern.finditer(text):
+                stated = _counted_number(match.group(1))
+                if stated is None or stated == live:
+                    continue
+                line = text[: match.start()].count("\n") + 1
+                report.refuse(
+                    f"{name}:{line}",
+                    f"states {match.group(0)!r}, and this vehicle has {live} {label}. A count in a "
+                    "tool's prose is a claim about the corpus the tool walks, so it drifts the "
+                    "moment the corpus moves and nothing notices — which is how this one did, for "
+                    "several rounds, while the sentence explaining the value map was read by "
+                    "whoever was editing it",
                 )
 
 

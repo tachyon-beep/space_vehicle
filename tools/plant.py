@@ -1761,7 +1761,7 @@ def driver_nodes(world: World, state: State) -> list[str]:
 def state_values(world: World, state: State, value: Any) -> dict[str, Any]:
     """The map entries one state's new value belongs under.
 
-    **The value space was keyed by node, and twelve nodes carry more than one state.** `cabin_atm`
+    **The value space was keyed by node, and eleven nodes carry more than one state.** `cabin_atm`
     carries four gas masses and a pressure, so `values["cabin_atm"]` held whichever the loader wrote
     last — and the first tick after the plant learned to evaluate derivations set `csm_cabin_o2_kg` to
     the *water vapour's* mass, and `lm_cabin_o2_kg` to the nitrogen's. Two plausible numbers of
@@ -1802,10 +1802,16 @@ def _refuse_shared_node(world: World, state: State, where: str) -> None:
     """Refuse a state whose node carries another state, because the value map cannot hold both.
 
     The map is keyed by node, so two states on one node overwrite each other and whichever advanced
-    first reads the other's number on the next tick. Twelve nodes carry more than one state;
+    first reads the other's number on the next tick. Eleven nodes carry more than one state;
     `cabin_atm` and `lm_cabin_atm` carry five each. The fix is a key-space change and the reason this
     is a refusal rather than a repair: a value of the wrong quantity is indistinguishable from a
     right one on a panel.
+
+    That count is held against the corpus by `check_tool_docstrings`, which counts the same thing
+    this function walks. It had drifted before this: the figure was right when it was written, and
+    the vehicle gained or lost a shared node without the sentence moving. A count in prose has no
+    reader until something is given the job, which is why the sentence now states the derived one
+    and the check states it back.
     """
     if state.node == "internal" or state.method not in {"lag", "stock", "algebraic", "dynamics", "delay"}:
         return
@@ -1855,7 +1861,7 @@ def initial_values(world: World) -> dict[str, Any]:
     A state the configuration has not given a value is left out rather than guessed, and the plant
     refuses by name when a tick reaches it — which is the behaviour the check beside this wants.
 
-    **`internal` is a key space rather than a key.** The sentinel is not a node, and forty-eight
+    **`internal` is a key space rather than a key.** The sentinel is not a node, and fifty-nine
     states live on it — so `values["internal"]` as a single slot would let every one of them
     overwrite the next, which is why this function and `step()` both used to drop it. Dropping it
     was the workaround, and it cost the command surface a third of its effects: eight of the
@@ -1931,8 +1937,13 @@ def resolve_declared_states(world: World, values: dict[str, Any]) -> list[str]:
         # **The sentinel is a sub-map, so replacing its key loses the others** — the same defect
         # `step()`'s commit had, and this resolver is the second writer of that key. Merged here for
         # the same reason it is merged there: a *stage* is a partial view of the sentinel and only a
-        # commit sees both halves. Taking the merge out loses eleven of the twelve accumulators the
-        # seed put there, which is how the stock-seeding test found it.
+        # commit sees both halves. Taking the merge out loses twelve of the eighteen accumulators
+        # the seed put there, which is how the stock-seeding test found it. **Both figures are
+        # measured, not remembered**: eighteen is what `initial_values` seeds on the sentinel and
+        # twelve is how many of those keys this function does not rewrite. The first version of this
+        # sentence said eleven of twelve — the seed had fewer entries when it was written — and the
+        # second said five, which was a guess about which half of a merge wins. Twelve is the number
+        # that comes out of suppressing the merge and counting.
         if state.node == "internal" and isinstance(values.get("internal"), dict):
             entries["internal"] = {**values["internal"], **entries["internal"]}
         values.update(entries)

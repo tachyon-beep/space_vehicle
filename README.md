@@ -16401,6 +16401,99 @@ right about and buried under a claim that was wrong. The mapping answers it per 
 perception bound is per station, so the two are reconcilable — but the field is one step short of
 the index a bound needs, and that is recorded in the crew domain rather than here.
 
+## Three sentences about the value map said twelve, forty-eight and eleven of twelve
+
+The fault figures and the schedule size were given readers in earlier rounds. What that left was
+every *other* count a tool's prose states about the corpus it walks — and four of them were wrong.
+Three are claims about the vehicle, all in `plant.py`, and all three explain a rule that is still
+true:
+
+| sentence | says | the vehicle has |
+|---|---|---|
+| `_refuse_shared_node` | "Twelve nodes carry more than one state" | **11** |
+| `state_values` | "twelve nodes carry more than one state" | **11** |
+| `initial_values` | "forty-eight states live on it" (the sentinel) | **59** |
+
+Each was right when it was written. The vehicle gained and lost shared nodes and grew
+eleven states on the sentinel, and no sentence moved, because **a count in prose has no reader until
+something is given the job**. The fourth is a different kind of claim — what a *removed line* would
+cost — and it gets its own section below, because it is corrected and deliberately left unpatrolled.
+
+### The sentinel figure is the damaging one
+
+`initial_values`' paragraph is where the shape of the whole value map is explained: why
+`values["internal"]` cannot be a single slot, why dropping the key cost the command surface a third
+of its effects. A reader who believed "forty-eight" would size the sentinel's sub-map from a number
+that has been wrong for most of the folder's life — and `state_values`' docstring carried the *same*
+figure a third time, which is what a claim with no reader does: it gets copied.
+
+### Three figures, and the ratio that was also wrong
+
+The same round found a fourth drifted figure, in a sentence that is a **counterfactual**:
+`resolve_declared_states` says how many accumulators a *removed line* would cost, and it read
+"eleven of the twelve" over a seed of eighteen sentinel entries. Suppressing the merge and counting
+gives **twelve of the eighteen** — the keys the resolver does not rewrite.
+
+That one is corrected and deliberately **not** patrolled, and the boundary is the round's own
+judgement rather than an oversight: it describes what breaks if a line is deleted, not what the
+vehicle is, and the counts it needs come from running `initial_values` and the resolver rather than
+from the documents the linter walks. Making the linter run the plant to police one sentence is a
+worse trade than correcting the sentence and saying so in the check.
+
+### The reader
+
+`check_tool_docstrings` already held two kinds of figure — `faults.py`'s three fault counts and the
+schedule's size, in `plant.md` and every `tools/*.py`. It gains two more, anchored to the noun each
+count is *about* rather than to a number near it:
+
+```python
+MULTI_STATE_NODE_FIGURES = re.compile(r"\b([A-Za-z0-9-]+) nodes carry more than one state\b")
+SENTINEL_STATE_FIGURES   = re.compile(r"\b([A-Za-z0-9-]+) states live on it\b")
+```
+
+**And the reader needs a word table, which is the point rather than an inconvenience.** Both drifted
+figures were spelled out — "twelve" and "forty-eight" — so a digits-only reader would have caught
+neither. `NODE_COUNT_FIGURES` records the opposite choice for its own figures and names the gap it
+leaves; for these two a word table is the difference between reading the claim and skipping it. It
+covers one to ninety-nine, which is every count this corpus has stated in words.
+
+The counts come from the domains — each state's `node` is declared outright — rather than from
+`plant`, so the reader and the thing it reads do not share a bug. The two agree today, and a
+disagreement between them would be a finding in its own right rather than something this check
+should paper over.
+
+### What the round got wrong first
+
+**The check refused itself.** The comment above `MULTI_STATE_NODE_FIGURES` originally *quoted* both
+stale figures to explain why the patterns exist — and the first run reported two faults, one of them
+the paragraph explaining the check. A text-scoped reader cannot read its own documentation if the
+documentation is written in the reader's vocabulary. The comment now describes the figures instead
+of restating them, and the numbers live here, in the round log, which no pattern reads. This is the
+same limitation `NODE_COUNT_FIGURES` already records one pattern earlier, and the answer is the same.
+
+**And the test for that lesson was written wrong too.** Its first version asserted that the phrase
+appears on no non-comment line of the linter — which the pattern definitions themselves violate. A
+grep cannot tell a reader from a docstring. It now walks the real docstrings with `ast` and checks
+the counts in them, which is what a reader actually believes.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 260 | 260 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 28 | 28 |
+| build order · owes an edge | 13 | 13 |
+| build order · owes a rule | 62 | 62 |
+| `report.refuse` call sites | 787 | **788** |
+| tests | 312 | **313** |
+
+Four prose figures corrected, one of them three times over, and one new refusal site. No figure the
+build order states moved, because nothing about the vehicle's completeness changed — this round is
+about the sentences that describe it, which is the one thing this folder has found to be wrong more
+often than any of its arithmetic.
+
 ## The invariants, and which of them are enforced
 
 
