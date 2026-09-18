@@ -56,7 +56,8 @@ side (a vocabulary this repository cannot read is a vocabulary it cannot check).
 
 ```sh
 python3 tools/check_vehicle.py            # report; exit 0 with declared debts
-python3 tools/check_vehicle.py --strict   # exit 2 while any debt stands — CI and pre-run
+python3 tools/check_vehicle.py --strict   # exit 2 while any debt stands — the gate for a *finished*
+                                          # build, not for CI: a debt is a deliverable
 python3 tools/check_vehicle.py --order    # the derived tick order, dependencies first
 python3 tools/check_vehicle.py --debts    # the owed list grouped by what each one wants
 python3 tools/plant.py --readiness        # the build order: ready, blocked, and by what
@@ -78,6 +79,44 @@ you commit — it is the only thing that runs every refusal. The assertions that
 — the frozen corpus, the contract probe, the reconciliation README, the compose service — are *not*
 here; they live in that repository's `tests/test_vehicle_reconciliation.py`, because this suite may
 not read outside its own root.
+
+## Where to start
+
+There is no authored worklist, and that is deliberate — an authored one drifts the moment anything
+lands. The worklist is derived, and it is the first thing to run:
+
+```sh
+python3 tools/plant.py --build-order      # the four buckets, with a reason per state
+python3 tools/plant.py --readiness        # the same states as tick gaps, and what each one needs
+python3 tools/check_vehicle.py --debts    # every obligation, grouped by what it wants
+```
+
+Read the buckets as a queue. **`ready now`** is what a tick already advances. **`owes a value`** is
+the cheapest class and the debt count already tracks it. **`owes an edge`** is a coupling with no
+sensitivity, or a state nothing drives. **`owes a rule`** is domain code — `algebraic`, `discrete`,
+`dynamics`, `hazard` — and it is the largest block by construction, because the configuration
+deliberately carries no code (`plant.md` §3).
+
+Pick a finding, not a bucket: one commit, one defect, one refusal, one test, the pins moved, one
+README section. A round that lands two findings cannot be verified as one.
+
+## Two repositories, one round
+
+This is the vehicle's repository. `space_chassis` vendors it as a git submodule at
+`docs/deep_research/vehicle`, and holds the corpus, the contract and the reconciliation rows.
+
+1. **Work here.** In a chassis checkout this directory *is* the submodule, so `git log` here is this
+   history; commit under the vehicle's law and push to `origin` (`main`).
+2. **The chassis records the new pointer in its own commit.** A submodule bump is not a vehicle
+   finding and does not belong in a `vehicle:` message.
+3. **The reconciliation row for a vehicle file is edited on the chassis side**
+   (`docs/deep_research/integration/reconciliation/README.md`) — this suite may not read outside its
+   root, and the residue suite there is what holds that row to these tools. It also holds the
+   sentence that counts this suite's tests, so a round that adds or removes a test moves that
+   sentence too, in a chassis commit.
+4. **There is no CI here yet.** The gates above are what CI would run: `pytest -q`, and
+   `check_vehicle.py` exiting 0 — never `--strict`, because a debt is a deliverable and `--strict`
+   is the gate for a build that is finished.
 
 ## The law of debts
 
