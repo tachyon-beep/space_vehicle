@@ -2923,6 +2923,94 @@ def check_command_reach(
         )
 
 
+def check_node_key_spaces(
+    root: Path, coupling: dict[str, Any], report: Report
+) -> None:
+    """A node carrying a state whose *value* is a map has to say so.
+
+    `plant.state_values` gave the value map its shape: a state's value goes under its own id, a node
+    that carries exactly one state also keeps its node key, and the `internal` sentinel is a key
+    space of its own. What that leaves undeclared is the third shape — a state whose value is itself
+    a map. `pyro_fired` is `unit: map[device_id,bool]`, so its elements are a level below the value
+    every sibling on `structure_config` occupies, and **nothing in the corpus said which level a
+    writer should use**.
+
+    Two writers disagreed, which is how the defect surfaced. `state_values` nests, and the command
+    path did not: `apply_command` wrote a keyed state's elements *bare* into `values[node]`, so
+    `execute_event(event='lm_undocking')` staged `values['structure_config'] = {'lm_undocking': True}`
+    — an event name where `lm_separation_state` holds `docked`, `descent_stage_state` holds
+    `attached` and `configuration` holds the vehicle's whole configuration. Three of the four
+    `one_way_events` name a scalar sibling that way and the fourth names the keyed state itself, so
+    every value `execute_event` can take collided with something.
+
+    That the sentinel nested is why this hid: every keyed state a command could write — `hatch_state`,
+    `breaker_panel`, `thruster_valve`, `rcs.mode` and the rest — lives on `internal`, so the working
+    copy of the rule was the one exercised and the broken copy was on a node no command reached
+    until `structure_config`.
+
+    **The fix is in the plant** (`_stage_element`, one writer for both containers, so the two copies
+    of one rule cannot drift again). This check is the other half: a node that carries a keyed state
+    declares `key_space: by_state`, so the level a value lives at is readable off the corpus rather
+    than inferable from a state's `unit` by whoever happens to be writing. Five nodes carry one —
+    `structure_config`, `crew_state`, `alert_state`, `rcs_valves` and `rcs_thrust` — and the first
+    three each carry a scalar sibling, which is exactly the case the declaration exists to make
+    unambiguous. The other two are single-state nodes where the level is unambiguous only by
+    accident, which is not the same thing.
+    """
+    nodes = (coupling or {}).get("nodes") or {}
+    keyed: dict[str, list[str]] = {}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if not isinstance(state, dict):
+                continue
+            node = str(state.get("node"))
+            # The sentinel is a key space by construction and `coupling.yaml#nodes` does not declare
+            # it, so there is nothing there to annotate.
+            if node == "internal":
+                continue
+            if "map[" in str(state.get("unit") or ""):
+                keyed.setdefault(node, []).append(str(state.get("id")))
+    for node, holders in sorted(keyed.items()):
+        entry = nodes.get(node)
+        if not isinstance(entry, dict):
+            report.refuse(
+                f"coupling.yaml:nodes.{node}",
+                f"carries the keyed state(s) {holders} and is not declared as a node. A keyed "
+                "state's elements live one level below the value its siblings occupy, and a node "
+                "that is not declared at all has no place to say which",
+            )
+            continue
+        if entry.get("key_space") != "by_state":
+            siblings = sorted(
+                str(state.get("id"))
+                for path in (root / "domains").glob("*/components.yaml")
+                for state in (load(path, Report()) or {}).get("state") or []
+                if isinstance(state, dict)
+                and str(state.get("node")) == node
+                and str(state.get("id")) not in holders
+            )
+            report.refuse(
+                f"coupling.yaml:nodes.{node}",
+                f"carries {holders}, whose `unit` is a `map[...]`, and does not declare "
+                "`key_space: by_state`. A keyed state's value is a map of its elements, so those "
+                "elements live at a level the values beside them do not — and a writer that has to "
+                "infer the level from the state's `unit` is a writer that can put one where the "
+                f"other belongs. Its scalars are {siblings or 'none'}; the declaration is what says "
+                "the two levels are different",
+            )
+    # And the converse, one line, because a `key_space` nobody contradicts is a claim, not a fact:
+    # a node that says `by_state` and carries no keyed state is annotating nothing.
+    for node, entry in sorted(nodes.items()):
+        if isinstance(entry, dict) and entry.get("key_space") == "by_state" and node not in keyed:
+            report.refuse(
+                f"coupling.yaml:nodes.{node}",
+                "declares `key_space: by_state` and carries no state whose `unit` is a `map[...]`. "
+                "The declaration says a value here is nested one level deeper than its siblings', "
+                "and nothing on the node is",
+            )
+
+
 def check_reserve_floors(
     root: Path, registry: dict[str, dict[str, Any]], report: Report
 ) -> None:
@@ -16327,6 +16415,7 @@ def main(argv: list[str] | None = None) -> int:
     check_chain_faults(coupling or {}, mission or {}, root, registry, report)
     check_seeding_pools(mission or {}, root, report)
     check_command_reach(root, coupling or {}, report)
+    check_node_key_spaces(root, coupling or {}, report)
     check_reserve_floors(root, registry, report)
     if vehicle is not None:
         check_vehicle(vehicle, report)

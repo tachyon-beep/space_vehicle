@@ -2204,6 +2204,35 @@ def _refuse_unmapped(where: str, verb: str, source: str, values: set[str]) -> An
     )
 
 
+def _stage_element(
+    state: State,
+    value: Any,
+    element: str,
+    staged: dict[str, Any],
+    values: dict[str, Any],
+) -> None:
+    """One keyed state's element into the staged map, under the state's own id.
+
+    The sentinel and a coupling node differ in *which* map holds the state, and in nothing else. The
+    sentinel is a map keyed by state id because it is not a node; a coupling node is a map keyed by
+    state id because `state_values` says so — "every state's value is written under **its own id**,
+    and a node that carries exactly one state also keeps its node key". So the element goes one
+    level below that key either way, and the only thing this function has to decide is which
+    container the state's own id belongs in.
+
+    Naming the rule once is the fix, not the tidying. It was written twice and the two copies
+    disagreed: the sentinel's nested and the node's did not, and because the sentinel holds every
+    keyed state a command writes today — `hatch_state`, `breaker_panel`, `thruster_valve`, `rcs.mode`
+    and the rest — the wrong copy was the one nothing exercised.
+    """
+    key = "internal" if state.node == "internal" else state.node
+    outer = dict(staged.get(key) or values.get(key) or {})
+    elements = dict(outer.get(state.id) or {})
+    elements[element] = value
+    outer[state.id] = elements
+    staged[key] = outer
+
+
 def apply_command(
     world: World, values: dict[str, Any], verb: str, arguments: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2256,22 +2285,36 @@ def apply_command(
         # hatches, so writing `hatch_crew_lm` beside the sentinel's state ids put a hatch id in the
         # same namespace as `computer_mode` and lost the state's own name. A keyed state's elements
         # live under the state's id, on the sentinel and on a node alike.
+        #
+        # --------------------------------------------------------------------------------------
+        # **The node half of that sentence was prose and only the sentinel half was code.** The
+        # branch below wrote a keyed state's elements *bare* into `values[node]`, which is the key
+        # space a scalar state's whole value occupies — so on a node that carries both, one command
+        # put an element id where a sibling's value belongs. `pyro_fired` is the state that shows it:
+        # `structure_config` carries it beside `lm_separation_state`, `descent_stage_state` and
+        # `configuration`, and `execute_event(event='lm_undocking')` staged
+        # `values["structure_config"] = {"lm_undocking": True}` — an event name in the slot
+        # `lm_separation_state` holds `docked` in. Three of the four `one_way_events` name a scalar
+        # sibling that way, and the fourth names the keyed state itself, so all four collided.
+        #
+        # It was invisible for two reasons and both are worth naming. `apply_command`'s staged map is
+        # committed by the caller, so there was no merge here to overwrite a *previous* element and
+        # no counter to drift; and the state it writes is `discrete`, which `advance` refuses — so
+        # `state_values`, the writer that does nest on a node, was never reached for one. A latent
+        # collision is still a collision, and the shape the sentinel already uses is the shape the
+        # docstring above already promised: `values[node][state.id][element]`.
+        #
+        # **One helper rather than two branches**, because the duplication is what let the two halves
+        # of one sentence disagree for as long as they did. `_stage_element` is the only writer of a
+        # keyed element in this file.
+        # --------------------------------------------------------------------------------------
         if key_argument:
             if str(key_argument) not in arguments:
                 raise Unconfigured(
                     f"domains/{state.domain}/components.yaml:state {state.id}.command_value.key",
                     f"names {key_argument!r} and the call did not supply it",
                 )
-            if state.node == "internal":
-                sentinel = dict(staged.get("internal") or values.get("internal") or {})
-                elements = dict(sentinel.get(state.id) or {})
-                elements[str(arguments[key_argument])] = value
-                sentinel[state.id] = elements
-                staged["internal"] = sentinel
-            else:
-                elements = dict(staged.get(state.node) or values.get(state.node) or {})
-                elements[str(arguments[key_argument])] = value
-                staged[state.node] = elements
+            _stage_element(state, value, str(arguments[key_argument]), staged, values)
         elif state.node == "internal":
             sentinel = dict(staged.get("internal") or values.get("internal") or {})
             sentinel[state.id] = value

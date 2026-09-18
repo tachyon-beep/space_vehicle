@@ -16158,7 +16158,134 @@ that remained; it now asserts that the ready bucket and the tick's advanced set 
 **And the bucket's title says what it means.** "ready now — the classes the reference plant can
 advance" described a class; "ready now — the states a real tick advances" describes the set.
 
-## The invariants, and which of them are enforced## The invariants, and which of them are enforced
+## The command path wrote a keyed state into its siblings' slots
+
+`plant.md` names three shapes for the value map, and `plant.state_values` implements them: a state's
+value goes under its own id, a node carrying exactly one state also keeps its node key, and the
+`internal` sentinel is a key space of its own. A state whose `unit` is a `map[...]` is a **fourth**
+case — its value is itself a map, so its elements sit one level below where a scalar's whole value
+lives — and *that* level was declared nowhere. Two writers disagreed about it.
+
+| writer | what it did with a keyed element |
+|---|---|
+| `plant.state_values` | nests: `values[state.id][element]`, and the node key only when one state owns the node |
+| `plant.apply_command` | wrote **bare** into `values[node][element]` — the key space a scalar state's value occupies |
+
+The sentinel is why nothing noticed. Every keyed state a command could write — `hatch_state`,
+`breaker_panel`, `thruster_valve`, `rcs.mode` and five more — lives on `internal`, where
+`apply_command` *did* nest, so the working copy of the rule was the one every test exercised. The
+broken copy sat on a real node, and there was exactly one such state in the whole corpus.
+
+`structure_config` carries four states, and `pyro_fired` is keyed beside three scalars:
+
+```
+structure_config
+├── pyro_fired             map[device_id,bool]        <- a map
+├── lm_separation_state    enum[docked,undocked,separated]
+├── descent_stage_state    enum[attached,separated,abandoned]
+└── configuration          enum[docked,undocked,separated,abandoned]
+```
+
+So one command collided with all four of them. Before the fix:
+
+```
+execute_event(event='lm_undocking')  ->  {'structure_config': {'lm_undocking': True}}
+```
+
+`lm_undocking` is true in that staged map, and the key it holds is the slot
+`lm_separation_state` keeps `docked` in. Three of the four `one_way_events` share their id with a
+scalar sibling — `lm_undocking`, `descent_stage_separation` and `lm_ascent_jettison` — and the
+fourth, `pyro_fire`, shares the keyed state's own node key. There is no value `execute_event` can
+take that does not land on something. And because the caller commits with a shallow update, the
+collision is invisible in the staged map itself: the element *is* the whole map.
+
+### Why it was latent rather than live
+
+Two reasons, and both are worth keeping because each one is a way this class of defect hides.
+
+`pyro_fired` is `discrete`, and `advance` refuses every discrete state — its rule is domain code the
+configuration deliberately does not carry. So the writer that *does* nest, `state_values`, was never
+reached for this state, and the only writer that ever touched it was the command path. There was no
+counter to drift and no second reader to disagree.
+
+And the collision was one tick away from being observable rather than theoretical: the first rule
+that advances `lm_separation_state` would read `state_level`, which prefers `values[state.id]` and
+falls back to `values[state.node]` — a dict where a mode belongs — and publish an event name as the
+vehicle's configuration.
+
+### The fix is one writer, not two branches
+
+`apply_command` had the sentinel and the node written out as two copies of one rule, and the copies
+disagreed. `plant._stage_element` is now the only writer of a keyed element in the file: it decides
+which container the state's own id belongs in and nothing else, so the sentinel and a coupling node
+differ in *which map holds the state* and in nothing after that.
+
+The docstring that promised the nesting was already there, three lines above the broken branch, and
+it named both containers in one sentence — *"A keyed state's elements live under the state's id, on
+the sentinel and on a node alike."* The sentinel half was code and the node half was prose. This is
+the folder's oldest finding arriving in the one place the folder had not looked, and the reason the
+repair is a shared helper rather than a second correct branch: a sentence cannot be two branches, and
+two branches of one sentence can always drift.
+
+### The corpus half: `key_space`
+
+The plant fix makes the writer correct. It does not make the *level* readable, because nothing in
+the corpus said which one a keyed state's value occupies — a writer had to infer it from the state's
+`unit`. So a node that carries a state whose value is a map now says so:
+
+```yaml
+  structure_config:
+    key_space: by_state
+```
+
+Five nodes carry one, and the count is the claim rather than decoration: `structure_config`,
+`crew_state`, `alert_state`, `rcs_valves` and `rcs_thrust`. Three of them carry a scalar sibling
+beside the keyed state — the case the declaration exists to make unambiguous — and the other two are
+single-state nodes where the level is unambiguous only by accident, which is not the same thing.
+
+`check_node_key_spaces` refuses both halves of the join: a node carrying a `map[...]` state that does
+not declare `key_space: by_state`, and a node that declares one and carries no keyed state. The
+second is not symmetry for its own sake — a `key_space` nothing contradicts is a claim, not a fact,
+and this folder's whole subject is declarations that nothing reads.
+
+### The tests
+
+`test_a_command_puts_a_keyed_state_beside_its_siblings_never_on_top_of_them` asserts the writer's
+shape on `structure_config` directly: the element is nested under the state's own id, the two
+seeded scalars come through *unchanged* beside it, a second event accumulates rather than replacing
+the first, and the sentinel still nests exactly as it did. That last assertion is the helper's own
+contract — the two containers must not be able to drift again.
+
+`test_the_linter_refuses_a_keyed_state_on_a_node_that_does_not_declare_its_key_space` breaks three
+copies: the declaration removed, a `key_space` on a node with no keyed state, and both at once.
+
+**And the third case was written wrong first.** The first version keyed `lm_separation_state` alone
+and expected a refusal — and the linter composed, correctly, because the fixture's `coupling.yaml`
+still declared `key_space: by_state` on the node. The check was right and the *expectation* was the
+false claim: with the declaration present there is nothing to refuse, so a test demanding one is
+asking the tool to contradict itself. It was found by logging the check's own view of the fixture
+(the node arrived with `ks='by_state'`) after re-reading the test twice had found nothing — which is
+the same lesson the round is about, one level up: the instrument you trust is the one that reads the
+artifact rather than the one that reads your description of it.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 28 | 28 |
+| build order · owes an edge | 13 | 13 |
+| build order · owes a rule | 62 | 62 |
+| `report.refuse` call sites | 781 | **784** |
+| tests | 309 | **311** |
+
+Nothing about the vehicle's completeness moved, and that is the honest reading: this round fixed a
+writer and made a level explicit. The three new refusal sites are the check's two halves plus the
+converse, and the two new tests are the writer's shape and the refusal's three broken copies.
+
+## The invariants, and which of them are enforced
 
 
 `mission_diode.md:1264-1345` states ten safety invariants for the mission boundary. They arrived

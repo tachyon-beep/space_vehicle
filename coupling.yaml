@@ -46,6 +46,15 @@ provenance_rules: docs/deep_research/integration/simulator-design.md#31
 #   discrete — a latched or enumerated state. Advanced by the event queue.
 #   service  — a process, not a physical quantity. Holds authority, not energy.
 #   sink     — where published evidence goes. Never read back.
+#
+# `key_space: by_state` is the one optional field, and it says what the node's values *are*.
+# Absent, the node's key space is one value per state — `values[node]` holds a scalar, or
+# `values[node][state_id]` does, and `plant.state_values` writes both. Present, at least one state
+# here is *itself* a map (`unit: map[<key>,<value>]`), so its elements are one level deeper still,
+# at `values[node][state_id][element]`. The distinction is not decoration: the command writer used
+# to put a keyed state's elements beside its siblings' values, and on `structure_config` that put an
+# event name in the slot `lm_separation_state` holds `docked` in. `check_node_key_spaces` refuses a
+# node that carries a keyed state and does not say so.
 # --------------------------------------------------------------------------------------
 nodes:
   # --- consumables: the conserved stocks (apollo_diode.md:836-847) --------------------
@@ -450,8 +459,13 @@ nodes:
       between them is the propellant they all draw — which is an edge to a consumables node rather
       than a state here
   thrust_main:       {domain: propulsion, kind: flow,     unit: N,    apollo: "135-137"}
-  rcs_valves:        {domain: rcs,        kind: discrete, unit: enum, apollo: "149"}
-  rcs_thrust:        {domain: rcs,        kind: flow,     unit: N,    apollo: "150"}
+  # Both of these nodes hold a single state whose `unit` is a `map[...]`, so their values are maps
+  # of elements rather than one scalar — `key_space: by_state` says so rather than leaving it to be
+  # read off the state's unit. `thruster_valve` is `map[thruster_id,bool]` and `thruster_thrust` is
+  # `map[thruster_id,N]`; neither has a scalar sibling today, and the declaration is what keeps the
+  # level explicit if one arrives.
+  rcs_valves:        {domain: rcs,        kind: discrete, unit: enum, apollo: "149", key_space: by_state}
+  rcs_thrust:        {domain: rcs,        kind: flow,     unit: N,    apollo: "150", key_space: by_state}
 
   # --- avionics, structure, crew, and the executive -----------------------------------
   instrumentation:   {domain: avionics,  kind: service,  unit: "-",  apollo: "180-182"}
@@ -461,6 +475,9 @@ nodes:
     kind: discrete
     unit: enum
     apollo: "211"
+    # `pyro_fired`'s value is a map — `unit: map[device_id,bool]` — so this node's values are one
+    # level deeper under the state's own id than the three scalars beside it. See `key_space` below.
+    key_space: by_state
     state_order: [pyro_fired, lm_separation_state, descent_stage_state, configuration]
     state_order_note: >-
       the three mechanisms and then the configuration they produce. `configuration` is a
@@ -472,6 +489,9 @@ nodes:
     kind: state
     unit: enum
     apollo: "226-227"
+    # `crew_location` and `crew_availability` are `map[crew_id,...]`; `crew_workload` is a lag in
+    # hours. See `key_space` below.
+    key_space: by_state
     state_order: [crew_location, crew_availability, crew_workload]
     state_order_note: >-
       workload last because it is a lag on what the crew have been doing, and what they are doing
@@ -483,6 +503,8 @@ nodes:
     kind: discrete
     unit: enum
     apollo: "221-223"
+    # `alert_lifecycle` is `map[alert_id,...]`; `alarm_horn` is an enum. See `key_space` below.
+    key_space: by_state
     state_order: [alert_lifecycle, alarm_horn]
     state_order_note: >-
       the state machine first and the horn second, because the horn sounds *because* of the
