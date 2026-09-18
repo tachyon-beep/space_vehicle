@@ -50,6 +50,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
+from generate_readme import generate as generate_readme  # noqa: E402
 from plant import (  # noqa: E402
     Unconfigured,
     World,
@@ -198,6 +199,12 @@ class Console:
         self.telemetry = root / "telemetry"
         self.state = root / "state.json"
         self.help_file = root / "HELP.md"
+        # **The sixth file, and the one nothing wrote.** `docs/diode-contract.md:31-35` lists it as
+        # `vehicle -> agent  (the protocol, in the vehicle's words)`, and the console made five of
+        # the six: `console.json`, `state.json`, `HELP.md`, `telemetry/` and `output/`. A window with
+        # no README is a protocol a fleet has to infer from `HELP.md`'s verb list, which answers
+        # *what may I ask for* and not *how does this work*.
+        self.readme = root / "README.md"
         self.pending = root / "pending.json"
         self.variables: dict[str, Any] = {}
         self.ticks = 0
@@ -248,6 +255,16 @@ class Console:
         self.root.mkdir(parents=True, exist_ok=True)
         self.output.mkdir(exist_ok=True)
         self.telemetry.mkdir(exist_ok=True)
+        # **Generated once, at boot, and cached — because the configuration does not change while a
+        # console runs, and the file is 7 kB.** The first version called the generator from
+        # `publish()`, so every cycle re-derived a document that could not have moved: 20 ms a cycle
+        # at one frame per cycle, which is 2 % of a tick and enough to make the probe's own mirror
+        # check flaky — that check doctors `state.json` and waits `1.5 x poll_seconds` for a
+        # republish, and a console slower than the probe's patience *is* a console that looks like it
+        # reads its own mirror back. The two files below are the configuration's, not the tick's.
+        self.readme_text = generate_readme(self.world.root)
+        self.help_cache: str | None = None
+        write_text_atomic(self.readme, self.readme_text)
         if not self.pending.exists():
             write_json_atomic(self.pending, {"pending": []})
         # **`console.json` is written last, and that ordering is the whole content of this
@@ -836,7 +853,13 @@ class Console:
             "capability": rows,
         }
         write_json_atomic(self.state, state)
+        # Written every cycle from the cached text, for the reason `HELP.md` is: a hand-edit lasts
+        # until the next cycle. What is *derived* is done once, because the configuration is fixed
+        # for the life of a console — a cadence class that moved, a channel withdrawn or a refusal
+        # code added all require a restart, which is the same statement the capabilities snapshot
+        # makes by being rebuilt per cycle from a world that has not changed.
         write_text_atomic(self.help_file, self.help_text())
+        write_text_atomic(self.readme, self.readme_text)
         write_json_atomic(
             self.pending,
             {
@@ -939,8 +962,14 @@ class Console:
         vehicle's obligation under the contract is the `available_commands` key and it meets it.
         The mismatch is recorded in `presentation.yaml#conformance` rather than papered over by
         giving HELP.md a verb list it does not otherwise need.
+
+        Cached after the first call, for the reason `readme_text` is generated once: the
+        configuration is fixed for the life of a console, and regenerating a 58-verb document every
+        cycle is work that cannot produce a different answer.
         """
-        return generate_help(self.world.root)
+        if self.help_cache is None:
+            self.help_cache = generate_help(self.world.root)
+        return self.help_cache
 
 
 def main(argv: list[str] | None = None) -> int:

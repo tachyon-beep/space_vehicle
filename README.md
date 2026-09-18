@@ -15737,6 +15737,78 @@ re-bounded its own ring, or renumbered, would collide with the frames already on
 *set* still changing every cycle, which is the half of that check that matters once the count stops
 growing. No corpus figure moved; this is criterion 3b.
 
+## The window's sixth file, generated — and the tool that tried to eat the round log
+
+`docs/diode-contract.md:31-35` lists six files, and the console made five of them. The missing one is
+the protocol itself, and §8 makes it load-bearing:
+
+> `HELP.md`, `state.json` and `README.md` are the vehicle's documentation of itself, written in
+> whatever voice the vehicle's builder chooses, and **they are the only place a verb name can
+> appear**.
+
+Five of six is a window whose protocol a fleet has to infer from a verb list — and `HELP.md` answers
+*what may I ask for*, not *how does this work*. `tools/generate_readme.py` is the answer, and the
+console writes it at boot and on every cycle.
+
+### Generated rather than written, and what each file owns
+
+| file | what it answers | where its facts come from |
+|---|---|---|
+| `README.md` | **how this window works**: the six files, the layers, the refusals, the cadence, what is withheld | `presentation.yaml`, `channels.yaml`, the command registries |
+| `HELP.md` | **what I may ask for**: one entry per verb, its gates, its interlocks, its schema | `domains/*/commands.yaml` |
+| `state.json` | **what is true right now**: the mirror | live state |
+
+The refusal vocabulary is **imported from `generate_help.py` rather than restated here**, which is
+the round's small structural decision: V-02's chain is already written once, and a second copy is this
+folder's oldest defect — two declarations of one thing, in two files that never met. The window's
+README and its `HELP.md` now cannot disagree about what a refusal means.
+
+**What the file deliberately does not describe is the vehicle's weaknesses.** No thresholds, no
+failure chains, no fault kinds, no verb list: `docs/design.md` §8's boundary is that the vehicle
+publishes what it *concluded* and never what it *suspects about itself*. A protocol that told a fleet
+where to look first would delete the experiment.
+
+### The mistake, which was one command away from destroying a megabyte
+
+The first version of the generator had a `--write` flag, and `--write` wrote `README.md` **into the
+vehicle folder** — which is this project's round log, a megabyte of it. It overwrote the whole file
+with the window protocol. The only reason it is recoverable is that it had been committed a round
+earlier, and `git checkout` is not a thing to rely on.
+
+The flag is gone, and it is not coming back: the generator prints to stdout, the console is the only
+writer, and a tool that generates a file called `README.md` beside a file called `README.md` is a tool
+with a loaded gun in it.
+
+### And the flakiness that followed the file
+
+Adding a per-cycle generation to `publish()` made the contract probe fail two checks —
+*"published state is rewritten, not read back"* — and the reason is worth recording because it is a
+**timing** bug that read as a correctness one. `generate_readme` costs about 20 ms; a console cycle
+went from 0.095 s to 0.45 s; and `check_state_is_a_mirror` doctors `state.json` and waits
+`1.5 × poll_seconds` for a republish. A console slower than the probe's patience is a console that
+*looks like it reads its own mirror back*.
+
+The fix is the one the file should have had anyway: **the configuration does not change while a
+console runs**, so `HELP.md` and `README.md` are generated once and written from the cached text. That
+took a cycle from 0.45 s back to 0.095 s and the probe to a stable 14/0/1 across three consecutive
+runs. The same round found the same race in `test_the_vehicle_passes_the_contract_probe`, which ran
+`--cycles 600` against a probe that takes about a minute: the console could finish first, and then the
+probe is doctoring a file nothing will rewrite. That test's console is unbounded now, and killed in
+its `finally`.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order · a real tick | 42 · 25 · 12 · 60 · 33 of 139 | unchanged |
+| tests in `tests/test_vehicle_config.py` | 305 | **306** |
+| a console cycle | 0.45 s | **0.095 s** |
+| the diode probe | 14 passed · 0 failed · 1 skipped | **unchanged, run three times** |
+
+**Criterion 3c, and no corpus figure moved.** The window now holds all six of the contract's files,
+every one of them generated from the configuration, and the probe's baseline holds on it.
+
 ## The invariants, and which of them are enforced
 
 
