@@ -218,6 +218,33 @@ state:
     node: internal
     method: dynamics
     unit: m/s
+    # **The two things a scalar `dynamics` state needs, and the corpus declared neither because it
+    # had never been asked.** An accumulator with no zero is a number nobody can interpret, and the
+    # rule it integrates is `dv/dt = F/m` — so it owes both the zero and the mass.
+    initial: 0
+    initial_provenance:
+      basis: chosen
+      reason: >-
+        no engine of this vehicle has fired at MET 0, and the state's own note says where the clock
+        starts: the first burn on the vehicle's own budget is the translunar midcourse correction,
+        and the SIVB's TLI is an external stage. Zero is what the mission profile says rather than a
+        placeholder for a figure nobody has
+    mass_kg: 44085
+    mass_source: vehicle.yaml:configurations.csm_lm_docked.mass_kg
+    # The sentinel can carry no edge, so the thrust is named. `thrust_main_n` advances at node
+    # 27 of the derived order and this state advances with its domain after the whole schedule,
+    # so the reading is always this tick's — which the linter checks rather than assumes.
+    driven_by: thrust_main_n
+    mass_note: >-
+      **the mass is the configuration's, not the engine's**, and it is declared here rather than read
+      from a stock the plant cannot yet advance. `csm_lm_docked` is the heaviest configuration and
+      the one the mission starts in (`vehicle.yaml#configurations`, 44,085 kg) — the same figure
+      `E-ENG-DYN`'s own sensitivity is derived from, `1/mass_kg` = 2.2683e-05 m/s2 per N. What is
+      owed is the *live* mass: `E-ENG-DYN`'s note says the plant should use `1/m(t)`, and the same
+      newton accelerates the LM twice as hard once the CSM is gone. The term that would make it live
+      is the propellant stock, which is the flow this vehicle cannot yet move — `E-PROP-ENG`'s driver
+      is a stock *level* and its unit is stated backwards. Until then a fixed mass is the honest
+      reading, and it is named here rather than buried in the arithmetic
     provenance:
       basis: apollo
       ref: "apollo_diode.md:141"

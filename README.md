@@ -71,9 +71,9 @@ Current state: **composes, with 261 declared debts.** A debt is reported and is 
 always there and previously invisible — the eleven `UNCONFIGURED` scalars in the two files nothing
 walked (round 46), a `debt:` key inside a block no tool read, three debts that were being counted
 twice. A number that goes *up* because the instrument got better is not a regression, and the line
-that carries the real movement is beside it: **19 → 32 of the 139 states advance in a real tick**,
-the build order's ready-now bucket went 25 → 41, and the states that owe a *rule* — the only class
-that is code rather than data — went 79 → 61. What falls is progress; what rises has to say why.
+that carries the real movement is beside it: **19 → 33 of the 139 states advance in a real tick**,
+the build order's ready-now bucket went 25 → 42, and the states that owe a *rule* — the only class
+that is code rather than data — went 79 → 60. What falls is progress; what rises has to say why.
 
 The count also moved *down* twice in that window for the right reason: **C-25 and C-26** were put to
 the operator and closed, and C-26 re-derived the RCS chain rather than recording a disagreement — see
@@ -198,7 +198,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 261 declared debts
 and every one of them named. **114 of the 139 states are fully configured and 25 carry a debt**, and
-a real tick advances **32** of the 139 states against the build order's **41** ready — the second
+a real tick advances **33** of the 139 states against the build order's **42** ready — the second
 of those is the objective's own second completion criterion, and both are read out of
 `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. The sentence above claimed
 "every figure in this sentence is derived by the tools and asserted against this file" while the two
@@ -1615,7 +1615,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 `lag` and `stock` — and refuses the rest as domain code. That was 44 of the vehicle's 124 states when
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete`, `dynamics` and
 `delay` are rules the configuration deliberately does not carry**, and with the states on the
-`internal` sentinel counted among them, so 61 of the 139 states need code. (This said *before the
+`internal` sentinel counted among them, so 60 of the 139 states need code. (This said *before the
 plant can walk a whole tick*, which was true when it was written and is not now: a tick walks all 134
 of them and records what it cannot advance. See *The tick stopped at its first debt* below.)
 
@@ -1806,10 +1806,10 @@ sequence of tests the plant runs when it gets there — so the two cannot disagr
 ```
 139 states, by what blocks them:
 
-    41   29 %  ready now — the classes the reference plant can advance
+    42   30 %  ready now — the classes the reference plant can advance
     25   18 %  owes a value — the cheapest to close, and the debt count already tracks them
     12    9 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    61   44 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    60   43 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -15557,6 +15557,68 @@ The first of those is the one that matters: **`coolant_flow_kg_s` is *ready* and
 **One state, and the rule layer is down to 61 — from 79 at the start of this session.** The plant
 advances 32 of 139 against the build order's 41 ready, and the nine-state gap is still exactly the
 `unmet_reading` class plus `source_converter_v`'s owed time constant.
+
+## The plant integrates its first `dynamics` state, and it is not the 6-DOF one
+
+`plant.md` §3's row for `dynamics` is *rigid-body 6-DOF* — "semi-implicit/Verlet in coast, RK4 in
+burns; renormalise the quaternion every tick" — and its argument is measured rather than preferred:
+forward Euler accumulates **+1.06 %** in semi-major axis over eight days, 2,000× the published
+0.01 km precision, and rate cannot fix it, because it needs 82 µs.
+
+**That is not what this round implemented, and the difference is the point.** Three of the vehicle's
+four `dynamics` states are that family and none of them can advance:
+
+| state | what it needs |
+|---|---|
+| `orbital_state` | a state vector — `mission.yaml`'s position and velocity are `UNCONFIGURED` |
+| `attitude`, `body_rate` | the inertia tensor `E-RCS-DYN` owes, so the RCS wrench has no `rad/s² per N` |
+| `nav_covariance` | a process-noise model, declared nowhere |
+
+The fourth, `propulsion.accumulated_dv_m_s`, is a `dynamics` state for a different reason and the
+corpus says which: *"an integrated state that is not conserved, which is what the `dynamics` class is
+for: position and velocity are the same kind of thing."* A Δv accumulator is one scalar integrated
+from a thrust and a mass — and the state's own note says why it must be: *"a cutoff that waits for the
+guidance cycle is a cutoff that overruns."*
+
+### The scalar half of the class, named as such
+
+The branch implements `dv/dt = F/m`, with the driver in newtons and the mass declared **on the
+state**, and it refuses by name rather than integrating anything else: a driver that is not a force,
+a state with no mass, a mass that is not positive, a `dynamics` state with no driver at all. That last
+refusal is the one the sentinel forces — `accumulated_dv_m_s` is on the `internal` node, where no edge
+can land, so it names its thrust (`driven_by: thrust_main_n`) the way a derivation binds a reading, and
+the linter holds it to the same rule: **the producer must advance first.** `thrust_main_n` is node 27
+of 58 and this state advances with its domain after the whole schedule, so the reading is always this
+tick's.
+
+### Two sets that differ on purpose, and one mistake
+
+The plant now seeds a starting value for `dynamics` states (`SEEDED_METHODS`), and the linter
+deliberately does **not** ask every `dynamics` state for a scalar `initial` — because a quaternion is
+not a scalar and a rule that demanded one would refuse the correct declaration. What the linter asks
+instead is the *shape*: a `dynamics` state that declares `driven_by` and `mass_kg` is the scalar
+accumulator, and it must declare its zero. That is a rule about what the plant implements rather than
+about the class, which is the only version of it that can be true.
+
+**The mistake this round made is in the integration itself.** The first version of the branch kept the
+edge's `transfer` (`1/mass_kg`) *and* divided by the state's `mass_kg` — so a newton held for one tick
+accumulated a thousandth of the right number, and the state's own declared mass was decorative. Two
+declarations of one ratio is exactly the shape this folder spends its rounds removing, and the test
+caught it by holding thrust for one tick and reading the result.
+
+### The figures that moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 261 | 261 |
+| build order | 41 ready · 25 value · 12 edge · 61 rule | **42** · 25 · 12 · **60** |
+| states a tick advances | 32 of 139 | **33** of 139 |
+| `report.refuse` call sites | 779 | **780** |
+| tests in `tests/test_vehicle_config.py` | 301 | **302** |
+
+**The plant now advances six of the seven method classes** — `lag`, `stock`, `delay`, `algebraic`,
+`dynamics` (scalar) and the `internal` seeding — with the 6-DOF half of `dynamics` and all of
+`discrete` and `hazard` still owing code. The rule layer is at 60, from 79 six rounds ago.
 
 ## The invariants, and which of them are enforced
 

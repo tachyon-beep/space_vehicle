@@ -4241,6 +4241,30 @@ def check_initial_values(where: str, components: dict[str, Any], report: Report)
                 report,
             )
 
+    # --------------------------------------------------------------------------------------
+    # **The scalar `dynamics` shape, which the class rule cannot reach.**
+    #
+    # `accumulated_dv_m_s` integrates `dv/dt = F/m`: it names its thrust (`driven_by`) and declares
+    # the mass it divides by (`mass_kg`), which is exactly the shape the plant's `dynamics` branch
+    # implements. A state with that shape needs a starting value for the same reason a level does —
+    # an accumulator with no zero is a number nobody can interpret — and asking here rather than in
+    # `INTEGRATOR_METHODS` is what keeps the rule from demanding a scalar from a quaternion.
+    # --------------------------------------------------------------------------------------
+    for state in components.get("state") or []:
+        if not isinstance(state, dict) or state.get("method") != "dynamics":
+            continue
+        if state.get("driven_by") is None or state.get("mass_kg") is None:
+            continue
+        if "initial" not in state:
+            report.refuse(
+                f"{where}:state {state.get('id')}.initial",
+                "declares the scalar `dynamics` shape — a named driver and a mass — and no initial "
+                "condition. That shape is `dv/dt = F/m`, an accumulator, and an accumulator without "
+                "a zero is a number nobody can interpret",
+            )
+
+
+
 
 def check_domain(
     path: Path,

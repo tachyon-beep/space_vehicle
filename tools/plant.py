@@ -74,6 +74,16 @@ from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
     stock_flux_basis,
 )
 
+# **The classes this file seeds a starting value for, and why the set is wider than the linter's.**
+# `check_initial_values` asks every integrator it names for a *scalar* `initial`, with one of three
+# groundings — which is right for a level and wrong for a vector or a quaternion. So `dynamics` is
+# deliberately outside the linter's set until the 6-DOF half of the class lands in a shape that rule
+# can hold, and this file's seeder honours any numeric `initial` a state declares. Round 52 is the
+# round that needed one for a `dynamics` state (`accumulated_dv_m_s`, whose accumulator has to start
+# at zero), and the two sets are named separately so the difference is a decision here rather than a
+# hole there.
+SEEDED_METHODS = (*INTEGRATOR_METHODS, "dynamics")
+
 # The parameters each integrator class owes, from `plant.md` §3. A method absent from this table
 # owes none *by name* — which is not the same as owing nothing, and `advance()` is where the
 # difference shows.
@@ -1193,7 +1203,17 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
     # `pressurant_he` — four stocks that are correctly declared and simply drain, which is the same
     # distinction the linter's undriven-node check draws for the same reason.
     preloaded = (world.nodes.get(state.node) or {}).get("preloaded")
-    if state.method in {"lag", "stock", "delay", "dynamics"} and not incoming and not preloaded:
+    # **A `dynamics` state may name its driver instead of being reached by an edge.** The sentinel
+    # is not a coupling node, so no edge can land on it, and `dv/dt` needs a thrust that is a
+    # scheduled state rather than a graph neighbour. The name is the same declaration a derivation
+    # binds, and the linter holds it to the same rule: the producer must advance first.
+    named_driver = state.method == "dynamics" and state.spec.get("driven_by") is not None
+    if (
+        state.method in {"lag", "stock", "delay", "dynamics"}
+        and not incoming
+        and not preloaded
+        and not named_driver
+    ):
         raise Unconfigured(
             where, f"is a {state.method} with no incoming edge, so nothing drives it"
         )
@@ -1509,6 +1529,129 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             ring_key: {"next": (next_slot + 1) % delay_ticks, "slots": slots},
         }
 
+    if state.method == "dynamics":
+        # --------------------------------------------------------------------------------------
+        # **The sixth class, and the one this file has refused longest.**
+        #
+        # `plant.md` §3's row for `dynamics` is *"rigid-body 6-DOF: position, velocity, quaternion,
+        # body rates — semi-implicit/Verlet in coast, RK4 in burns; renormalise the quaternion every
+        # tick"*, and the argument for that shape is measured rather than preferred: forward Euler
+        # accumulates +1.06 % in semi-major axis over eight days, 2,000x the published 0.01 km
+        # precision, and rate cannot fix it — it needs 82 µs.
+        #
+        # **That is not what this branch is, and saying so is the point.** Three of the four
+        # `dynamics` states are that family (`orbital_state`, `attitude`/`body_rate`,
+        # `nav_covariance`) and none of them can advance: the first needs a state vector nobody has
+        # supplied, the second an inertia tensor `E-RCS-DYN` owes, the third a process-noise model
+        # that is not declared anywhere. The fourth, `propulsion.accumulated_dv_m_s`, is a `dynamics`
+        # state for a different reason and the corpus says which: *"an integrated state that is not
+        # conserved, which is what the `dynamics` class is for: position and velocity are the same
+        # kind of thing."* A Δv accumulator is one scalar integrated from a thrust and a mass — and
+        # it is the state that has to be right at the moment of cutoff, because a cutoff that waits
+        # for the guidance cycle is a cutoff that overruns.
+        #
+        # So the rule here is the **scalar** half of the class: `dv/dt = F(t)/m`, with the driver in
+        # newtons and the mass declared on the state. A state whose driver is not a force, or which
+        # has no mass to divide by, is refused **by name** rather than integrated into a plausible
+        # number — which is what keeps this branch honest about being one state's rule rather than
+        # the class's.
+        #
+        # The integration is explicit Euler, and that is deliberate: `plant.md` forbids it *for an
+        # orbit* because the error accumulates over eight days of coast, and this accumulator is not
+        # an orbit — it is read against a budget and its per-tick error is 1e-16 of a metre per
+        # second. A Verlet step here would be a tableau with no second derivative to improve.
+        # --------------------------------------------------------------------------------------
+        # **The driver, from an edge or from a named state — and the second is not a loophole.**
+        # `accumulated_dv_m_s` is on the `internal` sentinel, where no edge can land, so its thrust
+        # comes from `thrust_main_n`'s value this tick, named by the state. That is the same reading
+        # a derivation binds with a bare name, and it is checked the same way: the linter requires
+        # the named state to advance *before* this one. A state that names no driver and has no edge
+        # is refused rather than integrated from nothing.
+        source = state.spec.get("driven_by")
+        if source is not None:
+            transfer = 1.0
+            driver = values.get(str(source))
+            if driver is None:
+                raise Unconfigured(
+                    f"{where}",
+                    f"names {source!r} as its driver, which has no value this tick",
+                    needs=str(source),
+                )
+            driver_unit = "N"
+        elif incoming:
+            driver_edge = canonical_contributors(incoming)[0]
+            sensitivity = driver_edge.sensitivity or {}
+            driver_unit = str(sensitivity.get("unit") or "")
+            transfer = float(sensitivity.get("value") or 0.0)
+            driver = values.get(driver_edge.source)
+            if driver is None:
+                raise Unconfigured(
+                    f"{where}",
+                    f"reads {driver_edge.source!r}, which nothing supplies",
+                    needs=driver_edge.source,
+                )
+        else:
+            raise Unconfigured(
+                where,
+                "is a `dynamics` state with no driver: no edge reaches it and it names none "
+                "(`driven_by`). An accumulator with nothing to accumulate is not a state whose rule "
+                "is missing, it is a state whose input is",
+            )
+        # A driver is a force, whether it arrives through an edge or by name: an edge says so in its
+        # unit (`m/s2 per N`), and a named state says so in its own. Nothing else is `dv/dt = F/m`.
+        named_force = str(
+            next((s.unit for s in world.states if s.id == str(source)), "") or ""
+        ) == "N"
+        if not (named_force if source is not None else "per N" in driver_unit):
+            raise Unconfigured(
+                f"{where}.driven_by"
+                if source is not None
+                else f"coupling.yaml:edge {canonical_contributors(incoming)[0].id}",
+                f"drives the `dynamics` state {state.id!r} and is in {driver_unit!r}. The scalar rule "
+                "this branch implements is `dv/dt = F/m`, so the driver has to be a force; anything "
+                "else is the 6-DOF half of the class, whose integrator is owed",
+            )
+        mass = state.spec.get("mass_kg")
+        if not isinstance(mass, (int, float)) or isinstance(mass, bool):
+            # **A `dynamics` state with no mass is the 6-DOF half of the class, and it owes a rule.**
+            # This branch implements one scalar — `dv/dt = F/m` — and a state with no mass to divide
+            # by is not that state; it is an orbit or a body rate, whose integrator is a shape this
+            # file does not have. The refusal is routed to the state rather than to `.mass_kg` so the
+            # worklist files it under *owes a rule*, which is what an implementer should go and
+            # write. `orbital_state` and `thruster_thrust` are the two that land here.
+            raise Unconfigured(
+                where,
+                "is a `dynamics` state whose rule is not the scalar one this plant implements. A "
+                "scalar accumulator is `dv/dt = F/m` and declares its `mass_kg`; a 6-DOF state is a "
+                "position, a velocity and a quaternion — or a body rate — and `plant.md` §3 gives "
+                "that half Verlet in coast and RK4 in burns with the quaternion renormalised every "
+                "tick, which is a shape no scalar can carry",
+                needs=f"{state.id}.mass_kg",
+            )
+        if float(mass) <= 0.0:
+            raise Unconfigured(
+                f"{where}.mass_kg",
+                f"is {mass!r}. A vehicle with no mass accelerates without bound, so a zero here is a "
+                "missing configuration rather than a light one",
+            )
+        current_level = state_level(values, state)
+        if current_level is None:
+            raise Unconfigured(
+                f"{where}.initial",
+                "declares no starting value, and an accumulator with no zero is a number nobody can "
+                "interpret. The linter requires one of every integrator (`INTEGRATOR_METHODS`)",
+                needs=f"{state.id}.initial",
+            )
+        # **`dv/dt = F/m`, and the `m` is the state's own declaration.** The edge's sensitivity is a
+        # *second* statement of the same ratio where there is an edge (`E-ENG-DYN` carries
+        # `1/mass_kg`, derived from `vehicle.yaml#configurations.csm_lm_docked.mass_kg`), and the
+        # linter holds the two together rather than the plant applying both — the first version of
+        # this branch kept the edge's `transfer` in place beside the mass and a newton held for one
+        # tick accumulated a thousandth of what it should. A named driver has no edge to read a
+        # transfer from, so `transfer` is 1.0 there and the mass is the only conversion.
+        accumulated = float(current_level) + float(driver) * dt / float(mass)
+        return state_values(world, state, accumulated)
+
     if state.method == "algebraic":
         # **The rule the configuration does carry, and the plant would not read.** Thirteen
         # `algebraic` states declare their arithmetic as a `derivation` over named inputs — load
@@ -1664,7 +1807,7 @@ def initial_values(world: World) -> dict[str, Any]:
     """
     values: dict[str, Any] = {}
     for state in world.states:
-        if state.method not in INTEGRATOR_METHODS:
+        if state.method not in SEEDED_METHODS:
             continue
         initial = (state.spec or {}).get("initial")
         if not isinstance(initial, (int, float)):
@@ -2168,6 +2311,20 @@ def build_order(world: World) -> dict[str, list[State]]:
                 # "owes a rule: domain code", which is the same defect as the `algebraic` case above
                 # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
                 # makes it the third method a configuration can carry on its own.
+                ready.append(state)
+                continue
+            if (
+                state.method == "dynamics"
+                and state.spec.get("driven_by") is not None
+                and isinstance(state.spec.get("mass_kg"), (int, float))
+                and isinstance(state.spec.get("initial"), (int, float))
+            ):
+                # **The sixth class, one state at a time.** `accumulated_dv_m_s` is the scalar shape
+                # the plant's `dynamics` branch implements — a named driver, a mass to divide by, and
+                # a zero to accumulate from — so the worklist has to call it ready for the same reason
+                # it calls a `delay` with a `delay_s` ready: the rule is in the configuration. The
+                # 6-DOF states are not, and the three conditions are what tells them apart rather than
+                # a list of names.
                 ready.append(state)
                 continue
             if state.node == "internal":
