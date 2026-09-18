@@ -11404,15 +11404,22 @@ def test_the_presentation_references_resolve_and_the_table_is_whole(tmp_path):
     """
     presentation = yaml.safe_load((VEHICLE / "presentation.yaml").read_text())
     coupling = yaml.safe_load((VEHICLE / "coupling.yaml").read_text())
-    repo = VEHICLE.parents[2]
 
+    # **The references are cited, not opened.** This test used to `stat` all four against the
+    # repository root, which was right while the vehicle lived inside `space_chassis` and is a
+    # boundary violation now that it is its own repository: the contract, the probe and the corpus
+    # documents are *outside* this root, and a suite that stats them is a suite that cannot run
+    # without the other half checked out — the same "a check that cannot run is not a check that
+    # passed" this file's own docstrings are about. Their existence is asserted where they live
+    # (`space_chassis/tests/test_vehicle_reconciliation.py`); what belongs here is that the vehicle
+    # *names* them, which is the claim the table actually makes.
     for value in (
         presentation["contract"],
         presentation["contract_probe"],
         coupling["generated_from"],
         coupling["provenance_rules"],
     ):
-        assert (repo / str(value).split("#", 1)[0]).exists(), value
+        assert isinstance(value, str) and value.strip(), value
 
     numbers = sorted(row["check"] for row in presentation["conformance"])
     assert numbers == list(range(1, 13)), numbers
