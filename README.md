@@ -16766,6 +16766,117 @@ Thirteen new debts — eleven from the check and two from the `open_debts` sente
 decision. **No state moved and no figure the objective watches changed**, because this round found a
 family of defects that were invisible rather than one that was breaking something.
 
+## The run's identity could not be named on resume, because the flag and the default were one value
+
+Round 55 gave a run an identity: a scenario posture and a seed, recorded in `state.json`'s vehicle
+block and in `pending.json` — the window's only file that is read back as input — with a comment
+promising what the record is for, in as many words: *"a resumed console keeps its scenario unless
+the caller names another."* This round found that the second half of that sentence could not happen.
+
+```sh
+python3 tools/console.py --diode-dir .scratch/diode --slug v --scenario degraded --seed 42 --cycles 2
+# [console] … slug=v … scenario=degraded seed=42 ring=300 …
+python3 tools/console.py --diode-dir .scratch/diode --slug v --scenario crisis --seed 7 --cycles 1
+# [console] … slug=v … scenario=degraded seed=42 ring=300 …
+```
+
+The caller named a crisis at seed 7 and the window carried on as a degraded run at seed 42, printing
+the two numbers it had just been told to abandon. Three flags did that, and it is one mechanism.
+
+### A flag that *is* its own default cannot be asked about
+
+`--scenario` defaulted to `"nominal"`, `--seed` to `0` and `--ring-slots` to `300`. All three name a
+value the console writes into `pending.json` and reads back on the next process — `scenario`, `seed`,
+`ring_slots`. So each of them is two things at once, a thing the vehicle remembers and a thing a
+command line can say, and those two are tellable apart only if *the caller named nothing* has a
+representation of its own. `args.scenario` did not: it was `"nominal"` whether the caller had typed
+`--scenario nominal` or typed nothing at all. The restore in `initialise` asked the only question it
+could ask — *is there a scenario in the record?* — and the answer overrode the caller every time.
+
+| what the caller did | `args.scenario` before | what the run used |
+|---|---|---|
+| named `crisis` on a window recorded as `degraded` | `"crisis"` | **`degraded`**, silently |
+| named `nominal` on a window recorded as `degraded` | `"nominal"` | `degraded`, silently |
+| named nothing | `"nominal"` | `degraded` |
+| named `crisis` on a fresh window | `"crisis"` | `crisis` |
+
+The third row is what the old design was built for; the second is what it broke. A caller who
+deliberately names the default posture and a caller who names nothing are the same argument, and on a
+resumed window those two want opposite outcomes. The same held for the seed, which matters for the
+same reason and not a smaller one: a run is reproducible from the *pair*, so a seed that lost to the
+record leaves a run whose own numbers do not replay it.
+
+### The fix is a representation for "named nothing", resolved in one place
+
+The three defaults are `None`. `None` is the one value a caller cannot type, so it is the only
+representation "named nothing" can have; and the three are resolved **once**, in `main`, where both
+the window's record and the mission's declared postures are in hand. A caller who names a value gets
+it. A caller who names nothing inherits the record. A window with no record gets `DEFAULT_SCENARIO`,
+`DEFAULT_SEED`, `DEFAULT_RING_SLOTS`. The console's own `initialise` restores none of the three any
+more, because a second restore is a second answer — and it was the wrong one.
+
+The refusal is made on the **resolved** value rather than on the flag, so a record naming a posture
+`mission.yaml` no longer declares is caught here too, with its own sentence: *"the window at … records
+scenario 'phantom', which is not one of the vehicle's 3"* wants a different repair from *"you named a
+scenario that does not exist"*.
+
+Two behaviours are new beside the fix, and both are consequences of the same sentence rather than
+separate decisions:
+
+- **`--plan` takes the resolved pair**, so `--plan` on a window recorded as `crisis` describes the
+  crisis that window is in rather than the default it never had. The plan a run announces and the
+  plan it flies stay one computation, which is the property round 55 built `--plan` for; taking the
+  flag instead would have made them two implementations that agree until somebody resumes.
+- **`--ring-slots` naming a bound the window does not have is refused** — exit 3, both numbers
+  named. The ring's own decision is unchanged: whatever bound the frames on disk were written under
+  is the bound the run keeps, so the frames held, the losses accounted and the declared slot count
+  cannot become three answers to one question. What was wrong was the *manner* — `300` was the
+  default, so a caller who named `10` and a caller who named nothing were the same argument and the
+  run kept `300` without a word. A fresh window is still bound however the caller likes, which is
+  what keeps this a rule about restarts rather than a rule against naming the bound at all.
+
+### The refusal, and the defect the refusal's first version had
+
+`check_console_flags` states the rule about the *mechanism* rather than about three flag names: **an
+argument whose destination appears in `pending.json` must default to `None`.** The durable set is
+read off the console's own `write_json_atomic(..., self.pending, {…})` calls and the option list off
+its own parser, both through `ast`, so neither is a copy that can go stale and a fourth remembered
+value is caught the day it is declared rather than the day somebody notices a flag doing nothing.
+
+**The check's first version had the defect it exists to catch.** It returned the keys of the *first*
+`write_json_atomic(self.pending, …)` that `ast.walk` reached, and the first is the smallest:
+`initialise` seeds the file with `{"pending": []}` before anything has happened, so the derived
+durable set was `{pending}` — against which no flag is remembered and every flag passes. Every such
+write is unioned instead, and a write the checker cannot read is a refusal rather than a partial
+answer, because a check that passes for the wrong reason is the failure this folder keeps finding one
+level up from wherever it is looking.
+
+`copy_definition` gained `tools/console.py` in the same commit, and that is the same sentence
+arriving in the fixture: a linter that reads a file the fixture did not copy refuses for absence in
+every test in the file, which is how `tools/faults.py` got there the round its docstring gained a
+reader.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 273 | 273 |
+| a real tick advances | 36 of 139 | 36 of 139 |
+| build order · ready now | 36 | 36 |
+| build order · owes a value | 23 | 23 |
+| build order · owes an edge | 16 | 16 |
+| build order · owes a rule | 64 | 64 |
+| `report.refuse` call sites | 790 | **796** |
+| tests | 312 | **314** |
+
+**No corpus figure moved, because this is a tool round** — the same shape round 55 had, and the same
+reason criterion 3 keeps its own budget. What moved is criterion 3's live half: the fourth case in
+`test_a_run_can_say_which_scenario_it_is` is the one the first three could not see — the window is
+made as `degraded` and resumed as `crisis --seed 7`, and the mirror, the record *and* `--plan` all
+follow the caller — and `test_a_restart_may_not_re_bound_the_ring_and_says_so` is the refusal, with
+the agreeing bound and the fresh window as its controls. The three values the console remembers are
+now tellable from their own defaults, and the linter refuses the next one that is not.
+
 ## The invariants, and which of them are enforced
 
 

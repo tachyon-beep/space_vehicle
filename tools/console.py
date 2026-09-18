@@ -67,6 +67,55 @@ from plant import (  # noqa: E402
 # is written by something this process does not control.
 MAX_READ_BYTES = 1_000_000
 
+# **The three values a run remembers and a caller may also name, and the defaults are `None`.**
+# `--scenario`, `--seed` and `--ring-slots` are each written into `pending.json` and read back on
+# the next process — which makes each of them two things at once: a thing the vehicle remembers and
+# a thing a caller can say. Those two are only distinguishable if *the caller named nothing* has a
+# representation of its own, and a parser whose `--scenario` defaults to `"nominal"` does not have
+# one: `--scenario nominal` and no flag at all are the same `args.scenario`, so the restore cannot
+# know which it is looking at and a resumed run ignored every one of the three. Round 55's own
+# comment promised the opposite in as many words — *"a resumed console keeps its scenario unless
+# the caller names another"* — and nothing could have kept that promise.
+#
+# So the flag defaults are `None`, `None` means **the caller named nothing**, and the resolution
+# happens once, in `main`, where the window's record and the mission's declared postures are both
+# in hand. The declared defaults live here instead, and they are what an unnamed flag resolves to on
+# a window that has no record — a fresh one.
+DEFAULT_SCENARIO = "nominal"
+DEFAULT_SEED = 0
+DEFAULT_RING_SLOTS = 300
+
+
+def recorded_run(root: Path) -> dict[str, Any]:
+    """The run's own record of itself — `pending.json` — or an empty map where there is none.
+
+    `pending.json` is the one file in the window that is read back as input; `state.json` is
+    published state and the contract is explicit that editing it changes nothing. Everything a
+    restart has to remember lives here, which is why the resolution of a *named* flag against a
+    *remembered* one has to read it before the console is constructed rather than inside it: the
+    console can restore a value, but it cannot see the flag that lost to it.
+    """
+    record = read_json_bounded(root / "pending.json")
+    return record if isinstance(record, dict) else {}
+
+
+def resolve_remembered(named: Any, recorded: Any, default: Any) -> Any:
+    """The caller's value if the caller named one, else the record's, else the declared default.
+
+    **The first branch is the whole fix.** `named is not None` is a question the parser could not
+    be asked while the defaults were the same values a caller could type, and it is the question
+    the round turned on. Written out three times rather than once it would also be three chances to
+    reach for `or` — and `args.seed or recorded_seed or 0` looks right and is wrong in the one case
+    a seed exists to be: a caller who names `0` means `0`, and `or` reads that as *named nothing*.
+    "Named nothing" has exactly one representation and it is `None`; falsiness is a different
+    question and this is not it.
+    """
+    if named is not None:
+        return named
+    if recorded is not None:
+        return recorded
+    return default
+
 # The result filename's bound, in *bytes*, from `docs/diode-contract.md:96-99`: "the whole
 # truncated at 160 bytes, so no separator, traversal sequence, or partial multi-byte character can
 # reach the filesystem." Slicing a Python `str` at 160 characters is not that bound, and a
@@ -146,9 +195,9 @@ class Console:
         *,
         phase: str,
         tripped_interlocks: set[str] | None = None,
-        scenario: str = "nominal",
-        seed: int = 0,
-        ring_slots: int = 300,
+        scenario: str = DEFAULT_SCENARIO,
+        seed: int = DEFAULT_SEED,
+        ring_slots: int = DEFAULT_RING_SLOTS,
     ) -> None:
         self.world = world
         # **The ring's slot count, which the contract demands and nothing bounded.**
@@ -302,23 +351,20 @@ class Console:
                 self.dwell = {
                     str(k): v for k, v in restored["dwell"].items() if isinstance(v, dict)
                 }
-            for key in ("ticks", "seq", "seed"):
+            for key in ("ticks", "seq"):
                 value = restored.get(key)
                 if isinstance(value, int) and value >= 0:
                     setattr(self, key, value)
-            # **A resumed console keeps its scenario unless the caller names another.** The whole
-            # point of recording the pair is that the record describes the run; a restart that
-            # silently reset it to `nominal` would make the second half of a crisis run report
-            # itself as a nominal one.
-            if isinstance(restored.get("scenario"), str) and restored["scenario"]:
-                self.scenario = restored["scenario"]
-            # **A restart may not silently re-bound the ring.** `ticks` and `seq` are restored
-            # because a reset counter makes the record lie; the slot count is restored for the same
-            # reason, and the file on disk is what settles it: whatever is there is kept and pruned
-            # to this run's bound, so the count on disk, the accounting and the declaration cannot
-            # disagree about how many frames exist.
-            if isinstance(restored.get("ring_slots"), int) and restored["ring_slots"] > 0:
-                self.ring_slots = restored["ring_slots"]
+            # **The run's identity and the ring's bound are resolved in `main`, not restored here.**
+            # They are the three values a caller can also name, and the console cannot tell a flag
+            # that named a value from a flag left at its default — `args.scenario` was `"nominal"`
+            # whichever way the caller meant it. What `main` passes in is therefore already the
+            # answer: the caller's if the caller named one, the record's if not, the declared
+            # default on a window with no record. A second restore here would be a second answer,
+            # and it would be the wrong one — it is what silently overrode `--scenario crisis` on a
+            # window recorded as `degraded`, and what made `--seed` and `--ring-slots` no-ops too.
+            #
+            # `boot_id` is restored below and is not a flag, so it has no such ambiguity.
             if isinstance(restored.get("boot_id"), str) and restored["boot_id"]:
                 self.boot_id = restored["boot_id"]
         self.publish()
@@ -991,7 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ring-slots",
         type=int,
-        default=300,
+        default=None,
         metavar="N",
         help="how many frames the telemetry ring holds. `docs/diode-contract.md:186` requires a "
         "fixed slot count and `presentation.yaml#ring` declines to set it — 'a slot count is a "
@@ -1010,17 +1056,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--scenario",
-        default="nominal",
+        default=None,
         metavar="POSTURE",
         help="the run's difficulty identity: a `mission.yaml#scenario_postures` id "
-        "(nominal, degraded, crisis). Recorded in the mirror and in the vehicle's own record",
+        "(nominal, degraded, crisis). Recorded in the mirror and in the vehicle's own record, and "
+        "a resumed run keeps the one it recorded unless this names another",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=0,
+        default=None,
         help="the run's master seed, for the fault streams `tools/faults.py` draws from. "
-        "A scenario and a seed together are what make a run reproducible",
+        "A scenario and a seed together are what make a run reproducible, and a resumed run keeps "
+        "the pair it recorded unless this names another",
     )
     args = parser.parse_args(argv)
 
@@ -1040,17 +1088,69 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - a refusal is the answer here too
         sys.stderr.write(f"the scenario postures cannot be loaded: {exc}\n")
         return 3
-    if args.scenario not in postures:
+
+    # ---- the run's identity, resolved once -------------------------------------------------
+    #
+    # A caller who names a value gets it. A caller who names nothing inherits whatever the window's
+    # own record holds. A window with no record gets the declared default. The order matters and it
+    # is the round's whole subject: the middle case is only reachable because the flag defaults are
+    # `None`, and it is *unreachable* when `--scenario` defaults to the string the record would
+    # hold anyway.
+    window = Path(args.diode_dir) / args.slug
+    recorded = recorded_run(window)
+    recorded_scenario = recorded.get("scenario")
+    if not isinstance(recorded_scenario, str) or not recorded_scenario:
+        recorded_scenario = None
+    scenario = resolve_remembered(args.scenario, recorded_scenario, DEFAULT_SCENARIO)
+    # The refusal is made on the **resolved** value rather than on the flag, so a record naming a
+    # posture the mission no longer declares is caught here too. It exits 3 either way and the two
+    # sentences differ, because "you named a scenario that does not exist" and "this window is in a
+    # scenario that does not exist" want different repairs.
+    if scenario not in postures:
+        if args.scenario is not None:
+            sys.stderr.write(
+                f"scenario {scenario!r} is not one of the vehicle's "
+                f"{len(postures)}: {sorted(postures)}\n"
+            )
+        else:
+            sys.stderr.write(
+                f"the window at {window} records scenario {scenario!r}, which is not one of the "
+                f"vehicle's {len(postures)}: {sorted(postures)}. Name one that is, or point "
+                f"`--diode-dir` and `--slug` at another window\n"
+            )
+        return 3
+    # The seed rides the same rule, and the reason is the pair rather than either half: a run is
+    # reproducible from its scenario *and* its seed, so a seed flag that lost to the record would
+    # leave a run whose own numbers do not reproduce it.
+    recorded_seed = recorded.get("seed")
+    if not isinstance(recorded_seed, int) or recorded_seed < 0:
+        recorded_seed = None
+    seed = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
+    # **The ring is the one remembered value a restart may not re-bound, and this is where that
+    # decision is made audible.** Its own logic is unchanged — whatever bound the frames on disk
+    # were written under is the bound the run keeps, so the count on disk, the loss accounting and
+    # the declaration cannot disagree about how many frames exist. What changes is that a caller
+    # who names a *different* bound is told, instead of being handed the old one with no remark.
+    recorded_slots = recorded.get("ring_slots")
+    if not isinstance(recorded_slots, int) or recorded_slots <= 0:
+        recorded_slots = None
+    if args.ring_slots is not None and recorded_slots is not None and args.ring_slots != recorded_slots:
         sys.stderr.write(
-            f"scenario {args.scenario!r} is not one of the vehicle's "
-            f"{len(postures)}: {sorted(postures)}\n"
+            f"--ring-slots {args.ring_slots} names a bound the window at {window} does not have: "
+            f"its record holds {recorded_slots}, and the frames on disk were written under it. A "
+            f"restart keeps the bound the ring already has — re-bounding it would make the frames "
+            f"held, the losses accounted and the declared slot count three answers to one question. "
+            f"Point `--slug` at a new window to run a differently bounded ring\n"
         )
         return 3
+    ring_slots = resolve_remembered(args.ring_slots, recorded_slots, DEFAULT_RING_SLOTS)
 
     # **`--plan` answers "what will this run be" before it is run**, which is the half of criterion
     # 3a that a console cannot answer for itself: the console is the window, and the faults are the
     # adversary's. Both read the same `scenario_report`, so the plan a run announces and the plan it
-    # flies are one computation rather than two that agree until somebody edits one.
+    # flies are one computation rather than two that agree until somebody edits one — and it takes
+    # the *resolved* pair for that reason, so `--plan` on a window recorded as `crisis` describes
+    # the crisis that window is in rather than the default it would have had.
     if args.plan or args.plan_json:
         faults = load_faults(Path(args.dir))
         if not faults:
@@ -1065,7 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
         ]
         hours = sum(phases)
         try:
-            plan = scenario_report(Path(args.dir), faults, postures, args.scenario, args.seed, hours)
+            plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
         except Exception as exc:  # noqa: BLE001 - the refusal is the answer
             sys.stderr.write(f"the scenario cannot be planned: {exc}\n")
             return 3
@@ -1093,13 +1193,13 @@ def main(argv: list[str] | None = None) -> int:
 
     console = Console(
         world,
-        Path(args.diode_dir) / args.slug,
+        window,
         args.slug,
         phase=args.phase,
         tripped_interlocks=set(args.closed_interlock),
-        scenario=args.scenario,
-        seed=args.seed,
-        ring_slots=args.ring_slots,
+        scenario=scenario,
+        seed=seed,
+        ring_slots=ring_slots,
     )
     console.initialise()
     if args.init:

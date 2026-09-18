@@ -76,8 +76,9 @@ def copy_definition(destination: Path) -> Path:
     fault policies (`check_tool_docstrings`). A fixture that copied only the YAML would make every
     one of those checks refuse for absence in every test in this file — which is the same defect
     the domains clause above records, arriving in the fixture that clause was written for. So the
-    fixture copies what the linter reads and nothing else: the two prose files and the one tool
-    whose docstring makes a claim, not the 750 KB `check_vehicle.py` the fixture is *running*.
+    fixture copies what the linter reads and nothing else: the two prose files and the tools whose
+    own text makes a claim — the fault scheduler's docstring and the console's parser
+    (`check_console_flags`) — not the 750 KB `check_vehicle.py` the fixture is *running*.
     """
     destination.mkdir(parents=True, exist_ok=True)
     for name in FILES:
@@ -85,7 +86,8 @@ def copy_definition(destination: Path) -> Path:
     for name in ("README.md", "plant.md"):
         shutil.copy(VEHICLE / name, destination / name)
     (destination / "tools").mkdir(exist_ok=True)
-    shutil.copy(VEHICLE / "tools" / "faults.py", destination / "tools" / "faults.py")
+    for name in ("faults.py", "console.py"):
+        shutil.copy(VEHICLE / "tools" / name, destination / "tools" / name)
     domains = VEHICLE / "domains"
     if domains.is_dir():
         shutil.copytree(domains, destination / "domains")
@@ -8978,6 +8980,39 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert "is not one of the vehicle's" in refused.stderr, refused.stderr
     assert "crisis" in refused.stderr and "nominal" in refused.stderr
 
+    # **And the fourth case, which the first three could not see.** The second case proves a
+    # restart that names *nothing* keeps the pair; this one proves a restart that names *something*
+    # is obeyed — and the two are the same observation only if the parser can tell them apart.
+    # It could not: `--scenario` defaulted to `"nominal"`, so `args.scenario` was a string whether
+    # the caller had named the posture or named nothing, and the restore in `initialise` overrode
+    # both. `--scenario crisis` on the window below continued as `degraded` and printed
+    # `scenario=degraded` while the caller watched. So the window is made as one posture and
+    # resumed as another, and the *pair* is named, because a run is reproducible from its scenario
+    # and its seed and a seed that lost to the record would leave a run its own numbers do not
+    # replay.
+    made = run_console(
+        "--diode-dir", str(root), "--slug", "renamed", "--scenario", "degraded", "--seed", "3",
+        "--cycles", "1", "--poll", "0.05",
+    )
+    assert made.returncode == 0, made.stderr[-400:]
+    assert "scenario=degraded seed=3" in made.stdout, made.stdout[-400:]
+    renamed = run_console(
+        "--diode-dir", str(root), "--slug", "renamed", "--scenario", "crisis", "--seed", "7",
+        "--cycles", "1", "--poll", "0.05",
+    )
+    assert renamed.returncode == 0, renamed.stderr[-400:]
+    assert "scenario=crisis seed=7" in renamed.stdout, renamed.stdout[-400:]
+    record = json.loads((root / "renamed" / "pending.json").read_text())
+    assert record["scenario"] == "crisis" and record["seed"] == 7, record
+    # The mirror moves with the record, because the mirror is what the fleet reads.
+    mirror = json.loads((root / "renamed" / "state.json").read_text())
+    assert mirror["vehicle"]["scenario"] == "crisis", mirror["vehicle"]
+    # And the plan is asked about the *resolved* pair rather than the flag, so `--plan` on this
+    # window with no `--scenario` describes the crisis it is in and not the default it never had.
+    planned = run_console("--diode-dir", str(root), "--slug", "renamed", "--plan-json")
+    assert planned.returncode == 0, planned.stderr[-400:]
+    assert json.loads(planned.stdout)["posture"] == "crisis", planned.stdout[:200]
+
 
 def test_a_scenario_plan_is_what_that_scenario_decides(tmp_path):
     """The plan a run announces and the plan it flies are one computation, not two that agree.
@@ -9146,6 +9181,113 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
     # claim; the run's own frame count is a consequence of `initialise` publishing as well.
     ring_one = json.loads((diode / "one-slot" / "state.json").read_text())["ring"]
     assert len(frames) == 1 and frames[0] == f"{ring_one['newest_seq'] + 1:03d}.json", (frames, ring_one)
+
+
+def test_a_restart_may_not_re_bound_the_ring_and_says_so(tmp_path):
+    """The ring's bound is the one remembered value a restart keeps, and keeping it in silence is a lie.
+
+    The decision itself is older than this test: the frames on disk were written under a bound, and
+    a restart that took a new one would make the frames held, the losses accounted and the declared
+    slot count three answers to one question — so the record's bound wins. What was wrong was the
+    *manner*: `--ring-slots` defaulted to `300`, so a caller who named `10` and a caller who named
+    nothing were the same argument, and the run kept `300` without a word. A caller reads
+    `ring=300` in a line of status output and has no way to know that the number they typed was
+    discarded — which is this folder's oldest sentence about a name that resolves to nothing.
+
+    So the refusal is the deliverable, not the override: a named bound that the window does not
+    have exits 3 and names the bound it does have, and a bound that *agrees* with the record still
+    runs, because there is nothing to disagree about.
+    """
+    diode = tmp_path / "diode"
+    console = [
+        sys.executable,
+        str(VEHICLE / "tools" / "console.py"),
+        "--diode-dir",
+        str(diode),
+        "--slug",
+        "held",
+        "--ring-slots",
+        "6",
+        "--cycles",
+        "1",
+        "--poll",
+        "0.02",
+    ]
+    first = subprocess.run(console, capture_output=True, text=True, check=False)
+    assert first.returncode == 0, first.stderr[-600:]
+    assert "ring=6" in first.stdout, first.stdout[-300:]
+
+    # Naming the bound the window already has is not a disagreement, and it runs.
+    same = subprocess.run(
+        [
+            sys.executable,
+            str(VEHICLE / "tools" / "console.py"),
+            "--diode-dir",
+            str(diode),
+            "--slug",
+            "held",
+            "--ring-slots",
+            "6",
+            "--cycles",
+            "1",
+            "--poll",
+            "0.02",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert same.returncode == 0, same.stderr[-600:]
+    assert "ring=6" in same.stdout, same.stdout[-300:]
+
+    # Naming another one is refused, with both numbers, and the window is untouched.
+    before = json.loads((diode / "held" / "pending.json").read_text())
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(VEHICLE / "tools" / "console.py"),
+            "--diode-dir",
+            str(diode),
+            "--slug",
+            "held",
+            "--ring-slots",
+            "10",
+            "--cycles",
+            "1",
+            "--poll",
+            "0.02",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode == 3, refused.returncode
+    assert "--ring-slots 10" in refused.stderr and "holds 6" in refused.stderr, refused.stderr
+    after = json.loads((diode / "held" / "pending.json").read_text())
+    assert after["ring_slots"] == 6 and after["seq"] == before["seq"], (before, after)
+    # And a fresh window is free to be bound however the caller likes, which is what keeps this a
+    # rule about *restarts* rather than a rule against naming the bound at all.
+    fresh = subprocess.run(
+        [
+            sys.executable,
+            str(VEHICLE / "tools" / "console.py"),
+            "--diode-dir",
+            str(diode),
+            "--slug",
+            "fresh",
+            "--ring-slots",
+            "10",
+            "--cycles",
+            "1",
+            "--poll",
+            "0.02",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert fresh.returncode == 0, fresh.stderr[-600:]
+    assert "ring=10" in fresh.stdout, fresh.stdout[-300:]
 
 
 def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
@@ -14811,6 +14953,72 @@ def test_the_linter_refuses_a_tool_docstring_whose_fault_counts_have_drifted(tmp
     result = run_linter(definition)
     assert result.returncode == 1
     assert "states 118 declared faults" in result.stdout, result.stdout[-900:]
+
+
+def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(tmp_path):
+    """The run's identity is three flags, and a flag that *is* its own default cannot be obeyed.
+
+    `tools/console.py` writes `scenario`, `seed` and `ring_slots` into `pending.json` — the window's
+    only input file — and all three are also command-line options. That makes each of them two
+    things at once, a thing the vehicle remembers and a thing a caller can say, and the two are
+    tellable apart only if *the caller named nothing* has a representation of its own. It did not:
+    `--scenario` defaulted to `"nominal"`, `--seed` to `0`, `--ring-slots` to `300`, so `args.scenario`
+    was the same string whether the caller had named the posture or named nothing at all. The
+    restore asked which one it was looking at and could not be answered, and a resumed window
+    silently ignored all three.
+
+    **The refusal is about the mechanism rather than about the three flags**, which is why the
+    durable set is read off the console's own `write_json_atomic(..., self.pending, {...})` call and
+    the option list off its own parser: a fourth remembered value added later is caught the day it
+    is declared, and neither list is a copy that can go stale. `None` is the rule because `None` is
+    the one value a caller cannot name, and three breaks are exercised — the string default, the
+    numeric one, and the case the derivation itself cannot run — because a check that reports the
+    right thing for one shape of the defect and stays silent for its sibling is the next round's
+    finding.
+    """
+    # The corpus at rest: the console already resolves the three, so the check is silent about it.
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1500:]
+
+    # A string default, which is the break the round found: `--scenario crisis` and no flag at all
+    # become the same argument.
+    named = copy_definition(fixture_dir(tmp_path, "console-flag"))
+    path = named / "tools" / "console.py"
+    text = path.read_text()
+    assert '"--scenario",\n        default=None,' in text, "the fixture no longer matches console.py"
+    path.write_text(text.replace('"--scenario",\n        default=None,', '"--scenario",\n        default="nominal",', 1))
+    result = run_linter(named)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "tools/console.py:--scenario" in result.stdout, result.stdout[-900:]
+    assert "defaults to 'nominal'" in result.stdout, result.stdout[-900:]
+    assert "written to `pending.json` as `scenario`" in result.stdout, result.stdout[-900:]
+
+    # The numeric one, on a flag whose value is an int: the message has to read the same way, and
+    # the point is that `0` is as un-nameable-a-default as `"nominal"` is.
+    seeded = copy_definition(fixture_dir(tmp_path, "console-seed"))
+    path = seeded / "tools" / "console.py"
+    text = path.read_text()
+    assert '"--seed",\n        type=int,\n        default=None,' in text
+    path.write_text(
+        text.replace('"--seed",\n        type=int,\n        default=None,', '"--seed",\n        type=int,\n        default=0,', 1)
+    )
+    result = run_linter(seeded)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "tools/console.py:--seed" in result.stdout, result.stdout[-900:]
+    assert "defaults to 0" in result.stdout, result.stdout[-900:]
+
+    # **A check that cannot run is not a check that passed.** Renaming the record the durable set is
+    # derived from must refuse rather than pass: a silent pass here would leave every flag in the
+    # file unchecked while the report said the vehicle composed.
+    unwritten = copy_definition(fixture_dir(tmp_path, "console-unreadable"))
+    path = unwritten / "tools" / "console.py"
+    text = path.read_text()
+    assert text.count("write_json_atomic(self.pending,") == 1
+    assert text.count("self.pending,") >= 2
+    path.write_text(text.replace("self.pending", "self.record_file"))
+    result = run_linter(unwritten)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "no longer writes `pending.json` in a form this check can read" in result.stdout, result.stdout[-900:]
 
 
 def test_the_linter_refuses_a_shared_node_or_sentinel_count_that_has_drifted(tmp_path):

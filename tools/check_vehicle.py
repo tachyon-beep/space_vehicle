@@ -45,6 +45,7 @@ convention of the operator-side services this project already has.
 from __future__ import annotations
 
 import argparse
+import ast
 import collections
 import inspect
 import math
@@ -16635,6 +16636,185 @@ def check_tool_docstrings(
                 )
 
 
+def _console_durable_keys(tree: ast.Module) -> set[str] | None:
+    """The keys `tools/console.py` writes into `pending.json` — what a restart *remembers*.
+
+    Read off the writer rather than listed here, for the reason this folder keeps rediscovering: a
+    second copy of a set is a second answer, and the copy is the one that goes stale. `pending.json`
+    is the window's only input file — the contract is explicit that `state.json` is published state
+    and that editing it changes nothing — so the dictionaries handed to `write_json_atomic` for
+    `self.pending` *are* the durable set, and there is nothing else they could be.
+
+    **Every such write, unioned, because there is more than one and the first is the smallest.**
+    `initialise` seeds the file with `{"pending": []}` before anything has happened, and the cycle's
+    own write carries the ten keys a restart needs. Reading only the first match found `pending` and
+    nothing else — a durable set of one, against which no flag is remembered and every flag passes —
+    which is the check passing for the wrong reason. That is the same failure the check exists to
+    refuse, one level up, and it is why this returns `None` rather than a partial set when a write
+    it cannot read is present.
+
+    `None` means the writer could not be read, which the caller refuses rather than tolerates: a
+    check that cannot run is not a check that passed.
+    """
+    found = False
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or len(node.args) < 2:
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Name) and func.id == "write_json_atomic"):
+            continue
+        target = node.args[0]
+        if not (
+            isinstance(target, ast.Attribute)
+            and target.attr == "pending"
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+        ):
+            continue
+        found = True
+        payload = node.args[1]
+        if not isinstance(payload, ast.Dict):
+            return None
+        keys |= {
+            key.value
+            for key in payload.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+    return keys if found else None
+
+
+def _console_flag_defaults(tree: ast.Module) -> list[tuple[str, str, ast.expr | None]] | None:
+    """Every option the console declares, as `(dest, flag, default node)`.
+
+    The `dest` comes from the flag the way `argparse` derives it — `--ring-slots` is `ring_slots` —
+    unless the call says otherwise, because that is the name the rest of `main` reads and the name
+    that would have to appear in the durable dictionary for the two to be about one value.
+
+    `None` means no parser was found to read, which is a refusal for the reason above.
+    """
+    parser_vars: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "ArgumentParser"):
+            continue
+        parser_vars |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+    if not parser_vars:
+        return None
+    found: list[tuple[str, str, ast.expr | None]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == "add_argument"
+            and isinstance(func.value, ast.Name)
+            and func.value.id in parser_vars
+        ):
+            continue
+        flags = [
+            arg.value
+            for arg in node.args
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        ]
+        long_flags = [flag for flag in flags if flag.startswith("--")]
+        if not long_flags:
+            continue
+        flag = max(long_flags, key=len)
+        named = next(
+            (kw.value for kw in node.keywords if kw.arg == "dest"), None
+        )
+        dest = (
+            named.value
+            if isinstance(named, ast.Constant) and isinstance(named.value, str)
+            else flag.lstrip("-").replace("-", "_")
+        )
+        default = next((kw.value for kw in node.keywords if kw.arg == "default"), None)
+        found.append((dest, flag, default))
+    return found
+
+
+def check_console_flags(root: Path, report: Report) -> None:
+    """A flag whose value the vehicle remembers must be distinguishable from its own default.
+
+    `tools/console.py` writes three values into `pending.json` that a caller can also *name*:
+    `scenario`, `seed` and `ring_slots`. Each is therefore two things at once — a thing the vehicle
+    remembers and a thing a command line can say — and the two are only tellable apart if *the
+    caller named nothing* has a representation of its own. It did not: `--scenario` defaulted to
+    `"nominal"`, `--seed` to `0` and `--ring-slots` to `300`, so `args.scenario` was the same string
+    whether the caller had named the posture or named nothing at all. The restore could not ask the
+    question, and a resumed window silently ignored all three — `--scenario crisis` on a window
+    recorded as `degraded` continued as `degraded` and printed `scenario=degraded` while the caller
+    watched, which is a run that is not the run it was asked for and says so in a line nobody can
+    read as a refusal. Round 55's own comment promised the opposite in as many words: *"a resumed
+    console keeps its scenario unless the caller names another."*
+
+    So the rule is one sentence and it is about the *mechanism* rather than about three flags: **an
+    argument whose destination appears in `pending.json` must default to `None`.** `None` is the
+    only value a caller cannot name, which is what makes it mean *named nothing*. The durable set
+    comes from the console's own writer and the option list from its own parser, so a fourth durable
+    flag added later is caught by this check the day it is declared rather than the day somebody
+    notices a flag doing nothing.
+
+    This is a claim about a tool rather than about the corpus, and it lives here for the reason
+    `check_tool_docstrings` does: the console's parser is a declaration about the run's identity, and
+    a declaration with no reader has already drifted.
+    """
+    source_path = root / "tools" / "console.py"
+    if not source_path.is_file():
+        report.refuse(
+            "tools/console.py",
+            "is missing, so the flags that name the run's own record cannot be held against the "
+            "record they name",
+        )
+        return
+    try:
+        tree = ast.parse(source_path.read_text())
+    except SyntaxError as exc:
+        report.refuse("tools/console.py", f"does not parse, so its flags cannot be read: {exc}")
+        return
+    durable = _console_durable_keys(tree)
+    if durable is None:
+        report.refuse(
+            "tools/console.py",
+            "no longer writes `pending.json` in a form this check can read, so the set of values a "
+            "restart remembers — and therefore the set of flags that must be able to tell `named` "
+            "from `named nothing` — is unknown",
+        )
+        return
+    options = _console_flag_defaults(tree)
+    if options is None:
+        report.refuse(
+            "tools/console.py",
+            "no longer declares its arguments in a form this check can read, so which flags name a "
+            "remembered value is unknown",
+        )
+        return
+    remembered = [(dest, flag, default) for dest, flag, default in options if dest in durable]
+    if not remembered:
+        report.refuse(
+            "tools/console.py",
+            f"declares no flag for any of the {len(durable)} value(s) it writes to `pending.json` "
+            "({', '.join(sorted(durable))}), so a run's identity cannot be named at all",
+        )
+    for dest, flag, default in sorted(remembered):
+        if isinstance(default, ast.Constant) and default.value is None:
+            continue
+        stated = ast.unparse(default) if default is not None else "nothing"
+        report.refuse(
+            f"tools/console.py:{flag}",
+            f"defaults to {stated} and its value is written to `pending.json` as `{dest}`, so a "
+            f"caller who names {stated} and a caller who names nothing are the same argument — and "
+            "the restore that reads the record back cannot tell which it is looking at, so the "
+            "window silently ignores whichever the caller asked for. Default it to `None`, which "
+            "no caller can name, and resolve it where the record and the declaration are both in "
+            "hand",
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check that the vehicle definition composes.")
     parser.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent))
@@ -16885,6 +17065,11 @@ def main(argv: list[str] | None = None) -> int:
     # rest of this function derived before it can check the node count the front table gives.
     check_readme_figures(root, documents, registry, schedule, report)
     check_tool_docstrings(root, documents, schedule, report)
+    # A tool's parser is a declaration too, and this one declares what a *run* is: the three values
+    # the console remembers and a caller can also name. It is checked after the corpus for the
+    # reason the tool checks are: a refusal here is about a file that describes the vehicle rather
+    # than about the vehicle, and the reader wants the corpus findings first.
+    check_console_flags(root, report)
     # The debts themselves, held against the declarations they are about: an entry that says it is
     # answered, or that names a coupling edge which has stopped owing, is counted above by the
     # walks that count every `open_debts` entry and is refused here.
