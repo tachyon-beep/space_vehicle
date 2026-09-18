@@ -58,6 +58,7 @@ import json
 import math
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -2870,6 +2871,279 @@ def roots(world: World, gaps: list[Gap]) -> list[Gap]:
     return out
 
 
+@dataclass(frozen=True)
+class Phase:
+    """One row of the mission's clock: a phase and the half-open tick range it owns."""
+
+    id: str
+    first_tick: int
+    last_tick: int
+    starts_at_h: float
+    duration_h: float
+
+    def __str__(self) -> str:
+        return f"{self.id} [{self.first_tick:,}, {self.last_tick:,})"
+
+
+def mission_ladder(world: World) -> list[Phase]:
+    """The declared phases as tick ranges — the mission's clock, derived in one place.
+
+    **The ladder has been declared since the mission landed and no run has ever read it.**
+    `check_mission` sums the durations, `--blackout` walks them to place the occultation, and the
+    crew test asks which phase a station is occupied in — but `step()` takes a `dt` and no MET, so
+    nothing in the plant has ever known *when* it was. That is the gap this closes, and it is the
+    one a mission-length run cannot be built without: a rule gated on the phase, a burn that happens
+    during `descent`, a valve that opens at `surface`, all need a tick's phase before they need
+    anything else.
+
+    The boundaries are integers because `check_mission` refuses a phase whose `starts_at_h` is not a
+    whole number of ticks — a boundary between two ticks has no tick it belongs to, and rounding it
+    would quietly make every phase the wrong length. The ladder is derived from `starts_at_h` rather
+    than from a running sum of durations for the same reason the field exists: the two are held
+    against each other, and this one is absolute.
+    """
+    tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
+    if not isinstance(tick_hz, (int, float)) or tick_hz <= 0:
+        raise Unconfigured("mission.yaml", "declares no numeric tick_hz, so there is no clock")
+    ladder: list[Phase] = []
+    for row in (world.documents.get("mission.yaml") or {}).get("phases") or []:
+        starts = row.get("starts_at_h")
+        duration = row.get("duration_h")
+        if not isinstance(starts, (int, float)) or not isinstance(duration, (int, float)):
+            raise Unconfigured(
+                f"mission.yaml:phase {row.get('id')}",
+                "declares no numeric `starts_at_h` and `duration_h`, so its ticks cannot be derived",
+            )
+        first = int(round(float(starts) * 3600.0 * float(tick_hz)))
+        last = int(round((float(starts) + float(duration)) * 3600.0 * float(tick_hz)))
+        ladder.append(Phase(str(row.get("id")), first, last, float(starts), float(duration)))
+    if not ladder:
+        raise Unconfigured("mission.yaml", "declares no phases, so there is no mission to run")
+    return ladder
+
+
+def mission_ticks(world: World) -> int:
+    """The ladder's length in ticks, held against `mission.yaml#total_ticks`.
+
+    Two declarations of one length, and the linter re-derives the second from `total_duration_h` —
+    so a ladder that does not tile the mission exactly is a disagreement between three numbers that
+    all claim to be the mission's size. A run is the reader that has to care: it advances ticks, and
+    a ladder with a gap in it would leave ticks that belong to no phase.
+    """
+    ladder = mission_ladder(world)
+    end = ladder[-1].last_tick
+    declared = (world.documents.get("mission.yaml") or {}).get("total_ticks")
+    if isinstance(declared, int) and declared != end:
+        raise Unconfigured(
+            "mission.yaml:total_ticks",
+            f"declares {declared:,} ticks and the phase ladder ends at {end:,}. A run advances "
+            "ticks, so the two have to be the same number or the mission it flies is not the one "
+            "the ladder declares",
+        )
+    for previous, phase in zip(ladder, ladder[1:], strict=False):
+        if phase.first_tick != previous.last_tick:
+            raise Unconfigured(
+                f"mission.yaml:phase {phase.id}",
+                f"starts at tick {phase.first_tick:,} and {previous.id} ends at "
+                f"{previous.last_tick:,}, so the ticks between them belong to no phase",
+            )
+    return end
+
+
+def mission_phase(ladder: list[Phase], tick: int) -> Phase | None:
+    """The phase a tick falls in, or `None` past the end of the ladder."""
+    for phase in ladder:
+        if phase.first_tick <= tick < phase.last_tick:
+            return phase
+    return None
+
+
+@dataclass
+class MissionGap:
+    """One state's failure across a run, accumulated rather than repeated.
+
+    **A `Gap` per state per tick is not a record, it is a denial of service.** `step()` appends one
+    for every state it could not advance and a tick refuses about a hundred of them, so a diagnostic
+    list that `--readiness` passes for a single tick becomes tens of thousands of records after a
+    few hundred and three and a half billion for the declared mission. The shape a *run* needs is
+    the one a reader wants anyway: which tick a state first failed on, how many ticks it failed for,
+    and why — because the first tick is what tells a declaration debt apart from a trajectory one.
+    """
+
+    state: str
+    first_tick: int
+    ticks: int
+    owed: str
+
+    @property
+    def late(self) -> bool:
+        """Did this state advance at t=0 and stop later? The only failures a mission run adds."""
+        return self.first_tick > 0
+
+
+US_PER_TICK_BUDGET = 8.7
+
+
+def report_mission(world: World, ticks: int, *, repeats: int = 1) -> int:
+    """Run the declared mission for `ticks` ticks and report what the run says.
+
+    **This is the run `--readiness` and `--determinism` both are not.** `--readiness` walks one tick
+    to classify the work; `--determinism` walks fifty to compare two of them. Neither has a clock,
+    so neither can say which phase it is in, and neither can tell a state that never advanced from
+    one that advanced for a while and stopped. What this adds is the ladder, one accumulator per
+    state, and the arithmetic of running the whole thing — reported rather than hidden, because
+    `plant.md` §10 prices the 34,560,000-tick mission at 8.7 µs/tick and calls that "not a Python
+    number", and a run mode that quietly refused to finish would be the same silence in a new place.
+
+    Three claims are made and each is checked rather than asserted:
+
+      * **the tick and the worklist agree** — the states a real tick advanced are the states
+        `--build-order` calls *ready now*, which is the property the README has promised since
+        round 58 and which nothing outside the test file has ever compared;
+      * **the run is deterministic** — `repeats` independent runs, compared by the §6 compare-point
+        of every tick, on the same declared tick rate;
+      * **the gap list is the configuration's, not the trajectory's** — every failure's first tick
+        is reported, so a state that stops later is visible as one.
+    """
+    if ticks <= 0:
+        raise Unconfigured("--mission", f"asked for {ticks} ticks, which is no run at all")
+    ladder = mission_ladder(world)
+    total = mission_ticks(world)
+    tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
+    dt = tick_seconds(world)
+    print(
+        f"the mission: {len(ladder)} phases, {ladder[-1].starts_at_h + ladder[-1].duration_h:g} h, "
+        f"{total:,} ticks at {float(tick_hz):g} Hz"
+    )
+    print(
+        f"running ticks 0 … {ticks:,} — MET 0.000 h to {ticks * dt / 3600:.3f} h, "
+        f"phase {getattr(mission_phase(ladder, 0), 'id', '?')}"
+    )
+    runs: list[list[str]] = []
+    gaps: dict[str, MissionGap] = {}
+    advanced: set[str] = set()
+    per_phase: dict[str, int] = {}
+    started = time.perf_counter()
+    for run_index in range(max(1, repeats)):
+        values = initial_values(world)
+        digests: list[str] = []
+        for tick in range(ticks):
+            recorded: list[Gap] = []
+            values = step(world, values, dt, recorded)
+            # The compare-point is `plant.md` §6's, and it is taken only when there is a second run
+            # to compare it with: hashing the whole map is a fifth of the tick's own cost.
+            if repeats > 1:
+                digests.append(state_hash(values))
+            if run_index:
+                continue
+            # **The accumulator walks the gaps, not the states.** The first version iterated all
+            # 139 states every tick to find the ones that did *not* fail, which cost fifteen times
+            # the tick it was measuring — a diagnostic that changes the number it reports. The
+            # worklist claim is a claim about t=0, so the advanced set is taken once, on the first
+            # tick, which is also the only tick it is about.
+            if tick == 0:
+                advanced = {state.id for state in world.states} - {
+                    gap.state.id for gap in recorded
+                }
+            phase = mission_phase(ladder, tick)
+            label = phase.id if phase else "past the ladder"
+            per_phase[label] = per_phase.get(label, 0) + 1
+            for gap in recorded:
+                entry = gaps.get(gap.state.id)
+                if entry is None:
+                    gaps[gap.state.id] = MissionGap(gap.state.id, tick, 1, gap.owed)
+                else:
+                    entry.ticks += 1
+        runs.append(digests)
+    elapsed = time.perf_counter() - started
+    per_run = elapsed / max(1, repeats)
+    micros = per_run / ticks * 1e6
+    print(
+        f"  {ticks:,} tick(s) x {max(1, repeats)} run(s) in {per_run:.3f} s per run "
+        f"= {micros:,.0f} µs/tick"
+    )
+    # **The arithmetic plant.md §10 prices, measured rather than quoted.** The budget there is an
+    # 8.7 µs/tick target for the declared mission; what this reports is what the reference plant
+    # actually costs, and the ratio is the honest distance between them. It is printed because a run
+    # mode that silently refuses to finish the mission is the same silence as a mode that pretends.
+    full = total * per_run / ticks
+    print(
+        f"  the declared mission is {total:,} ticks, which at this rate is {full / 3600:.2f} h of "
+        f"wall clock — {micros / US_PER_TICK_BUDGET:,.0f}x the {US_PER_TICK_BUDGET:g} µs/tick "
+        "budget plant.md §10 sets"
+    )
+    print()
+    print("phases this run covered:")
+    for phase in ladder:
+        covered = per_phase.get(phase.id, 0)
+        if covered:
+            print(f"  {phase.id:24} {covered:>12,} tick(s)  of {phase.last_tick - phase.first_tick:,}")
+    if per_phase.get("past the ladder"):
+        print(f"  {'past the ladder':24} {per_phase['past the ladder']:>12,} tick(s)")
+    # **What the bound costs, stated rather than left for the reader to work out.** The first phase
+    # is 13,140,000 ticks, so no bounded run reaches a second one — and a run that covers one phase
+    # of eight is a statement about `translunar_coast` and not about the mission. The distance to the
+    # next boundary is printed in ticks and in the wall clock this machine measured, so the next
+    # `--ticks` is a decision rather than a guess.
+    ahead = [phase for phase in ladder if phase.first_tick >= ticks]
+    if ahead:
+        boundary = ahead[0]
+        print(
+            f"  the next boundary is {boundary.id} at tick {boundary.first_tick:,} — "
+            f"{boundary.first_tick - ticks:,} ticks further on, about "
+            f"{(boundary.first_tick - ticks) * per_run / ticks / 3600:.2f} h of wall clock"
+        )
+    else:
+        print("  this run covers the whole ladder")
+    print()
+    if runs and len(runs) > 1:
+        same = runs[0] == runs[1] and all(run == runs[0] for run in runs[2:])
+        print(
+            f"determinism: {max(1, repeats)} independent runs, compare-points "
+            f"{'identical' if same else 'DIVERGED'} on every tick"
+        )
+    # **The claim the README has made since round 58, checked here for the first time outside the
+    # test file.** `--build-order`'s ready bucket is defined as "the states a real tick advances",
+    # because `build_order` runs one. If a *different* tick — a later one, with the map in a
+    # different state — advanced a different set, the bucket would be a claim about t=0 wearing the
+    # name of a claim about the mission.
+    ready = {state.id for state in build_order(world)["ready"]}
+    if ready == advanced:
+        print(
+            f"the tick and the worklist agree: the {len(ready)} states `--build-order` calls ready "
+            "are exactly the states this tick advanced"
+        )
+    else:
+        print(
+            f"the tick and the worklist DISAGREE: build order {len(ready)}, tick {len(advanced)}; "
+            f"only in the worklist {sorted(ready - advanced)[:5]}, "
+            f"only in the tick {sorted(advanced - ready)[:5]}"
+        )
+    print()
+    late = sorted((entry for entry in gaps.values() if entry.late), key=lambda e: e.first_tick)
+    print(
+        f"gaps: {len(gaps)} state(s) could not advance, {len(late)} of them for the first time "
+        "after tick 0"
+    )
+    if late:
+        print("  the time-dependent ones, by the tick they start:")
+        for entry in late[:10]:
+            print(f"    tick {entry.first_tick:>10,}  {entry.state:28} {entry.owed[:70]}")
+    else:
+        print(
+            "  every one of them failed on tick 0 and on every tick after it, so the gap list is "
+            "the *declaration's* and not the trajectory's — which is what makes a one-tick worklist "
+            "a statement about the mission"
+        )
+    order = {node: index for index, node in enumerate(world.schedule)}
+    by_schedule = sorted(gaps.values(), key=lambda e: (order.get(e.state, -1), e.state))
+    for entry in by_schedule[:10]:
+        print(f"  {entry.state:28} {entry.ticks:>12,} of {ticks:,} ticks  {entry.owed[:64]}")
+    if len(gaps) > 10:
+        print(f"  … and {len(gaps) - 10} more")
+    return 0
+
+
 def readiness(world: World) -> None:
     """What is ready, what is not, and what the schedule reaches first."""
     ready = [s for s in world.states if not s.owed]
@@ -2999,10 +3273,31 @@ def main(argv: list[str] | None = None) -> int:
         "`plant.md` §6's per-tick state hash, which two equivalent runs must share",
     )
     parser.add_argument(
+        "--mission",
+        action="store_true",
+        help="run the declared mission on its own clock for `--ticks` ticks: the phase ladder as "
+        "tick ranges, one accumulator per state, the measured cost of the whole thing, and the "
+        "three claims a run can check (the worklist agrees, the runs are deterministic, the gaps "
+        "are the declaration's rather than the trajectory's)",
+    )
+    parser.add_argument(
         "--ticks",
         type=int,
         default=50,
-        help="how many ticks `--determinism` walks (default 50, at the declared tick rate)",
+        help="how many ticks `--determinism` and `--mission` walk (default 50). The declared "
+        "mission is 34,560,000 of them, which `--mission` prices before it starts",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="walk the whole declared mission rather than `--ticks`. Refused unless `--anyway` "
+        "is also given, because the reference plant measures in milliseconds per tick and the "
+        "mission is measured in hours of wall clock — see the estimate `--mission` prints",
+    )
+    parser.add_argument(
+        "--anyway",
+        action="store_true",
+        help="accept the measured cost of `--full` and run it",
     )
     parser.add_argument(
         "--closed-gate",
@@ -3238,6 +3533,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.build_order:
         report_build_order(world)
         return 0
+
+    if args.mission:
+        # **The bound is named before the run, not discovered by it.** `--full` walks 34,560,000
+        # ticks, which this plant measures in hours; refusing it by default and printing the
+        # estimate is the difference between a tool that tells you what it costs and one that
+        # appears to hang. `--anyway` is the caller accepting the number it was just shown.
+        ticks = args.ticks
+        if args.full:
+            try:
+                ticks = mission_ticks(world)
+            except Unconfigured as exc:
+                sys.stderr.write(f"the mission cannot be run: {exc}\n")
+                return 3
+            if not args.anyway:
+                # A short calibration, so the number in the refusal is this machine's rather than a
+                # figure from a document.
+                sample = min(200, ticks)
+                started = time.perf_counter()
+                values = initial_values(world)
+                for _ in range(sample):
+                    values = step(world, values, tick_seconds(world), [])
+                rate = (time.perf_counter() - started) / sample
+                sys.stderr.write(
+                    f"--full asks for {ticks:,} ticks. Measured here: {rate * 1e6:,.0f} µs/tick, "
+                    f"so the mission is about {ticks * rate / 3600:.1f} h of wall clock. Pass "
+                    "--anyway to run it, or --ticks N for a bounded run\n"
+                )
+                return 3
+        try:
+            return report_mission(world, ticks, repeats=2 if args.anyway else 1)
+        except Unconfigured as exc:
+            sys.stderr.write(f"the mission cannot be run: {exc}\n")
+            return 3
 
     print(
         f"loaded {len(world.states)} states, {len(world.edges)} edges, "

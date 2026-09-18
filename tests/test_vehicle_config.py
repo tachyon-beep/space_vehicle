@@ -18821,6 +18821,130 @@ def test_the_determinism_view_runs_two_runs_and_says_so(tmp_path):
     assert "provenance basis 'probably' is not one of" in result.stdout, result.stdout[-900:]
 
 
+def test_the_linter_refuses_a_phase_boundary_that_is_not_a_whole_tick(tmp_path):
+    """The ladder is checked against itself and against its total, and neither asks what clock it runs on.
+
+    `check_mission` holds `starts_at_h` against the running sum of the durations, and `total_ticks`
+    is re-derived from `total_duration_h x 3600 x tick_hz`. What none of that asks is whether a
+    boundary is *on the clock the mission runs on*: MET is an integer tick count from the epoch, so
+    a phase beginning at 18,000,001.8 ticks is a phase whose first tick is not a tick. A run has to
+    round it — and then the phase is silently not the length the ladder declares — or carry a
+    fractional clock, and then no timestamp in the vehicle is the integer tick it claims to be.
+
+    **The fixture has to be built carefully, and the first two attempts at it were wrong.** Shifting
+    a duration and leaving `starts_at_h` alone is caught by the *existing* cumulative-sum check, and
+    a shift that is a whole number of ticks (0.01 h is 1,800 of them) is on the grid and correctly
+    composes. The break has to move a boundary by something that is not a tick: 0.00001 h is 1.8
+    ticks at 50 Hz, so `descent` gains one hundred-thousandth of an hour, `surface` loses it, and
+    `surface`'s own `starts_at_h` moves with it — which is what makes the ladder still sum to 192 h
+    and still be a ladder, with one boundary off the grid.
+    """
+    from pathlib import Path as _Path
+
+    import yaml as _yaml
+
+    mission = _yaml.safe_load((VEHICLE / "mission.yaml").read_text())
+    hz = mission["tick_hz"]
+    for phase in mission["phases"]:
+        ticks = phase["starts_at_h"] * 3600 * hz
+        assert ticks == int(ticks), f"{phase['id']} is off the grid in the corpus itself"
+
+    definition = copy_definition(fixture_dir(tmp_path, "phase-grid"))
+    path = definition / "mission.yaml"
+    lines = path.read_text().splitlines(keepends=True)
+    state = {"phase": None}
+    moved = 0
+    for index, line in enumerate(lines):
+        match = re.match(r"^  - id: (\S+)", line)
+        if match:
+            state["phase"] = match.group(1)
+            continue
+        stripped = line.strip()
+        if state["phase"] == "descent" and stripped == "duration_h: 2.5":
+            lines[index] = line.replace("duration_h: 2.5", "duration_h: 2.50001")
+            moved += 1
+        elif state["phase"] == "surface" and stripped == "duration_h: 21.5":
+            lines[index] = line.replace("duration_h: 21.5", "duration_h: 21.49999")
+            moved += 1
+        elif state["phase"] == "surface" and stripped == "starts_at_h: 100.0":
+            lines[index] = line.replace("starts_at_h: 100.0", "starts_at_h: 100.00001")
+            moved += 1
+    assert moved == 3, f"the fixture no longer matches mission.yaml ({moved} edits)"
+    path.write_text("".join(lines))
+
+    result = run_linter(definition)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "mission.yaml:phase surface.starts_at_h" in result.stdout, result.stdout[-900:]
+    assert "which is 18,000,001.8 ticks at 50 Hz" in result.stdout, result.stdout[-900:]
+    # And it is the *only* thing wrong with that copy: the durations still sum to the declared
+    # total, so the refusal is about the grid and not about the ladder's arithmetic.
+    assert "phase durations sum to" not in result.stdout
+    broken = _yaml.safe_load(_Path(path).read_text())
+    assert abs(sum(p["duration_h"] for p in broken["phases"]) - 192.0) < 1e-9
+
+
+def test_the_mission_run_walks_the_ladder_and_accumulates_its_gaps():
+    """The run `--readiness` and `--determinism` both are not: one tick is not a mission.
+
+    `--readiness` walks one tick to classify the work, `--determinism` walks fifty to compare two of
+    them, and neither has a clock — `step()` takes a `dt` and no MET, so nothing in the plant can say
+    which phase it is in. This asserts the four things the mode is for: the ladder is derived from
+    the mission's own declarations, the tick and the worklist agree (the claim the README has made
+    since round 58 and nothing outside the test file had compared), the gaps are *accumulated* — one
+    record per state rather than one per state per tick — and every failure's first tick is reported,
+    which is what tells a declaration debt apart from a trajectory one.
+    """
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    # The clock is the ladder's, and it is the declared one: 192 h at 50 Hz, tiling without a gap.
+    world = plant.load_world(VEHICLE)
+    ladder = plant.mission_ladder(world)
+    assert [phase.id for phase in ladder][:3] == ["translunar_coast", "lunar_orbit", "descent"]
+    assert ladder[0].first_tick == 0
+    assert plant.mission_ticks(world) == 34_560_000
+    for previous, phase in zip(ladder, ladder[1:], strict=False):
+        assert phase.first_tick == previous.last_tick, phase.id
+    assert plant.mission_phase(ladder, 0).id == "translunar_coast"
+    assert plant.mission_phase(ladder, ladder[-1].first_tick).id == "entry"
+    assert plant.mission_phase(ladder, 34_560_000) is None
+
+    result = subprocess.run(
+        [sys.executable, str(VEHICLE / "tools" / "plant.py"), "--mission", "--ticks", "40"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-600:]
+    assert "the mission: 8 phases, 192 h, 34,560,000 ticks at 50 Hz" in result.stdout, result.stdout
+    assert "phase translunar_coast" in result.stdout
+    assert "µs/tick" in result.stdout
+    assert "the tick and the worklist agree" in result.stdout, result.stdout[-900:]
+    # The one state of the fourteen commanded modes that advances, named where a reader can see it.
+    assert "relief_valve_state" not in result.stdout.split("gaps:")[0]
+    # The gap accumulator's shape: the count is the build order's non-ready count, and the
+    # time-dependent ones are named rather than repeated.
+    gapped = re.search(r"gaps: (\d+) state\(s\) could not advance, (\d+) of them", result.stdout)
+    assert gapped, result.stdout[-900:]
+    ready = {state.id for state in plant.build_order(world)["ready"]}
+    assert int(gapped.group(1)) == len(world.states) - len(ready), gapped.group(1)
+    assert int(gapped.group(2)) == 0, "a state that advanced at tick 0 stopped inside 40 ticks"
+
+    # The bound is named before the run: `--full` refuses with the measured cost, not a silent hang.
+    refused = subprocess.run(
+        [sys.executable, str(VEHICLE / "tools" / "plant.py"), "--mission", "--full"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode == 3
+    assert "--full asks for 34,560,000 ticks" in refused.stderr, refused.stderr[-400:]
+    assert "Pass --anyway to run it" in refused.stderr
+
+
 def test_a_state_whose_unit_is_a_rate_computes_a_rate(tmp_path):
     """Two states computed a coefficient under a rate's unit, and the tank that drains read it.
 

@@ -15402,6 +15402,39 @@ def check_mission(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) 
             "mission.yaml",
             f"phase durations sum to {durations:g} h but total_duration_h is {total:g} h",
         )
+    # --------------------------------------------------------------------------------------
+    # **A phase boundary that falls between two ticks has no tick it belongs to.**
+    #
+    # The ladder is declared twice — durations and absolute starts — and the two are held together,
+    # and `total_ticks` is re-derived from `total_duration_h`. What none of that asks is whether a
+    # boundary is *on the clock the mission actually runs on*. MET is an integer tick count from the
+    # epoch (`check_met_clock` says so, and `met_epoch_utc` is what makes it absolute), so a phase
+    # starting at 18,000,001.8 ticks is a phase whose first tick is not a tick. A run has to either
+    # round it — and then the phase is not the length it declares, silently — or carry a fractional
+    # clock, and then MET is not the integer every timestamp in the vehicle is built on.
+    #
+    # The check is exact and it is one multiply: `starts_at_h x 3600 x tick_hz` is an integer, or the
+    # boundary is off the grid and the corpus says by how much. It went unnoticed because every
+    # duration in this mission is a whole number of ticks — 73.0 h is 13,140,000 of them — and a
+    # property that holds for every value in a file is a property nobody has had to write down.
+    # --------------------------------------------------------------------------------------
+    tick_hz = doc.get("tick_hz")
+    if isinstance(tick_hz, (int, float)) and tick_hz > 0:
+        for phase in phases:
+            starts = phase.get("starts_at_h")
+            if not isinstance(starts, (int, float)):
+                continue
+            ticks = float(starts) * 3600.0 * float(tick_hz)
+            if abs(ticks - round(ticks)) < 1e-6:
+                continue
+            report.refuse(
+                f"mission.yaml:phase {phase.get('id')}.starts_at_h",
+                f"is {starts:g} h, which is {ticks:,.1f} ticks at {tick_hz:g} Hz. MET is an integer "
+                "tick count from the epoch, so a phase boundary that falls between two ticks has no "
+                "tick it belongs to: a run either rounds it — and then the phase is not the length "
+                "the ladder declares — or carries a fractional clock, and then no timestamp in the "
+                "vehicle is the integer tick it says it is",
+            )
     if doc.get("met_epoch_utc") is None:
         report.debt(
             "mission.yaml", "met_epoch_utc is unset, so every timestamp is relative to nothing"

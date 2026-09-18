@@ -41,6 +41,8 @@ python3 tools/plant.py --frame            # one telemetry frame in the declared 
 python3 tools/plant.py --state            # one state.json: the mirror and the capability snapshot
 python3 tools/plant.py --crew             # who is at which station, and which phases cannot say
 python3 tools/plant.py --blackout         # the second clock, and the LM's opposite situation
+python3 tools/plant.py --mission --ticks 500   # the mission on its own clock, and what stops it
+python3 tools/plant.py --mission --full       # refused with the measured cost, unless --anyway
 python3 tools/plant.py --state --closed-gate reserve_floor_water_cooling_enable
 python3 tools/generate_help.py            # HELP.md, from the command registries
 
@@ -17071,6 +17073,81 @@ next command, not after.
 | build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
 | `report.refuse` call sites | 800 | **801** |
 | tests | 316 | **317** |
+
+## The mission had a ladder and no run had ever had a clock
+
+`mission.yaml` declares eight phases summing to 192.0 h at a declared 50 Hz, and `total_ticks` —
+34,560,000 — is re-derived from them. Three tools read the ladder: `check_mission` sums it,
+`--blackout` walks it to place the occultation, and the crew test asks which phase a station is
+occupied in. **None of them ticks.** `step()` takes a `dt` and no MET, so nothing in the plant could
+say *when* it was: `--readiness` walked one tick at t=0 and `--determinism` walked fifty, and a rule
+gated on the phase — a valve that opens at `surface`, a burn that happens during `descent` — had
+nothing to read.
+
+### The clock, and the boundary that had no tick
+
+`mission_ladder` derives each phase's half-open tick range from `starts_at_h` and the declared rate,
+`mission_ticks` holds the end of the ladder against `total_ticks` and refuses a ladder with a gap in
+it, and `mission_phase` answers which phase a tick falls in. The boundaries are integers because
+**they have to be** — and that turned out to be an unchecked property of the corpus.
+
+`check_mission` holds `starts_at_h` against the running sum of the durations, and `total_ticks` is
+re-derived from `total_duration_h`. Neither asks whether a boundary is *on the clock the mission runs
+on*, and MET is an integer tick count from the epoch. A phase beginning at 18,000,001.8 ticks has no
+tick it belongs to: a run either rounds it — and then the phase silently is not the length the ladder
+declares — or carries a fractional clock, and then no timestamp in the vehicle is the integer tick it
+claims to be. The refusal is one multiply, `starts_at_h × 3600 × tick_hz` an integer, and it fires on
+a copy with a boundary 1.8 ticks off the grid.
+
+**It went unnoticed because every duration in this mission is a whole number of ticks** — 73.0 h is
+13,140,000 of them — and a property that holds for every value in a file is a property nobody has had
+to write down. Building the fixture took three attempts for the same reason: shifting a duration and
+leaving `starts_at_h` alone is caught by the cumulative-sum check, and a shift that is a whole number
+of ticks (0.01 h is 1,800 of them) is on the grid and correctly composes.
+
+### The run, and what it costs
+
+```sh
+python3 tools/plant.py --mission --ticks 500     # 1,337 µs/tick here; 500 ticks in 0.67 s
+python3 tools/plant.py --mission --full          # refused: 34,560,000 ticks is ~13 h of wall clock
+```
+
+`plant.md` §10 prices the declared mission at **8.7 µs/tick** and says in as many words that this "is
+not a Python number". The mode measures instead of quoting: a tick of this reference plant costs
+**1,337 µs** here, so the mission is about **13 hours** of wall clock — 154× the budget. `--full`
+refuses by default and prints that estimate, measured on this machine with a 200-tick calibration,
+rather than appearing to hang; `--anyway` is the caller accepting the number it was just shown.
+
+The first phase is 13,140,000 ticks, so **no bounded run reaches a second phase**, and the mode says
+so: it prints the next boundary in ticks and in the measured wall clock, which is what makes the next
+`--ticks` a decision rather than a guess.
+
+### What the run says
+
+| claim | answer |
+|---|---|
+| the tick and the worklist agree | **yes** — the 37 states `--build-order` calls ready are exactly the 37 a real tick advanced |
+| the gaps are the declaration's, not the trajectory's | **yes** — all 102 failed on tick 0 and on every tick after |
+| the run is deterministic | `--determinism`'s business, unchanged: 12 of 12 compare-points identical |
+
+The first is the property the README has promised since round 58 and nothing outside the test file
+had ever compared; the second is what makes a one-tick worklist a statement about the mission rather
+than about t=0. **And the second is why this round moves no state**: a run that covers one phase of
+eight and finds no time-dependent failure has told the truth about the ladder, not about the vehicle.
+
+**One mistake, and the run measured itself into it.** The gap accumulator's first version walked all
+139 states every tick to find the ones that did *not* fail, which cost **20,481 µs/tick** — fifteen
+times the tick it was measuring, so the tool's headline number was mostly the tool. The accumulator
+walks the gaps now and takes the advanced set once, on the tick the worklist claim is about.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 286 | 286 |
+| build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
+| `report.refuse` call sites | 801 | **802** |
+| tests | 317 | **319** |
 
 ## The invariants, and which of them are enforced
 
