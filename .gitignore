@@ -1,0 +1,16 @@
+# The vehicle's own repository.
+#
+# The configuration, the tools and the referee are source; everything a run produces is not.
+# `.scratch/` is where a round verifies itself by breaking copies — the folder's law is that a
+# refusal nobody has seen fire is indistinguishable from a check that always passes, and the
+# verifiers that prove otherwise are scratch by design.
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Round verifiers, and any diode directory a console was pointed at.
+.scratch/
+volumes/

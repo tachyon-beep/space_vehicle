@@ -1,29 +1,33 @@
 # AGENTS.md — the vehicle
 
-This folder is the seed of the vehicle: the far side of the window `space_chassis` deliberately
-does not contain. It lives in this repository only because the separate repository
-`../integration/simulator-design.md` §2 decides on does not exist yet. When it does, **this folder
-moves wholesale**, which is why nothing here may reach back into the chassis.
+This is the vehicle's own repository: the far side of the window `space_chassis` deliberately does
+not contain. It is vendored into `space_chassis` as a git submodule at
+`docs/deep_research/vehicle`, so a checkout of the chassis has a vehicle to run — and a second
+vehicle would be a second submodule beside it, not a second folder in here.
 
-The only interface between the two halves is `docs/diode-contract.md`. Nothing in this folder serves
-the fleet, and none of these tools may be imported by the operator-side services, which are standard
-library only — the tools here need PyYAML, deliberately, and are wired into nothing.
+The only interface between the two halves is `docs/diode-contract.md`, which stays frozen in
+`space_chassis`. Nothing in this repository serves the fleet, and none of these tools may be
+imported by the operator-side services, which are standard library only — the tools here need
+PyYAML, deliberately, and are wired into nothing.
 
-**Paths.** A path starting with `../` or `./` is relative to this folder; anything else is relative
-to the repository root.
+**Paths.** Everything in this repository is relative to its root, which is this folder. The corpus
+and the contract are *outside* it now (`space_chassis`'s `docs/deep_research/` and
+`docs/diode-contract.md`): cite them by name and line, never read them from here, because a suite
+that reads across the repository boundary is a suite that cannot run without the other half.
 
 ## What is input, and what is yours
 
 | | |
 |---|---|
-| **Frozen — read, cite, never edit** | `../apollo_diode.md`, the twelve `../*_diode.md` subsystem specs, `../integration/simulator-design.md`, `../integration/corpus-review.md`, `../integration/review-findings.md`, and `docs/diode-contract.md`. They have not changed since the initial commit, and a round that "fixes" one of them is editing the evidence. |
-| **Yours** | everything in this folder, `tests/test_vehicle_config.py` at the repo root, and the one changelog row per file in `../integration/reconciliation/README.md`. |
+| **Frozen — cite, never edit, never read from here** | `apollo_diode.md`, the twelve `*_diode.md` subsystem specs, `integration/simulator-design.md`, `integration/corpus-review.md`, `integration/review-findings.md`, and `docs/diode-contract.md` — all of them `space_chassis`'s, all unchanged since its initial commit. A round that "fixes" one of them is editing the evidence, and a tool here that *opens* one has broken the boundary the submodule exists to keep. |
+| **Yours** | everything in this repository, `tests/test_vehicle_config.py` included. The one changelog row per file in `space_chassis`'s `integration/reconciliation/README.md` is maintained on that side now: the residue suite there (`tests/test_vehicle_reconciliation.py`) holds the row to what this repository's tools say. |
 
-Where the corpus and the vehicle disagree, the disagreement is *recorded* —
-`../integration/reconciliation/01-conflict-register.md` is where a decision about one goes — and the
-linter cites the line it is disagreeing with. `apollo` supplies the vehicle and the subsystem specs
-supply the per-domain contracts; the rule is an override, not a tie-break, and `corpus-review.md`
-carries the three corrections that make it narrower than it sounds.
+Where the corpus and the vehicle disagree, the disagreement is *recorded* — in
+`space_chassis`'s `integration/reconciliation/01-conflict-register.md` for a decision about the
+vehicle as a whole, and in this repository's own `open_debts` for one it can carry — and the linter
+cites the line it is disagreeing with. `apollo` supplies the vehicle and the subsystem specs supply
+the per-domain contracts; the rule is an override, not a tie-break, and `corpus-review.md` carries
+the three corrections that make it narrower than it sounds.
 
 ## The corpus
 
@@ -44,13 +48,13 @@ equipment, loads), `points.yaml` (published channels and `not_published`), `prof
 (thresholds, profiles, selection), `commands.yaml` (verbs and `not_implemented`), `fault_policy.yaml`
 (faults and coverage). A new domain also has to appear in `coupling.yaml#nodes` — **as node ids, not
 domain names**, because the scheduler sorts nodes and a domain order cannot in general exist — and
-in the canonical vocabulary at `../integration/reconciliation/02-canonical-vocabulary.md`.
+in `space_chassis`'s canonical vocabulary at
+`docs/deep_research/integration/reconciliation/02-canonical-vocabulary.md`, which is checked on that
+side (a vocabulary this repository cannot read is a vocabulary it cannot check).
 
 ## The two gates
 
 ```sh
-cd docs/deep_research/vehicle
-
 python3 tools/check_vehicle.py            # report; exit 0 with declared debts
 python3 tools/check_vehicle.py --strict   # exit 2 while any debt stands — CI and pre-run
 python3 tools/check_vehicle.py --order    # the derived tick order, dependencies first
@@ -59,8 +63,7 @@ python3 tools/plant.py --readiness        # the build order: ready, blocked, and
 python3 tools/plant.py --build-order      # what blocks every state, derived
 python3 tools/generate_help.py            # HELP.md, from the command registries
 
-cd ../../..                               # the repo root
-python3 -m pytest tests/test_vehicle_config.py -q     # the referee's own referee
+python3 -m pytest -q tests/test_vehicle_config.py     # the referee's own referee
 uvx ruff check . --no-cache
 ```
 
@@ -68,10 +71,13 @@ Linter exits: `0` composes (debts and all), `1` refused — something is *wrong*
 `2` `--strict` with unfilled debts, `3` unreadable. **A refusal is fatal always; a debt is a
 deliverable.**
 
-The test file is the gate that matters, and it is a *vehicle* file living at the repo root because
-the suite is one suite. It runs the linter against broken copies: a linter that has never been seen
-to refuse is indistinguishable from a linter that always passes. Run the whole file before you
-commit — it is the only thing that runs every refusal.
+The test file is the gate that matters, and it lives in this repository at
+`tests/test_vehicle_config.py`. It runs the linter against broken copies: a linter that has never
+been seen to refuse is indistinguishable from a linter that always passes. Run the whole file before
+you commit — it is the only thing that runs every refusal. The assertions that need `space_chassis`
+— the frozen corpus, the contract probe, the reconciliation README, the compose service — are *not*
+here; they live in that repository's `tests/test_vehicle_reconciliation.py`, because this suite may
+not read outside its own root.
 
 ## The law of debts
 
@@ -135,7 +141,7 @@ Get the live numbers from the tools rather than from prose:
 python3 tools/check_vehicle.py | tail -2          # channels, edges, chains, phases, debts
 python3 tools/plant.py --readiness                # states, nodes, configured, edges, scalars
 python3 tools/plant.py --build-order              # the four buckets
-grep -c "^def test_" ../../../tests/test_vehicle_config.py
+grep -c "^def test_" tests/test_vehicle_config.py
 ```
 
 ## The traps, in the order they have bitten

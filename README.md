@@ -1,14 +1,18 @@
 # vehicle/
 
-The seed of the vehicle — the far side of the window that `space_chassis` deliberately does
-not contain. It lives here because the separate repository `integration/simulator-design.md`
-§2 decides on does not exist yet; when it does, this folder moves wholesale.
+The vehicle: the far side of the window that `space_chassis` deliberately does not contain. It is
+its own repository, vendored into `space_chassis` as a git submodule at `docs/deep_research/vehicle`
+so that a checkout of the chassis has a vehicle to run — and a second vehicle is a second submodule
+beside it rather than a second folder in here.
 
-The corpus in the parent folder describes **what a domain reports and accepts**. It does not
-describe what a domain *does*: there is no mass, no inertia, no thrust, no Isp, no mission
-duration and no integrator anywhere in sixteen thousand lines (`integration/corpus-review.md`
-§3 and §6). This folder is where those things are written down once, with their provenance
-attached, so that a plant can be built against them and a run can be interpreted afterwards.
+The corpus it was built from stays in `space_chassis` (`docs/deep_research/*_diode.md`,
+`integration/simulator-design.md`, `integration/corpus-review.md`), and so does
+`docs/diode-contract.md`, the one interface the two halves share. The corpus describes **what a
+domain reports and accepts**; it does not describe what a domain *does*: there is no mass, no
+inertia, no thrust, no Isp, no mission duration and no integrator anywhere in sixteen thousand lines
+(`integration/corpus-review.md` §3 and §6). This repository is where those things are written down
+once, with their provenance attached, so that a plant can be built against them and a run can be
+interpreted afterwards. Nothing here reads across the boundary: the corpus is *cited*, never opened.
 
 | File | What it is |
 |---|---|
@@ -47,18 +51,19 @@ python3 tools/faults.py --seed 20260912 --posture degraded  # x5, and one latent
 python3 tools/faults.py --check                             # adding a fault moves no other's events
 python3 tools/faults.py --list                              # every fault, its kind and its seeding
 
-# the vehicle's side of the frozen window, and the repository's own instrument against it
+# the vehicle's side of the frozen window, and the operator side's instrument against it
 python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --init
 python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --cycles 300 --poll 0.2
-python3 ../../../contract/diode_probe.py --diode-dir .scratch/diode --slug vehicle --poll-seconds 1
+# ... and from a *space_chassis* checkout, where the probe lives:
+#   python3 contract/diode_probe.py --diode-dir docs/deep_research/vehicle/.scratch/diode \
+#       --slug vehicle --poll-seconds 1
 ```
 
-**The probe is one level out of this folder**, and the path says so: `contract/` is the repository's,
-not the vehicle's, because `docs/diode-contract.md` is the only thing the two halves share and the
-probe is the operator side's instrument against it. Run it from here with the path above, or from the
-repository root as `python3 contract/diode_probe.py --diode-dir
-docs/deep_research/vehicle/.scratch/diode --slug vehicle --poll-seconds 1` — `--diode-dir` is
-relative to wherever you stand, so the two forms differ in more than the script path.
+**The probe is not in this repository**, and the path says so: `contract/diode_probe.py` is
+`space_chassis`'s, because `docs/diode-contract.md` is the only thing the two halves share and the
+probe is the operator side's instrument against it. The two lines above are the vehicle's half; the
+commented third is how the operator side runs the instrument against it, and `--diode-dir` is
+relative to wherever you stand, so the mount path differs between the two.
 
 **And it needs a console that is still running.** The three lines are three commands, not three steps
 of one: `--init` creates the directory and stops, the second *is* the window, and the probe has to

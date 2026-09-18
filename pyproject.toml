@@ -1,0 +1,28 @@
+[project]
+name = "aurora-vehicle"
+version = "0.1.0"
+description = "The vehicle: the far side of the diode window — configuration, reference plant, linter and referee"
+requires-python = ">=3.12"
+
+# The tools need PyYAML and nothing else, deliberately: they are wired into nothing, and the
+# operator-side services they must never gain a dependency from are standard library only.
+dependencies = ["PyYAML"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".scratch"]
+
+[tool.ruff.lint]
+# E501 is off because the reasoning lives in module docstrings and comments, and the prose reads
+# worse wrapped.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["error::DeprecationWarning"]
