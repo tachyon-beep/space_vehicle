@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 274 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
-and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
-a real tick advances **41** of the 139 states, and the build order's **41** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 274 declared debts
+and every one of them named. **107 of the 139 states are fully configured and 32 carry a debt**, and
+a real tick advances **45** of the 139 states, and the build order's **45** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -226,14 +226,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **275** is every obligation the linter can name:
-**201** literal `UNCONFIGURED` scalars and **74** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **274** is every obligation the linter can name:
+**197** literal `UNCONFIGURED` scalars and **77** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **201** the plant
+the missing charging efficiency, the pump-speed conversion). The **197** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 201 is the linter's 201 **plus** the graph's unset edge
+`coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1832,8 +1832,8 @@ their producer is missing has not moved them.
 ```
 139 states, by what blocks them:
 
-    41   29 %  ready now — the states a real tick advances
-    34   24 %  owes a value — the cheapest to close, and the debt count already tracks them
+    45   32 %  ready now — the states a real tick advances
+    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     49   35 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -17525,6 +17525,76 @@ and says why.
 
 **Three states left *owes a rule* without a line of rule code being written**, which is the same
 result round 67 had for fourteen: the rule was the hold, and what the states owed was a declaration.
+
+## The launch state is declared once, and thirteen owed positions became four plus nine
+
+The round that landed the commanded modes asked all fourteen for a starting position. One was
+sourced — `relief_valve_state`, from its own *"normally closed, with an 'unexpected opening'
+event"* — and **thirteen were left owed**, because the corpus publishes vocabularies and not launch
+positions.
+
+Four of those thirteen share one reason, and it is the mission's own start rather than a
+measurement:
+
+> **a machine with no commanded burn is `off`, and a guidance mode with no burn in progress is
+> `coast`.**
+
+`phases[0]` is `translunar_coast` and `delta_v_budget`'s first burn is hours after the epoch, so no
+engine has been commanded and no manoeuvre is in progress. It is a decision about *this mission*,
+which is why it is declared once in `mission.yaml#launch_state` rather than four times as a
+`chosen` reason on each state — four sentences pretending to be one decision is how the next reader
+gets it wrong.
+
+```yaml
+launch_state:
+  reason: >-
+    the mission begins at the pad: `phases[0]` is `translunar_coast` and the first burn in
+    `delta_v_budget` is hours after the epoch ...
+  states:
+    aps_state: "off"
+    dps_state: "off"
+    sps_state: "off"
+    guidance_mode: coast
+```
+
+### Quoted, because YAML reads a bare `off` as a boolean
+
+`check_boolean_words` refuses a word the parser took as a value, and this is the first declaration
+in the corpus where the word **is** the value: `off` is a member of all three engines' vocabularies,
+and the parser's `False` is not. The block was written with bare `off`s first and the parse said so.
+
+### The join is refused in both directions
+
+Two files, one question — the decision is the mission's and the value is the state's — which is the
+shape this folder finds drifted, so the check refuses both ways: a state the block names must
+declare that value, and a state whose `initial_provenance` cites the block must be **named in it**. A
+state citing a decision that does not mention it is a citation nothing holds.
+
+### The nine that stay owed, and why that is the round's other half
+
+| still owed | the question the corpus does not answer |
+|---|---|
+| `cabin_regulator_position`, `bus_tie_closed` | which regulator mode and which tie position the vehicle launches in |
+| `comm_mode`, `antenna_selection`, `telemetry_rate` | the link mode, the antenna, and which of two priced telemetry profiles the mission opens on |
+| `breaker_panel`, `hatch_state` | every breaker's and every hatch's position at the epoch |
+| `computer_mode`, `mode` | whether the guidance computer is `idle` or `run`, and the RCS's starting mode |
+
+Each keeps its `UNCONFIGURED` and its note. **`off` is not a plausible number for any of them** —
+that is the whole reason the block covers four and not thirteen.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 278 | **274** |
+| build order · ready now | 41 | **45** |
+| build order · owes a value | 34 | **30** |
+| build order · owes an edge / rule | 15 · 49 | 15 · 49 |
+| a real tick advances | 41 of 139 | **45 of 139** |
+| states fully configured | 103 / 139 | **107 / 139** |
+| UNCONFIGURED scalars | 201 | **197** |
+| `report.refuse` call sites | 809 | **814** |
+| tests | 327 | **328** |
 
 ## The invariants, and which of them are enforced
 

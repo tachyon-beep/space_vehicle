@@ -410,14 +410,11 @@ state:
     node: guidance
     method: discrete
     unit: "enum[coast,burn,landing,rendezvous,alignment,free_drift]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the guidance mode at MET 0. `apollo_diode.md:147`'s vocabulary is here and no source gives the
-      mode the vehicle launches in. `coast` is what the mission's own ladder implies — the first
-      burn in `mission.yaml#delta_v_budget` is hours after the epoch — and *implies* is the
-      inference this field exists to refuse rather than to make. What would close it: the guidance
-      section's launch configuration, or one decision that a vehicle with no burn in progress is
-      in `coast`
+    initial: "coast"
+    initial_provenance:
+      basis: derived
+      relation: "the vehicle at MET 0, from `mission.yaml#launch_state`: the mission begins at the pad, so no engine has been commanded and no guidance manoeuvre is in progress"
+      source: mission.yaml:launch_state
     moved_by:
       - "command:set_guidance_mode"
     dwell:

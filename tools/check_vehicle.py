@@ -16150,6 +16150,69 @@ def check_crew_bindings(
             )
 
 
+def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> None:
+    """**One decision about MET 0, held in both directions.** `mission.yaml#launch_state` declares the
+    machines the mission's own start settles — the three engines are `off` and the guidance mode is
+    `coast`, because no burn has been commanded — and each state's `initial` cites it. The two are
+    written in two files for the usual reason (the decision is the mission's, the value is the
+    state's), which is exactly the shape this folder finds drifted: a value edited in one place and
+    left standing in the other.
+
+    So both directions are refused: a state the block names must declare that value, and a state
+    whose `initial_provenance` cites the block must be named in it. A state that cites it and is
+    absent would be claiming a decision that does not mention it; a state it names and that declares
+    a different value would be a second answer to the one question.
+    """
+    block = mission.get("launch_state") or {}
+    states = block.get("states")
+    if states is None:
+        return
+    if not isinstance(states, dict) or not states:
+        report.refuse(
+            "mission.yaml:launch_state",
+            f"declares `states` as {states!r}, which names no machine",
+        )
+        return
+    if not block.get("reason"):
+        report.refuse(
+            "mission.yaml:launch_state",
+            "declares no `reason`. A launch position no source publishes is a decision, and the "
+            "reason is what separates it from a number somebody typed",
+        )
+    declared: dict[str, dict[str, Any]] = {}
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                declared[str(state["id"])] = state
+    for sid, value in sorted(states.items()):
+        state = declared.get(str(sid))
+        if state is None:
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"names {sid!r}, which is not a state of any domain",
+            )
+            continue
+        if str(state.get("initial")) != str(value):
+            report.refuse(
+                f"domains/{path.name}:state {sid}",
+                f"declares `initial: {state.get('initial')!r}` and `mission.yaml#launch_state` "
+                f"makes it {value!r}. The decision is declared once, in the mission, and this state "
+                "is one of the machines it is about",
+            )
+    for sid, state in sorted(declared.items()):
+        provenance = state.get("initial_provenance") or {}
+        if str(provenance.get("source") or "") != "mission.yaml:launch_state":
+            continue
+        if sid not in states:
+            report.refuse(
+                f"domains/{path.name}:state {sid}",
+                "cites `mission.yaml:launch_state` as where its starting position comes from, and "
+                f"that block does not name it (it names {sorted(states)}). A state claiming a "
+                "decision that does not mention it is a citation nothing holds",
+            )
+
+
 def check_mission_bindings(
     channels: dict[str, Any],
     mission: dict[str, Any],
@@ -17481,14 +17544,22 @@ def main(argv: list[str] | None = None) -> int:
             check_propulsion_bindings(root, vehicle, report)
             if channels is not None:
                 check_mission_bindings(channels, mission, registry, report, vehicle)
-                check_crew_bindings(
-                    mission,
-                    vehicle,
-                    registry,
-                    report,
-                    {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
-                    crew_station_vocabulary(root),
-                )
+            # **Inside the `vehicle is not None` guard, which the round's own edit took it out of.**
+            # This walk reads `vehicle["configurations"]`, so an unparseable `vehicle.yaml` made it
+            # raise instead of refusing — and `test_an_unloadable_vehicle_refuses_instead_of_crashing`
+            # is the test that says why: a crash is not a refusal, and the operator sees a traceback
+            # where the linter owes a sentence.
+            check_crew_bindings(
+                mission,
+                vehicle,
+                registry,
+                report,
+                {str(p.get("id")) for p in (channels or {}).get("crew_positions") or []},
+                crew_station_vocabulary(root),
+            )
+        # Outside it: this one reads the mission and the domains, and is about the mission's own
+        # start rather than about the vehicle file.
+        check_launch_state(root, mission, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
         check_landing_site(mission, report)

@@ -55,12 +55,11 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the engine's position at MET 0. The mission begins at the pad with the SPS unburnt, and that is an
-      inference from the phase ladder rather than a published engine sequence of events. What
-      would close it: the SPS's own flight sequence, or one decision taken for all three engines
-      that a machine with no commanded burn is `off`
+    initial: "off"
+    initial_provenance:
+      basis: derived
+      relation: "the vehicle at MET 0, from `mission.yaml#launch_state`: the mission begins at the pad, so no engine has been commanded and no guidance manoeuvre is in progress"
+      source: mission.yaml:launch_state
     moved_by:
       - "command:arm_engine"
     command_value:
@@ -83,11 +82,11 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,standby,armed,ignition,mainstage,shutdown,failed]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the engine's position at MET 0, owed with the SPS's and for the same reason: the vocabulary is
-      `apollo_diode.md`'s and the launch position is not published. What would close it: the
-      descent engine's flight sequence, or the one decision the three engines share
+    initial: "off"
+    initial_provenance:
+      basis: derived
+      relation: "the vehicle at MET 0, from `mission.yaml#launch_state`: the mission begins at the pad, so no engine has been commanded and no guidance manoeuvre is in progress"
+      source: mission.yaml:launch_state
     moved_by:
       - "command:arm_engine"
     command_value:
@@ -115,12 +114,11 @@ state:
     node: engine_main
     method: discrete
     unit: "enum[off,armed,ignition,mainstage,shutdown,failed]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the engine's position at MET 0, owed with the SPS's and the DPS's. The ascent engine is the one
-      whose start matters most — it is the only way off the surface — and that is an argument for
-      sourcing it rather than for guessing it. What would close it: the ascent engine's flight
-      sequence, or the one decision the three engines share
+    initial: "off"
+    initial_provenance:
+      basis: derived
+      relation: "the vehicle at MET 0, from `mission.yaml#launch_state`: the mission begins at the pad, so no engine has been commanded and no guidance manoeuvre is in progress"
+      source: mission.yaml:launch_state
     moved_by:
       - "command:arm_engine"
     command_value:

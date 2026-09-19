@@ -60,6 +60,43 @@ total_duration_provenance:
   relation: "sum of the phase durations below; the linter refuses a build where they disagree"
 
 tick_hz: 50
+
+# --------------------------------------------------------------------------------------
+# **The vehicle at MET 0, for the machines the mission's own start settles.**
+#
+# Four latched machines declare where they begin and had no source for it: the three engines and
+# the guidance mode. `apollo_diode.md` gives each one's vocabulary and no launch position, and the
+# assemblies' flight sequences are not in the corpus. What *is* declared is the mission's start —
+# the phase ladder opens at `translunar_coast` and `delta_v_budget`'s first burn is hours after the
+# epoch — and that settles four of them by one rule rather than four judgements:
+#
+#   **a machine with no commanded burn is `off`, and a guidance mode with no burn in progress is
+#   `coast`.**
+#
+# It is declared once, here, because it is one decision. Thirteen modes were asked for a starting
+# position in the round that landed the commanded family; this covers four of them, `translunar_
+# coast`'s own reading covers none of the other nine (a regulator position, a link mode, an antenna
+# selection and a telemetry profile are choices the corpus does not make), and those stay owed with
+# their reasons named rather than resolved to something plausible.
+#
+# The linter holds every `initial` that cites this block against the value here, and every state
+# this block names against its own `initial`, so the decision cannot be edited in one place and
+# left standing in another.
+# --------------------------------------------------------------------------------------
+launch_state:
+  reason: >-
+    the mission begins at the pad: `phases[0]` is `translunar_coast` and the first burn in
+    `delta_v_budget` is hours after the epoch, so no engine has been commanded and no guidance
+    manoeuvre is in progress
+  # **Quoted, because YAML reads a bare `off` as a boolean.** `check_boolean_words` refuses a word
+  # the parser took as a value, and this is the first declaration in the corpus where the word *is*
+  # the value: `off` is a member of all three engines' vocabularies and the parser's `False` is not.
+  states:
+    aps_state: "off"
+    dps_state: "off"
+    sps_state: "off"
+    guidance_mode: coast
+
 total_ticks: 34560000
 total_ticks_provenance:
   basis: derived
