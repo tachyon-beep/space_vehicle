@@ -187,6 +187,11 @@ phases:
     duration_h: 24.5
     starts_at_h: 73.0
     configurations: [csm_lm_docked, lm_alone_descent]
+    # **One entry per subject, and the second is why the form is per subject.** The phase begins
+    # docked with nobody else anywhere, and ends with the LM away and the CSM waiting with the CM
+    # pilot alone aboard. A phase-wide list cannot say both, and the crew arithmetic needs it to:
+    # the sum over a subject and its co-present vehicles has to be `crew.size`.
+    also_present: [[], [csm_alone_lunar]]
     entry: "LOI complete; the vehicle is in a lunar parking orbit"
     exit: "LM undocked and the descent orbit insertion burn is complete"
     provenance:
@@ -198,7 +203,7 @@ phases:
     duration_h: 2.5
     starts_at_h: 97.5
     configurations: [lm_alone_descent]
-    also_present: [csm_alone_lunar]   # the CSM waits in lunar orbit while the LM descends, with the CM pilot alone aboard: `csm_alone` is the post-jettison vehicle and carries all three
+    also_present: [[csm_alone_lunar]]   # the CSM waits while the LM descends, with the CM pilot alone aboard: `csm_alone` is the post-jettison vehicle and carries all three
     entry: "LM undocked, DOI complete, perilune at the descent-orbit altitude; the CSM is on a separate orbit"
     exit: "landing contact, or an abort to the ascent stage"
     provenance:
@@ -210,7 +215,9 @@ phases:
     duration_h: 21.5
     starts_at_h: 100.0
     configurations: [lm_alone_descent, lm_ascent_stage]
-    also_present: [csm_alone_lunar]   # the CSM waits through the whole surface stay with the CM pilot alone aboard
+    # The same co-present set for both subjects, and it is still written twice: one entry per
+    # subject is the form, and a shorthand for "the same again" would be a second way to say it.
+    also_present: [[csm_alone_lunar], [csm_alone_lunar]]
     entry: "landing contact; the descent engine is off and the LM is stable"
     exit: "ascent engine ignition, or a decision to abandon the surface"
     provenance:
@@ -222,6 +229,9 @@ phases:
     duration_h: 3.5
     starts_at_h: 121.5
     configurations: [lm_ascent_stage, csm_lm_ascent_docked]
+    # The mirror of `lunar_orbit`: the CSM waits alone until the ascent stage docks, and after
+    # that there is nobody else — the two are one vehicle again.
+    also_present: [[csm_alone_lunar], []]
     entry: "ascent engine ignition; the descent stage is left on the surface"
     exit: "docking complete and the crew transferred to the CSM"
     provenance:

@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 280 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,7 +211,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 280 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
 a real tick advances **38** of the 139 states, and the build order's **38** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -17395,6 +17395,60 @@ is a decision to make and is counted.
 
 The two debts the round adds are the two phases that want a contract decision; everything else it
 did was arithmetic that now balances.
+
+## The co-present vehicles are declared per subject, and the shape was the whole defect
+
+Round 73 left two phases as *debts* rather than bending them to fit: `also_present` was phase-wide,
+a phase's `configurations` list is a **sequence**, and `lunar_orbit` begins docked with nobody else
+anywhere and ends with the LM away and the CSM waiting with the CM pilot alone aboard.
+`ascent_rendezvous` is the mirror of it. One list cannot be right for both ends, so those two phases
+accounted for two of their three crew, and the crew arithmetic could not be checked on them at all.
+
+Round 74 makes the field **one entry per subject**, parallel to `configurations`:
+
+```yaml
+lunar_orbit:
+  configurations: [csm_lm_docked, lm_alone_descent]
+  also_present:   [[], [csm_alone_lunar]]
+```
+
+### The flat form is refused, not tolerated
+
+Two ways to say one thing is how the next reader gets it wrong, so the linter refuses the old shape
+outright and names the reason. Three refusals, and each is a way the parallel form can be written
+wrong:
+
+| break | what it says |
+|---|---|
+| a flat list | *"It is one entry per subject — a list of lists parallel to `configurations`"* |
+| the wrong length | *"so one of the two is about a different phase. They are parallel lists"* |
+| a configuration on both sides | *"a subject is not something that is merely there"* |
+
+### Four readers, and one of them was written wrong first
+
+`also_present` had four readers — `check_mission`'s validation, round 73's crew sum,
+`check_crew_bindings`' crew-holding set and `plant.py`'s two crew projections — and all four index
+it by subject now. **The crew-arithmetic debt disappeared rather than being narrowed**: with the
+shape able to say it, every phase and every subject adds up to `crew.size`, so there is nothing left
+for a debt to name.
+
+**And the edit introduced the very defect the round is about.** `crew_placement`'s new local was
+named `rows` — the same name as the accumulator three lines above it — so every phase reset the list
+it was appending to and the function returned **one row, the last phase's**. `crew_placement`'s own
+docstring is about a reader that held two people for a vehicle declaring three; the fixture test
+that caught this one is the same test. *One name, two meanings, in the edit that was adding a field
+for exactly that reason* — and it was caught by a test that already existed, which is the argument
+for the suite being this size.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 280 | **278** |
+| phases that account for the whole crew | 6 of 8 | **8 of 8** |
+| build order · ready / value / edge / rule | 38 · 34 · 15 · 52 | 38 · 34 · 15 · 52 |
+| `report.refuse` call sites | 805 | **805** |
+| tests | 325 | **326** |
 
 ## The invariants, and which of them are enforced
 

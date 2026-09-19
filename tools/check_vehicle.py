@@ -15459,24 +15459,51 @@ def check_mission(doc: dict[str, Any], vehicle: dict[str, Any], report: Report) 
                     where, f"names configuration {cfg!r} which vehicle.yaml does not declare"
                 )
         # `also_present` is the other half of the configuration list and it says something the list
-        # cannot: which vehicles exist throughout the phase without being its subject. During
+        # cannot: which vehicles exist alongside the phase's subject without being it. During
         # `descent` and `surface` the CSM is alone in lunar orbit, and naming it here is the only
         # way the vehicle can say where the CM pilot is — `plant.py --crew` reported her UNPLACED
         # for both phases until the field existed.
-        sequence = list(phase.get("configurations") or [])
-        for cfg in phase.get("also_present") or []:
-            if cfg not in known:
+        #
+        # **It is one entry per subject, and the shape was phase-wide until round 74.** A phase's
+        # `configurations` list is a *sequence*, so a phase whose co-present set changes part way
+        # through — `lunar_orbit` begins docked and ends undocked, and `ascent_rendezvous` is the
+        # mirror of it — could not say so at all: one list was wrong for one end whatever it held,
+        # and four phases accounted for the wrong number of crew. The flat form is refused rather
+        # than tolerated, because two ways to say one thing is how the next reader gets it wrong.
+        sequence = [str(c) for c in phase.get("configurations") or []]
+        present = phase.get("also_present")
+        if present is not None:
+            if not isinstance(present, list) or not all(isinstance(row, list) for row in present):
                 report.refuse(
                     where,
-                    f"declares also_present {cfg!r}, which vehicle.yaml does not declare",
+                    "declares `also_present` as "
+                    + ("a flat list" if isinstance(present, list) else repr(present))
+                    + ". It is one entry per subject — a list of lists parallel to `configurations` — "
+                    "because a phase's subject sequence is a progression and the vehicles that are "
+                    "*there* can change from one subject to the next",
                 )
-            elif cfg in sequence:
-                report.refuse(
-                    where,
-                    f"lists {cfg!r} in both `configurations` and `also_present`. The first is the "
-                    "sequence the phase's subject passes through and the second is what else is "
-                    "there, so one configuration cannot be both",
-                )
+            else:
+                if len(present) != len(sequence):
+                    report.refuse(
+                        where,
+                        f"names {len(sequence)} configuration(s) in sequence and {len(present)} "
+                        "entry/entries in `also_present`, so one of the two is about a different "
+                        "phase. They are parallel lists",
+                    )
+                if any(name in sequence for row in present for name in row):
+                    report.refuse(
+                        where,
+                        "lists a configuration in both `configurations` and `also_present`. The "
+                        "first is the sequence the phase's subject passes through and the second is "
+                        "what else is there, so one configuration cannot be both",
+                    )
+                for row in present:
+                    for cfg in row:
+                        if str(cfg) not in known:
+                            report.refuse(
+                                where,
+                                f"declares also_present {cfg!r}, which vehicle.yaml does not declare",
+                            )
         # A phase used to carry `allowed_verbs` as the inverse of the verbs' `allowed_phases`.
         # By the time eight domains had landed the two lists disagreed in 197 places, and the
         # phase side was the weaker claim: it cannot know whether a verb's guards are
@@ -15780,8 +15807,12 @@ def check_crew_bindings(
             if not isinstance(phase, dict):
                 continue
             subjects = [str(c) for c in phase.get("configurations") or []]
-            present = [str(c) for c in phase.get("also_present") or []]
-            for subject in subjects:
+            rows = phase.get("also_present") or []
+            # One entry per subject, so the simultaneous set is indexed rather than shared. Before
+            # round 74 the whole list applied to every subject, and the two phases whose subjects
+            # need different sets were counted debts instead of being refused.
+            for index, subject in enumerate(subjects):
+                present = [str(c) for c in rows[index]] if index < len(rows) else []
                 row = next(
                     (c for c in configurations if str(c.get("id")) == subject), None
                 )
@@ -15801,23 +15832,10 @@ def check_crew_bindings(
                 # One set cannot be right for both ends, so the repair is either a per-subject form
                 # or two phases — and choosing between them is a decision about the profile, which
                 # is why these two are counted and the others are refused.
-                # **Only the phases that do not balance are the finding**, and the shape of the
-                # repair is what decides refusal from debt: a single-subject phase that is off by
-                # one is a count to correct, and a multi-subject one cannot be corrected at all in
-                # this shape, because `also_present` is phase-wide and its ends need different sets.
+                # **A refusal now, and a debt before round 74.** The shape could not express a
+                # changing co-present set, so the two phases that needed one were counted; with
+                # `also_present` indexed by subject there is nothing left for a debt to say.
                 if total == size:
-                    continue
-                if len(subjects) > 1:
-                    report.debt(
-                        f"mission.yaml:phase {phase.get('id')}",
-                        f"accounts for {total} crew while the mission declares {size} during "
-                        f"{subject} ("
-                        + " + ".join(f"{cid} ({count})" for cid, count in counts)
-                        + f"), and the phase names {len(subjects)} configurations in sequence with "
-                        f"one phase-wide `also_present` ({present or 'none'}). A phase whose sequence "
-                        "changes the co-present set cannot say so in this shape: declare "
-                        "`also_present` per subject, or split the phase",
-                    )
                     continue
                 report.refuse(
                     f"mission.yaml:phase {phase.get('id')}",
@@ -16020,9 +16038,14 @@ def check_crew_bindings(
     # the same list `plant.py` builds. The two readers now read one declaration.
     by_id = {c.get("id"): c for c in configurations}
     for phase in mission.get("phases") or []:
-        named = [str(n) for n in phase.get("configurations") or []] + [
-            str(n) for n in phase.get("also_present") or []
-        ]
+        # Per subject, for the reason the field is indexed: a phase's co-present vehicles can change
+        # from one subject to the next, and the crew a phase holds is the union over its subjects.
+        subjects = [str(n) for n in phase.get("configurations") or []]
+        rows = phase.get("also_present") or []
+        named = list(subjects)
+        for index in range(len(subjects)):
+            if index < len(rows):
+                named += [str(n) for n in rows[index]]
         vehicles = {
             str(by_id[name].get("crew_in"))
             for name in named

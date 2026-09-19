@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 280 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 278 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -424,7 +424,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 280 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 278 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -810,11 +810,20 @@ def crew_placement(root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for phase in mission.get("phases") or []:
         # `configurations` is the sequence the phase's *subject* passes through; `also_present` is
-        # what else is flying. Both place crew, and the second is the only reason the CM pilot can
-        # be located during `descent` and `surface`.
-        named = [str(n) for n in phase.get("configurations") or []] + [
-            str(n) for n in phase.get("also_present") or []
-        ]
+        # what else is flying, **one entry per subject**, because the vehicles that are there can
+        # change from one subject to the next (`lunar_orbit` begins docked and ends undocked). Both
+        # place crew, and the second is the only reason the CM pilot can be located during `descent`
+        # and `surface`.
+        subjects = [str(n) for n in phase.get("configurations") or []]
+        # **`co_present` and not `rows`.** The first version of this edit named the local after the
+        # field and shadowed the accumulator three lines above it, so every phase reset the list it
+        # was appending to and the function returned one row — the last phase's. One name, two
+        # meanings, in the edit that was adding a field for exactly that reason.
+        co_present = phase.get("also_present") or []
+        named = list(subjects)
+        for index in range(len(subjects)):
+            if index < len(co_present):
+                named += [str(n) for n in co_present[index]]
         for name in named:
             config = configs.get(name) or {}
             held = str(config.get("crew_in") or "")
@@ -853,6 +862,10 @@ def crew_coverage(root: Path) -> list[dict[str, Any]]:
     passes through and `also_present` is what else is flying, and the second is the only reason the
     CM pilot can be located during `descent` and `surface`: the CSM waits in lunar orbit through
     both, alone, with her aboard.
+
+    **`also_present` is one entry per subject since round 74**, so the union is built by index
+    rather than by concatenating one phase-wide list — that list could not say that `lunar_orbit`
+    begins with nobody else and ends with the CSM waiting.
     """
     mission = load_yaml(root / "mission.yaml")
     vehicle = load_yaml(root / "vehicle.yaml")
@@ -860,9 +873,12 @@ def crew_coverage(root: Path) -> list[dict[str, Any]]:
     people = (mission.get("crew") or {}).get("positions") or []
     summary: list[dict[str, Any]] = []
     for phase in mission.get("phases") or []:
-        present = [str(n) for n in phase.get("configurations") or []] + [
-            str(n) for n in phase.get("also_present") or []
-        ]
+        subjects = [str(n) for n in phase.get("configurations") or []]
+        rows = phase.get("also_present") or []
+        present = list(subjects)
+        for index in range(len(subjects)):
+            if index < len(rows):
+                present += [str(n) for n in rows[index]]
         vehicles = {str((configs.get(n) or {}).get("crew_in") or "") for n in present}
         unplaced = [
             str(person.get("id"))
