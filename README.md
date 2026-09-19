@@ -17447,7 +17447,7 @@ for the suite being this size.
 | `declared debts` | 280 | **278** |
 | phases that account for the whole crew | 6 of 8 | **8 of 8** |
 | build order · ready / value / edge / rule | 38 · 34 · 15 · 52 | 38 · 34 · 15 · 52 |
-| `report.refuse` call sites | 805 | **805** |
+| `report.refuse` call sites | 805 | **807** |
 | tests | 325 | **326** |
 
 ## The invariants, and which of them are enforced
