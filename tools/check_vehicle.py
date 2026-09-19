@@ -2036,6 +2036,30 @@ def withheld_channels(root: Path) -> set[str]:
     return names
 
 
+def every_state_on_each_node(root: Path) -> dict[str, list[str]]:
+    """Every state each coupling node carries, **whatever its method** — the writer's own question.
+
+    `states_by_node` below counts the methods an edge's *value* can drive, because that is the set
+    `advances:` may name. The value map asks a different question: `state_values` writes a node key
+    when **one** state owns the node, so a node carrying a `lag` and two `discrete` states publishes
+    nothing — and the crowded-source check was asking the first question while the writer answered
+    the second. `crew_state` counts one state there and carries three; `structure_config` counts none
+    and carries four. Both are crowded in fact, and the four edges that read them were reported
+    nowhere, which is why three rounds described them as "spoken for by their targets' blockers"
+    rather than as what they are: **not asked at all**.
+    """
+    by_node: dict[str, list[str]] = {}
+    if not (root / "domains").is_dir():
+        return by_node
+    for path in sorted(p for p in (root / "domains").iterdir() if p.is_dir()):
+        components = load(path / "components.yaml", Report()) or {}
+        for state in components.get("state") or []:
+            node = str(state.get("node") or "")
+            if state.get("id") and node:
+                by_node.setdefault(node, []).append(str(state["id"]))
+    return by_node
+
+
 def states_by_node(root: Path) -> dict[str, list[str]]:
     """Every state each coupling node carries, in declaration order, `internal` excluded.
 
@@ -2171,6 +2195,7 @@ def check_coupling(
     withheld: set[str] | None = None,
     states_by_node_map: dict[str, list[str]] | None = None,
     state_methods: dict[str, str] | None = None,
+    every_state_map: dict[str, list[str]] | None = None,
 ) -> None:
     nodes = doc.get("nodes") or {}
     edges = doc.get("edges") or []
@@ -2326,6 +2351,23 @@ def check_coupling(
     # names a state on the target cannot be reused here as the driver's name: the field speaks for
     # one end of the edge, and the ends are different quantities.
     # --------------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------------
+    # **Which end drives the flux, which this check did not ask — and round 71 believed it.**
+    #
+    # `stock_flux` has taken a `driver_node` since round 57, and the stock branch passes
+    # `edge.target` for a **discharge**: a tank empties at the rate its consumer sets, so the target
+    # is what the flux multiplies. The check below asked the *source* node every time, so for an edge
+    # that leaves a stock it reported a crowded node the flux never reads — and round 71 took the
+    # debt at its word and declared `reads: csm_cabin_co2_kg` on `E-CABIN-CO2-REMOVAL`, overriding a
+    # correct driver (the removal rate, 3.16e-05 kg/s) with the cabin's own mass. The flux went from
+    # 6.32e-07 kg per tick to 8.47e-04 — 1,340 times the removal the edge's own relation describes,
+    # and a decay that would empty the cabin in fifty ticks.
+    #
+    # It is latent rather than live only because the cabin's CO2 stock is refused for another reason
+    # first, which is exactly how a wrong declaration survives a round. The check asks the driving
+    # end now, and the rule for `reads:` follows it: the name is a state on the node whose value the
+    # flux multiplies, which is the target for a discharge and the source otherwise.
+    # --------------------------------------------------------------------------------------
     for edge in edges:
         source = str(edge.get("from"))
         where = f"coupling.yaml:edge {edge.get('id')}"
@@ -2333,7 +2375,14 @@ def check_coupling(
             continue
         if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
             continue
-        sharers = (states_by_node_map or {}).get(source) or []
+        drives_from = str(edge.get("to")) if source in stock_nodes else source
+        # **The writer's predicate, not the `advances:` one.** `state_values` writes a node key when
+        # one state owns the node, counting every method — so this asks `every_state_map`. Asking
+        # `states_by_node` here made a node carrying a lag and two discrete states look
+        # uncrowded, which is how four edges read a node that publishes nothing and no check
+        # said so.
+        crowd_map = every_state_map if every_state_map is not None else states_by_node_map
+        sharers = (crowd_map or {}).get(drives_from) or []
         # **The field the debt asked for, and the rule that keeps a name honest.** `reads:` names the
         # state on the edge's own source node whose value the flux multiplies, and it is the third
         # role a state can play in an edge — `advances` speaks for the target end, `drains` for the
@@ -2344,21 +2393,22 @@ def check_coupling(
         if reads is not None and str(reads) not in sharers:
             report.refuse(
                 where,
-                f"declares `reads: {reads!r}`, which is not a state on its own source node "
-                f"`{source}`" + (f" (they are {sorted(sharers)})" if sharers else " (it carries none)"),
+                f"declares `reads: {reads!r}`, which is not a state on `{drives_from}`, the node "
+                f"whose value this flux multiplies"
+                + (f" (they are {sorted(sharers)})" if sharers else " (it carries none)"),
             )
             continue
         if len(sharers) < 2 or reads is not None:
             continue
         report.debt(
             where,
-            f"reads {source}, which carries {len(sharers)} states ({sorted(sharers)}), and a node "
-            "carrying more than one state publishes no value under its own name — so the driver this "
-            "flux multiplies by is `None` on every tick rather than late on this one. What is owed is "
-            "one of two repairs and they are not equivalent: give the node a state that *is* the "
-            "quantity this edge wants, or declare `reads:` — the state on this node the flux reads. "
-            "The first changes what the vehicle models and the second changes what an edge may say, "
-            "and the corpus has taken the second for `link`, `vehicle_dynamics` and the two cabins",
+            f"reads {drives_from}, which carries {len(sharers)} states ({sorted(sharers)}), and a "
+            "node carrying more than one state publishes no value under its own name — so the driver "
+            "this flux multiplies by is `None` on every tick rather than late on this one. What is "
+            "owed is one of two repairs and they are not equivalent: give the node a state that *is* "
+            "the quantity this edge wants, or declare `reads:` — the state on that node the flux "
+            "reads. The first changes what the vehicle models and the second changes what an edge may "
+            "say, and the corpus has taken the second for `link` and `vehicle_dynamics`",
         )
 
     for edge in edges:
@@ -17121,6 +17171,7 @@ def main(argv: list[str] | None = None) -> int:
             withheld=withheld_channels(root),
             states_by_node_map=states_by_node(root),
             state_methods=state_methods(root),
+            every_state_map=every_state_on_each_node(root),
         )
         schedule = derive_schedule(coupling, report)
     check_range_kinds(registry, report)

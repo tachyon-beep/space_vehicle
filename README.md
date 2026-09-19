@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 275 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 275 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
-a real tick advances **37** of the 139 states, and the build order's **37** ready are that same set
+a real tick advances **38** of the 139 states, and the build order's **38** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -1832,9 +1832,9 @@ their producer is missing has not moved them.
 ```
 139 states, by what blocks them:
 
-    37   27 %  ready now — the states a real tick advances
+    38   27 %  ready now — the states a real tick advances
     34   24 %  owes a value — the cheapest to close, and the debt count already tracks them
-    16   12 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
+    15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     52   37 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
@@ -17275,6 +17275,71 @@ counted and already in the build order. Naming the right state does not invent i
 every state behind those edges was blocked on its own declaration first. What the round removes is a
 driver that was never going to exist, and what it adds is the vocabulary to say so — for the ten
 edges the debt family started with, and for any node that turns out to be crowded later.
+
+## The check that asked the wrong end, and the predicate that meant two things
+
+Round 71 added `reads:` and declared it on six edges. Two of those declarations were wrong, and
+finding out why took a round — which is the shape of this one.
+
+### `reads: csm_cabin_co2_kg` was a 1,340-fold overstatement
+
+`stock_flux` has taken a `driver_node` since round 57, and the stock branch passes **`edge.target`**
+for a discharge: a tank empties at the rate its consumer sets, so the target's value is what the flux
+multiplies. The crowded-source debt asked the *source* node every time — so it fired on
+`E-CABIN-CO2-REMOVAL`'s five-state cabin, which that edge does not read at all, and round 71 took the
+debt at its word:
+
+| driver | flux per tick |
+|---|---|
+| the removal rate (`co2_removal_csm`, 3.16e-05 kg/s) — correct, and what the edge has always had | 6.32e-07 kg |
+| `reads: csm_cabin_co2_kg` — what round 71 declared | **8.47e-04 kg** |
+
+That is **1,340× the removal the edge's own relation describes**, and a decay that would empty the
+cabin in fifty ticks. It was *latent* rather than live only because the cabin's CO₂ stock is refused
+for another reason first: a wrong declaration survives exactly as long as nothing reads it, and the
+check that would have read it was asking the wrong end. The rule is the driving node's now, the two
+declarations are gone, and a `reads` naming a state on the non-driving end is refused.
+
+### And the predicate meant two things
+
+Asking the right end raised a second question — *what counts as a crowded node?* — and the check and
+the writer were answering differently:
+
+| | counts |
+|---|---|
+| `state_values`, the writer | **every** state on the node |
+| `states_by_node`, which the check was asking | the methods a *value* can drive — `stock, lag, delay, dynamics, algebraic` |
+
+So `crew_state` (one countable state, three actual) and `structure_config` (none, four) looked
+uncrowded, and the three crew edges plus `E-STRUCT-PLATE` were **reported nowhere**. Three earlier
+rounds described those edges as "spoken for by their targets' blockers"; they were not asked at all.
+The check asks the writer's question now, and the three crew edges are counted debts for the first
+time — which is why the debt count went *up*.
+
+### The field had a third reader
+
+`E-WATER-RAD` is the edge the corrected predicate surfaced: `water_cooling → radiator_reject`, whose
+target carries the rejection in W and the surface temperature in K, and whose unit is `kg/s per W`.
+Declaring `reads: radiator_rejection_w` made the coolant's discharge computable — **and the build
+order did not move**, because `plant._classify` was still refusing every crowded driver node whether
+or not an edge had named what it reads. The classifier is the reader that *names the bucket*, so the
+tick advanced a state the worklist filed under *owes an edge*: the first line of the report stopped
+meaning what it says. It asks the same question as the other two now.
+
+**Round 71 taught two of three readers. This is what the third one cost.**
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 275 | **278** |
+| build order · ready now | 37 | **38** |
+| build order · owes an edge | 16 | **15** |
+| build order · owes a value / rule | 34 · 52 | 34 · 52 |
+| a real tick advances | 37 of 139 | **38 of 139** |
+| crowded-source debt entries | 0 | **3** |
+| `report.refuse` call sites | 804 | **804** |
+| tests | 323 | **324** |
 
 ## The invariants, and which of them are enforced
 

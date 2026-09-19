@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 275 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 278 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -424,7 +424,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 275 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 278 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1186,7 +1186,8 @@ def stock_flux(
                 f"drives {edge.target} and reads {source!r}, which carries {len(sharers)} states "
                 f"({', '.join(sharers)}) and therefore publishes no value under its own name — the "
                 "map keeps a node key only for a node with one state, so this is not a value that "
-                "is late, it is a driver that was never declared. Name the state this flux reads",
+                "is late, it is a driver that was never declared. Name the state this flux reads, "
+                "with `reads:` on this edge",
                 needs=source,
             )
         raise Unconfigured(
@@ -2714,8 +2715,28 @@ def _classify(world: World, state: State) -> str:
     # three. The bucket is the edge, because what is missing is the declaration of *which*
     # state the flux reads — the same shape as an edge with no sensitivity, arriving through
     # the other end of the read.
+    # **And the third reader of the same predicate.** Round 71 added `reads:` — the declaration this
+    # bucket is asking for — and taught the tick and the debt check about it; this classifier, which
+    # is the one that *names* the bucket, went on refusing a crowded driver node whether or not an
+    # edge had said which state it reads. `water_cooling_kg` is the case that caught it: the tick
+    # advances it, `--build-order` filed it under *owes an edge*, and the first line of the report
+    # stopped meaning what it says. The node is unreadable only where no edge touching it names a
+    # read.
     unreadable = [
-        node for node in driver_nodes(world, state) if len(world.states_on(node)) > 1
+        node
+        for node in driver_nodes(world, state)
+        if len(world.states_on(node)) > 1
+        # **Back-edges included**, which the driver list above deliberately excludes: a back-edge is
+        # a *scheduling* declaration — it reads last tick's value — and `E-WATER-RAD` is one, because
+        # the coolant's discharge into the radiator is the delayed half of a declared cycle. It is
+        # still the edge that names what it reads, and leaving it out of this test made the
+        # classifier refuse a state the tick advances.
+        and not any(
+            edge.reads
+            for edge in world.edges
+            if node in (edge.source, edge.target)
+            and state.node in (edge.source, edge.target)
+        )
     ]
     if unreadable:
         return "edge"

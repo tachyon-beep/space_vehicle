@@ -664,9 +664,15 @@ edges:
         `source_converter_v`, and it belongs in that state's relation, so it is recorded in
         open_debts as a resistance rather than as a coefficient here. Closing this edge retires
         the *coefficient* half of that debt and leaves the resistance half standing
+  # **No `reads:` here, and round 72 removed the one round 71 put on it.** This edge leaves a
+  # stock node, so `stock_flux` is handed its *target* as the driver — a discharge empties at the
+  # rate its consumer sets — and `co2_removal_csm` carries one state and publishes its key. The
+  # crowded node the debt named (`cabin_atm`, five states) is the end this edge does **not** read,
+  # and declaring `reads: csm_cabin_co2_kg` overrode the removal rate with the cabin's own mass:
+  # 8.47e-04 kg per tick against a declared 6.32e-07, a decay that would empty the cabin in fifty
+  # ticks. A wrong declaration is worse than a missing one, and both are worse than a check that
+  # asks which end drives the flux.
   - id: E-CABIN-CO2-REMOVAL
-    # Four gas masses and a pressure share this node; the one this edge removes is the carbon dioxide.
-    reads: csm_cabin_co2_kg
     sensitivity:
       value: 1.0
       computation: "1.0"
@@ -678,8 +684,8 @@ edges:
     to: co2_removal_csm
     kind: rate
     drains: csm_cabin_co2_kg
+  # As `E-CABIN-CO2-REMOVAL`: the driver is the cartridge's removal rate, not the cabin's mass.
   - id: E-LM-CABIN-CO2-REMOVAL
-    reads: lm_cabin_co2_kg
     sensitivity:
       value: 1.0
       computation: "1.0"
@@ -1208,6 +1214,11 @@ edges:
     kind: lag
     advances: zone_radiator_t
   - id: E-WATER-RAD
+    # **The one this round's fix found, and the role the field was built for.** This edge leaves a
+    # stock, so its flux is driven by `radiator_reject` — which carries the radiator's rejection in
+    # W and its surface temperature in K. The edge's unit is `kg/s per W`, so the quantity it
+    # multiplies is the rejection.
+    reads: radiator_rejection_w
     sensitivity:
       value: 4.0816e-07
       computation: "1 / 2.45e6"
