@@ -16213,6 +16213,50 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
             )
 
 
+def check_tick_grain(mission: dict[str, Any], report: Report) -> None:
+    """**§5's integer-microsecond stamps need a tick that is a whole number of microseconds.**
+
+    `plant.md` §5 puts latched states on a sub-tick queue "with **integer-microsecond timestamps**,
+    not on the tick boundary", and §9's step 3 takes the horizon to the next stamp. Both of those
+    are statements about a tick, and until this function neither was joined to the tick: `tick_hz`
+    was checked against `total_ticks` (round 45) and against the estimator's sub-stepping rates
+    (round 35), and nothing asked whether a tick even *has* an integer number of microseconds in it.
+
+    At 50 Hz it does — 20,000 µs, exactly — and the corpus had been assuming that by construction. At
+    60 Hz it does not (16,666.67 µs), and the failure is silent in exactly the way §5 forbids: the
+    plant rounds the tick to a whole number of microseconds, so a stamp intended for the tick's last
+    microsecond lands on the next tick's first, and the tie-break between two events resolves by a
+    float's rounding rather than by their delays. A tick shorter than a microsecond is the same
+    refusal from the other side: there is no integer stamp to make inside it at all.
+
+    `gnc/estimator#sub_stepping`'s note already cites "the plant's integer-microsecond event queue"
+    as the thing its major cycle is a sub-step inside, which is what makes this a join rather than a
+    preference — the corpus names the queue, and the queue needs the grain.
+    """
+    tick_hz = mission.get("tick_hz")
+    if not isinstance(tick_hz, (int, float)) or isinstance(tick_hz, bool) or tick_hz <= 0:
+        # Not this function's refusal: `check_mission` reports a missing tick rate by name, and a
+        # second message about the same absence is the double-count this folder keeps finding.
+        return
+    micros = 1_000_000.0 / float(tick_hz)
+    if micros < 1.0:
+        report.refuse(
+            "mission.yaml:tick_hz",
+            f"is {tick_hz:g} Hz, so a tick is {micros:g} µs and contains no whole microsecond at "
+            "all. `plant.md` §5 gives latched states integer-microsecond stamps on a sub-tick "
+            "queue, and a tick with no integer grain has no stamp to place",
+        )
+    elif abs(micros - round(micros)) > 1e-9:
+        report.refuse(
+            "mission.yaml:tick_hz",
+            f"is {tick_hz:g} Hz, so a tick is {micros:g} µs — not a whole number of microseconds. "
+            "`plant.md` §5's stamps are integers, and a tick that is not a whole number of them "
+            "forces the plant to round, which makes the tie-break between two events in one tick a "
+            "float's arithmetic rather than their delays: the exact thing §5 says timestamps exist "
+            "to remove",
+        )
+
+
 def check_band_on(root: Path, registry: dict[str, dict[str, Any]], report: Report) -> None:
     """**A hysteresis band with values in it has to say what point it is a band *on*.**
 
@@ -17681,6 +17725,7 @@ def main(argv: list[str] | None = None) -> int:
         # start rather than about the vehicle file.
         check_launch_state(root, mission, report)
         check_band_on(root, registry, report)
+        check_tick_grain(mission, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
         check_landing_site(mission, report)

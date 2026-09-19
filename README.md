@@ -17506,10 +17506,15 @@ to it and the descent stage is `attached` at MET 0.
 `plant.md` §5's queue is **sub-tick**: integer-microsecond stamps on latched comparators, dwell on a
 monotonic clock, and §9 step 3's `horizon = min(dt, time to next event)`. These transitions arrive as
 *commands* and the effect path applies them at the moment of effect, so nothing here needed the
-queue. **The queue's first user is the comparator-driven latch** — the `hysteresis` family, six
-states whose `moved_by` is `logic:` prose and whose input nothing declares — and building it before
-that family exists would be a data structure with no events to schedule. Step 3 stays `horizon = dt`
-and says why.
+queue, and this section said so — including that "Step 3 stays `horizon = dt` and says why".
+
+**That sentence has since been answered, and round 78 is where.** The queue landed with the
+externally stamped effects as its first user, and the reason it waited — "the queue's first user is
+the comparator-driven latch" — turned out to be a statement about the queue's *self-scheduled*
+events rather than about the queue. What is still owed is the other half of the same family: §5's
+zero-crossing and dwell-expiry events, which the plant must *generate* rather than receive, and the
+`hysteresis` rule that would consume them. The family's comparator input is declared now
+(`band_on`), so what remains is the rule and the crossing.
 
 ### What moved
 
@@ -17670,6 +17675,91 @@ them for. The debt count and the `UNCONFIGURED` count both rise by exactly those
 refusal count rises by four: a band with no `band_on`, a `band_on` that names no registered point,
 a band disagreeing with the threshold on its own point in the point's units, and a band claiming
 other units while dividing differently from the band it names.
+
+## §9's step 3 was one line, and the queue it named did not exist
+
+The plant's own docstring excused it: *"Step 3's event queue needs latched states, so it is a no-op
+until there are any."* There were **seventeen** by the time that sentence was read against the
+corpus — the fourteen commanded modes round 67's hold carries and the three the one-way events move
+— so `horizon = dt` was a no-op whose stated reason had lapsed. It is the same shape as round 67's
+exemption (*"the plant refuses a `discrete` state outright"*), round 70's `state_order` guard
+(*"an order needs something to order"*, read as *"this node has one state"*) and round 72's `drains`
+guard: **a premise stated once, excusing a branch, and never re-read.** The premise is the finding;
+the queue is the repair.
+
+`plant.md` §5 asks for integer-microsecond stamps, and §9's step 3 is literally
+`horizon = min(dt, events.time_to_next())`. Both are now the plant's:
+
+| §5 / §9 | what the plant does |
+|---|---|
+| integer-µs stamps, not tick boundaries | `Effect(offset_us, verb, arguments)`, `offset_us` an `int` — a float stamp is refused rather than coerced |
+| `horizon = min(dt, time to next event)` | the tick is split at each stamp, and each sub-interval *is* the horizon `advance` already takes |
+| effects enter at step 1 and nowhere else | the queue is validated in `step` and applied through `apply_command`, which is unchanged |
+| the compare-point is per tick (§6) | one hash per tick: the queue splits the integration, not the statement |
+
+### The identity that had to hold, and the artifact it found
+
+A split tick has to be the same arithmetic as consecutive short ticks, or the queue is a second
+integrator wearing the first one's name. The test does not assert a value — it asserts an
+**identity**: the same three events at the same three stamps, run once through the queue and once as
+four short ticks with the commands applied between them, must produce the same committed map.
+
+It did not, on the first attempt, and the difference was four stock residual accumulators. The last
+sub-interval was computed as `_tick_us(dt) / 1e6 - elapsed_us / 1e6`, and `0.02 - 0.015` is
+`0.005000000000000001` — a 2e-18 s error that a stock's Bresenham residual can see and a lag's
+`exp(-h/tau)` can see. **Doing half the arithmetic in floats puts back exactly the ambiguity §5 took
+out with integer stamps**, and it took a test asserting an identity to find what a test asserting a
+value would have rounded away.
+
+### What the stamps decide, and what they cannot
+
+`configuration` declares `event_value` for three events — `lm_undocking` → `undocked`,
+`descent_stage_separation` → `separated`, `lm_ascent_jettison` → `abandoned` — so two of them landing
+in one tick leaves it on whichever was stamped last. Handing the queue the three in scrambled list
+order still ends on `abandoned`; swapping the stamps and not the list ends on `undocked`. **The
+microseconds decide, not the list**, which is §5's whole argument — *"that is a tie-break
+masquerading as physics, and the fix is timestamps, not a smaller `dt`"*.
+
+What a stamp cannot decide is a tie: two effects at the *same* microsecond are still ambiguous, and
+the sort is stable rather than clever, so they land in the caller's order. Saying that out loud is
+better than a sort that would silently reorder them.
+
+### The join the queue needed, and the corpus never made
+
+An integer microsecond is only meaningful relative to a tick, and **nothing asked whether a tick
+*has* an integer number of them.** `tick_hz` was held against `total_ticks` (round 45) and against
+the estimator's sub-stepping rates (round 35); both are about how many ticks there are. At 50 Hz a
+tick is 20,000 µs exactly, which is why the corpus has been able to assume it — and at 60 Hz it is
+16,666.67 µs, where the plant's rounding puts a stamp meant for the tick's last microsecond onto the
+next tick's first and a float decides the tie-break §5 exists to remove. So `check_tick_grain`
+refuses a tick rate with no whole-microsecond grain, or one shorter than a microsecond, and it is a
+join between two declarations rather than a preference: `gnc/estimator#sub_stepping` already cites
+"the plant's integer-microsecond event queue" as what its major cycle is a sub-step inside.
+
+### What is still owed
+
+§5's **self-scheduled** events — a comparator's zero crossing, a dwell's expiry — and the
+`hysteresis` rule that would consume them. The queue's first user is the *executive's* stamped
+effects, which is what landed here; the plant still generates no event of its own, and the stock
+branch's zero-crossing comment says so where the shortfall is recorded. The family that needs it has
+its comparator input declared as of round 77 (`band_on`), so what remains is the rule and the
+crossing rather than a missing declaration.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 276 | 276 |
+| build order · ready now | 45 | 45 |
+| `report.refuse` call sites | 818 | **820** |
+| tests | 329 | **331** |
+| `step()` parameters | 4 | **5** (`effects`) |
+| runtime refusals in `plant.py` | 2 classes | **3** (`EffectRefused`) |
+
+No figure in the status section moves, and that is the round's own measurement: **a queue nothing
+schedules yet changes no count.** It adds a capability, a class of refusal and a corpus join, and
+every state's classification is where it was — which is what makes the next round's rule the thing
+that moves them.
 
 ## The invariants, and which of them are enforced
 

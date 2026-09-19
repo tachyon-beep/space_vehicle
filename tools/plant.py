@@ -135,6 +135,39 @@ class Gap:
         return f"{self.where}: {self.owed}"
 
 
+class EffectRefused(Exception):
+    """An external input the plant will not take, for one of §5's two reasons.
+
+    Both are refusals rather than corrections, and both would otherwise be *silent*: a verb that
+    stages nothing would look exactly like an effect that landed (the caller sees an unchanged value
+    map and cannot tell that from "nothing happened"), and an offset outside the tick would be
+    clamped to the nearest boundary, which is the merge of two events that §5's whole argument is
+    against. A raise rather than a `Gap`, because a gap is a fact about the *configuration* and this
+    is a fact about the call.
+    """
+
+
+@dataclass(frozen=True)
+class Effect:
+    """One external input, stamped to the **microsecond** within its tick (`plant.md` §5).
+
+    `offset_us` is an integer count of microseconds from the tick's start, and it is integer
+    *because* §5 says so: what a sub-tick stamp buys is that two events landing in the same tick on
+    the same latched machine are ordered by their delays rather than by the order a list happened to
+    be written in — "that is a tie-break masquerading as physics, and the fix is timestamps, not a
+    smaller `dt`". Two effects at the *same* microsecond are therefore still a tie, and the sort is
+    stable: equal stamps keep the caller's order, which is the one thing the queue cannot decide for
+    the caller.
+
+    `verb` and `arguments` are an ordinary command's, because that is what an effect is — the
+    queue's job is *when*, and `apply_command` remains the only thing that knows *what*.
+    """
+
+    offset_us: int
+    verb: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+
+
 def unset_paths(node: Any, trail: str = "") -> list[str]:
     """Every `UNCONFIGURED` scalar under a node, with the path that reaches it."""
     found: list[str] = []
@@ -1465,8 +1498,12 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         moved = math.floor(quanta)
         level = current + moved * quantum
         # "**Zero-crossing raises an event and records a shortfall.** Never clamp silently, never go
-        # negative. The shortfall is the evidence." The event queue is step 3 and is a no-op until
-        # there are latched states, so the shortfall is returned with the level and named here.
+        # negative. The shortfall is the evidence." The queue exists as of round 78 — §5's
+        # integer-microsecond stamps, carried by `Effect` — but a zero crossing is an event the
+        # *plant* generates, and nothing here raises one: the queue's contents are the executive's
+        # stamped effects, and a self-scheduled crossing needs the rule that computes the crossing.
+        # So the shortfall is returned with the level and named here, which is the same open half the
+        # hysteresis family still owes rather than a second one.
         shortfall = 0.0
         if level < 0.0:
             shortfall = -level
@@ -2127,12 +2164,18 @@ def step(
     values: dict[str, Any],
     dt: float,
     gaps: list[Gap] | None = None,
+    effects: list[Effect] | None = None,
 ) -> dict[str, Any]:
     """`plant.md`'s seven-step tick, with the parts that need code named rather than faked.
 
     Steps 1, 2, 5, 6 and 7 are the window's and the executive's and are stubbed with their
-    contracts written down. Step 3's event queue needs latched states, so it is a no-op until
-    there are any. Step 4 is the one this file is really about: it walks the derived order.
+    contracts written down. **Step 3 is the queue**, and it used to be a line: this docstring said
+    "Step 3's event queue needs latched states, so it is a no-op until there are any", and by the
+    time that sentence was read against the corpus there were seventeen — the fourteen commanded
+    modes and the three the one-way events move. `horizon = dt` was a no-op whose stated reason had
+    lapsed, which is the same shape as round 67's exemption, round 70's `state_order` guard and
+    round 72's `drains` guard: a premise stated once, excusing a branch, and never re-read. Step 4
+    is the one this file is really about: it walks the derived order.
 
     **Step 4 does not stop.** §9's loop is `for node in SCHEDULE: for producer in node.producers:
     staged.update(producer.advance(...))` — unconditional, and "writes are staged, then committed".
@@ -2140,6 +2183,16 @@ def step(
     reaches every state after it. This function used to raise out of the loop instead, so the first
     unconfigured state ended the tick and the rest of the order has never advanced — a plant that
     stops at its first debt is a plant whose frozen order has never been run.
+
+    **§9's step 3 is literal now**: `horizon` is the interval to the next boundary, which is `dt`
+    when nothing is queued and the next stamp when something is. A split tick is the same arithmetic
+    as consecutive short ticks — `advance` already takes a horizon, so the sub-interval *is* that
+    horizon and no integrator changed — and
+    `test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it` runs the same events both
+    ways and holds the two states byte-identical rather than asserting the property in prose.
+
+    **The compare-point stays per tick** (§6): the caller hashes what this returns, which is the
+    state after the last boundary, so a split tick produces one hash rather than one per effect.
 
     Where a state cannot advance, the gap is appended to `gaps` and the tick carries on. Passing a
     list is how `--readiness` reports them; passing nothing still runs the whole tick, because a gap
@@ -2151,13 +2204,149 @@ def step(
     # 1. Effects — everything external enters here and nowhere else.
     # 2. Revalidate at the moment of effect. Nothing is captured at schedule time.
     #    Both belong to the executive; the plant's contract is that it never sees an effect that
-    #    has not been through them.
-    #
-    # 3. Advance to the next event boundary.
-    horizon = dt
+    #    has not been through them. What arrives here is already accepted, and already stamped.
+    queue = _stamped(world, dt, effects)
 
-    # 4. Nodes, in the linter's frozen total order, Gauss-Seidel on the DAG, back-edges reading
-    #    last tick's value. Writes are staged, then committed.
+    # 3. Advance to the next event boundary, one sub-interval at a time: §9's `horizon` for each
+    #    segment is `min(remaining, time to next event)`, and the walk in between is the same walk.
+    committed = values
+    elapsed_us = 0
+    for offset_us, effect in queue:
+        committed = _walk(world, committed, (offset_us - elapsed_us) / 1_000_000, gaps)
+        # The effect lands on what the walk just committed, so a state it moves is visible to the
+        # next segment's walk — which is the whole difference between a queue and a list of commands
+        # applied at the tick's end.
+        committed = _merged(
+            committed, apply_command(world, committed, effect.verb, effect.arguments)
+        )
+        elapsed_us = offset_us
+    # **Integer microseconds, subtracted before the one division.** This read
+    # `_tick_us(dt) / 1_000_000 - elapsed_us / 1_000_000`, and `0.02 - 0.015` is
+    # `0.005000000000000001` rather than `0.005` — a 2e-18 s difference that the stock residual
+    # accumulators and the lag alphas can see. The split tick then disagreed with the same run as
+    # consecutive short ticks on four residual keys, which is how a test asserting an *identity*
+    # found what a test asserting a *value* would have rounded away: doing half the arithmetic in
+    # floats puts back the ambiguity §5 took out.
+    committed = _walk(world, committed, (_tick_us(dt) - elapsed_us) / 1_000_000, gaps)
+
+    # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
+    #    accumulator of every `conserve` edge, which exists once the stocks do.
+    # 6. Instruments: T -> A. One-way, and the quality function cannot see the faults.
+    # 7. Compare-point: `state_hash(committed)` is a hash over canonically-encoded state, and the
+    #    caller takes it every tick — `--determinism` is the caller that does, and
+    #    `test_two_runs_of_the_same_start_produce_the_same_compare_point` is the reader. It is a
+    #    function rather than a line in here because `step`'s contract is to *return the state*: a
+    #    hash appended to the map would be a value nothing declared. One hash per tick rather than
+    #    one per boundary: the queue splits the *integration*, and §6's compare-point is a per-tick
+    #    statement about where the vehicle ended up.
+    return committed
+
+
+def _tick_us(dt: float) -> int:
+    """A tick in §5's integer microseconds.
+
+    Not `dt * 1e6` spelled at each call site: the tick is 20,000 µs at 50 Hz, and every stamp is
+    compared against this one number rather than against a float that would turn `19_999.999999`
+    into a boundary case. The plant's clock is the mission's `tick_hz` (see `tick_seconds`), so a
+    tick that is not a whole number of microseconds is rounded here, once.
+    """
+    return int(round(dt * 1_000_000))
+
+
+def _stages_a_state(world: World, verb: str) -> bool:
+    """Whether this verb can move anything at all — §5's first refusal, asked *before* applying.
+
+    Two ways a verb writes a state, and both are declarations rather than a list kept here: it has a
+    `command_value` on some state (`command_targets`), or it is the verb an `one_way_events` row
+    names. Thirty-seven of the fifty-eight verbs read, configure or report, and scheduling one of
+    those as a timed effect is a category error rather than a no-op — a caller that queues a read
+    believes something happens at that microsecond, and nothing does.
+    """
+    if command_targets(world, verb):
+        return True
+    return any(str(row.get("verb")) == verb for row in world.one_way_events.values())
+
+
+def _stamped(world: World, dt: float, effects: list[Effect] | None) -> list[tuple[int, Effect]]:
+    """The queue: the effects validated and sorted by stamp, or a named refusal.
+
+    Sorted **stably**, so equal stamps keep the caller's order. Two effects at the same microsecond
+    are still a tie, and that is the one case a stamp cannot decide; saying so here is better than a
+    sort that quietly reorders them by insertion.
+    """
+    if not effects:
+        return []
+    tick_us = _tick_us(dt)
+    queue: list[tuple[int, Effect]] = []
+    for effect in effects:
+        if not isinstance(effect, Effect):
+            raise EffectRefused(
+                f"plant.py:step: {effect!r} is not an `Effect`. An effect is external input with a "
+                "sub-tick stamp, and anything else arriving here has not been stamped at all"
+            )
+        offset_us = effect.offset_us
+        # `bool` is an `int` in Python and `True` as a microsecond count is a caller's mistake
+        # rather than a stamp. §5 says *integer*, so the check is the type, not just the range.
+        if not isinstance(offset_us, int) or isinstance(offset_us, bool):
+            raise EffectRefused(
+                f"plant.py:step: effect {effect.verb!r} carries `offset_us` {offset_us!r}, which is "
+                "not an integer number of microseconds. §5's stamps are integer microseconds, and a "
+                "float one is a smaller `dt` wearing the queue's name"
+            )
+        if not 0 <= offset_us < tick_us:
+            raise EffectRefused(
+                f"plant.md:5: effect {effect.verb!r} is stamped {offset_us} µs, outside the tick "
+                f"[0, {tick_us}). Clamping it to the nearest boundary is the merge of two events "
+                "that the integer stamps exist to prevent; an effect belonging to another tick is "
+                "that tick's for the executive to carry"
+            )
+        if effect.verb not in world.verbs:
+            raise EffectRefused(
+                f"plant.py:verb {effect.verb}: is not registered by any domain, so there is nothing "
+                "for it to stage and nothing it could mean at this microsecond"
+            )
+        if not _stages_a_state(world, effect.verb):
+            raise EffectRefused(
+                f"plant.md:5: effect {effect.verb!r} stages no state. Thirty-seven of the "
+                "fifty-eight verbs read, configure or report, and scheduling one of those as a "
+                "timed effect is a category error: the caller believes something happens at that "
+                "microsecond and the value map comes back unchanged"
+            )
+        queue.append((offset_us, effect))
+    queue.sort(key=lambda row: row[0])
+    return queue
+
+
+def _merged(values: dict[str, Any], staged: dict[str, Any]) -> dict[str, Any]:
+    """A staged delta committed onto the value map — the one writer of that merge.
+
+    **The sentinel is a sub-map, so replacing its key loses the others.** A stage writes
+    `{"internal": {state_id: value}}` and a bare `{**values, **staged}` replaced the whole map with
+    that one entry, so the accumulators wiped each other out — the same shape of defect as the node
+    collision, one level down. Merged here rather than in `state_values`, because a *stage* is a
+    partial view and only the commit sees both halves.
+
+    One helper rather than the two copies this was (the walk, and the effect application the queue
+    added), because two copies of a merge are how one half gets fixed and the other left standing.
+    """
+    committed = {**values, **staged}
+    if isinstance(values.get("internal"), dict) and isinstance(staged.get("internal"), dict):
+        committed["internal"] = {**values["internal"], **staged["internal"]}
+    return committed
+
+
+def _walk(
+    world: World,
+    values: dict[str, Any],
+    horizon: float,
+    gaps: list[Gap] | None,
+) -> dict[str, Any]:
+    """§9's step 4 over one horizon: every node in the frozen order, then the sentinel.
+
+    Split out of `step` for §5's queue, and it is the *same* walk the unsplit tick always ran — a
+    queue that re-implemented the node order to schedule around it would be a second copy of the one
+    thing §9 check 9 is about. `horizon` is the sub-interval, which is what `advance` already takes.
+    """
     staged: dict[str, Any] = {}
     for node in world.schedule:
         for state in world.states_on(node):
@@ -2169,24 +2358,7 @@ def step(
     sentinel, _ = world.sentinel_states()
     for state in sentinel:
         _advance_into(world, state, values, staged, horizon, gaps)
-    committed = {**values, **staged}
-    # **The sentinel is a sub-map, so replacing its key loses the others.** A stage writes
-    # `{"internal": {state_id: value}}` and `{**values, **staged}` replaced the whole map with that
-    # one entry, so the accumulators wiped each other out — the same shape of defect as the node
-    # collision, one level down. Merged here rather than in `state_values`, because a *stage* is a
-    # partial view and only the commit sees both halves.
-    if isinstance(values.get("internal"), dict) and isinstance(staged.get("internal"), dict):
-        committed["internal"] = {**values["internal"], **staged["internal"]}
-
-    # 5. Commit, then assert what can be asserted exactly. `assert_conservation` needs the
-    #    accumulator of every `conserve` edge, which exists once the stocks do.
-    # 6. Instruments: T -> A. One-way, and the quality function cannot see the faults.
-    # 7. Compare-point: `state_hash(committed)` is a hash over canonically-encoded state, and the
-    #    caller takes it every tick — `--determinism` is the caller that does, and
-    #    `test_two_runs_of_the_same_start_produce_the_same_compare_point` is the reader. It is a
-    #    function rather than a line in here because `step`'s contract is to *return the state*: a
-    #    hash appended to the map would be a value nothing declared.
-    return committed
+    return _merged(values, staged)
 
 
 def _advance_into(

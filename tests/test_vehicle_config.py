@@ -8818,6 +8818,138 @@ def test_a_hysteresis_band_says_what_point_it_is_a_band_on(tmp_path):
     )
 
 
+def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
+    """§9's step 3 was one line, `horizon = min(dt, events.time_to_next())`, and the queue was absent.
+
+    The plant excused it in prose: *"Step 3's event queue needs latched states, so it is a no-op
+    until there are any."* There were seventeen by the time that sentence was read against the
+    corpus — the fourteen commanded modes and the three the one-way events move — so `horizon = dt`
+    was a no-op whose stated reason had lapsed, the same shape as round 67's exemption, round 70's
+    `state_order` guard and round 72's `drains` guard.
+
+    Two things are asserted here, and the first is the one that would catch a queue that merely
+    *looks* right. **A split tick is the same arithmetic as consecutive short ticks**: the queue's
+    sub-interval is passed to `advance`, which already takes a horizon, so no integrator changed —
+    and the identity is checked against the whole committed map rather than against a value, which
+    is how it found that computing the last sub-interval as `0.02 - 0.015` gives
+    `0.005000000000000001` and moves four stock residual accumulators. Both halves have to be in
+    integer microseconds, or half the arithmetic puts back the ambiguity §5 took out.
+
+    **And the stamps decide, not the list.** §5's whole argument is that two events landing in one
+    tick on one latched machine are ordered by their delays rather than by a tie-break — "that is a
+    tie-break masquerading as physics, and the fix is timestamps, not a smaller `dt`". The triple
+    below is the corpus's own: `configuration` has `event_value` for all three of
+    `lm_undocking` → `undocked`, `descent_stage_separation` → `separated` and
+    `lm_ascent_jettison` → `abandoned`, so the value it ends on is *whichever event is stamped
+    last* — and scrambling the list order must not change that.
+    """
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    world = plant.load_world(VEHICLE)
+    values = plant.initial_values(world)
+    dt = plant.tick_seconds(world)
+    assert values["configuration"] == "docked"
+
+    def event(name: str, at_us: int) -> plant.Effect:
+        return plant.Effect(offset_us=at_us, verb="execute_event", arguments={"event": name})
+
+    undock, separate, jettison = (
+        event("lm_undocking", 5_000),
+        event("descent_stage_separation", 10_000),
+        event("lm_ascent_jettison", 15_000),
+    )
+
+    # An empty queue is the tick the plant always ran: byte-identical, and the same gaps.
+    plain, empty = [], []
+    assert plant.step(world, values, dt, plain) == plant.step(world, values, dt, empty, effects=[])
+    assert [g.where for g in plain] == [g.where for g in empty]
+
+    # The stamps decide. The list is scrambled on purpose and the answer follows the microseconds.
+    assert plant.step(world, values, dt, None, effects=[separate, jettison, undock])[
+        "configuration"
+    ] == "abandoned"
+    swapped = [
+        event("lm_ascent_jettison", 5_000),
+        event("lm_undocking", 15_000),
+    ]
+    assert plant.step(world, values, dt, None, effects=swapped)["configuration"] == "undocked"
+
+    # And the split tick is the same run as four short ticks with the effects between them. The
+    # horizons are 5 ms, 5 ms, 5 ms and the remainder, in both.
+    split = plant.step(world, values, dt, None, effects=[separate, jettison, undock])
+    manual = plant.step(world, values, 0.005)
+    for effect in (undock, separate, jettison):
+        manual = plant._merged(
+            manual, plant.apply_command(world, manual, effect.verb, effect.arguments)
+        )
+        manual = plant.step(world, manual, 0.005)
+    assert split == manual, [
+        (key, split.get(key), manual.get(key)) for key in set(split) | set(manual)
+        if split.get(key) != manual.get(key)
+    ][:6]
+
+    # §5's two refusals, and both are refused rather than corrected: a stamp outside the tick would
+    # otherwise be clamped into a merge, and a verb that stages nothing would look like an effect
+    # that landed.
+    for bad, needle in (
+        (event("lm_undocking", 20_000), "outside the tick"),
+        (event("lm_undocking", -1), "outside the tick"),
+        (plant.Effect(offset_us=1.5, verb="execute_event", arguments={}), "not an integer number"),
+        (plant.Effect(offset_us=1_000, verb="no_such_verb", arguments={}), "not registered"),
+        # A real verb, and one of the thirty-seven that stage nothing: `ack_alarm` is a read of the
+        # alert state, and an effect that "lands" at a microsecond while writing nothing is the one
+        # failure a caller cannot see, because the value map comes back looking like a quiet tick.
+        (plant.Effect(offset_us=1_000, verb="ack_alarm", arguments={}), "stages no state"),
+    ):
+        with pytest.raises(plant.EffectRefused) as refused:
+            plant.step(world, values, dt, None, effects=[bad])
+        assert needle in str(refused.value), str(refused.value)
+
+    # The tick is 20,000 µs, which is why 20,000 is out of range and 19,999 is not: §5's stamps are
+    # integers *inside* one tick, and the last microsecond of the tick is the last one it has.
+    assert plant._tick_us(dt) == 20_000
+    assert plant.step(world, values, dt, None, effects=[event("lm_undocking", 19_999)])[
+        "configuration"
+    ] == "undocked"
+
+
+def test_the_tick_is_a_whole_number_of_microseconds(tmp_path):
+    """§5's stamps are integers, and nothing asked whether a tick **has** an integer number of them.
+
+    `tick_hz` was held against `total_ticks` (round 45) and against the estimator's sub-stepping
+    rates (round 35), and both of those are statements about how many ticks there are. The queue
+    needs a different one: a stamp is an integer count of microseconds *within* a tick, so a tick
+    that is not a whole number of microseconds has no grid to place one on.
+
+    At 50 Hz it does — 20,000 µs exactly — which is why the corpus has been able to assume it. At
+    60 Hz it does not, and the failure is silent in the way §5 names: the plant rounds the tick, so
+    a stamp meant for the tick's last microsecond lands on the next tick's first and the tie-break
+    between two events is decided by a float. `gnc/estimator#sub_stepping` already cites "the
+    plant's integer-microsecond event queue" as what its major cycle is a sub-step inside, so this
+    is a join between two declarations rather than a preference.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-900:]
+
+    for hertz, needle in (
+        ("60", "not a whole number of microseconds"),
+        ("2000000", "contains no whole microsecond at all"),
+    ):
+        definition = copy_definition(fixture_dir(tmp_path, f"tick-{hertz}"))
+        path = definition / "mission.yaml"
+        text = path.read_text()
+        path.write_text(
+            re.sub(r"^tick_hz:.*$", f"tick_hz: {hertz}", text, count=1, flags=re.M)
+        )
+        out = run_linter(definition)
+        assert out.returncode == 1, out.stdout[-900:]
+        assert needle in out.stdout, out.stdout[-900:]
+
+
 def test_a_read_is_held_to_the_node_that_drives_the_flux(tmp_path):
     """`reads:` was held to the source node, and for a discharge the source is the end nobody reads.
 
@@ -13542,6 +13674,8 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # entry per subject: the shape can say it now, so there is nothing left for a debt to name.
     # 278 -> 274 in round 76: the four machines `mission.yaml#launch_state` settles stopped
     # owing a starting position.
+    # Unmoved in round 78, and that is the round's own measurement: §5's queue landed with nothing
+    # scheduled on it, so no obligation was answered and none was created.
     # 274 -> 276 in round 77, and the two are a new *kind* of obligation rather than more of an old
     # one: `sensor_health` and `innovation_window` carry hysteresis bands whose subject is a
     # statistic — a sensor's disagreement with its peers, and normalized innovation squared — that
