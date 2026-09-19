@@ -420,6 +420,7 @@ state:
       assert: 3
       clear: 1
       dwell_ms: 0
+    band_on: UNCONFIGURED
     provenance:
       basis: historical
       source: "avionics_diode.md:380-386 — `bad_count` incremented on an implausible sample, reset on a plausible one, and compared against `trip_count`"
@@ -430,7 +431,12 @@ state:
         sample rate varies by two orders of magnitude across the vehicle — the bus voltmeters
         publish at 10 Hz and the reconciliation residuals at 0.2 Hz, so "200 ms of bad samples"
         means twenty samples on one and none on the other. `assert: 3` and `clear: 1` are the
-        document's trip semantics made declarative
+        document's trip semantics made declarative. `band_on` is `UNCONFIGURED` on purpose and is
+        the one thing this entry still owes: the band counts samples of a *statistic* — a
+        sensor's disagreement with its peers — and no registered point carries that statistic, so
+        there is nothing for the band to be a band on. It is not on a channel's volts and naming
+        one would be a lie; what it wants is the disagreement statistic published as a point,
+        which is FDIR's own arithmetic and would be the same point its comparison reads.
 
   - id: redundancy_vote
     node: internal
@@ -531,6 +537,7 @@ state:
       assert: 2
       clear: 1
       dwell_ms: 0
+    band_on: UNCONFIGURED
     provenance:
       basis: historical
       source: "avionics_diode.md:413-418 — `k_of_m_history`, and the two thresholds that separate a warn from a trip"
@@ -543,7 +550,11 @@ state:
         error vector, `S = H P- H^T + R`, and a Joseph-form update chosen because 34.56 million
         covariance updates over an eight-day run is exactly the regime where the asymmetric form
         drifts. The debt is closed; the two domains now share one innovation test, which is the
-        right number of them
+        right number of them. `band_on` is the exception, and it is a different debt from the one
+        just closed: the two values count *innovations over the warn threshold* in a window of m
+        samples, and normalized innovation squared is a statistic the estimator computes rather
+        than a point it publishes — so the band's own subject has no registered point yet, and
+        `assert: 2` cannot be read against anything
 
   - id: actuator_tracking
     node: internal

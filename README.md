@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 274 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 276 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,8 +211,8 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 274 declared debts
-and every one of them named. **107 of the 139 states are fully configured and 32 carry a debt**, and
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 276 declared debts
+and every one of them named. **105 of the 139 states are fully configured and 34 carry a debt**, and
 a real tick advances **45** of the 139 states, and the build order's **45** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
@@ -226,11 +226,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **274** is every obligation the linter can name:
-**197** literal `UNCONFIGURED` scalars and **77** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **276** is every obligation the linter can name:
+**199** literal `UNCONFIGURED` scalars and **77** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **197** the plant
+the missing charging efficiency, the pump-speed conversion). The **199** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
@@ -1633,7 +1633,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete` and `dynamics`
 are rules the configuration deliberately does not carry** — `delay` *is* carried, as a `delay_s` and
 a ring, and the vehicle's one delay state is in *ready now* — and counting them together with the
-states a tick cannot reach because a coupling is missing, so 49 of the 139 states need code.
+states a tick cannot reach because a coupling is missing, so 47 of the 139 states need code.
 (This said *before the plant can walk a whole tick*, which was true when it was written and is not
 now: a tick walks all 139 of them and records what it cannot advance. See *The tick stopped at its
 first debt* below.)
@@ -1825,17 +1825,17 @@ implementer should open first. That is round 58's change, and it replaced a seco
 worklist used to run its own sequence of tests over each state's spec and answer a different question
 from the one a tick answers, which left nine states filed *ready now* and refused by the first tick
 in round 57 and two more still after it. `test_the_build_order_is_the_ticks_own_gap_list` holds the
-two sets equal, and `--readiness` still counts what a *declaration* is missing: 25 states carry a
-debt, and the three that differ from this bucket are the ones a tick cannot reach because a value
-their producer is missing has not moved them.
+two sets equal, and `--readiness` still counts what a *declaration* is missing: 34 states carry a
+debt and 29 of them are in this bucket — the five that differ are debts a tick walks past, which is
+the distinction between a value nobody has written down and a state nothing can reach.
 
 ```
 139 states, by what blocks them:
 
     45   32 %  ready now — the states a real tick advances
-    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
+    32   23 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    49   35 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    47   34 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -17595,6 +17595,81 @@ that is the whole reason the block covers four and not thirteen.
 | UNCONFIGURED scalars | 201 | **197** |
 | `report.refuse` call sites | 809 | **814** |
 | tests | 327 | **328** |
+
+## A hysteresis band said when a state flips and never what it was reading
+
+Six states carry a `hysteresis` block. Four of them have values in it:
+
+| state | band | what it is a band on |
+|---|---|---|
+| `lcl_tripped` | 1.25 / 1.05 | `power.lcl_[n]_current_a` — as a **fraction** of the load's rating |
+| `load_shed_class` | 26.5 / 27.0 | *nothing said* — and the note claimed "volts on bus A" |
+| `sensor_health` | 3 / 1 | *nothing* — a count of samples, not a point |
+| `innovation_window` | 2 / 1 | *nothing* — a count of innovations over a threshold |
+
+A band carries a unit-less pair of numbers and no subject. Nothing in the file says what quantity
+those numbers are compared against, so a band can be read against any point at all — and the one
+place that *did* say it was prose, in `load_shed_class`'s note: *"Its hysteresis values are volts on
+bus A and are shadowed by the four bus thresholds in profiles.yaml, which carry the per-tier
+dwells."*
+
+**That sentence was false by 0.2 V.** `bus_a_undervoltage` — the tier the state's own assert matches
+to the volt — declares `assert: 26.5, clear: 27.2`. The state declared `clear: 27.0`. A bus
+recovering to 27.1 V therefore released the ladder's position while `bus_a_undervoltage` was still
+asserted: two statements about the same volts, on the same point, disagreeing — with a sentence
+between them claiming they were the same. Prose about a band is not a reader of a band, and this
+folder's recurring finding is what a declaration with no reader does.
+
+The repair is a field and a check rather than a better sentence:
+
+- **`band_on`** names the point the band is a band on, or `UNCONFIGURED` when its subject is a
+  statistic no point carries.
+- **Where a threshold on that point declares a band of its own, the two must be one decision** — as
+  *values* when the state's band is in the point's units, and as a **ratio** when it is not.
+- **`band_units`** is how a band says it is in different units. `lcl_tripped`'s 1.25/1.05 is
+  `lcl_overcurrent`'s 313 A / 263 A as a fraction of the load's rating: 1.190 either way, which is
+  the part that survives the unit change and therefore the part worth checking. Declaring the band
+  in amperes there would be a second source of truth for a limit the threshold already owns.
+
+So `load_shed_class` carries the top tier's own band, to the volt — it reads its `clear` from the
+threshold now rather than restating it — and `lcl_tripped` names its point and declares its units.
+Nothing else moved: `band_on` on a point no threshold bands is recorded and left alone, because
+there is nothing yet to hold it to.
+
+**The other two are a new kind of obligation, and they stay owed.** `sensor_health` counts samples of
+a sensor's disagreement with its peers; `innovation_window` counts innovations over a warn threshold.
+Neither statistic is a registered point — one is FDIR's own arithmetic and the other is a quantity
+the estimator computes rather than publishes — so `band_on: UNCONFIGURED` is the honest answer and
+naming a channel there would be a lie. **Both are the same debt**: the point their band is on.
+
+**The mistake this round made first.** It reported those two itself, so each appeared twice in
+`--debts` — once as *"is UNCONFIGURED"* from the generic unset walk and once from the new check. That
+is round 74's fault rebuilt inside the round that was quoting it: one missing limit counted as two.
+The check refuses a band with no `band_on` at all and leaves the counting to the walker, which
+already counts every unset scalar.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 274 | **276** |
+| build order · ready now | 45 | 45 |
+| build order · owes a value | 30 | **32** |
+| build order · owes a rule | 49 | **47** |
+| a real tick advances | 45 of 139 | 45 of 139 |
+| states fully configured | 107 / 139 | **105 / 139** |
+| states with a debt | 32 / 139 | **34 / 139** |
+| UNCONFIGURED scalars | 197 | **199** |
+| `report.refuse` call sites | 814 | **818** |
+| tests | 328 | **329** |
+
+The two states that changed bucket moved from *owes a rule* to *owes a value*, and that is the more
+accurate answer rather than a regression: what `sensor_health` and `innovation_window` are waiting
+for is a **number** — the point their band is on — not the domain code the rule bucket was asking
+them for. The debt count and the `UNCONFIGURED` count both rise by exactly those two, and the
+refusal count rises by four: a band with no `band_on`, a `band_on` that names no registered point,
+a band disagreeing with the threshold on its own point in the point's units, and a band claiming
+other units while dividing differently from the band it names.
 
 ## The invariants, and which of them are enforced
 

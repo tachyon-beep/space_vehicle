@@ -781,7 +781,11 @@ def test_the_build_order_is_the_ticks_own_gap_list():
     # the effect path applies it.
     # 41 -> 45 ready and 34 -> 30 value in round 76: the four machines `mission.yaml#launch_state`
     # settles, which were the largest single family among the thirteen owed positions.
-    ) == (45, 30, 15, 49), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
+    # 30 -> 32 value and 49 -> 47 rule in round 77, and the move is one finding rather than two:
+    # `sensor_health` and `innovation_window` carry hysteresis bands over statistics that no point
+    # carries, so `band_on` is a second `UNCONFIGURED` on each and what they owe is a *value* — the
+    # point their band is on — rather than the domain code the rule bucket was asking them for.
+    ) == (45, 32, 15, 47), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
 
 
 def test_the_worklist_never_blames_a_state_whose_node_publishes_no_value():
@@ -2829,8 +2833,8 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
-    # One block deleted is one debt added: the corpus stands at 273, so the ablation is 274.
-    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
+    # One block deleted is one debt added: the corpus stands at 276, so the ablation is 277.
+    assert "COMPOSES, with 277 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2852,7 +2856,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 277 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2866,7 +2870,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 277 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6550,7 +6554,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # Removing this file's own prose obligations takes the headline down by the number of entries
     # that file carries, which is one here — so the figure is the base minus one, and it moves with
     # the base rather than with the runs of fixtures that inject a debt.
-    assert "with 273 declared debt(s)" in result.stdout
+    assert "with 275 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6961,7 +6965,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 277 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7067,7 +7071,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 277 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -8690,6 +8694,130 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     )
 
 
+def test_a_hysteresis_band_says_what_point_it_is_a_band_on(tmp_path):
+    """A band with values says when a state flips. What it never said was what it was *reading*.
+
+    `hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}` carries no unit and no subject, so a
+    band can be read against any point at all — and `load_shed_class`'s own note claimed its values
+    "are volts on bus A and are shadowed by the four bus thresholds in profiles.yaml" while the
+    threshold it named cleared at **27.2 V** and the state cleared at 27.0. A bus recovering to
+    27.1 V released the ladder's position while `bus_a_undervoltage` was still asserted: two
+    statements about the same volts, disagreeing by 0.2 V, with a sentence asserting they agreed.
+
+    Nothing read the sentence and nothing read the band, which is why the repair is a field and a
+    check rather than better prose. `band_on` names the point, and where a threshold on that point
+    declares a band of its own, the two must be the same decision — as values when the state's band
+    is in the point's units, and as a **ratio** when it is not: `lcl_tripped`'s 1.25/1.05 is
+    `lcl_overcurrent`'s 313 A/263 A as a fraction of the load's rating, and 1.190 is 1.190 either
+    way. Declaring that band in amperes would be a second source of truth for a limit the threshold
+    owns, which is why `band_units` exists rather than a conversion.
+
+    **Two bands name no point, and the round leaves them owed.** A sensor's disagreement with its
+    peers and normalized innovation squared are statistics their domains compute; neither is a
+    registered point, so neither band can be read against anything — and naming a channel there
+    would be a lie rather than a fix. `band_on: UNCONFIGURED` is counted by the generic unset walk
+    like every other unset scalar.
+
+    **The mistake this round made first:** it emitted its own debt for those two, so each was
+    reported twice — once as "is UNCONFIGURED" by the walker and once by the new check, which is
+    round 74's fault (one missing limit counted as two) rebuilt inside the round that was quoting
+    it. The new check refuses a *missing* `band_on` and leaves the counting to the walker.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1200:]
+
+    bands: dict[str, dict] = {}
+    for path in sorted((VEHICLE / "domains").glob("*/components.yaml")):
+        document = yaml.safe_load(path.read_text())
+        for state in document.get("state") or []:
+            band = state.get("hysteresis")
+            if isinstance(band, dict) and any(
+                isinstance(band.get(field), (int, float)) and not isinstance(band.get(field), bool)
+                for field in ("assert", "clear")
+            ):
+                bands[state["id"]] = state
+    # The four bands with values in them, and every one of them says what it is on.
+    assert sorted(bands) == [
+        "innovation_window",
+        "lcl_tripped",
+        "load_shed_class",
+        "sensor_health",
+    ], sorted(bands)
+    assert {sid: state["band_on"] for sid, state in bands.items()} == {
+        "load_shed_class": "power.dc_bus_a_v",
+        "lcl_tripped": "power.lcl_[n]_current_a",
+        "sensor_health": "UNCONFIGURED",
+        "innovation_window": "UNCONFIGURED",
+    }
+
+    # The ladder's band is the top tier's own, to the volt — and it is the *threshold's* value the
+    # state now carries, so the two cannot drift apart again.
+    profiles = yaml.safe_load((VEHICLE / "domains" / "power" / "profiles.yaml").read_text())
+    tiers = {t["id"]: t for t in profiles["thresholds"] if t.get("point") == "power.dc_bus_a_v"}
+    assert bands["load_shed_class"]["hysteresis"]["assert"] == tiers["bus_a_undervoltage"]["assert"]
+    assert bands["load_shed_class"]["hysteresis"]["clear"] == tiers["bus_a_undervoltage"]["clear"] == 27.2
+
+    # And the fraction is the same decision as the amperes, which is what can be compared across
+    # units: the ratio.
+    overcurrent = next(t for t in profiles["thresholds"] if t["id"] == "lcl_overcurrent")
+    band = bands["lcl_tripped"]["hysteresis"]
+    assert band["assert"] / band["clear"] == pytest.approx(
+        overcurrent["assert"] / overcurrent["clear"], rel=0.01
+    )
+
+    # Each of the two owed bands is reported once rather than twice, which is the round's own first
+    # mistake: the walker already counts an `UNCONFIGURED` scalar.
+    view = subprocess.run(
+        [sys.executable, str(LINTER), "--dir", str(VEHICLE), "--debts"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    assert view.count("band_on") == 2, view
+
+    def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        target = definition.joinpath(*path)
+        text = target.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        target.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1200:]}"
+
+    # A band reading a point it does not name.
+    refusal(
+        "no-band-on",
+        ("domains", "power", "components.yaml"),
+        "    band_on: power.dc_bus_a_v\n",
+        "",
+        "and no `band_on`",
+    )
+    # A band on a point that does not exist.
+    refusal(
+        "unregistered",
+        ("domains", "power", "components.yaml"),
+        "    band_on: power.dc_bus_a_v\n",
+        "    band_on: power.dc_bus_c_v\n",
+        "which is not a registered point",
+    )
+    # And the disagreement the round found: the state's clear 0.2 V below the threshold's own.
+    refusal(
+        "clear-disagrees",
+        ("domains", "power", "components.yaml"),
+        "hysteresis: {assert: 26.5, clear: 27.2, dwell_ms: 500}",
+        "hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}",
+        "Two statements about the same quantity in the same units on the same point have to agree",
+    )
+    # A band claiming other units while dividing differently from the band it names.
+    refusal(
+        "ratio-disagrees",
+        ("domains", "power", "components.yaml"),
+        "hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}",
+        "hysteresis: {assert: 1.25, clear: 1.02, dwell_ms: 500}",
+        "is not the ratio of any band declared there",
+    )
+
+
 def test_a_read_is_held_to_the_node_that_drives_the_flux(tmp_path):
     """`reads:` was held to the source node, and for a discharge the source is the end nobody reads.
 
@@ -8947,7 +9075,11 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # the verb, `command_value` mapped its argument and `dwell` guarded the re-command — and what
     # the plant owed was the *hold* between commands. Eleven of the twelve moved to `value` because
     # the mode's starting position is owed; the twelfth is `relief_valve_state`, which reaches ready.
-    assert len(buckets["rule"]) == 49, "just under a third of the vehicle is domain code"
+    # 49 -> 47 in round 77, and it is the same finding as the value bucket's move above:
+    # `sensor_health` and `innovation_window` owe the *point* their hysteresis band is on, which is
+    # a value, rather than the logic that would drive them, which is what this bucket was asking
+    # for. A band over a statistic nobody publishes is blocked by a missing number, not by code.
+    assert len(buckets["rule"]) == 47, "just under a third of the vehicle is domain code"
     # Two more moved *in* when a discrete state began owing a value by field name rather than
     # owing the code that would set it: `telemetry_rate` and `bus_tie_closed`, whose
     # `command_value` mappings name profiles and a mode no source prices.
@@ -8973,12 +9105,13 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # 26 -> 25 in round 33: `suit_loop_flow_cfm` took the ECS guide's published 35 cfm as its
     # initial, so it stopped owing a value — and the bucket it moved to is `rule`, above.
     # 25 -> 28 in round 58: the bucket is a *root's* verdict now, so the states blocked behind a
-    # value debt are filed here with it. `--readiness` still counts the declarations: 25 states
-    # carry one, and the three that differ are the ones a tick cannot reach because a value their
-    # producer is missing has not moved them.
+    # value debt are filed here with it. `--readiness` still counts the declarations: 34 states
+    # carry one and 29 of them are in this bucket — the five that differ are debts a tick walks
+    # past, which is the difference between a value nobody wrote down and a state nothing reaches.
     # 23 -> 34 in round 67: eleven commanded modes whose starting position no source answers. The
     # narrow bucket is where they belong — each is one field — and the count is the shopping list.
-    assert len(buckets["value"]) == 30
+    # 30 -> 32 in round 77: the two hysteresis bands whose subject is a statistic no point carries.
+    assert len(buckets["value"]) == 32
     # Two of the twenty-eight "owed an edge" were not owed one at all: the three preloaded tanks
     # are advanceable, and the thirteen `internal` states need code. Three more left the bucket
     # when it stopped asking the integrator's question — a `regimes` table is a *declared*
@@ -10356,7 +10489,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 274 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 276 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -10452,7 +10585,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 274 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 276 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -13243,7 +13376,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 276 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -13409,7 +13542,11 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # entry per subject: the shape can say it now, so there is nothing left for a debt to name.
     # 278 -> 274 in round 76: the four machines `mission.yaml#launch_state` settles stopped
     # owing a starting position.
-    assert owed == "274", "the view must agree with the headline count"
+    # 274 -> 276 in round 77, and the two are a new *kind* of obligation rather than more of an old
+    # one: `sensor_health` and `innovation_window` carry hysteresis bands whose subject is a
+    # statistic — a sensor's disagreement with its peers, and normalized innovation squared — that
+    # no registered point carries, so the bands name no point and cannot be read against anything.
+    assert owed == "276", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -15102,7 +15239,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 274 declared debt(s)",
+        "COMPOSES, with 276 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -15110,7 +15247,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 274 declared debt(s)",
+        "COMPOSES, with 276 declared debt(s)",
         composes=True,
     )
 
@@ -15125,7 +15262,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 275 declared debt(s)" in out, out[-300:]
+    assert "with 277 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -15284,7 +15421,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 275 declared debt(s)" in out, out[-400:]
+    assert "with 277 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -15431,7 +15568,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 275 declared debt(s)" in out, out[-400:]
+    assert "with 277 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -15441,7 +15578,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 274 declared debt(s)",
+        "COMPOSES, with 276 declared debt(s)",
         composes=True,
     )
 
@@ -15583,7 +15720,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 274 declared debt(s)",
+        "COMPOSES, with 276 declared debt(s)",
         composes=True,
     )
 

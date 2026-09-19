@@ -16213,6 +16213,126 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
             )
 
 
+def check_band_on(root: Path, registry: dict[str, dict[str, Any]], report: Report) -> None:
+    """**A hysteresis band with values in it has to say what point it is a band *on*.**
+
+    `hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}` says when a state flips and nothing
+    whatever about what it is reading. The unit is not in the band and the subject is not in the
+    band, so a band whose *subject* changes — a threshold on the same quantity moving its own
+    band, or the state being moved to a different point — keeps comparing the old numbers against
+    the new point and nothing notices. That is not a hypothetical: `load_shed_class`'s own note
+    claimed its "hysteresis values are volts on bus A and are shadowed by the four bus thresholds
+    in profiles.yaml", and the claim was false by 0.2 V — the threshold clears at 27.2 V and the
+    state cleared at 27.0, so a bus recovering to 27.1 V released the ladder's position while
+    `bus_a_undervoltage` was still asserted. Prose about a band is not a reader of it, which is
+    why the repair is a field and this function is what reads it.
+
+    `band_on` names a registered point, or `UNCONFIGURED` when the band's subject has no point —
+    and `UNCONFIGURED` is a debt here for the same reason it is everywhere else: a band counting
+    samples of a statistic nobody publishes cannot be read against anything.
+
+    Where a threshold on that point declares a band of its own, the two have to be the same
+    decision, and which question to ask depends on `band_units`:
+
+    - **absent** — the state's band is in the point's own units, so its `assert` and `clear` must
+      be one of the bands a threshold on that point already declares. That is the check that
+      caught `load_shed_class`.
+    - **declared** — the same band carried in different units, which is `lcl_tripped`'s case: its
+      1.25/1.05 is `lcl_overcurrent`'s 313 A/263 A as a fraction of the load's rating. Values
+      cannot be compared across units, but the *ratio* can, and it is the same decision: 1.190
+      either way. Declaring the band in amperes here would be a second source of truth for a
+      limit the threshold owns.
+
+    A point no threshold bands is left alone: the join is recorded, and there is nothing yet to
+    hold it to. A band whose own `assert` and `clear` are still owed owes those first — this
+    function is about what a band with values is *on*, not about the values.
+    """
+
+    def held(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    bands: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted((root / "domains").glob("*/profiles.yaml")):
+        profiles = load(path, Report()) or {}
+        for threshold in profiles.get("thresholds") or []:
+            if not isinstance(threshold, dict) or not threshold.get("point"):
+                continue
+            if held(threshold.get("assert")) and held(threshold.get("clear")):
+                bands.setdefault(str(threshold["point"]), []).append(threshold)
+
+    index = ChannelIndex(registry)
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for position, state in enumerate(components.get("state") or []):
+            if not isinstance(state, dict):
+                continue
+            band = state.get("hysteresis")
+            if not isinstance(band, dict):
+                continue
+            assert_v, clear_v = band.get("assert"), band.get("clear")
+            if not (held(assert_v) and held(clear_v)):
+                continue
+            where = f"domains/{path.parent.name}/components.yaml#state[{position}]({state.get('id')})"
+            band_on = state.get("band_on")
+            if band_on is None:
+                report.refuse(
+                    where,
+                    f"carries a hysteresis band ({assert_v}, {clear_v}) and no `band_on`, so neither "
+                    "the band's unit nor the quantity it compares is written down anywhere — the "
+                    "numbers can be read against any point at all. Name the point the band is a band "
+                    "on, or `UNCONFIGURED` if its subject is a statistic no point carries",
+                )
+                continue
+            if band_on == "UNCONFIGURED":
+                # Not a debt reported here. `walk_unset` already counts every `UNCONFIGURED`
+                # scalar, so emitting one from this function would report one missing value twice
+                # — the exact fault round 39 found in the threshold census. What this function
+                # adds for that state is the *refusal* when the field is missing entirely; the
+                # reason it is unset lives in the state's own note, where every other
+                # `UNCONFIGURED` in the vehicle keeps it.
+                continue
+            if not isinstance(band_on, str) or band_on not in index:
+                report.refuse(
+                    where,
+                    f"names `band_on: {band_on!r}`, which is not a registered point. A band on a "
+                    "point that does not exist is a comparison with nothing",
+                )
+                continue
+            candidates = bands.get(band_on) or []
+            if not candidates:
+                continue
+            units = state.get("band_units")
+            if units is None:
+                if not any(
+                    threshold.get("assert") == assert_v and threshold.get("clear") == clear_v
+                    for threshold in candidates
+                ):
+                    declared_here = ", ".join(
+                        f"{threshold.get('id')}: {threshold.get('assert')}/{threshold.get('clear')}"
+                        for threshold in candidates
+                    )
+                    report.refuse(
+                        where,
+                        f"puts its band at {assert_v}/{clear_v} on {band_on!r}, where the declared "
+                        f"bands are {declared_here}. Two statements about the same quantity in the "
+                        "same units on the same point have to agree; either this band is one of "
+                        "those, or its `band_units` says how it differs from them",
+                    )
+                continue
+            here = assert_v / clear_v
+            if not any(
+                abs(here - (threshold["assert"] / threshold["clear"]))
+                <= 0.01 * (threshold["assert"] / threshold["clear"])
+                for threshold in candidates
+            ):
+                report.refuse(
+                    where,
+                    f"declares `band_units` ({units}) and a band of {assert_v}/{clear_v} on "
+                    f"{band_on!r}, but its ratio {here:.4f} is not the ratio of any band declared "
+                    "there. A band in other units is the same band only if it divides the same way",
+                )
+
+
 def check_mission_bindings(
     channels: dict[str, Any],
     mission: dict[str, Any],
@@ -17560,6 +17680,7 @@ def main(argv: list[str] | None = None) -> int:
         # Outside it: this one reads the mission and the domains, and is about the mission's own
         # start rather than about the vehicle file.
         check_launch_state(root, mission, report)
+        check_band_on(root, registry, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
         check_landing_site(mission, report)

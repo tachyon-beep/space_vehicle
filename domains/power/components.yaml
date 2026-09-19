@@ -342,14 +342,22 @@ state:
       - "trigger:set_breaker"
       - "logic:the protection trips it and reports it on power.lcl_[n]_state; one controlled reclose, then latch"
     hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}
+    band_on: power.lcl_[n]_current_a
+    band_units: "fraction of the rating rather than amperes"
     note: >-
       One controlled reclose and then latch (electrical_diode.md:254, :888-901). The
       reclose-then-latch shape is the whole reason this is a latched discrete with hysteresis
       rather than a comparison: a load that trips on a transient must come back, and one that
-      trips twice inside the recovery dwell must not.
+      trips twice inside the recovery dwell must not. Its band is the same band as
+      `lcl_overcurrent` in profiles.yaml — 125 % and 105 % — carried as a fraction of the load's
+      rating instead of in amperes, which is what `band_units` declares: the two numbers are the
+      same decision in two units, so the check that holds them together is their ratio (1.190,
+      the same as 313 A / 263 A) rather than their values. Declaring the band in amperes here
+      would be a second source of truth for a limit the threshold already owns, and it is the
+      reason the assert is a multiple rather than 313.
     provenance:
       basis: chosen
-      reason: "electrical_diode.md:254 supplies one controlled reclose then latch; a latched discrete with hysteresis is the only representation in which reclose-then-latch is expressible at all"
+      reason: "electrical_diode.md:254 supplies one controlled reclose then latch; a latched discrete with hysteresis is the only representation in which reclose-then-latch is expressible at all, and its band is the lcl_overcurrent band as a fraction of the load's rating"
 
   - id: load_shed_class
     method: discrete
@@ -357,14 +365,20 @@ state:
     unit: "enum[none,P3,P2,P1,P0]"
     moved_by:
       - "logic:the undervoltage ladder's own position, which the bus thresholds drive"
-    hysteresis: {assert: 26.5, clear: 27.0, dwell_ms: 500}
+    hysteresis: {assert: 26.5, clear: 27.2, dwell_ms: 500}
+    band_on: power.dc_bus_a_v
     note: >-
-      The ladder's position. Its hysteresis values are volts on bus A and are shadowed by the
-      four bus thresholds in profiles.yaml, which carry the per-tier dwells; this entry exists
-      so the state itself is latched and cannot oscillate between tiers within a tick.
+      The ladder's position, and the one band of the four in profiles.yaml that the position
+      itself latches on: the top tier, `bus_a_undervoltage` — assert 26.5 V, clear 27.2 V. The
+      clear was 27.0 V until `check_band_on` read this entry's `band_on` against the threshold it
+      names, and the two statements about the same volts disagreed by 0.2 V: a bus recovering to
+      27.1 V released the ladder's position while `bus_a_undervoltage` was still asserted. The
+      per-tier dwells and the three tiers below stay in profiles.yaml, where the thresholds that
+      step through them carry them; what this entry owns is the latch, and a latch needs one band
+      rather than four.
     provenance:
       basis: chosen
-      reason: "the ladder position is a mode, not a measurement, so it is latched; its hysteresis values are volts on bus A and are shadowed by the four bus thresholds, which carry the per-tier dwells"
+      reason: "the ladder position is a mode, not a measurement, so it is latched; its band is the top tier's own band on power.dc_bus_a_v, which `band_on` names so the linter holds the two to the same volts"
 
   - id: bus_a_load_w
     method: algebraic
