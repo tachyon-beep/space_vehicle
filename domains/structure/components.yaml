@@ -57,8 +57,21 @@ state:
     node: structure_config
     method: discrete
     unit: "enum[docked,undocked,separated]"
+    initial: docked
+    initial_provenance:
+      basis: derived
+      relation: "the configuration the mission begins in, which `mission.yaml#phases` states in its first row: `translunar_coast` names `csm_lm_docked`, so the two vehicles are docked, the LM is attached to the CSM and the descent stage is attached to the LM at MET 0"
+      source: mission.yaml:phases.translunar_coast.configurations[0]
     moved_by:
       - "event:lm_undocking"
+    # **What the event makes this state, which has been missing since the state landed.** The event
+    # declares a transition between two *configurations* (`csm_lm_docked` -> `lm_alone_descent`) and
+    # this state speaks its own vocabulary, so "moved by `event:lm_undocking`" named the cause and
+    # not the effect. `event_value` is the other half and it is `command_value`'s shape: the state
+    # says what it becomes, and the linter holds the value inside the state's own `unit`.
+    event_value:
+      - event: lm_undocking
+        becomes: undocked
     one_way: true
     requires_arm: true
     provenance:
@@ -72,10 +85,25 @@ state:
     node: structure_config
     method: discrete
     unit: "enum[docked,undocked,separated,abandoned]"
+    initial: docked
+    initial_provenance:
+      basis: derived
+      relation: "the published configuration at MET 0, which `mission.yaml#phases` states in its first row: `translunar_coast` names `csm_lm_docked`, so the vehicle is docked"
+      source: mission.yaml:phases.translunar_coast.configurations[0]
     moved_by:
       - "event:lm_undocking"
       - "event:descent_stage_separation"
       - "event:lm_ascent_jettison"
+    # The published configuration is the coarse one: undocked, then the descent stage left behind,
+    # then the ascent stage gone. Each is a different value of this state, which is why it declares
+    # all three events rather than the one its own machine does.
+    event_value:
+      - event: lm_undocking
+        becomes: undocked
+      - event: descent_stage_separation
+        becomes: separated
+      - event: lm_ascent_jettison
+        becomes: abandoned
     dwell:
       min_on_s: 0
       min_off_s: 0
@@ -99,8 +127,16 @@ state:
     node: structure_config
     method: discrete
     unit: "enum[attached,separated,abandoned]"
+    initial: attached
+    initial_provenance:
+      basis: derived
+      relation: "the configuration the mission begins in, which `mission.yaml#phases` states in its first row: `translunar_coast` names `csm_lm_docked`, so the two vehicles are docked, the LM is attached to the CSM and the descent stage is attached to the LM at MET 0"
+      source: mission.yaml:phases.translunar_coast.configurations[0]
     moved_by:
       - "event:descent_stage_separation"
+    event_value:
+      - event: descent_stage_separation
+        becomes: separated
     one_way: true
     requires_arm: true
     provenance:

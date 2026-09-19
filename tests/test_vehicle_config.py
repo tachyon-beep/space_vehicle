@@ -776,7 +776,10 @@ def test_the_build_order_is_the_ticks_own_gap_list():
     # 37 -> 38 ready and 16 -> 15 edge in round 72: `E-WATER-RAD` was a crowded node whose read
     # nobody had named, and naming it (`radiator_rejection_w`) made the coolant's discharge a
     # value the tick computes rather than a coupling the worklist asks for.
-    ) == (38, 34, 15, 52), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
+    # 38 -> 41 ready and 52 -> 49 rule in round 75: the three states whose only mover is a one-way
+    # event, which owed the *effect* rather than the rule — `event_value` is that declaration, and
+    # the effect path applies it.
+    ) == (41, 34, 15, 49), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
 
 
 def test_the_worklist_never_blames_a_state_whose_node_publishes_no_value():
@@ -8500,6 +8503,93 @@ def test_the_co_present_vehicles_are_declared_per_subject(tmp_path):
     )
 
 
+def test_a_one_way_event_declares_what_it_makes_of_the_state_it_moves(tmp_path):
+    """`event:` named the cause and nothing named the effect, so three states could not be advanced.
+
+    `moved_by: [event:lm_undocking]` says which event moves a state. The event's own declaration in
+    `one_way_events` gives a transition between two **configurations** (`csm_lm_docked` →
+    `lm_alone_descent`), and the state speaks a vocabulary of its own (`docked/undocked/separated`).
+    Nothing joined the two, so `lm_separation_state`, `descent_stage_state` and `configuration` have
+    been "moved" by an event since they landed and no tool could say what they *become* — which is
+    the whole of why the plant refused them, and why they sat in *owes a rule* beside states that
+    genuinely owe code.
+
+    **The effect is `event_value`, and it is `command_value`'s shape**: the state says what the event
+    makes it, and the value is held inside the state's own `unit` — round 67's rule for a starting
+    position, applied to a transition. The other declaration is allowed and already exists:
+    `pyro_fired` carries its effect in a `command_value` entry for the event's *verb*, and its own
+    note says so — *"The other mover, `event:pyro_fire`, is the executive raising the same value."*
+
+    **What is still owed is `plant.md` §5's sub-tick half.** These transitions arrive as commands and
+    the effect path applies them at the moment of effect; the *queue* — integer-microsecond stamps
+    on latched comparators, and §9 step 3's `min(dt, time to next event)` — wants its first
+    comparator-driven latch, which is the hysteresis family and not this one.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1200:]
+
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    world = plant.load_world(VEHICLE)
+    values = plant.initial_values(world)
+    # The three start where the mission's own first phase says they do.
+    assert (values["configuration"], values["lm_separation_state"]) == ("docked", "docked")
+    assert values["descent_stage_state"] == "attached"
+
+    staged = plant.apply_command(world, values, "execute_event", {"event": "lm_undocking"})
+    assert staged["lm_separation_state"] == "undocked", staged
+    assert staged["configuration"] == "undocked", staged
+    # The stage that has not separated is not moved by an event that is not its own.
+    assert "descent_stage_state" not in staged, staged
+
+    # And the tick carries what the effect left, which is the rule round 67 landed for commands.
+    carried = plant.step(world, {**values, **staged}, plant.tick_seconds(world), [])
+    assert carried["configuration"] == "undocked" and carried["lm_separation_state"] == "undocked"
+    assert carried["descent_stage_state"] == "attached"
+
+    # Every event mover in the corpus declares its effect, one way or the other.
+    for state in world.states:
+        for mover in [str(m) for m in (state.spec.get("moved_by") or [])]:
+            if mover.startswith("event:"):
+                assert any(
+                    isinstance(row, dict) and str(row.get("event")) == mover.split(":", 1)[1]
+                    for row in state.spec.get("event_value") or []
+                ) or any(
+                    isinstance(row, dict)
+                    and str(row.get("verb"))
+                    == str((world.one_way_events.get(mover.split(":", 1)[1]) or {}).get("verb"))
+                    for row in state.spec.get("command_value") or []
+                ), (state.id, mover)
+
+    def refusal(name: str, old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        path = definition / "domains" / "structure" / "components.yaml"
+        text = path.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        path.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1200:]}"
+
+    # The effect removed: the state is moved by an event and nothing says what it becomes.
+    refusal(
+        "effect-missing",
+        "    event_value:\n      - event: descent_stage_separation\n        becomes: separated\n",
+        "",
+        "nothing says what the event makes this state",
+    )
+    # A value the state cannot report afterwards.
+    refusal(
+        "effect-outside-the-vocabulary",
+        "        becomes: separated\n    one_way",
+        "        becomes: jettisoned\n    one_way",
+        "which its `unit` ('enum[attached,separated,abandoned]') cannot hold",
+    )
+
+
 def test_a_read_is_held_to_the_node_that_drives_the_flux(tmp_path):
     """`reads:` was held to the source node, and for a discharge the source is the end nobody reads.
 
@@ -8722,7 +8812,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # so it is the one of the fourteen that reaches *ready* rather than *owes a value*.
     # 37 -> 38 in round 72: `E-WATER-RAD`'s driver was a crowded node with no name for the state it
     # reads, and naming it (`radiator_rejection_w`) made the coolant's discharge computable.
-    assert len(buckets["ready"]) == 38
+    assert len(buckets["ready"]) == 41
     # `rule` went 71 -> 69 -> 82 across two rounds. The first move was `moved_by`: the two still
     # owed put an `UNCONFIGURED` in their spec and `walk_unset` counts any unset scalar as a value
     # the plant wants, so they left this bucket without the code they need going away. The second
@@ -8757,7 +8847,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # the verb, `command_value` mapped its argument and `dwell` guarded the re-command — and what
     # the plant owed was the *hold* between commands. Eleven of the twelve moved to `value` because
     # the mode's starting position is owed; the twelfth is `relief_valve_state`, which reaches ready.
-    assert len(buckets["rule"]) == 52, "just over a third of the vehicle is domain code"
+    assert len(buckets["rule"]) == 49, "just under a third of the vehicle is domain code"
     # Two more moved *in* when a discrete state began owing a value by field name rather than
     # owing the code that would set it: `telemetry_rate` and `bus_tie_closed`, whose
     # `command_value` mappings name profiles and a mode no source prices.
@@ -11147,7 +11237,9 @@ def test_every_stock_declares_where_it_starts():
     # moves the figure by one.
     # 56 -> 57 in round 70, with `source_converter`: the regulator's node is a node like any
     # other, and its state being seeded is what makes the cell's node single-state again.
-    assert len(on_nodes) == 57, f"{len(on_nodes)} node keys carry a value"
+    # 57 -> 60 in round 75: the three states the effect path owns through a one-way event, which
+    # are seeded now that they declare the position they hold.
+    assert len(on_nodes) == 60, f"{len(on_nodes)} node keys carry a value"
     # And the map a tick actually starts from is that seed plus the declared arithmetic, so the
     # resolved states are a strict superset and every one of them is `algebraic`.
     assert seeded_integrators.keys() < seeded.keys(), "the resolution added nothing to the seed"
@@ -14155,7 +14247,11 @@ def test_every_command_that_writes_a_state_can_be_applied_or_refuses_by_name():
             # It is not necessarily a key `initial_values` seeded: only *stocks* have declared
             # starting amounts, so a mode node like `engine_main` is absent from the seed and appears
             # the first time a command writes it.
-            assert key == "internal" or key in world.nodes or any(s.id == key for s in targets), key
+            # **And the states a one-way event moves**, which the effect pass stages under their own
+            # ids: `targets` is what the *verb* writes through `command_value`, and an event writes
+            # states the verb has no `command_value` entry for.
+            known = {state.id for state in world.states}
+            assert key == "internal" or key in world.nodes or key in known, key
     # **Fourteen apply and seven are owed**, and the eighth moved across in round 33: a
     # rule-computed state is changed through an *input*, and `select_antenna`'s input
     # (`comms.antenna_selection`) is a state that exists and declares the same verb — so the command
@@ -15559,7 +15655,7 @@ def test_the_linter_asks_a_carried_mode_where_it_starts_and_not_a_code_moved_one
         eclss,
         "    unit: \"enum[closed,primary,emergency,isolated]\"\n    initial: UNCONFIGURED\n",
         "    unit: \"enum[closed,primary,emergency,isolated]\"\n",
-        "is a `discrete` state whose every mover is a command (['set_cabin_regulator'])",
+        "is a `discrete` state the effect path owns (['command:set_cabin_regulator'])",
     )
     # A position the state cannot hold. `cabin_regulator_position` has no `auto` member — that is
     # the bus tie's vocabulary — so this is a mode the vehicle would be in and could not report.
@@ -17659,8 +17755,9 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # unblocked are the whole of this move.
     # 36 -> 37 in round 67, with `relief_valve_state`: the plant holds a commanded mode, and the
     # relief valve's starting position is the one the corpus could source.
-    # 37 -> 38 in round 72, with the coolant's drain.
-    assert len(advanced) == 38, sorted(advanced)
+    # 37 -> 38 in round 72 (the coolant's drain) and 38 -> 41 in round 75, with the three
+    # states the effect path owns through a one-way event.
+    assert len(advanced) == 41, sorted(advanced)
 
     # The arithmetic is the corpus's, at the values the corpus declares.
     assert values["cabin_heat_csm"] == 733.0
@@ -19543,4 +19640,5 @@ def test_the_tick_can_read_what_the_build_order_promises():
 
     # The figures this rests on, so a round that moves them has to say so here.
     assert len(world.states) == 139
-    assert len(ready) == 38 and len(advanced) == 38
+    # 38 -> 41 in round 75: the three event-moved states, held by the tick and moved by the effect.
+    assert len(ready) == 41 and len(advanced) == 41

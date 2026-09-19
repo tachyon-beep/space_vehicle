@@ -72,6 +72,7 @@ from check_vehicle import (  # noqa: E402  (a sibling tool, not a package)
     command_only_movers,
     derivation_value,
     derive_schedule,
+    effect_owned_movers,
     lag_driver_basis,
     stock_flux_basis,
 )
@@ -240,6 +241,10 @@ class World:
     # sentinel in the order they advance, or the string "independent". Absent means the domain owes
     # the declaration, and this file says so out loud when it advances them anyway.
     internal_order: dict[str, Any] = field(default_factory=dict)
+    # domain -> event id -> the `one_way_events` row that declares it, with its verb, its two
+    # configurations and its arming requirement. The effect path needs the verb to know which
+    # command fires which event, and nothing else in this file reads the block.
+    one_way_events: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Every YAML document a declared `derivation` may name, so an `algebraic` state's own arithmetic
     # can be evaluated at a tick. Loaded once, with the world.
     documents: dict[str, Any] = field(default_factory=dict)
@@ -414,6 +419,18 @@ def load_world(root: Path) -> World:
         # weaker than the linter's — which is the one thing sharing the function is meant to prevent.
         nodes={str(k): v for k, v in (coupling.get("nodes") or {}).items()},
         internal_order=internal_order,
+        # domain -> event id -> the row, built in one pass over the domain files. The effect path
+        # needs each event's `verb` to know which command fires it.
+        one_way_events={
+            str(row.get("id")): {**row, "domain": components_path.parent.name}
+            for components_path in sorted(
+                path
+                for path in (root / "domains").glob("*/components.yaml")
+                if path.is_file()
+            )
+            for row in (load_yaml(components_path).get("one_way_events") or [])
+            if isinstance(row, dict) and row.get("id")
+        },
         channels=channels,
         documents=documents,
         points=points,
@@ -1764,6 +1781,17 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         movers = [str(m) for m in (state.spec.get("moved_by") or [])]
         commanded = command_only_movers(state.spec)
         elsewhere = sorted(m for m in movers if not m.startswith("command:"))
+        # **The other half of the family, and it was the same gap one declaration over.** A state
+        # whose only mover is an `event:` is held between events for exactly the reason a commanded
+        # one is held between commands — an irreversible transition is not a per-tick computation —
+        # and what it owed was not the *rule* but the *effect*: the event names a transition between
+        # two configurations and the state speaks a vocabulary of its own. `event_value` is that
+        # declaration, so a state that has one for every event it names is carried here, and a state
+        # that lacks one still refuses with the mover named.
+        owned = effect_owned_movers(state.spec)
+        if owned and not commanded:
+            commanded = owned
+            elsewhere = []
         if commanded and not elsewhere:
             held = state_level(values, state)
             if held is None:
@@ -1983,7 +2011,10 @@ def initial_values(world: World) -> dict[str, Any]:
     """
     values: dict[str, Any] = {}
     for state in world.states:
-        if state.method == "discrete" and command_only_movers(state.spec):
+        # **`effect_owned_movers`, not `command_only_movers`** — the seeder is the fifth reader of
+        # the predicate, and it is the one whose silence reads as "the state has no starting
+        # position" rather than "this branch did not recognise it".
+        if state.method == "discrete" and effect_owned_movers(state.spec):
             # **A latched mode's starting position, which is not a number and is not nothing.** The
             # tick's hold reads the state's current value, so a mode the plant carries needs a
             # position at t=0 for the same reason a stock needs a level: without one the first tick
@@ -2485,6 +2516,27 @@ def apply_command(
         else:
             staged[state.node] = value
             staged[state.id] = value
+    # --------------------------------------------------------------------------------------
+    # **And what the one-way events this command fires make of the states that declare them.**
+    #
+    # `moved_by: [event:lm_undocking]` names the cause and `event_value` names the effect; the
+    # effect path is what applies it, for the reason round 67 gave for the commanded family — a
+    # latched transition is not a per-tick computation, and the tick's whole job is to hold the
+    # value between transitions. The events a command fires are the ones whose own declaration
+    # names this verb: `execute_event` carries `event` as an enum of the declared ids, so the join
+    # is exact rather than a guess at which argument names one.
+    # --------------------------------------------------------------------------------------
+    fired = {
+        str(name)
+        for arg in arguments.values()
+        for name, row in world.one_way_events.items()
+        if str(name) == str(arg) and str(row.get("verb")) == verb
+    }
+    for event_id in sorted(fired):
+        for state in world.states:
+            for row in state.spec.get("event_value") or []:
+                if isinstance(row, dict) and str(row.get("event")) == event_id:
+                    staged.update(state_values(world, state, row.get("becomes")))
     return staged
 
 
@@ -2607,14 +2659,17 @@ def _classify(world: World, state: State) -> str:
         # arriving one class later. A delay is a `delay_s` and a ring and nothing else, which
         # makes it the third method a configuration can carry on its own.
         return "ready"
-    if state.method == "discrete" and command_only_movers(state.spec):
+    if state.method == "discrete" and effect_owned_movers(state.spec):
         # **And the fourth class a configuration can carry on its own, which this classifier was
-        # most confident could not exist.** A commanded mode's rule is the *hold*, and the
-        # transition is the effect path's; the predicate is the same function `advance` and
-        # `check_initial_values` read, so the worklist, the checker and the tick cannot come apart
-        # over what "carried" means. A mode that still owes its starting position never reaches
-        # here — `initial: UNCONFIGURED` is a literal unset scalar, so the value branch above files
-        # it, which is the right bucket for a state that is one field away.
+        # most confident could not exist.** A latched machine's rule is the *hold* and its
+        # transitions are the effect path's — a command or a one-way event — so what it owes is the
+        # effect declared, not code. The predicate is the same function `advance` and
+        # `check_initial_values` read, **widened in round 75 to include an event mover whose effect
+        # the state declares**: this classifier is the fourth reader of it, and round 72's lesson
+        # was that a predicate taught to three readers and not the fourth produces a worklist that
+        # disagrees with the tick. A machine that still owes its starting position or its effect
+        # never reaches here — the value branch above files it, which is the right bucket for a
+        # state that is one field away.
         return "ready"
     if (
         state.method == "dynamics"

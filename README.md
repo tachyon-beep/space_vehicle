@@ -213,7 +213,7 @@ pricing is now derived from a phase list rather than assumed.
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
 thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
-a real tick advances **38** of the 139 states, and the build order's **38** ready are that same set
+a real tick advances **41** of the 139 states, and the build order's **41** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -1633,7 +1633,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete` and `dynamics`
 are rules the configuration deliberately does not carry** — `delay` *is* carried, as a `delay_s` and
 a ring, and the vehicle's one delay state is in *ready now* — and counting them together with the
-states a tick cannot reach because a coupling is missing, so 52 of the 139 states need code.
+states a tick cannot reach because a coupling is missing, so 49 of the 139 states need code.
 (This said *before the plant can walk a whole tick*, which was true when it was written and is not
 now: a tick walks all 139 of them and records what it cannot advance. See *The tick stopped at its
 first debt* below.)
@@ -1832,10 +1832,10 @@ their producer is missing has not moved them.
 ```
 139 states, by what blocks them:
 
-    38   27 %  ready now — the states a real tick advances
+    41   29 %  ready now — the states a real tick advances
     34   24 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    52   37 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    49   35 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -17449,6 +17449,82 @@ for the suite being this size.
 | build order · ready / value / edge / rule | 38 · 34 · 15 · 52 | 38 · 34 · 15 · 52 |
 | `report.refuse` call sites | 805 | **807** |
 | tests | 325 | **326** |
+
+## A one-way event said which state it moves and not what it makes of it
+
+Four states declare an `event:` mover, and the declaration has three layers that never met:
+
+| layer | says |
+|---|---|
+| the state | `moved_by: [event:lm_undocking]` — **the cause** |
+| the event | `from_configuration: csm_lm_docked`, `to_configuration: lm_alone_descent` — a transition between two **configurations** |
+| the state's `unit` | `enum[docked, undocked, separated]` — **its own vocabulary** |
+
+Nothing joined the second and third, so `lm_separation_state`, `descent_stage_state` and
+`configuration` have been "moved" by an event since they landed and no tool could say what they
+*become*. That is the whole of why the plant refused them, and why they sat in *owes a rule* beside
+states that genuinely owe code: **the rule was never missing — the effect was.**
+
+### `event_value`, which is `command_value`'s shape
+
+```yaml
+- id: configuration
+  moved_by: ["event:lm_undocking", "event:descent_stage_separation", "event:lm_ascent_jettison"]
+  event_value:
+    - {event: lm_undocking, becomes: undocked}
+    - {event: descent_stage_separation, becomes: separated}
+    - {event: lm_ascent_jettison, becomes: abandoned}
+```
+
+The state says what the event makes it, and the value is held inside the state's own `unit` — round
+67's rule for a starting position, applied to a transition. The other declaration is allowed and
+already exists: `pyro_fired` carries its effect in a `command_value` entry for the event's **verb**,
+and its own note says so — *"The other mover, `event:pyro_fire`, is the executive raising the same
+value."* So the linter's rule is one sentence — **a state moved by an event must declare what the
+event makes it, through `event_value` or through a `command_value` for the event's verb** — and it
+fires on all three forms of getting it wrong.
+
+### The predicate had five readers, and round 72 said so
+
+Round 67's `command_only_movers` answered "is every mover a command". Round 75 widens it **by one
+kind** — an `event:` mover whose effect the state declares is the same shape of transition — and the
+widened `effect_owned_movers` is read by five places: the tick's hold, the linter's initial-value
+rule, the seeder, the worklist's classifier, and the effect path. Round 72's finding was a predicate
+taught to three readers and not the fourth; this round the seeder was the one that answered *"this
+state has no starting position"* when the truth was *"this branch did not recognise it"*, and the
+worklist reported **38 ready** while the tick advanced 41.
+
+### The starting positions came with it
+
+A state the effect path owns needs a position to hold, so the same rule that asked the fourteen
+commanded modes in round 67 asks these three — and all three are **derived**, from the mission's own
+first row: `translunar_coast` names `csm_lm_docked`, so the vehicle is `docked`, the LM is `docked`
+to it and the descent stage is `attached` at MET 0.
+
+### What is still owed, and it is §5's other half
+
+`plant.md` §5's queue is **sub-tick**: integer-microsecond stamps on latched comparators, dwell on a
+monotonic clock, and §9 step 3's `horizon = min(dt, time to next event)`. These transitions arrive as
+*commands* and the effect path applies them at the moment of effect, so nothing here needed the
+queue. **The queue's first user is the comparator-driven latch** — the `hysteresis` family, six
+states whose `moved_by` is `logic:` prose and whose input nothing declares — and building it before
+that family exists would be a data structure with no events to schedule. Step 3 stays `horizon = dt`
+and says why.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 278 | 278 |
+| build order · ready now | 38 | **41** |
+| build order · owes a rule | 52 | **49** |
+| build order · owes a value / edge | 34 · 15 | 34 · 15 |
+| a real tick advances | 38 of 139 | **41 of 139** |
+| `report.refuse` call sites | 807 | **809** |
+| tests | 326 | **327** |
+
+**Three states left *owes a rule* without a line of rule code being written**, which is the same
+result round 67 had for fourteen: the rule was the hold, and what the states owed was a declaration.
 
 ## The invariants, and which of them are enforced
 

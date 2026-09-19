@@ -279,6 +279,32 @@ def command_only_movers(state: dict[str, Any]) -> list[str]:
     return sorted({m.split(":", 1)[1] for m in movers})
 
 
+def effect_owned_movers(state: dict[str, Any]) -> list[str]:
+    """The movers the **effect path** owns for this state, or `[]` where something else moves it.
+
+    Round 67's `command_only_movers` answered a narrower question — "is every mover a command" — and
+    this widens it by one kind: an `event:` mover whose effect the state declares (`event_value`) is
+    the same shape of transition, because an irreversible event is not a per-tick computation either.
+    The plant holds such a state between transitions and the effect path carries them, so both the
+    hold and the initial-value rule ask this one predicate rather than a second spelling of it.
+    """
+    movers = [str(m) for m in state.get("moved_by") or []]
+    if not movers:
+        return []
+    declared = {
+        str(row.get("event"))
+        for row in state.get("event_value") or []
+        if isinstance(row, dict)
+    }
+    for mover in movers:
+        if mover.startswith("command:"):
+            continue
+        if mover.startswith("event:") and mover.split(":", 1)[1] in declared:
+            continue
+        return []
+    return movers
+
+
 def unit_vocabulary(unit: Any) -> set[str] | None:
     """Every value a state's `unit` says it can hold, or `None` where the unit is not a vocabulary.
 
@@ -4498,7 +4524,7 @@ def check_initial_values(where: str, components: dict[str, Any], report: Report)
         sid = str(state.get("id"))
         method = str(state.get("method"))
         swhere = f"{where}:state {sid}"
-        carried = command_only_movers(state) if method == "discrete" else []
+        carried = effect_owned_movers(state) if method == "discrete" else []
         if method in INTEGRATOR_METHODS:
             carried = []
         elif not carried:
@@ -4507,9 +4533,9 @@ def check_initial_values(where: str, components: dict[str, Any], report: Report)
             if carried:
                 report.refuse(
                     f"{swhere}.initial",
-                    f"is a `discrete` state whose every mover is a command ({carried}), so a tick "
-                    "carries it — the effect path writes the transition and the tick holds the value "
-                    "between commands. A latched mode with no starting position is a machine the "
+                    f"is a `discrete` state the effect path owns ({carried}), so a tick carries it "
+                    "— a command or a one-way event writes the transition and the tick holds the "
+                    "value between them. A latched machine with no starting position is one the "
                     "plant has nothing to hold: declare where it is at MET 0, or `UNCONFIGURED` "
                     "with the `initial_note` that says what would answer it",
                 )
@@ -6394,8 +6420,13 @@ def check_domain(
         for v in (docs.get("commands.yaml") or {}).get("commands") or []
         if isinstance(v, dict)
     }
+    # **A mapping rather than a set, since round 75**: the event's *verb* is half of the join below
+    # — a state whose effect a command carries declares `command_value` for that verb and no
+    # `event_value` at all — and a set cannot answer which verb an event is fired by.
     events_here = {
-        str(e.get("id")) for e in components.get("one_way_events") or [] if isinstance(e, dict)
+        str(e.get("id")): e
+        for e in components.get("one_way_events") or []
+        if isinstance(e, dict) and e.get("id")
     }
     # This domain's states by id, for a `computed` effect's `selects`: the input a rule-computed
     # state is changed through is a state of the domain that owns the command, and a cross-domain
@@ -6501,6 +6532,59 @@ def check_domain(
                         f"names event {name!r}, which this domain does not declare in "
                         f"`one_way_events` ({sorted(events_here)})",
                     )
+                    continue
+                # ----------------------------------------------------------------------------------
+                # **And what the event makes it, which nothing asked.**
+                #
+                # `moved_by: [event:lm_undocking]` names the *cause*; the event's own declaration
+                # gives a transition between two **configurations** (`csm_lm_docked` ->
+                # `lm_alone_descent`); and the state speaks a vocabulary of its own
+                # (`docked/undocked/separated`). Nothing joined the two, so the three states whose
+                # only mover is an event have been "moved" by it since they landed and no tool could
+                # say what they become — which is why the plant could not advance them.
+                #
+                # The effect is declared one of two ways, and both already exist in the corpus. An
+                # `event_value` entry names the event and the value, which is `command_value`'s
+                # shape for a transition no command carries. Or a `command_value` entry for the
+                # event's own **verb** carries it — `pyro_fired` is the case, and its own note says
+                # so: *"The other mover, `event:pyro_fire`, is the executive raising the same
+                # value."* Either way the value has to be one the state can hold, which is the rule
+                # round 67 wrote for a mode's starting position.
+                # ----------------------------------------------------------------------------------
+                effect = next(
+                    (
+                        row
+                        for row in state.get("event_value") or []
+                        if isinstance(row, dict) and str(row.get("event")) == name
+                    ),
+                    None,
+                )
+                verb = str((events_here.get(name) or {}).get("verb") or "")
+                carried = any(
+                    isinstance(row, dict) and str(row.get("verb")) == verb
+                    for row in state.get("command_value") or []
+                )
+                if effect is None and not carried:
+                    report.refuse(
+                        f"{mwhere}",
+                        f"names event {name!r} and nothing says what the event makes this state. "
+                        "The event declares a transition between two *configurations* and this "
+                        "state's vocabulary is its own, so the effect is a separate declaration: an "
+                        f"`event_value` entry for {name!r}, or a `command_value` entry for its verb "
+                        f"({verb!r}) if a command carries it",
+                    )
+                    continue
+                if effect is not None:
+                    vocabulary = unit_vocabulary(state.get("unit"))
+                    becomes = effect.get("becomes")
+                    if vocabulary is not None and str(becomes) not in vocabulary:
+                        report.refuse(
+                            f"{where}:state {sid}.event_value",
+                            f"makes it {becomes!r}, which its `unit` ({state.get('unit')!r}) cannot "
+                            f"hold — the vocabulary is {sorted(vocabulary)}. An event that puts a "
+                            "state in a value it cannot report is a transition the vehicle cannot "
+                            "describe afterwards",
+                        )
                 continue
             # The verb may live in **another** domain, and three of the movers do: the crew's
             # `breaker_panel` is written by `power`'s `set_breaker`, the crew's `switch_panel` by
