@@ -665,6 +665,8 @@ edges:
         open_debts as a resistance rather than as a coefficient here. Closing this edge retires
         the *coefficient* half of that debt and leaves the resistance half standing
   - id: E-CABIN-CO2-REMOVAL
+    # Four gas masses and a pressure share this node; the one this edge removes is the carbon dioxide.
+    reads: csm_cabin_co2_kg
     sensitivity:
       value: 1.0
       computation: "1.0"
@@ -677,6 +679,7 @@ edges:
     kind: rate
     drains: csm_cabin_co2_kg
   - id: E-LM-CABIN-CO2-REMOVAL
+    reads: lm_cabin_co2_kg
     sensitivity:
       value: 1.0
       computation: "1.0"
@@ -1724,6 +1727,11 @@ edges:
     edge, which is why `C-RAD-COOL` is gone rather than declared and why this edge's `value`
     is the debt: what belongs here is the rejection law and not a slope."}
   - id: E-AMP-LOAD
+    # **The state this flux reads, on a node that carries two.** `link` holds the transmit power and
+    # the signal-to-noise ratio, so the node publishes no key; the edge's own unit is `A per W` and
+    # the quantity it multiplies is the power the amplifier is putting out. `link_snr` is the other
+    # candidate and it is a decibel — a ratio of the same link, not an input to its load.
+    reads: tx_power
     from: link
     to: bus_a
     kind: rate
@@ -1787,6 +1795,11 @@ edges:
     sensitivity: {value: UNCONFIGURED, unit: "rad/s2 per N", basis: UNCONFIGURED, at: nominal,
     note: "needs the inertia tensor, which nobody supplies"}
   - id: E-DYN-GNC
+    # **The trajectory, not the attitude.** `vehicle_dynamics` carries a body rate, an attitude and
+    # an orbit, and what a navigation solution estimates is a position and a velocity — the estimator
+    # consumes rates through its own model, and `nav_solution`'s covariance is about where the vehicle
+    # is rather than which way it points.
+    reads: orbital_state
     sensitivity:
       value: 1.0
       computation: "1.0"
@@ -1920,6 +1933,9 @@ edges:
         decision. The geometry and the inertia tensor remain owed — but they are owed to
         `E-RCS-DYN` and to `domains/rcs/`, and this edge is now closed without them
   - id: E-DYN-GEOM
+    # And the other one: `deg per deg` is one degree of attitude error per degree of boresight error,
+    # which is a relation about the attitude and about nothing else on this node.
+    reads: attitude
     from: vehicle_dynamics
     to: antenna_geometry
     kind: algebraic
@@ -2218,6 +2234,9 @@ edges:
     one_way: true
     sensitivity: {value: 1.0, unit: "-", basis: derived, relation: "published evidence is the instrument state restated at the publication rate; one unit in, one unit out", at: nominal}
   - id: E-LINK-TEL
+    # The other role on the same node: what a link delivers is set by how good it is, and the
+    # quantity that says so is the ratio — `tx_power` is the input the amplifier's load already reads.
+    reads: link_snr
     from: link
     to: published_evidence
     kind: rate

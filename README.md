@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 281 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 275 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,7 +211,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 281 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 275 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
 a real tick advances **37** of the 139 states, and the build order's **37** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -226,8 +226,8 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **281** is every obligation the linter can name:
-**201** literal `UNCONFIGURED` scalars and **80** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **275** is every obligation the linter can name:
+**201** literal `UNCONFIGURED` scalars and **74** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
 the missing charging efficiency, the pump-speed conversion). The **201** the plant
@@ -17209,6 +17209,72 @@ state blocked on that node was blocked on its own declaration first, so what the
 *silent* defect — a driver that was never going to exist — rather than an ordering one. The scalars
 went *up* by two because the converter's edge declares its coefficient and its basis as owed, which is
 the difference between a value nobody has and a value nobody wrote down.
+
+## The repair the debt named, and the field that makes it sayable
+
+Six debt entries have said the same sentence since round 57: *"reads `link`, which carries 2 states
+(`link_snr`, `tx_power`), and a node carrying more than one state publishes no value under its own
+name — so the driver this flux multiplies by is `None` on every tick rather than late on this one.
+What is owed is one of two repairs and they are not equivalent: give the node a state that *is* the
+quantity this edge wants, or declare which state the flux reads."* Round 70 took the first repair for
+the fuel cell. This round takes the second, and takes it as a **contract change** rather than a
+per-edge workaround: `coupling.yaml#edges` gains `reads:`.
+
+### Three roles, one field each
+
+| field | names | end it speaks for |
+|---|---|---|
+| `advances:` | the state the flux feeds | the **target** node |
+| `drains:` | the stock the flow leaves | the **source** node |
+| `reads:` | the state whose value the flux multiplies | the **source** node |
+
+The first two were required where a node carries more than one state; the third is what an edge says
+when it wants a *quantity* that a crowded node cannot publish. `plant.md` §2 states all three now,
+and the linter holds `reads:` the way round 68 held `drains:` — **the name must be a state on the
+edge's own source node**, because an edge cannot read a value from a node it does not start at. The
+plant resolves it through `edge_driver`, which goes through `state_level` rather than a second
+spelling of the key space.
+
+### The six, and why each names what it does
+
+| edge | node | reads | why that one |
+|---|---|---|---|
+| `E-AMP-LOAD` | `link` | `tx_power` | its unit is `A per W`: the transmitter's DC draw is a function of the power it is putting out |
+| `E-LINK-TEL` | `link` | `link_snr` | what a link *delivers* is set by how good it is, and that is the ratio |
+| `E-DYN-GNC` | `vehicle_dynamics` | `orbital_state` | a navigation solution estimates a position and a velocity |
+| `E-DYN-GEOM` | `vehicle_dynamics` | `attitude` | `deg per deg` is attitude error into boresight error |
+| `E-CABIN-CO2-REMOVAL` | `cabin_atm` | `csm_cabin_co2_kg` | of four gas masses and a pressure, the one this removes is the CO₂ |
+| `E-LM-CABIN-CO2-REMOVAL` | `lm_cabin_atm` | `lm_cabin_co2_kg` | the same, at the LM |
+
+`E-CREW-ATM` and `E-LM-CREW-ATM` are the two the field cannot fix, and they are the ones the debt's
+*first* repair is for: they read `crew_state` for a crew **count** in `kg/h per crew`, and no state on
+that node holds one — every state there is a map of stations, a map of availabilities or a workload
+index. Naming a state would name the wrong quantity, which is the failure the field exists to avoid
+rather than to commit.
+
+### What the field does and does not do
+
+`E-CABIN-CO2-REMOVAL`'s driver resolves to the cabin's CO₂ mass now, where it was `None`. Four of the
+six resolve to `None` still — `tx_power` and `link_snr` owe a `command_value` mapping, `attitude` and
+`orbital_state` are `dynamics` with no incoming edge. **That is the honest boundary of the repair**:
+`reads:` chooses *which* state, and whether that state has a value is that state's own debt, already
+counted and already in the build order. Naming the right state does not invent its value.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 281 | **275** |
+| crowded-source debt entries | 6 | **0** |
+| edges declaring `reads:` | 0 | **6** |
+| build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
+| `report.refuse` call sites | 803 | **804** |
+| tests | 321 | **323** |
+
+**Six debts closed, no bucket moved**, which is the same shape round 70 had and for the same reason:
+every state behind those edges was blocked on its own declaration first. What the round removes is a
+driver that was never going to exist, and what it adds is the vocabulary to say so — for the ten
+edges the debt family started with, and for any node that turns out to be crowded later.
 
 ## The invariants, and which of them are enforced
 

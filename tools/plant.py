@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 281 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 275 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -180,6 +180,13 @@ class Edge:
     sensitivity: dict[str, Any]
     advances: str | None = None
     drains: str | None = None
+    # **Which state on the source node the flux multiplies**, where the node carries more than one.
+    # `state_values` keeps a node key only for a node a single state owns, so an edge reading a
+    # crowded node read `None` on every tick — and the corpus's own refusal said what to do about it
+    # ("Name the state this flux reads") for six rounds without a field to name it in. `advances`
+    # speaks for the *target* end and `drains` for the state a flow *leaves*; this is the third
+    # role, and it is the only one that changes what an edge may say rather than what a node holds.
+    reads: str | None = None
 
     @property
     def usable(self) -> bool:
@@ -341,6 +348,7 @@ def load_world(root: Path) -> World:
             sensitivity=e.get("sensitivity") or {},
             advances=e.get("advances"),
             drains=e.get("drains"),
+            reads=e.get("reads"),
         )
         for e in coupling.get("edges") or []
     ]
@@ -416,7 +424,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 281 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 275 declared debts, most of which are prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -1155,7 +1163,12 @@ def stock_flux(
     # that sets the rate. Reading the stock itself on a discharge returns its own level, and
     # `E-CREW-WATER` at `kg/h per crew` then multiplied by a mass in kilograms and gave zero.
     source = driver_node or edge.source
-    driver = values.get(source)
+    # **The state the edge names, where it names one.** A crowded node publishes no key, so reading
+    # the node is reading nothing — and the edge's own `reads:` is the declaration the refusal below
+    # has been asking for since round 57. `state_level` is the one function that knows a state's key
+    # space, so this goes through it rather than through a second spelling of the same rule.
+    named = next((s for s in world.states if s.id == edge.reads), None) if edge.reads else None
+    driver = state_level(values, named) if named is not None else values.get(source)
     if driver is None:
         # **A node that carries two states publishes no value under its own name.** `state_values`
         # writes the node key only when one state owns the node, and `_refuse_shared_node` says why:
@@ -1284,7 +1297,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
         if not ok:
             raise Unconfigured(f"coupling.yaml:edge {driver_edge.id}", why)
         tau = float(state.spec["tau_s"])
-        driver = values.get(incoming[0].source)
+        driver = edge_driver(world, incoming[0], values)
         if driver is None:
             raise Unconfigured(
                 f"{where}",
@@ -1490,7 +1503,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
                 "it back unchanged. A delay is its history, so a scale here cannot be applied later "
                 "without inventing it",
             )
-        driver = values.get(driver_edge.source)
+        driver = edge_driver(world, driver_edge, values)
         if driver is None:
             raise Unconfigured(
                 f"{where}",
@@ -1604,7 +1617,7 @@ def advance(world: World, state: State, values: dict[str, Any], dt: float) -> di
             sensitivity = driver_edge.sensitivity or {}
             driver_unit = str(sensitivity.get("unit") or "")
             transfer = float(sensitivity.get("value") or 0.0)
-            driver = values.get(driver_edge.source)
+            driver = edge_driver(world, driver_edge, values)
             if driver is None:
                 raise Unconfigured(
                     f"{where}",
@@ -1853,6 +1866,29 @@ def state_level(values: dict[str, Any], state: State) -> Any:
         # `avionics.clock_offset_ms` as six accumulators at once.
         return (values.get("internal") or {}).get(state.id)
     return values.get(state.node)
+
+
+def edge_driver(
+    world: World, edge: Edge, values: dict[str, Any], node: str | None = None
+) -> Any:
+    """The value an edge's flux multiplies: the state it names, or the node's own key.
+
+    **`reads:` is the edge's answer to a question the refusal has been asking since round 57.**
+    `state_values` writes a node key only when a single state owns the node, so an edge reading a
+    crowded node read `None` on every tick — and the refusal said, correctly, *"Name the state this
+    flux reads"*, with no field to name it in. Round 70 split one such node and this is the other
+    repair working: the edge declares which state it means.
+
+    The fallback is the node's key, and it is the same number by construction in every case that has
+    one at all — because the key exists exactly when one state owns the node. There is deliberately
+    no third branch that guesses among siblings: a crowded node with no `reads:` is refused, which
+    is what `stock_flux` does with the `None` this returns.
+    """
+    if edge.reads:
+        named = next((state for state in world.states if state.id == edge.reads), None)
+        if named is not None:
+            return state_level(values, named)
+    return values.get(node or edge.source)
 
 
 def _refuse_shared_node(world: World, state: State, where: str) -> None:

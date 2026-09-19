@@ -104,6 +104,17 @@ points in it. That is what Gauss-Seidel does anyway: the domain is an authoring 
 scheduling unit. The derived order is 59 nodes and `check_vehicle.py` reports its tail on every
 run.
 
+**An edge names the state it acts on at each end, and the three fields are not
+interchangeable.** `advances:` names the state on the **target** node the flux feeds;
+`drains:` names the stock on the **source** node the flow leaves; and `reads:` names the state
+on the **source** node whose value the flux multiplies. The first two are required where the
+node carries more than one state, because otherwise nothing says which of them the edge is
+about. The third is the one that changes what an edge may *say*: `state_values` keeps a node
+key only for a node a single state owns, so an edge reading a crowded node reads `None` on
+every tick — and `reads:` is how it names the quantity it actually wants instead. It is held to
+its own source node, like `drains`, because an edge cannot read a value from a node it does not
+start at.
+
 A domain that reads a value a peer writes *within the same tick* is declaring a Gauss-Seidel
 dependency, and the linter refuses it if `coupling.yaml` does not contain the edge. Cycles are
 allowed only when declared with a named back-edge (`coupling.yaml#cycles`), and a latched

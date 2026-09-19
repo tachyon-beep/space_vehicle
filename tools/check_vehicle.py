@@ -2328,21 +2328,37 @@ def check_coupling(
     # --------------------------------------------------------------------------------------
     for edge in edges:
         source = str(edge.get("from"))
+        where = f"coupling.yaml:edge {edge.get('id')}"
         if edge.get("kind") == CLAMP_KIND:
             continue
         if (edge.get("sensitivity") or {}).get("value") in (None, "UNCONFIGURED"):
             continue
         sharers = (states_by_node_map or {}).get(source) or []
-        if len(sharers) < 2:
+        # **The field the debt asked for, and the rule that keeps a name honest.** `reads:` names the
+        # state on the edge's own source node whose value the flux multiplies, and it is the third
+        # role a state can play in an edge — `advances` speaks for the target end, `drains` for the
+        # stock a flow leaves, and this for the value it reads. It is checked the way `drains` is
+        # (round 68): a name off the edge's own source node is refused, because an edge cannot read
+        # a value from a node it does not start at.
+        reads = edge.get("reads")
+        if reads is not None and str(reads) not in sharers:
+            report.refuse(
+                where,
+                f"declares `reads: {reads!r}`, which is not a state on its own source node "
+                f"`{source}`" + (f" (they are {sorted(sharers)})" if sharers else " (it carries none)"),
+            )
+            continue
+        if len(sharers) < 2 or reads is not None:
             continue
         report.debt(
-            f"coupling.yaml:edge {edge.get('id')}",
+            where,
             f"reads {source}, which carries {len(sharers)} states ({sorted(sharers)}), and a node "
             "carrying more than one state publishes no value under its own name — so the driver this "
             "flux multiplies by is `None` on every tick rather than late on this one. What is owed is "
             "one of two repairs and they are not equivalent: give the node a state that *is* the "
-            "quantity this edge wants, or declare which state the flux reads. The first changes what "
-            "the vehicle models and the second changes what an edge may say",
+            "quantity this edge wants, or declare `reads:` — the state on this node the flux reads. "
+            "The first changes what the vehicle models and the second changes what an edge may say, "
+            "and the corpus has taken the second for `link`, `vehicle_dynamics` and the two cabins",
         )
 
     for edge in edges:
