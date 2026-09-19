@@ -294,6 +294,36 @@ configurations:
       basis: historical
       source: "A11: CSM at TLI 63,473 lb; PSR App C-I: 63,508 lb = 28,807 kg. CM at entry 12,096 lb = 5,487 kg; SM inert 8,700-9,000 lb implied by flight residuals = 4,037 kg"
 
+  # **The CSM while the LM is away, and it was missing.** `csm_alone` is "after the LM is jettisoned"
+  # and carries all three; during `lunar_orbit`, `descent`, `surface` and `ascent_rendezvous` the LM
+  # is away with two of them and the CSM holds one. One configuration id cannot be both, so the
+  # phases that name `csm_alone` as co-present were accounting for five crew from a crew of three --
+  # and the only check that had ever compared the two crew models compared their *maximum*.
+  #
+  # The count is derived rather than chosen: `mission.yaml#crew.size` is 3 and `lm_alone_descent`
+  # carries 2, so what is left in the CSM is 1 — the same arithmetic `mission.yaml#crew.positions`
+  # states as two `goes_to_surface: true` and one that does not.
+  - id: csm_alone_lunar
+    name: "CSM alone in lunar orbit while the LM is away"
+    crew_aboard: 1
+    crew_in: csm
+    mass_kg: 28807
+    mass_breakdown_total_kg: 28807
+    mass_breakdown:
+      csm_cm_at_entry: 5487
+      csm_sm_inert: 4037
+      csm_sps_propellant: 18508
+      csm_sm_rcs_propellant: 608
+      csm_cm_rcs_propellant: 112
+      csm_residual_and_stores: 55
+    provenance:
+      basis: derived
+      relation: >-
+        the CSM alone is the same vehicle whether the LM has been jettisoned or is merely away, so
+        the mass is `csm_alone`'s to the kilogram and the breakdown is its own. What differs is the
+        crew: `mission.yaml#crew.size` is 3 and `lm_alone_descent` carries 2, so this one carries 1
+      source: "the mass is `csm_alone`'s (A11 TLI 63,473 lb; PSR App C-I 63,508 lb = 28,807 kg)"
+
   - id: lm_alone_descent
     name: "LM alone with its descent stage, after undocking"
     crew_aboard: 2
@@ -759,6 +789,96 @@ mass_properties:
               w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
               w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
               weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+    # **The same vehicle as `csm_alone`, derived the same way.** The CSM alone does not change
+    # mass because the LM is away rather than jettisoned, and this entry is that one with its own
+    # ids: every derivation reads this configuration's own `mass_kg`, which is the same number
+    - id: csm_alone_lunar
+      table: ODB_3_2_22
+      weight_lb:
+        value: 63508.56
+        derivation:
+          expression: "mass_kg / lb_to_kg"
+          inputs:
+            mass_kg: vehicle.yaml:configurations.csm_alone_lunar.mass_kg
+            lb_to_kg: 0.45359237
+      x_bar_m:
+        value: 23.67649
+        derivation:
+          expression: "(x_low + (weight_lb - w_low) * (x_high - x_low) / (w_high - w_low)) * in_to_m"
+          inputs:
+            x_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.x_bar_in
+            x_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.x_bar_in
+            w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+            w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+            weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+            in_to_m: 0.0254
+      inertia_kg_m2:
+        ixx:
+          value: 46745.3
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.ixx_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.ixx_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        iyy:
+          value: 104373.8
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.iyy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.iyy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        izz:
+          value: 108118.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.izz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.izz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxy:
+          value: -2907.6
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pxy_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pxy_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pxz:
+          value: 533.1
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pxz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pxz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
+              slug_ft2_to_kg_m2: 1.355817948330809
+        pyz:
+          value: 2887.7
+          derivation:
+            expression: "(i_low + (weight_lb - w_low) * (i_high - i_low) / (w_high - w_low)) * slug_ft2_to_kg_m2"
+            inputs:
+              i_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.pyz_slug_ft2
+              i_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.pyz_slug_ft2
+              w_low: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w62918_0.weight_lb
+              w_high: vehicle.yaml:mass_properties.tables.ODB_3_2_22.rows.w63918_3.weight_lb
+              weight_lb: vehicle.yaml:mass_properties.configurations.csm_alone_lunar.weight_lb.value
               slug_ft2_to_kg_m2: 1.355817948330809
     - id: lm_alone_descent
       table: ODB_3_2_25

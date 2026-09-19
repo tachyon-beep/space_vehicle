@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 280 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,7 +211,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 280 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
 a real tick advances **38** of the 139 states, and the build order's **38** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -17338,8 +17338,63 @@ meaning what it says. It asks the same question as the other two now.
 | build order · owes a value / rule | 34 · 52 | 34 · 52 |
 | a real tick advances | 37 of 139 | **38 of 139** |
 | crowded-source debt entries | 0 | **3** |
-| `report.refuse` call sites | 804 | **804** |
+| `report.refuse` call sites | 804 | **805** |
 | tests | 323 | **324** |
+
+## The crew were counted twice, and held together by a maximum
+
+`mission.yaml#crew` is a personnel model — a size, a surface party, one entry per person with a
+station per vehicle — and `vehicle.yaml#configurations` is a hardware model — `crew_aboard` and
+`crew_in` per configuration. The only join between them was one line:
+
+```python
+if max(aboard) != size:  # refuse
+```
+
+**A maximum cannot see a phase that has one person too many.** `descent` named `lm_alone_descent`
+(two crew) beside `also_present: [csm_alone]` (three) — **five crew, from a crew of three** — and
+three more phases were the same mistake or its mirror:
+
+| phase | accounted for | of |
+|---|---|---|
+| `descent` | `lm_alone_descent` (2) + `csm_alone` (3) = **5** | 3 |
+| `surface` | the same pair, twice over (two subjects) = **5** | 3 |
+| `lunar_orbit` | `lm_alone_descent` (2), CSM not declared = **2** | 3 |
+| `ascent_rendezvous` | `lm_ascent_stage` (2), CSM not declared = **2** | 3 |
+
+### The repair was a missing configuration, not a wrong number
+
+`csm_alone` is *"after the LM is jettisoned"* and carries all three. The CSM that waits in lunar
+orbit while the LM is away carries **one**, and the corpus had a single id for both vehicles.
+`csm_alone_lunar` is that vehicle: the same mass to the kilogram, every property derived the same
+way from its own `mass_kg`, and one crew — which is `crew.size` (3) minus `lm_alone_descent`'s two,
+the same arithmetic `crew.positions` states as two `goes_to_surface: true` and one that does not.
+`descent` and `surface` name it now, and both balance.
+
+### And the last two are a contract decision, not a value
+
+`also_present` is **phase-wide**, and a phase's `configurations` list is a *sequence*. `lunar_orbit`
+is docked at one end and undocked at the other, and `ascent_rendezvous` is the mirror of it — so one
+co-present set cannot be right for both ends, and no count fixes that. They are **counted debts**
+naming the two ways out (declare `also_present` per subject, or split the phase), because choosing
+between them is a decision about the profile rather than a number somebody owes.
+
+The check reports the two shapes differently on purpose: a **single-subject** phase that is off by
+one is a count to correct and is refused; a **multi-subject** one that cannot balance in this shape
+is a decision to make and is counted.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 278 | **280** |
+| vehicle configurations | 5 | **6** |
+| build order · ready / value / edge / rule | 38 · 34 · 15 · 52 | 38 · 34 · 15 · 52 |
+| `report.refuse` call sites | 804 | **804** |
+| tests | 324 | **325** |
+
+The two debts the round adds are the two phases that want a contract decision; everything else it
+did was arithmetic that now balances.
 
 ## The invariants, and which of them are enforced
 

@@ -15757,6 +15757,78 @@ def check_crew_bindings(
             "nobody is standing in",
         )
     # --------------------------------------------------------------------------------------
+    # **The crew are counted once, and nothing added the counts up.**
+    #
+    # `crew_aboard` is how many people are in *that* vehicle, and a phase names one subject
+    # configuration at a time — its `configurations` list is a chronological progression — plus
+    # whatever is simply there in `also_present`. So the simultaneous set of a phase is one subject
+    # plus that list, and its counts have to add to `crew.size`. The check above compares the
+    # *largest* count against the size, which every configuration passes on its own.
+    #
+    # It was wrong in four places, and every one of them was the same mistake: `csm_alone` is
+    # "CSM alone after the LM is jettisoned" and carries three, and `descent` and `surface` name it
+    # as `also_present` beside an LM that carries two — five crew, from a crew of three. The other
+    # two are the phases where the LM is away and the CSM is not declared present at all, so the
+    # phase accounts for two of its three people.
+    #
+    # The rule is arithmetic and it is the only thing that ever compared the two crew models *per
+    # phase*: before it, `mission.yaml#crew` and `vehicle.yaml#configurations` were held together by
+    # a maximum, and a maximum cannot see a phase that has one person too many.
+    # --------------------------------------------------------------------------------------
+    if isinstance(size, int):
+        for phase in mission.get("phases") or []:
+            if not isinstance(phase, dict):
+                continue
+            subjects = [str(c) for c in phase.get("configurations") or []]
+            present = [str(c) for c in phase.get("also_present") or []]
+            for subject in subjects:
+                row = next(
+                    (c for c in configurations if str(c.get("id")) == subject), None
+                )
+                if row is None:
+                    continue
+                counts = [(subject, row.get("crew_aboard"))]
+                for other in present:
+                    mate = next((c for c in configurations if str(c.get("id")) == other), None)
+                    if mate is not None:
+                        counts.append((other, mate.get("crew_aboard")))
+                if not all(isinstance(count, int) for _, count in counts):
+                    continue
+                total = sum(count for _, count in counts)
+                # **A phase whose subjects need different co-present sets cannot say so**, and that
+                # is a contract decision rather than a value: `also_present` is phase-wide, and
+                # `lunar_orbit` and `ascent_rendezvous` each begin with the LM away and end docked.
+                # One set cannot be right for both ends, so the repair is either a per-subject form
+                # or two phases — and choosing between them is a decision about the profile, which
+                # is why these two are counted and the others are refused.
+                # **Only the phases that do not balance are the finding**, and the shape of the
+                # repair is what decides refusal from debt: a single-subject phase that is off by
+                # one is a count to correct, and a multi-subject one cannot be corrected at all in
+                # this shape, because `also_present` is phase-wide and its ends need different sets.
+                if total == size:
+                    continue
+                if len(subjects) > 1:
+                    report.debt(
+                        f"mission.yaml:phase {phase.get('id')}",
+                        f"accounts for {total} crew while the mission declares {size} during "
+                        f"{subject} ("
+                        + " + ".join(f"{cid} ({count})" for cid, count in counts)
+                        + f"), and the phase names {len(subjects)} configurations in sequence with "
+                        f"one phase-wide `also_present` ({present or 'none'}). A phase whose sequence "
+                        "changes the co-present set cannot say so in this shape: declare "
+                        "`also_present` per subject, or split the phase",
+                    )
+                    continue
+                report.refuse(
+                    f"mission.yaml:phase {phase.get('id')}",
+                    f"accounts for {total} crew while the mission declares {size}: "
+                    + " + ".join(f"{cid} ({count})" for cid, count in counts)
+                    + ". `crew_aboard` is how many people are in *that* vehicle and the crew are "
+                    "counted once, so a phase's simultaneous set has to add up to the size — two "
+                    "configurations that each look right on their own can put five people in a "
+                    "three-person crew",
+                )
+    # --------------------------------------------------------------------------------------
     # **An id is a key, so two people cannot share one.**
     #
     # `crew.crew_location` is `map[crew_id,...]`: the id is not a label on a person, it is the

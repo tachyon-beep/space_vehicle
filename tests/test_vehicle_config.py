@@ -2819,7 +2819,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
     # One block deleted is one debt added: the corpus stands at 273, so the ablation is 274.
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 281 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2841,7 +2841,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 281 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2855,7 +2855,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 281 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6536,9 +6536,10 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # And the obligation is what the count is counting: remove it and the headline falls back.
     result = broken(lambda d: d.__setitem__("open_debts", []))
     assert result.returncode == 0, result.stdout[-800:]
-    # The corpus stands at 273; removing this file's own prose obligations takes the headline down
-    # by the number of entries that file carries, which is one here.
-    assert "with 277 declared debt(s)" in result.stdout
+    # Removing this file's own prose obligations takes the headline down by the number of entries
+    # that file carries, which is one here — so the figure is the base minus one, and it moves with
+    # the base rather than with the runs of fixtures that inject a debt.
+    assert "with 279 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6949,7 +6950,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 279 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 281 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7055,7 +7056,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 279 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 281 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -8360,6 +8361,75 @@ def test_a_crowded_node_is_read_through_the_state_the_edge_names():
         "radiator_rejection_w",
         "tx_power",
     ], sorted(e.reads for e in world.edges if e.reads)
+
+
+def test_the_linter_counts_the_crew_once_per_phase(tmp_path):
+    """Two declarations of one crew, held together by a maximum that cannot see too many.
+
+    `mission.yaml#crew` is a personnel model — a size, a surface party, one entry per person — and
+    `vehicle.yaml#configurations` is a hardware model — `crew_aboard` and `crew_in` per
+    configuration. `check_crew_bindings` compared the *largest* `crew_aboard` against the size, and a
+    maximum cannot see a phase that has one person too many. `descent` named `lm_alone_descent` (2)
+    beside `also_present: [csm_alone]` (3) — five crew, from a crew of three — and three more phases
+    were the same mistake or its mirror: `surface` twice over, and `lunar_orbit` and
+    `ascent_rendezvous`, where the LM is away and the CSM is not declared present at all, so the
+    phase accounted for two of its three people.
+
+    **The repair was a missing configuration, not a wrong number.** `csm_alone` is "after the LM is
+    jettisoned" and carries all three; the CSM that waits in lunar orbit while the LM is away holds
+    one, and the corpus had one id for both. `csm_alone_lunar` is that vehicle: the same mass to the
+    kilogram, derived the same way from its own `mass_kg`, and one crew — which is `crew.size` minus
+    `lm_alone_descent`'s two rather than a number chosen.
+
+    **And the two phases that remain are a contract decision rather than a value.** `also_present` is
+    phase-wide and a phase's `configurations` list is a *sequence*, so `lunar_orbit` — docked at one
+    end, undocked at the other — cannot say that its co-present set changes. They are counted debts
+    naming the two ways to fix it (a per-subject form, or two phases) rather than bent to fit.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1500:]
+
+    # The count that was missing, read off the two files rather than off a list.
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import yaml as _yaml
+
+    mission = _yaml.safe_load((VEHICLE / "mission.yaml").read_text())
+    vehicle = _yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())
+    configs = {str(c["id"]): c for c in vehicle["configurations"]}
+    assert configs["csm_alone_lunar"]["crew_aboard"] == mission["crew"]["size"] - configs[
+        "lm_alone_descent"
+    ]["crew_aboard"]
+    for phase in mission["phases"]:
+        present = [str(c) for c in phase.get("also_present") or []]
+        for subject in phase.get("configurations") or []:
+            total = configs[str(subject)]["crew_aboard"] + sum(
+                configs[other]["crew_aboard"] for other in present
+            )
+            # The two multi-subject phases with a moving co-present set are the ones this shape
+            # cannot express; every other phase accounts for the whole crew.
+            if len(phase["configurations"]) > 1 and phase["id"] in (
+                "lunar_orbit",
+                "ascent_rendezvous",
+            ):
+                continue
+            assert total == mission["crew"]["size"], (phase["id"], subject, total)
+
+    # The refusal: a single-subject phase that names a co-present vehicle with too many aboard.
+    definition = copy_definition(fixture_dir(tmp_path, "crew-double-count"))
+    path = definition / "mission.yaml"
+    text = path.read_text()
+    assert "    also_present: [csm_alone_lunar]" in text
+    path.write_text(text.replace("    also_present: [csm_alone_lunar]", "    also_present: [csm_alone]", 1))
+    out = run_linter(definition).stdout
+    assert "accounts for 5 crew while the mission declares 3" in out, out[-1200:]
+
+    # And the multi-subject shape is a debt, not a refusal — the corpus composes with it.
+    debts = run_linter(VEHICLE, strict=True).stdout
+    assert "cannot say so in this shape" in debts, debts[-1200:]
+    assert debts.count("cannot say so in this shape") >= 2
 
 
 def test_a_read_is_held_to_the_node_that_drives_the_flux(tmp_path):
@@ -10028,7 +10098,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 278 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 280 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -10124,7 +10194,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 278 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 280 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -12911,7 +12981,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 278 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 280 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -13072,7 +13142,9 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # that read `link`, `vehicle_dynamics` and the two cabins no longer owe a decision.
     # 275 -> 278 in round 72: the three crew edges, whose source node the check was not asking
     # about, because it counted a different set of states than the value map writes.
-    assert owed == "278", "the view must agree with the headline count"
+    # 278 -> 280 in round 73: the two phases whose subject sequence cannot balance against one
+    # phase-wide `also_present`.
+    assert owed == "280", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -14761,7 +14833,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 280 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -14769,7 +14841,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 280 declared debt(s)",
         composes=True,
     )
 
@@ -14784,7 +14856,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-300:]
+    assert "with 281 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -14943,7 +15015,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-400:]
+    assert "with 281 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -15090,7 +15162,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-400:]
+    assert "with 281 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -15100,7 +15172,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 280 declared debt(s)",
         composes=True,
     )
 
@@ -15242,7 +15314,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 280 declared debt(s)",
         composes=True,
     )
 
@@ -15895,10 +15967,11 @@ def test_the_linter_and_the_plant_read_one_crew_placement_declaration(tmp_path):
     definition = copy_definition(tmp_path / "also-present")
     path = definition / "mission.yaml"
     text = path.read_text()
-    old = (
-        "    also_present: [csm_alone]   # the CSM waits in lunar orbit while the LM descends; "
-        "the CM pilot is aboard it and alone\n"
-    )
+    # **The anchor is the *list*, not the comment.** The comment moved in round 73 when the
+    # configuration it names did — `csm_alone` is the post-jettison vehicle and carries all three,
+    # and the CSM that waits during a descent carries one — and a fixture pinned to the prose would
+    # fail on the sentence rather than on the value.
+    old = "    also_present: [csm_alone_lunar]"
     assert old in text, "the fixture no longer matches descent's also_present"
 
     plant = VEHICLE / "tools" / "plant.py"

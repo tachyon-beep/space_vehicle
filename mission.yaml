@@ -198,7 +198,7 @@ phases:
     duration_h: 2.5
     starts_at_h: 97.5
     configurations: [lm_alone_descent]
-    also_present: [csm_alone]   # the CSM waits in lunar orbit while the LM descends; the CM pilot is aboard it and alone
+    also_present: [csm_alone_lunar]   # the CSM waits in lunar orbit while the LM descends, with the CM pilot alone aboard: `csm_alone` is the post-jettison vehicle and carries all three
     entry: "LM undocked, DOI complete, perilune at the descent-orbit altitude; the CSM is on a separate orbit"
     exit: "landing contact, or an abort to the ascent stage"
     provenance:
@@ -210,7 +210,7 @@ phases:
     duration_h: 21.5
     starts_at_h: 100.0
     configurations: [lm_alone_descent, lm_ascent_stage]
-    also_present: [csm_alone]   # the CSM waits in lunar orbit through the whole surface stay; the CM pilot is aboard it and alone
+    also_present: [csm_alone_lunar]   # the CSM waits through the whole surface stay with the CM pilot alone aboard
     entry: "landing contact; the descent engine is off and the LM is stable"
     exit: "ascent engine ignition, or a decision to abandon the surface"
     provenance:
