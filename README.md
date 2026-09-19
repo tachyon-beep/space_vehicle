@@ -19,11 +19,11 @@ interpreted afterwards. Nothing here reads across the boundary: the corpus is *c
 | `plant.md` | The core contract: what `step()` is, the seven integrator classes, determinism, the event queue, and what the plant may never do. |
 | `vehicle.yaml` | Globals: the frame registry and the four scalar conventions, environment, configurations and their mass closure, propulsion, consumable loads, thermal zones, antennas. |
 | `mission.yaml` | The profile: eight phases summing to 192.0 h, the ten-posture execution machine, the freshness manifest, the derived lunar occultation, MET epoch, crew, the Δv budget, objectives, the three scenario postures. |
-| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, seven declared cycles and the fifteen failure chains. The linter derives the 58-node tick order from it. |
+| `coupling.yaml` | apollo's coupling graph as data, with typed edges, crisis-point sensitivities, seven declared cycles and the fifteen failure chains. The linter derives the 59-node tick order from it. |
 | `presentation.yaml` | The vehicle's side of the frozen window: the epistemic mapping, the six files, the frame envelope, the mirror and its bound, the ring's cadence classes, and which of `diode_probe.py`'s twelve checks the configuration satisfies. |
 | `channels.yaml` | The point dictionary: 148 canonical channels with units, precision, rate, priority, events **and an event class**, a derived maximum decision age and the crew perception bound, plus the registry's own `coverage` block. |
 | `domains/<name>/` | One landed subsystem: `components` · `points` · `profiles` · `commands` · `fault_policy`. |
-| `tools/check_vehicle.py` | The linter. `--order` prints the derived 58-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
+| `tools/check_vehicle.py` | The linter. `--order` prints the derived 59-node tick order with the states at each node; `--phases` prints the verb-by-phase view derived from the registries. |
 | `tools/generate_help.py` | Emits the vehicle's `HELP.md` from the command registries — §8's only place a verb name may appear, so it is generated rather than written. |
 | `tools/plant.py` | A **reference plant**: loads the world from the configuration, builds the tick order, emits a frame, and runs until it reaches something it cannot compute — where it names what is missing instead of guessing. `--readiness` prints the build order. |
 
@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 286 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 281 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -210,8 +210,8 @@ because the claim spans every domain. The phase
 ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.md` §13 has been
 pricing is now derived from a phase list rather than assumed.
 
-**All eleven domains have landed** — 148 channels, 139 states over 58 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 286 declared debts
+**All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 281 declared debts
 and every one of them named. **103 of the 139 states are fully configured and 36 carry a debt**, and
 a real tick advances **37** of the 139 states, and the build order's **37** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -226,14 +226,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **286** is every obligation the linter can name:
-**199** literal `UNCONFIGURED` scalars and **87** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **281** is every obligation the linter can name:
+**201** literal `UNCONFIGURED` scalars and **80** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **199** the plant
+the missing charging efficiency, the pump-speed conversion). The **201** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 199 is the linter's 199 **plus** the graph's unset edge
+`coupling.yaml` included, so its 201 is the linter's 201 **plus** the graph's unset edge
 sensitivities, which the linter reports against the edge they belong to instead of against a
 top-level path. The headline number is the debt count, and until round 46 the left-hand number was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -17148,6 +17148,67 @@ walks the gaps now and takes the advanced set once, on the tick the worklist cla
 | build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
 | `report.refuse` call sites | 801 | **802** |
 | tests | 317 | **319** |
+
+## A voltage was living on a node declared in watts, and the node published nothing
+
+`fuel_cell` carried two states — `fuel_cell_power_w` in watts and `source_converter_v` in volts —
+and `state_values` writes a node key only when a **single** state owns the node. So the cell's node
+published no key at all, and five edges that read it for the cell's power multiplied by `None` on
+every tick:
+
+| edge | reads `fuel_cell` for | and got |
+|---|---|---|
+| `E-FC-BUS`, `E-FC-BUSB` | the power the cell puts on each bus | `None` |
+| `E-FC-HEAT` | the heat that power becomes | `None` |
+| `E-FC-DRAW-O2`, `E-FC-DRAW-H2` | the reactants it costs | `None` |
+
+Five debt entries said so, in as many words — *"give the node a state that is the quantity this edge
+wants, or declare which state the flux reads"* — and the round made the decision rather than
+recording it again. The node's own declarations pointed the way: its `unit` is `W` and its
+`state_order_note` said *"the cell produces and the converter regulates what it produced"*. **A
+voltage does not live on a node declared in watts**, and the converter is a different article.
+
+### The tell was the `state_order`
+
+That note was the symptom. It describes a dependency between two *articles*, and it was written as a
+sequence **inside one node** — where `state_order` decides which of a node's states advances first
+and says nothing to the scheduler, whose total order comes from `coupling.yaml#edges`. Two states
+sharing a node was the mechanism; a cross-node claim recorded as an intra-node order was the reason
+nobody noticed.
+
+The converter now has a node of its own, `V` beside the cell's `W`, and the sentence is an edge:
+`E-BUS-CONV`, `bus_a → source_converter`, kind `lag`, with its coefficient **owed** — because the
+residual sag of a *regulated* source is its internal resistance, which no source in the corpus
+publishes, and inventing a number here is the one thing the corpus forbids.
+
+### And the guard that let it stand
+
+The loop that checks `state_order` opens with `if len(producers) < 2: continue` — the right rule for
+the *requirement* (an order is needed only when there is something to order) and the wrong one for
+the *field*, because it means a `state_order` on a one-state node was never read. **That is round
+68's finding with the sign flipped**: there, `drains` was read only to choose between the stocks on a
+crowded node; here, `state_order` was read only to choose between the states on one. Both are guards
+whose condition answers the requirement and not the declaration. A `state_order` over one state is
+now refused, with the sentence that says why it is where a dependency goes to hide.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 286 | **281** |
+| scheduled nodes | 58 | **59** |
+| edges | 80 | **81** |
+| multi-state nodes | 11 | **10** |
+| UNCONFIGURED scalars | 199 | 201 |
+| build order · ready / value / edge / rule | 37 · 34 · 16 · 52 | 37 · 34 · 16 · 52 |
+| `report.refuse` call sites | 802 | **803** |
+| tests | 319 | **321** |
+
+**Five debts closed and not one bucket moved**, and that is the honest shape of a graph repair: every
+state blocked on that node was blocked on its own declaration first, so what the split removed was a
+*silent* defect — a driver that was never going to exist — rather than an ordering one. The scalars
+went *up* by two because the converter's edge declares its coefficient and its basis as owed, which is
+the difference between a value nobody has and a value nobody wrote down.
 
 ## The invariants, and which of them are enforced
 

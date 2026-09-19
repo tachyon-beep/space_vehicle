@@ -101,7 +101,7 @@ that are not there and refuses schedules that exist.
 
 So the schedule is over **nodes**, and a domain with states on several nodes appears at several
 points in it. That is what Gauss-Seidel does anyway: the domain is an authoring unit, not a
-scheduling unit. The derived order is 58 nodes and `check_vehicle.py` reports its tail on every
+scheduling unit. The derived order is 59 nodes and `check_vehicle.py` reports its tail on every
 run.
 
 A domain that reads a value a peer writes *within the same tick* is declaring a Gauss-Seidel

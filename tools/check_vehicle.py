@@ -2381,7 +2381,7 @@ def check_coupling(
     # An edge that drives a state has to say *which* state, whenever the node carries more than one
     # it could drive.
     #
-    # Ten of the vehicle's 58 nodes hold more than one state, and the plant resolves a state's
+    # Ten of the vehicle's 59 nodes hold more than one state, and the plant resolves a state's
     # drivers by node — so on `cabin_atm`, which holds four gas masses, `csm_cabin_o2_kg`,
     # `csm_cabin_n2_kg`, `csm_cabin_co2_kg` and `csm_cabin_h2o_kg` were all handed the same three
     # edges: the oxygen supply, the crew's CO2 production and a pressure/temperature relation. Every
@@ -7122,11 +7122,41 @@ def check_domains(
                     by_node.setdefault(node, []).append((path.name, str(state.get("id"))))
     node_docs = (coupling or {}).get("nodes") or {}
     for node, producers in sorted(by_node.items()):
-        if len(producers) < 2:
-            continue
         where = f"coupling.yaml:node {node}"
         declared = node_docs.get(node) or {}
         order = declared.get("state_order")
+        if len(producers) < 2:
+            # ----------------------------------------------------------------------------------
+            # **The same guard shape round 68 found in `drains`, in the graph's other half.**
+            #
+            # This loop opens by skipping a node with fewer than two states, because `state_order`
+            # exists to decide between them — and that is the right rule for the *requirement* and
+            # the wrong one for the *field*. A `state_order` on a one-state node was never read, so
+            # it could say anything.
+            #
+            # `fuel_cell` said this: `state_order: [fuel_cell_power_w, source_converter_v]` with the
+            # note *"the cell produces and the converter regulates what it produced, so the converter
+            # reads this tick's power rather than the previous one."* That sentence is a dependency
+            # between two **articles**, and the scheduler's total order comes from
+            # `coupling.yaml#edges` — an order inside a node says nothing about it, and no reader of
+            # `state_order` was ever going to act on it. The two states shared the node for as long
+            # as they did, which made the node publish no key at all, and five edges that read it for
+            # the cell's power multiplied by `None` on every tick.
+            #
+            # An order needs something to order. A node with one state advances in the only order it
+            # has, and a declaration that claims otherwise belongs in an edge.
+            # ----------------------------------------------------------------------------------
+            if order is not None:
+                report.refuse(
+                    where,
+                    f"carries one state ({producers[0][1]}) and declares `state_order: {order!r}`. An "
+                    "order needs something to order, so a `state_order` here is a claim no tool "
+                    "reads — and it is where a dependency *between* nodes gets written down by "
+                    "mistake, because the scheduler's total order comes from `coupling.yaml#edges` "
+                    "and a sequence inside one node says nothing about it. Declare the edge, or drop "
+                    "the order",
+                )
+            continue
         names = sorted(state_id for _, state_id in producers)
         if order is None:
             report.refuse(

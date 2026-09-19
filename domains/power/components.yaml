@@ -26,7 +26,7 @@ natural_rate_hz: 50
 # `command_executive`, which `E-CMD-BUS` drives the load-shed ladder with. All three are *inputs*,
 # which is why they belong here rather than in `writes` — the nodes they land on are power's.
 reads: [o2_csm, h2_csm, coldplate_t, link, command_executive]
-writes: [fuel_cell, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
+writes: [fuel_cell, source_converter, bus_a, bus_b, battery_energy, bus_tie, load_shed_state,
          fc_o2_draw, fc_h2_draw, battery_usable_j]
 
 # --------------------------------------------------------------------------------------
@@ -103,7 +103,7 @@ state:
 
   - id: source_converter_v
     method: lag
-    node: fuel_cell
+    node: source_converter
     unit: V
     initial: 29
     initial_source: vehicle.yaml:electrical.fuel_cells.output_v

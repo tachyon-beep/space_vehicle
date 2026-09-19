@@ -286,10 +286,29 @@ nodes:
     kind: flow
     unit: W
     apollo: "261-263"
-    state_order: [fuel_cell_power_w, source_converter_v]
-    state_order_note: >-
-      the cell produces and the converter regulates what it produced, so the converter reads this
-      tick's power rather than the previous one
+  # **The converter is a different article, and it was riding on the cell's node.**
+  #
+  # `source_converter_v` is a voltage and `fuel_cell` is declared in watts, so the two were never
+  # one quantity — and because the node carried two states it published no key at all, which is
+  # what made the error expensive: `E-FC-BUS`, `E-FC-BUSB`, `E-FC-HEAT`, `E-FC-DRAW-O2` and
+  # `E-FC-DRAW-H2` all read this node for the cell's *power*, so all five multiplied by `None` on
+  # every tick. The converter's own dependence on the cell was declared as `state_order` inside the
+  # node, which orders two states of one node and says nothing to the scheduler about two articles;
+  # it is now a state on a node of its own, with the driver its own relation owes.
+  #
+  # `state_order` was the tell: it exists for a node whose states must advance in a declared
+  # sequence, and the sentence it carried — "the converter reads this tick's power" — is a claim
+  # about a dependency *between* nodes, which is what `coupling.yaml#edges` is for.
+  source_converter:
+    domain: power
+    kind: state
+    unit: V
+    apollo: "249"
+    note: >-
+      the source regulator, which `electrical_diode.md:249` specifies as a regulated 24-32 V output
+      over 25-100 % of a 1.2 kW rating. It was a state on `fuel_cell` until round 70 and is an
+      article of its own: a voltage does not live on a node declared in watts, and its sharing the
+      node is what hid the cell's power from the five edges that read it
   bus_a:             {domain: power, kind: state,   unit: V,  apollo: "73-75"}
   bus_b:             {domain: power, kind: state,   unit: V,  apollo: "74"}
   bus_tie:           {domain: power, kind: discrete, unit: enum, apollo: "79"}
@@ -578,6 +597,33 @@ edges:
   # different claim from the two independent strings the spec describes, and the wrong one to make
   # silently. What this edge does say is what the vehicle's own file could not: bus B is fed.
   # --------------------------------------------------------------------------------------
+  # The converter's edge, which its own `state_order` sentence was standing in for until round 70.
+  # It regulates the bus it reads — `electrical_diode.md:249`'s regulated 24-32 V output over
+  # 25-100 % of a 1.2 kW rating — and that relation's coefficient is the source's internal
+  # resistance, the half of C-01's debt an earlier round left standing. Declared rather than absent
+  # because a node nothing reads and nothing writes is a declaration that looks like a connection,
+  # and owed rather than filled for the reason every other owed value here is.
+  #
+  # The direction is the converter's *sense* of the bus rather than its feed of it, and that is not
+  # a detail: `E-FC-BUS` already carries the cell's power to bus A, so an edge the other way would
+  # be a second feed of the same energy. What the regulator contributes is a voltage it holds, and
+  # holding it is a feedback relation on the bus it regulates.
+  - id: E-BUS-CONV
+    from: bus_a
+    to: source_converter
+    kind: lag
+    sensitivity:
+      value: UNCONFIGURED
+      unit: V per V
+      basis: UNCONFIGURED
+      at: nominal
+      relation: "the regulator holds its output inside a 24-32 V envelope over the load band, so what it contributes to the bus is a *regulation* rather than a droop: the coefficient is the residual sag, which is the source's internal resistance, and no source in the corpus publishes it"
+      note: >-
+        owed, and the shape of what would close it is named rather than guessed. A regulated source
+        does not sag proportionally to its load (`electrical_diode.md:249`), so the coefficient is
+        not `V per W`; it is the internal resistance, which appears here as the fraction of the
+        regulated output the bus sees. What would close it: a source-resistance figure for the
+        1.2 kW converter, or a measured regulation transient against load
   - id: E-FC-BUSB
     from: fuel_cell
     to: bus_b
