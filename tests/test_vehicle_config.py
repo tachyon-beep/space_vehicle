@@ -806,7 +806,7 @@ def test_the_build_order_is_the_ticks_own_gap_list():
     # `band_value` is a third `UNCONFIGURED` and it lands on `load_shed_class`, whose one band is the
     # tier that selects `none` — so what blocks it is the ladder's rung-to-class map, a *value* the
     # thresholds do not carry, rather than the domain code the rule bucket was asking it for.
-    ) == (48, 30, 15, 46), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
+    ) == (49, 29, 15, 46), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
 
 
 def test_the_worklist_never_blames_a_state_whose_node_publishes_no_value():
@@ -2854,8 +2854,8 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
-    # One block deleted is one debt added: the corpus stands at 275, so the ablation is 276.
-    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
+    # One block deleted is one debt added: the corpus stands at 274, so the ablation is 275.
+    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2877,7 +2877,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2891,7 +2891,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 275 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6575,7 +6575,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # Removing this file's own prose obligations takes the headline down by the number of entries
     # that file carries, which is one here — so the figure is the base minus one, and it moves with
     # the base rather than with the runs of fixtures that inject a debt.
-    assert "with 274 declared debt(s)" in result.stdout
+    assert "with 273 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6986,7 +6986,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 276 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7092,7 +7092,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 276 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -8656,8 +8656,8 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     # value* and into the ready bucket.
     gaps: list = []
     after = plant.step(world, values, plant.tick_seconds(world), gaps)
-    # The four the mission's start settles, and — since round 80 — the three the launch checklist
-    # publishes, which the tick now holds rather than refusing.
+    # The four the mission's start settles, the three the launch checklist publishes (round 80), and
+    # — since round 81 — the link mode the published rate travels on, which the tick holds too.
     for sid in (
         "aps_state",
         "dps_state",
@@ -8666,20 +8666,23 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
         "bus_tie_closed",
         "telemetry_rate",
         "antenna_selection",
+        "comm_mode",
     ):
         assert not [gap for gap in gaps if gap.state.id == sid], sid
     assert after["sps_state"] == "off"
     assert after["bus_tie_closed"] == "closed"
     assert after["telemetry_rate"] == 51200
     assert after["antenna_selection"] == "omni_b"
+    assert after["comm_mode"] == "sband_high"
 
-    # The seven are the ones the block declares — four decided, three published — and the other six
-    # are still owed.
+    # The eight are the ones the block declares — four decided, three published, one derived from a
+    # published one — and the other five are still owed.
     mission = yaml.safe_load((VEHICLE / "mission.yaml").read_text())
     assert sorted(mission["launch_state"]["states"]) == [
         "antenna_selection",
         "aps_state",
         "bus_tie_closed",
+        "comm_mode",
         "dps_state",
         "guidance_mode",
         "sps_state",
@@ -8696,7 +8699,6 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     assert sorted(owed) == [
         "breaker_panel",
         "cabin_regulator_position",
-        "comm_mode",
         "computer_mode",
         "hatch_state",
         "mode",
@@ -8769,8 +8771,8 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "antenna_selection": "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)",
     }
 
-    # The block declares seven positions: the four the mission's start settles and the three the
-    # checklist publishes.
+    # The block declares eight positions: the four the mission's start settles, the three the
+    # checklist publishes, and — since round 81 — the link mode the published rate travels on.
     assert block["states"] == {
         "aps_state": "off",
         "dps_state": "off",
@@ -8779,6 +8781,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "bus_tie_closed": "closed",
         "telemetry_rate": 51200,
         "antenna_selection": "omni_b",
+        "comm_mode": "sband_high",
     }
 
     # Every state that cites the block agrees with it, and its `basis` says which half it is in.
@@ -8800,9 +8803,10 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     rates = {entry["id"]: entry["bps"] for entry in yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())["comms"]["rates"]}
     assert states["telemetry_rate"]["initial"] == rates["high"] == 51200
 
-    # And the three left owed are owed for reasons the source does not answer, rather than for the
-    # absence of a source. Each note names the document now.
-    for sid in ("computer_mode", "comm_mode", "cabin_regulator_position", "hatch_state", "breaker_panel", "mode"):
+    # And the five left owed are owed for reasons the source does not answer, rather than for the
+    # absence of a source. Each note names the document now. `comm_mode` was the sixth until round
+    # 81 joined it to the rate it travels on.
+    for sid in ("computer_mode", "cabin_regulator_position", "hatch_state", "breaker_panel", "mode"):
         note = str(states[sid].get("initial_note") or "")
         assert "launch checklist" in note.lower(), sid
         assert states[sid]["initial"] == "UNCONFIGURED", sid
@@ -8833,14 +8837,27 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "",
         "and the block's `sourced` map does not cite it",
     )
-    # A locator for a position the block does not declare.
+    # A locator for a position the block does not declare. `computer_mode` is still owed and is not
+    # one of the block's eight; `comm_mode` used to serve here and cannot now, because round 81 put
+    # it in the block as a `derived` position — so citing it in `sourced` fires the *basis* join
+    # instead, which is the next case down.
     refusal(
         "locator-for-nothing",
         mission_path,
         '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
         '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n'
-        '    comm_mode: "p. 10"\n',
+        '    computer_mode: "p. 10"\n',
         "A locator for a position this block does not make is a citation nothing holds",
+    )
+    # A position the block makes from a *relation* and the block's own citation claiming a document
+    # for it — the two halves of the same join, disagreeing.
+    refusal(
+        "derived-cited-as-published",
+        mission_path,
+        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
+        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n'
+        '    comm_mode: "p. 10"\n',
+        "A published position is `historical`",
     )
     # A citation with no page, which is a source a reader cannot turn to.
     refusal(
@@ -8866,6 +8883,114 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "",
         "the citation is a declaration nothing reads",
     )
+
+
+def test_a_telemetry_profile_says_which_link_mode_carries_it(tmp_path):
+    """The high/low distinction is declared twice, and until this round nothing joined the two.
+
+    `apollo_diode.md:161` gives `comm.link_mode` as `sband_high/sband_low/vhf/none`; `:165` gives
+    `comm.telemetry_rate_bps` as "1,600 / 51,200 Apollo-inspired profiles"; and the corpus's own prose
+    says what the pair is — *"the high-rate/low-rate telemetry distinction was 51.2 and 1.6 kbit/s"*.
+    The vehicle carries both faithfully, as `comm_mode` and `telemetry_rate`, and **no declaration
+    anywhere said which link mode carries which rate.** A vehicle could hold `sband_low` at 51,200
+    bit/s — a link mode and a rate that contradict each other — and every check in the linter would
+    pass.
+
+    **The claim was in the corpus, as prose, written by the round before this one.**
+    `comm_mode`'s note said the two members "are the same choice as `telemetry_rate`'s `high` and
+    `low`", and nothing read it — this folder's second most frequent defect, arriving in the round
+    that was quoting it. The repair puts the correspondence where the rates are already declared
+    once: each profile in `vehicle.yaml#comms.rates` names the `link_mode` that carries it and the
+    `rate_state` that holds it, and `check_link_profiles` refuses the two positions disagreeing.
+
+    `comm_mode` is `derived` rather than `historical` for the same reason: the launch checklist sets
+    one switch (`PCM BIT RATE - HI`, p. 10), that is `telemetry_rate`'s position, and the link mode
+    follows from it through the correspondence — a relation, not a second reading.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1200:]
+
+    vehicle = yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())
+    rates = {entry["id"]: entry for entry in vehicle["comms"]["rates"]}
+    # Both profiles name both ends of the join.
+    assert {pid: (p["link_mode"], p["rate_state"]) for pid, p in rates.items()} == {
+        "low": ("sband_low", "telemetry_rate"),
+        "high": ("sband_high", "telemetry_rate"),
+    }
+
+    mission = yaml.safe_load((VEHICLE / "mission.yaml").read_text())
+    states_block = mission["launch_state"]["states"]
+    states: dict[str, dict] = {}
+    for path in sorted((VEHICLE / "domains").glob("*/components.yaml")):
+        for state in (yaml.safe_load(path.read_text()) or {}).get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                states[state["id"]] = state
+
+    # The two ends of one profile are the two positions the block declares, and they agree.
+    assert states_block["telemetry_rate"] == rates["high"]["bps"] == 51200
+    assert states_block["comm_mode"] == rates["high"]["link_mode"] == "sband_high"
+    provenance = states["comm_mode"]["initial_provenance"]
+    assert provenance["basis"] == "derived" and provenance["source"] == "mission.yaml:launch_state"
+
+    # The members that name a rate are the ones a profile carries; `vhf` and `none` are not.
+    profile_members = {p["link_mode"] for p in rates.values()}
+    vocabulary = set(
+        re.findall(r"enum\[([^\]]*)\]", states["comm_mode"]["unit"])[0].split(",")
+    )
+    assert profile_members == {"sband_high", "sband_low"}
+    assert profile_members < vocabulary, sorted(vocabulary)
+
+    def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        target = definition.joinpath(*path)
+        text = target.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        target.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1400:]}"
+
+    # A link mode no state's vocabulary holds.
+    refusal(
+        "link-mode-unknown",
+        ("vehicle.yaml",),
+        "      link_mode: sband_high\n",
+        "      link_mode: sband_wide\n",
+        "which is no state's vocabulary",
+    )
+    # A correspondence to a machine that does not exist.
+    refusal(
+        "rate-state-unknown",
+        ("vehicle.yaml",),
+        "      rate_state: telemetry_rate\n      provenance:\n        basis: apollo\n        ref: \"apollo_diode.md:7, :165\"\n    - id: high",
+        "      rate_state: telemetry_baud\n      provenance:\n        basis: apollo\n        ref: \"apollo_diode.md:7, :165\"\n    - id: high",
+        "which is not a state",
+    )
+    # **The join itself**: the link mode and the rate, disagreeing.
+    refusal(
+        "the-two-disagree",
+        ("mission.yaml",),
+        "    comm_mode: sband_high\n",
+        "    comm_mode: sband_low\n",
+        "so the two positions cannot disagree",
+    )
+    # A rate that is not one of the declared profiles.
+    refusal(
+        "rate-not-a-profile",
+        ("mission.yaml",),
+        "    telemetry_rate: 51200\n",
+        "    telemetry_rate: 3200\n",
+        "which is no telemetry profile's `bps`",
+    )
+    # And the owed half: a profile that names no link mode is a debt rather than a refusal, because
+    # the correspondence is something somebody has to declare and it is counted like any other.
+    definition = copy_definition(fixture_dir(tmp_path, "no-link-mode"))
+    path = definition / "vehicle.yaml"
+    text = path.read_text()
+    assert "      link_mode: sband_low\n" in text
+    path.write_text(text.replace("      link_mode: sband_low\n", "", 1))
+    out = run_linter(definition).stdout
+    assert "declares a telemetry profile and no `link_mode`" in out, out[-1400:]
+    assert "(low)" in out, out[-1400:]
 
 
 def test_a_hysteresis_band_says_what_point_it_is_a_band_on(tmp_path):
@@ -9470,7 +9595,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # so it is the one of the fourteen that reaches *ready* rather than *owes a value*.
     # 37 -> 38 in round 72: `E-WATER-RAD`'s driver was a crowded node with no name for the state it
     # reads, and naming it (`radiator_rejection_w`) made the coolant's discharge computable.
-    assert len(buckets["ready"]) == 48
+    assert len(buckets["ready"]) == 49
     # `rule` went 71 -> 69 -> 82 across two rounds. The first move was `moved_by`: the two still
     # owed put an `UNCONFIGURED` in their spec and `walk_unset` counts any unset scalar as a value
     # the plant wants, so they left this bucket without the code they need going away. The second
@@ -9548,7 +9673,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # 32 -> 33 in round 79: `load_shed_class` joins them, and for a reason one layer in — the band
     # it declares is `bus_a_undervoltage`, which by `coupling.yaml#open_debts`'s rung map selects
     # `none`, so what it owes is the rung-to-class map rather than the comparator that reads it.
-    assert len(buckets["value"]) == 30
+    assert len(buckets["value"]) == 29
     # Two of the twenty-eight "owed an edge" were not owed one at all: the three preloaded tanks
     # are advanceable, and the thirteen `internal` states need code. Three more left the bucket
     # when it stopped asking the integrator's question — a `regimes` table is a *declared*
@@ -10926,7 +11051,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 275 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 274 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -11022,7 +11147,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 275 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 274 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -11916,7 +12041,7 @@ def test_every_stock_declares_where_it_starts():
     # `bus_tie_closed` is the only state on `bus_tie`, so it seeds the node alias *and* its own id,
     # while `telemetry_rate` and `antenna_selection` are sentinel states and seed under their ids
     # alone.
-    assert len(on_nodes) == 69, f"{len(on_nodes)} node keys carry a value"
+    assert len(on_nodes) == 70, f"{len(on_nodes)} node keys carry a value"
     # And the map a tick actually starts from is that seed plus the declared arithmetic, so the
     # resolved states are a strict superset and every one of them is `algebraic`.
     assert seeded_integrators.keys() < seeded.keys(), "the resolution added nothing to the seed"
@@ -11928,11 +12053,11 @@ def test_every_stock_declares_where_it_starts():
     # different map — this one is the sub-map rather than the ids beside it.
     # 13 -> 15 in round 80: `telemetry_rate` and `antenna_selection` are sentinel states with a
     # position now, so they join this sub-map as well as the ids beside it.
-    assert len(seeded_integrators["internal"]) == 15, sorted(seeded_integrators["internal"])
+    assert len(seeded_integrators["internal"]) == 16, sorted(seeded_integrators["internal"])
     # Six of the sentinel's `algebraic` states resolve at t=0 as well — the bus load, the bay heat,
     # the cabin pressure differential and three more — so the sentinel's sub-map is the same map the
     # tick commits, merged rather than replaced.
-    assert len(seeded["internal"]) == 21, sorted(seeded["internal"])
+    assert len(seeded["internal"]) == 22, sorted(seeded["internal"])
     # The map is keyed by node and holds one value per key, so this is **not** a stock count and
     # stopped being one in round 8: four stocks share `cabin_atm` and four share `lm_cabin_atm`, so
     # six of the twenty-four declared values are the last of their key rather than a key of their
@@ -12000,6 +12125,9 @@ def test_every_stock_declares_where_it_starts():
         # the S-band omni on antenna B.
         "telemetry_rate",
         "antenna_selection",
+        # Round 81: the link mode that carries that profile, which is `derived` from it rather
+        # than read out of the checklist a second time.
+        "comm_mode",
     }, sorted(seeded_integrators["internal"])
     # **And the six `algebraic` states the resolver adds**, the sentinel's half of the declared
     # arithmetic: the bus load, the bay heat rate, the cabin pressure differential, the two loops'
@@ -12025,6 +12153,8 @@ def test_every_stock_declares_where_it_starts():
         # constant or an origin: the checklist's `PCM BIT RATE - HI` and `S BO ANT OMNI - B`.
         51200,
         "omni_b",
+        # Round 81's, and it is the profile's other half — the link mode the rate travels on.
+        "sband_high",
     }
     assert seeded["internal"]["o2_supply_pressure_psi"] == 900.0
     assert seeded["internal"]["suit_loop_flow_cfm"] == 35.0
@@ -13834,7 +13964,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -14011,7 +14141,7 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # prose obligation in `coupling.yaml#open_debts` for the three bands whose vocabulary is wider
     # than their comparator. The round adds a field to four states; nothing was answered, so nothing
     # fell.
-    assert owed == "275", "the view must agree with the headline count"
+    assert owed == "274", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -15708,7 +15838,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 275 declared debt(s)",
+        "COMPOSES, with 274 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -15716,7 +15846,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 275 declared debt(s)",
+        "COMPOSES, with 274 declared debt(s)",
         composes=True,
     )
 
@@ -15731,7 +15861,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 276 declared debt(s)" in out, out[-300:]
+    assert "with 275 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -15890,7 +16020,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 276 declared debt(s)" in out, out[-400:]
+    assert "with 275 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -16037,7 +16167,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 276 declared debt(s)" in out, out[-400:]
+    assert "with 275 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -16047,7 +16177,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 275 declared debt(s)",
+        "COMPOSES, with 274 declared debt(s)",
         composes=True,
     )
 
@@ -16189,7 +16319,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 275 declared debt(s)",
+        "COMPOSES, with 274 declared debt(s)",
         composes=True,
     )
 
@@ -18469,7 +18599,7 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # states the effect path owns through a one-way event.
     # 45 -> 48 in round 80, and this is the largest single move a *value* round has made: three
     # commanded modes the launch checklist publishes a position for, which the hold then carries.
-    assert len(advanced) == 48, sorted(advanced)
+    assert len(advanced) == 49, sorted(advanced)
 
     # The arithmetic is the corpus's, at the values the corpus declares.
     assert values["cabin_heat_csm"] == 733.0
@@ -18531,7 +18661,7 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # same branch that seeds a level and merged into the sub-map rather than replacing it.
     # 19 -> 21 in round 80: `telemetry_rate` and `antenna_selection`, the sentinel's second and
     # third modes.
-    assert len(values["internal"]) == 21, sorted(values["internal"])
+    assert len(values["internal"]) == 22, sorted(values["internal"])
     assert values["loop_primary_load_w"] == 1723.0 and values["loop_lm_load_w"] == 1007.0
 
 
@@ -20357,4 +20487,4 @@ def test_the_tick_can_read_what_the_build_order_promises():
     # 38 -> 41 in round 75: the three event-moved states, held by the tick and moved by the effect.
     # 41 -> 45 in round 76 and 45 -> 48 in round 80: the seven positions `mission.yaml#launch_state`
     # now declares, the last three of them read out of the launch checklist.
-    assert len(ready) == 48 and len(advanced) == 48
+    assert len(ready) == 49 and len(advanced) == 49

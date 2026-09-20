@@ -1681,13 +1681,25 @@ comms:
           steerable. Both values are owed rather than picked, because a gain invented here would
           propagate into `E-GEOM-LINK` and from there into every SNR a fleet ever reads
   rates:
+    # **The two profiles, and the link mode each one travels on.** `apollo_diode.md:161` declares
+    # `comm.link_mode` and `:165` declares `comm.telemetry_rate_bps`, and its own prose says they are
+    # two channels of one choice — "the high-rate/low-rate telemetry distinction was 51.2 and 1.6
+    # kbit/s" — so the vehicle carries two states for it and needed somewhere to say which member of
+    # one belongs to which profile of the other. Round 81 put it here, because this is where the
+    # rates are declared once.
+    # `rate_state` is the state that holds the rate rather than a label: the join is between two
+    # states, and both ends of it are named so the check needs to know neither one.
     - id: low
       bps: 1600
+      link_mode: sband_low
+      rate_state: telemetry_rate
       provenance:
         basis: apollo
         ref: "apollo_diode.md:7, :165"
     - id: high
       bps: 51200
+      link_mode: sband_high
+      rate_state: telemetry_rate
       provenance:
         basis: apollo
         ref: "apollo_diode.md:7, :165"

@@ -16570,6 +16570,128 @@ def check_band_value(root: Path, report: Report) -> None:
                     )
 
 
+def check_link_profiles(
+    root: Path, vehicle: dict[str, Any], mission: dict[str, Any], report: Report
+) -> None:
+    """**The high/low telemetry distinction is declared twice, and nothing joined the two.**
+
+    `apollo_diode.md:161` gives `comm.link_mode` as `sband_high/sband_low/vhf/none`, `:165` gives
+    `comm.telemetry_rate_bps` as "1,600 / 51,200 Apollo-inspired profiles", and the corpus's own prose
+    says what the pair is: *"the high-rate/low-rate telemetry distinction was 51.2 and 1.6 kbit/s"*.
+    The vehicle carries both faithfully — `comm_mode` and `telemetry_rate` are two states — and until
+    this round **no declaration anywhere said which link mode carries which rate.** A vehicle could
+    hold `sband_low` at 51,200 bit/s, a link mode and a rate that contradict each other, and every
+    check in this file would pass.
+
+    Round 80's own note on `comm_mode` said the two members "are the same choice as `telemetry_rate`'s
+    `high` and `low`" — **prose asserting a join, which is this folder's second most frequent defect
+    and was, in that round, its own.** The repair puts the correspondence on the side that already
+    owns the rates: `vehicle.yaml#comms.rates` declares each profile once, and `link_mode` and
+    `rate_state` are the halves that were missing. A profile with no `link_mode` is a debt — the
+    correspondence is owed — and the four ways of getting it wrong are refused.
+    """
+    # **`vehicle` can be `None`**, and it is whenever `vehicle.yaml` did not parse: this function
+    # runs after that refusal and must not turn a reported fault into a traceback. A check that
+    # cannot run is not a check that passed, and it is not a crash either.
+    rates = ((vehicle or {}).get("comms") or {}).get("rates") or []
+    if not isinstance(rates, list) or not rates:
+        return
+
+    # What a state can hold, so a `link_mode` resolves to the machine that carries it — and every
+    # state id, because the *rate* state's unit is a scale (`bit/s`) and carries no vocabulary at
+    # all. Two lookups rather than one: a `link_mode` must be a member of somebody's enum, and a
+    # `rate_state` need only exist.
+    known: dict[str, list[str]] = {}
+    every_state: set[str] = set()
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for state in components.get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                every_state.add(str(state["id"]))
+                values = unit_vocabulary(state.get("unit"))
+                if values:
+                    known[str(state["id"])] = sorted(values)
+
+    declared: dict[str, int] = {}
+    # `(state, member)` -> the profile that member carries, so the mission's two positions can be
+    # compared without this function knowing either state's name.
+    profile_of: dict[tuple[str, str], str] = {}
+    for position, profile in enumerate(rates):
+        if not isinstance(profile, dict):
+            continue
+        pid = str(profile.get("id"))
+        where = f"vehicle.yaml:comms.rates[{position}]({pid})"
+        bps = profile.get("bps")
+        if isinstance(bps, (int, float)) and not isinstance(bps, bool):
+            declared[pid] = int(bps)
+        link_mode = profile.get("link_mode")
+        rate_state = profile.get("rate_state")
+        if link_mode is None or rate_state is None:
+            missing = "link_mode" if link_mode is None else "rate_state"
+            report.debt(
+                where,
+                f"declares a telemetry profile and no `{missing}`, so nothing says which link mode "
+                "carries it or which state holds it. `apollo_diode.md:161` and `:165` declare the "
+                "link mode and the rate of one choice in two channels, so the correspondence is a "
+                "declaration rather than an inference",
+            )
+            continue
+        if str(rate_state) not in every_state:
+            report.refuse(
+                where,
+                f"names `rate_state: {rate_state!r}`, which is not a state — a correspondence to a "
+                "machine that does not exist",
+            )
+            continue
+        carriers = [sid for sid, values in known.items() if str(link_mode) in values]
+        if not carriers:
+            report.refuse(
+                where,
+                f"names `link_mode: {link_mode!r}`, which is no state's vocabulary — a link mode "
+                "nothing can hold is a correspondence with nothing",
+            )
+            continue
+        for carrier in carriers:
+            profile_of[(carrier, str(link_mode))] = pid
+
+    # **The join the round is about.** Where the mission declares both ends of one profile, they have
+    # to be the same profile: one switch on the launch checklist sets the rate, and the link mode is
+    # what that rate travels on.
+    states = (mission.get("launch_state") or {}).get("states") or {}
+    if not isinstance(states, dict):
+        return
+    # One pass per *rate state*, because two profiles can share one — both of this vehicle's do —
+    # and the question is asked of the state, not of the profile.
+    seen: set[str] = set()
+    for profile in rates:
+        if not isinstance(profile, dict):
+            continue
+        rate_state = str(profile.get("rate_state"))
+        if rate_state in seen or rate_state not in states:
+            continue
+        seen.add(rate_state)
+        value = states[rate_state]
+        matching = sorted(p for p, bps in declared.items() if str(bps) == str(value))
+        if not matching:
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"makes `{rate_state}` {value!r}, which is no telemetry profile's `bps` "
+                f"({sorted(declared.items())}). A rate that is not one of the declared profiles is "
+                "a link nothing priced",
+            )
+            continue
+        for sid, member in sorted(states.items()):
+            pid_here = profile_of.get((str(sid), str(member)))
+            if pid_here is None or pid_here == matching[0]:
+                continue
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"makes `{sid}` {member!r}, which carries the `{pid_here}` profile, and `{rate_state}` "
+                f"{value!r}, which is `{matching[0]}`. `apollo_diode.md:161` and `:165` declare the "
+                "link mode and the rate of a single choice, so the two positions cannot disagree",
+            )
+
+
 def check_mission_bindings(
     channels: dict[str, Any],
     mission: dict[str, Any],
@@ -17919,6 +18041,7 @@ def main(argv: list[str] | None = None) -> int:
         check_launch_state(root, mission, report)
         check_band_on(root, registry, report)
         check_band_value(root, report)
+        check_link_profiles(root, vehicle, mission, report)
         check_tick_grain(mission, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)

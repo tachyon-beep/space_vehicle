@@ -87,7 +87,10 @@ launch_state:
   reason: >-
     the mission begins at the pad: `phases[0]` is `translunar_coast` and the first burn in
     `delta_v_budget` is hours after the epoch, so no engine has been commanded and no guidance
-    manoeuvre is in progress
+    manoeuvre is in progress — and one position below is not about the pad at all: `comm_mode` is
+    the link mode that carries the telemetry profile `telemetry_rate` holds, which is the
+    correspondence `vehicle.yaml#comms.rates` declares and the reason one switch on the launch
+    checklist sets both
   # **Three of the positions below are not a decision at all — they are published**, and round 76
   # left nine of them owed on the strength of this block's own refusal message: *"a launch position
   # no source publishes is a decision."* That sentence was written as a general truth and it is not
@@ -116,6 +119,10 @@ launch_state:
     bus_tie_closed: closed
     telemetry_rate: 51200
     antenna_selection: omni_b
+    # And the link mode that carries it — `high`'s `link_mode`, which is `sband_high`. `derived`
+    # rather than `historical`: the checklist sets the rate, and this follows from it through the
+    # correspondence, which is why it is not in `sourced`.
+    comm_mode: sband_high
 
 total_ticks: 34560000
 total_ticks_provenance:

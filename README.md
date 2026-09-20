@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 275 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 274 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 275 declared debts
-and every one of them named. **105 of the 139 states are fully configured and 34 carry a debt**, and
-a real tick advances **48** of the 139 states, and the build order's **48** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 274 declared debts
+and every one of them named. **106 of the 139 states are fully configured and 33 carry a debt**, and
+a real tick advances **49** of the 139 states, and the build order's **49** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -226,11 +226,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **275** is every obligation the linter can name:
-**197** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **274** is every obligation the linter can name:
+**196** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **197** the plant
+the missing charging efficiency, the pump-speed conversion). The **196** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
@@ -1832,8 +1832,8 @@ the distinction between a value nobody has written down and a state nothing can 
 ```
 139 states, by what blocks them:
 
-    48   35 %  ready now — the states a real tick advances
-    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
+    49   35 %  ready now — the states a real tick advances
+    29   21 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     46   33 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -17957,6 +17957,87 @@ state. Two of them want a *decision about a vocabulary* rather than a value — 
 four members against the checklist's `OPEN` — and those are the two a next round should take
 together, because both are one question: **what the corpus's own enums mean, where a source states
 the configuration in a different vocabulary.**
+
+## A telemetry profile said which rate it was and never which link carried it
+
+`apollo_diode.md:161` declares `comm.link_mode` as `sband_high/sband_low/vhf/none`; `:165` declares
+`comm.telemetry_rate_bps` as "1,600 / 51,200 Apollo-inspired profiles"; and the corpus's own prose
+says what the pair is — *"the high-rate/low-rate telemetry distinction was 51.2 and 1.6 kbit/s"*.
+The vehicle carries both faithfully, as two states, `comm_mode` and `telemetry_rate`. Until this
+round **no declaration anywhere said which link mode carries which rate.** A vehicle could hold
+`sband_low` beside 51,200 bit/s — a link mode and a rate that contradict each other — and every one
+of the linter's checks would pass.
+
+### The claim was in the corpus, as prose, written by the round before this one
+
+Round 80 left `comm_mode` owed with a note that said its two members "are the same choice as
+`telemetry_rate`'s `high` and `low`". That is a **join asserted in prose with nothing reading it** —
+this folder's second most frequent defect, arriving in the round that had just spent its whole length
+on prose that no reader held. `cabin_regulator_position`'s withdrawn guess was the same shape one
+domain over.
+
+The repair puts the correspondence where the rates are already declared once:
+
+```yaml
+  rates:
+    - id: low
+      bps: 1600
+      link_mode: sband_low     # the half that was missing
+      rate_state: telemetry_rate
+    - id: high
+      bps: 51200
+      link_mode: sband_high
+      rate_state: telemetry_rate
+```
+
+`rate_state` is a *state* rather than a label, so `check_link_profiles` needs to know neither end's
+name: it resolves `link_mode` against the vocabularies of the states that exist, and then refuses the
+two declared positions disagreeing.
+
+### What the join buys
+
+`comm_mode` is no longer owed, and it is `derived` rather than `historical` — the launch checklist
+sets **one** switch (`PCM BIT RATE - HI`, p. 10), that is `telemetry_rate`'s position, and the link
+mode follows from it through the correspondence. A relation, not a second reading of the document.
+**It now advances**, and it is the fourth state this pair of rounds has taken out of *owes a value*
+by opening a document.
+
+The four refusals hold the pair from both ends and from both files: a `link_mode` that is no state's
+vocabulary, a `rate_state` that is no state, a rate that is no declared profile's `bps`, and the two
+positions disagreeing. A profile with no `link_mode` is a **debt** rather than a refusal, because the
+correspondence is something somebody has to declare and it is counted like every other obligation.
+
+### One mistake, caught by the suite rather than by review
+
+The check's first version read `vehicle.get("comms")` directly. `check_vehicle.py` runs its later
+checks even when `vehicle.yaml` did not parse — `vehicle` is `None` then — so on an unparseable file
+the round turned a *reported* fault into an `AttributeError`. `test_an_unloadable_vehicle_refuses_instead_of_crashing`
+is the test that exists for exactly this, and it caught the round's own check rather than one of the
+corpus's. **A check that cannot run is not a check that passed, and it is not a crash either.**
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 275 | **274** |
+| build order · ready now | 48 | **49** |
+| build order · owes a value | 30 | **29** |
+| build order · owes an edge / rule | 15 · 46 | 15 · 46 |
+| a real tick advances | 48 of 139 | **49 of 139** |
+| states fully configured | 105 / 139 | **106 / 139** |
+| states with a debt | 34 / 139 | **33 / 139** |
+| UNCONFIGURED scalars | 197 | **196** |
+| `report.refuse` call sites | 833 | **837** |
+| tests | 333 | **334** |
+
+### What is still owed
+
+Four positions, and one of them is now the sharpest thing on the board: **`cabin_regulator_position`**
+declares `closed/primary/emergency/isolated` and the launch checklist's ECS panels read `MAIN REG vlv
+(2) - OPEN` — a word the enum does not contain. That is the same question this round answered for the
+link mode (what does the corpus's enum mean where a source states the configuration in a different
+vocabulary), and it is the last one; `computer_mode`, `hatch_state`, `breaker_panel` and `mode` are
+waiting on the corpus's own shape rather than on a source.
 
 ## The invariants, and which of them are enforced
 
