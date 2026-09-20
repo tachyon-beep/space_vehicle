@@ -16162,6 +16162,16 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
     whose `initial_provenance` cites the block must be named in it. A state that cites it and is
     absent would be claiming a decision that does not mention it; a state it names and that declares
     a different value would be a second answer to the one question.
+
+    **Round 80 found that "decision" was the only thing this block could say, and that the sentence
+    above states it as a general truth.** Its own refusal message read *"a launch position no source
+    publishes is a decision"* — and nine positions were carried as owed on the strength of it, when
+    a published launch checklist states them: `MN BUS TIE (2) - on (up)` at T-1:15, `PCM BIT RATE -
+    HI`, `S BD ANT - OMNI` with `S BO ANT OMNI - B`. So the block gained a `source` — the document —
+    and a `sourced` map giving **each** state its own locator in it, and the state's own `basis` is
+    joined to that map in both directions. A position read out of a document is `historical`; one
+    the mission's own start settles is `derived`; and a block that cites a document for a position
+    it does not make, or makes one without saying where it came from, is refused.
     """
     block = mission.get("launch_state") or {}
     states = block.get("states")
@@ -16179,12 +16189,64 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
             "declares no `reason`. A launch position no source publishes is a decision, and the "
             "reason is what separates it from a number somebody typed",
         )
+    # **And a position a source *does* publish is not that**, which is what round 80 added. This
+    # block could only say *decided*: `reason` was the whole of its justification, and its own
+    # refusal message above said so in as many words — "a launch position no source publishes is a
+    # decision". Nine positions sat as owed on the strength of that sentence, and a published
+    # launch checklist states them. So the block carries a `source` and, per state, the locator in
+    # it, and the two are joined to each state's own `basis` below.
+    source = block.get("source")
+    sourced = block.get("sourced")
+    if sourced is not None:
+        if not isinstance(sourced, dict) or not sourced:
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"declares `sourced` as {sourced!r}, which cites no position. A published position "
+                "is cited one state at a time or it is not cited",
+            )
+            sourced = None
+        elif not (isinstance(source, str) and source.strip()):
+            report.refuse(
+                "mission.yaml:launch_state",
+                "declares `sourced` positions and no `source`, so nothing says which document they "
+                "were read out of. A citation without a document is a locator for a page of nothing",
+            )
+            sourced = None
+    elif isinstance(source, str) and source.strip():
+        report.refuse(
+            "mission.yaml:launch_state",
+            "declares a `source` and no `sourced` positions, so no state is joined to the document "
+            "it cites — the citation is a declaration nothing reads",
+        )
+    for sid, locator in sorted((sourced or {}).items()):
+        if sid not in (states or {}):
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"cites a locator for {sid!r} ({locator!r}) and does not declare that state's "
+                f"position — it declares {sorted(states or {})}. A locator for a position this "
+                "block does not make is a citation nothing holds",
+            )
+        elif not (isinstance(locator, str) and locator.strip()):
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"cites {sid!r} in `sourced` with no locator ({locator!r}). The document is named "
+                "once and the page is named per position, because a source a reader cannot turn to "
+                "is a source that cannot be disagreed with",
+            )
     declared: dict[str, dict[str, Any]] = {}
+    domain_of: dict[str, str] = {}
     for path in sorted((root / "domains").glob("*/components.yaml")):
         components = load(path, Report()) or {}
         for state in components.get("state") or []:
             if isinstance(state, dict) and state.get("id"):
                 declared[str(state["id"])] = state
+                # **The domain, kept per state.** The refusal at the end of this function named
+                # `domains/{path.name}` with `path` left over from the loop above it, so it named
+                # whichever file sorted last rather than the file the state is in — and a message
+                # that sends a reader to the wrong domain is worse than one that names no file.
+                # Round 80 found it while adding two refusals to that loop and gave each state its
+                # own.
+                domain_of[str(state["id"])] = path.parent.name
     for sid, value in sorted(states.items()):
         state = declared.get(str(sid))
         if state is None:
@@ -16204,12 +16266,36 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
         provenance = state.get("initial_provenance") or {}
         if str(provenance.get("source") or "") != "mission.yaml:launch_state":
             continue
+        where = f"domains/{domain_of.get(sid, '?')}/components.yaml:state {sid}"
         if sid not in states:
             report.refuse(
-                f"domains/{path.name}:state {sid}",
+                where,
                 "cites `mission.yaml:launch_state` as where its starting position comes from, and "
                 f"that block does not name it (it names {sorted(states)}). A state claiming a "
                 "decision that does not mention it is a citation nothing holds",
+            )
+            continue
+        # **And the state's own `basis` has to agree with the block's account of it.** `sourced`
+        # says this position was read out of a published document; `basis: historical` says the
+        # same thing from the state's side, and any other basis says it came from the mission's own
+        # start. Two statements about one position, in two files, joined by nothing — this folder's
+        # oldest shape, and the reason the four `derived` machines and the three `historical` ones
+        # are not interchangeable.
+        basis = str(provenance.get("basis") or "")
+        cited = sid in (sourced or {})
+        if cited and basis != "historical":
+            report.refuse(
+                where,
+                "is cited in `mission.yaml#launch_state`'s `sourced` map — a position read out of "
+                f"a published document — and declares `basis: {basis or 'none'}`. A published "
+                "position is `historical`, and the state's own provenance is where that is said",
+            )
+        elif not cited and basis == "historical":
+            report.refuse(
+                where,
+                "declares `basis: historical` for a position `mission.yaml#launch_state` makes, "
+                "and the block's `sourced` map does not cite it — so the block's own account of "
+                "where these positions come from is silent about this one",
             )
 
 

@@ -511,8 +511,14 @@ state:
     initial_note: >-
       the RCS mode at MET 0. `apollo_diode.md:147` gives the three modes and this state's own note
       argues `manual`'s weight — in it the crew are the controller — so the starting mode decides
-      who is flying the attitude loop before anything is commanded. What would close it: the
-      mission's attitude-control plan for the early coast
+      who is flying the attitude loop before anything is commanded. The launch checklist reaches the
+      attitude system without answering this: `SC CONT - SCS` (p. 6) says which *controller* is
+      selected and `CM RCS LOGIC - on (up)` says the logic is powered, and both are statements about
+      authority rather than about which of `auto`, `manual` and `free_drift` the RCS itself is in.
+      The automatic-selection switches the checklist does set (`AUTO RCS SEL A/C ROLL A1 - OFF`, p.
+      12) choose which axes the DAP may roll about, which is a third question again. What would
+      close it: the attitude-control plan for the early coast, or a decision about what these three
+      words mean at the pad
     moved_by:
       - "command:set_rcs_mode"
     dwell:

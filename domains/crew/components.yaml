@@ -88,10 +88,12 @@ state:
     initial: UNCONFIGURED
     initial_note: >-
       each breaker's position at MET 0. The state is a map over `breaker_id`, so its initial is a
-      position per breaker, and the corpus declares the key space and the values without saying
-      which breakers are `in` at the epoch — a vehicle at the pad has most of them in and the ones
-      that are not are a launch-configuration decision. What would close it: the launch
-      configuration's switch list
+      position per breaker — and `breaker_id` is the thing this state does not have. **The launch
+      checklist states the positions outright**, panel by panel: `cb Panel 4 - all closed`, and
+      `cb Panel 5 all closed except` `INST NONESS`, `ECS XDUCR PRESS GRP 2 MNA` and `WASTE H20/UR
+      DUMP HTR (2)` (p. 11). So this is no longer a missing *source* — it is a missing key space,
+      and the same one `set_breaker`'s `lcl` argument is waiting on in this domain's `open_debts`.
+      What would close it: the LCL set first, and then this map's ids, which are the same ids
     moved_by:
       - "command:set_breaker"
     command_value:

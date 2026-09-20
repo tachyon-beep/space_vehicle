@@ -325,12 +325,18 @@ state:
     node: internal
     method: discrete
     unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the selected antenna at MET 0. The four members are exactly `vehicle.yaml#comms.antennas`, and
-      which one is selected at the epoch is a property of the ground-station geometry at the pad
-      rather than of the vehicle. What would close it: the launch-network plan, or one decision
-      that the vehicle begins on an omni antenna because no pointing has been commanded
+    initial: omni_b
+    initial_provenance:
+      basis: historical
+      source: mission.yaml:launch_state
+      note: >-
+        the launch checklist's own configuration, read out of `mission.yaml#launch_state`: `S BD ANT
+        - OMNI` with `S BO ANT OMNI - B` (p. 10). This entry used to say that which antenna is
+        selected "is a property of the ground-station geometry at the pad rather than of the
+        vehicle" and to ask for the launch-network plan. The plan was not needed — the checklist
+        states the switch position, and it is omni B. The high-gain antenna is the one the same
+        checklist has the crew *power* (`HI-GAIN ANT PWR - PWR`) and point later; it is not the
+        antenna the link starts on
     moved_by:
       - "command:select_antenna"
     dwell:
@@ -354,9 +360,15 @@ state:
     initial: UNCONFIGURED
     initial_note: >-
       the link mode at MET 0. The four members are `apollo_diode.md:161`'s and `vhf` is not an Earth
-      link at all, so which one the vehicle starts in is a statement about the launch and ascent
-      communications plan, not a measurement. What would close it: the communications plan's
-      launch configuration
+      link at all. **The launch checklist states the configuration and still does not settle this
+      state**, because two of the four members are a distinction another state already owns:
+      `sband_high` and `sband_low` are the same choice as `telemetry_rate`'s `high` and `low`, which
+      the same checklist sets with one switch (`PCM BIT RATE - HI`, p. 10). So a source can answer
+      `telemetry_rate` — and did, in this round — while leaving this enum's own question open, which
+      is what a duplicated declaration buys. What the checklist does say is `S BO - T/R` and `S BO
+      MODE PCM - PCM` (p. 10): the S-band transponder is the link and it is in PCM. What would close
+      it: which of these four is a *link* rather than a rate — a decision about this enum, not about
+      the launch
     moved_by:
       - "command:set_comm_mode"
     dwell:
@@ -397,13 +409,17 @@ state:
     node: internal
     method: discrete
     unit: bit/s
-    initial: UNCONFIGURED
-    initial_note: >-
-      the rate at MET 0. `vehicle.yaml#comms.rates` declares `low` at 1,600 bit/s and `high` at 51,200,
-      both from `apollo_diode.md:7, :165`, and the state is a *rate* rather than a mode, so its
-      starting position is one of those numbers rather than a member of an enum. Which profile the
-      mission opens on is not declared anywhere. What would close it: the flight plan's initial
-      telemetry configuration, or one decision that the vehicle begins at the low rate
+    initial: 51200
+    initial_provenance:
+      basis: historical
+      source: mission.yaml:launch_state
+      note: >-
+        the `high` profile, from the launch checklist's `PCM BIT RATE - HI` (p. 10). This entry used
+        to say that which profile the mission opens on "is not declared anywhere" and to offer a
+        fallback decision that the vehicle begins at the *low* rate — and `low` is what the flight
+        checklist switches to in orbit, so the fallback would have been wrong in the one direction
+        that matters. The number is `vehicle.yaml#comms.rates`'s `high`, which `apollo_diode.md:7,
+        :165` already carried; what was missing was which of the two the countdown sets
     moved_by:
       - "command:set_telemetry_profile"
     command_value:

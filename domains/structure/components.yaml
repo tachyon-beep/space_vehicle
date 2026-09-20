@@ -214,10 +214,16 @@ state:
     initial: UNCONFIGURED
     initial_note: >-
       each hatch's position at MET 0. The state is a map over `hatch_id` and its three values are
-      `closed`, `latched` and `open`; the vehicle is pressurised at the epoch, which says the
-      hatches are not `open` and does not distinguish `closed` from `latched` — and that
-      distinction is the whole of `apollo_diode.md:207`'s "incompatible with pressure"
-      interlock. What would close it: the launch configuration's hatch list
+      `closed`, `latched` and `open`; the vehicle is pressurised at the epoch, which says the hatches
+      are not `open` and does not distinguish `closed` from `latched` — and that distinction is the
+      whole of `apollo_diode.md:207`'s "incompatible with pressure" interlock. The launch checklist
+      does reach the CSM's own hatches (p. 20): `FWD HATCH … ACTR HNDL sel - stow/check locked` and
+      `SIDE HATCH … GEAR BOX sel - LATCH … LOCK PIN REL KNOB - LOCK … LOCK PIN ind - flush`, which is
+      a *locked* hatch rather than a merely shut one — and it reaches **one** of this state's two
+      ids. `hatch_crew_csm` is the CSM's crew hatch; the LM's is in the LM's own launch checklist,
+      and no document held here states it at the epoch. So the source fills half this map, and half a
+      map is not a position. What would close it: the LM's launch checklist, or a decision that the
+      two hatches begin at the same value
     moved_by:
       - "command:set_hatch_valve"
     command_value:

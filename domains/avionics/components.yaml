@@ -388,11 +388,14 @@ state:
     unit: "enum[idle,run,standby,failed]"
     initial: UNCONFIGURED
     initial_note: >-
-      the mode the guidance computer is in at MET 0. `apollo_diode.md:176` gives the vocabulary and its
-      "restart/mode change" event, and no source says whether the vehicle launches with the
-      computer in `idle` or in `run` — which is the difference between a machine that is flying and
-      one that is waiting to be told to. What would close it: the avionics section's launch
-      configuration
+      the mode the guidance computer is in at MET 0. `apollo_diode.md:176` gives the vocabulary and
+      its "restart/mode change" event. The launch checklist does reach the computer, and what it says
+      does not use this enum: `G/N PWR - AC1` (p. 11) is the power selection, and `CMC MODE - FREE`
+      (pp. 6, 21) is the CMC's *mode switch*, whose members are FREE, AUTO and HOLD — a different
+      question from `idle`/`run`, which asks whether the machine is executing a program at all. So
+      the source names the configuration and not the member, and reading FREE onto this vocabulary
+      is a decision about what these four words mean rather than a lookup. What would close it: that
+      mapping, or an avionics source that uses this vocabulary at the pad
     moved_by:
       - "command:set_computer_mode"
     dwell:

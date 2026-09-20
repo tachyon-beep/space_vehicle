@@ -756,11 +756,28 @@ def test_the_build_order_is_the_ticks_own_gap_list():
     # asks the per-state tests about a state it advanced, so no state can be both — and the
     # declarations those twenty-one owe are still counted, by `--readiness`, which is where a
     # *declaration's* debts belong.
+    # **Round 80 narrowed this, and the reason belongs here before anyone widens it back.** The
+    # assertion used to read `state.id in advanced and _classify(state) != "ready"`, forbidding a
+    # state from advancing while its own declaration owes *anything* — including a `command_value`
+    # mapping for one argument, which `_classify`'s own docstring says "has a value it can be given
+    # without deciding the mover, so it stays where it is — `bus_tie_closed`, `telemetry_rate` and
+    # the three `command_value.selects` states are that case, and they are correctly filed."
+    #
+    # Both statements were true when they were written and they never met, because neither state
+    # advanced: both owed their `initial`. **Round 80 resolved both initials out of the launch
+    # checklist and the guard fired on exactly the case the classifier calls correct** — so the
+    # contradiction was latent in the pair, and finding it took a state crossing from one to the
+    # other. What round 58 actually established is kept, and it is the part that matters: **no state
+    # may advance while owing a declaration its own integrator reads.** A `command_value` mapping is
+    # read by the command path and not by `advance` — the hold carries the state either way — which
+    # is why `bus_tie_closed`'s `auto` and `telemetry_rate`'s `emergency`, `normal` and `burst` are
+    # owed, counted by `--readiness`, and not a disagreement with the tick.
     assert not [
         state.id
         for state in world.states
-        if state.id in advanced and plant._classify(world, state) != "ready"
-    ]
+        if state.id in advanced
+        and [owed for owed in state.owed if not owed.startswith("command_value")]
+    ], "a state the tick advanced is missing a declaration its own integrator reads"
     # The bucket totals are the guard that used to be the disagreement counters: a state moving
     # between them, or a new way of being blocked arriving, moves one of these four numbers.
     assert (
@@ -789,7 +806,7 @@ def test_the_build_order_is_the_ticks_own_gap_list():
     # `band_value` is a third `UNCONFIGURED` and it lands on `load_shed_class`, whose one band is the
     # tier that selects `none` — so what blocks it is the ladder's rung-to-class map, a *value* the
     # thresholds do not carry, rather than the domain code the rule bucket was asking it for.
-    ) == (45, 33, 15, 46), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
+    ) == (48, 30, 15, 46), [len(buckets[key]) for key in ("ready", "value", "edge", "rule")]
 
 
 def test_the_worklist_never_blames_a_state_whose_node_publishes_no_value():
@@ -2837,8 +2854,8 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
-    # One block deleted is one debt added: the corpus stands at 278, so the ablation is 279.
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    # One block deleted is one debt added: the corpus stands at 275, so the ablation is 276.
+    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2860,7 +2877,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2874,7 +2891,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 279 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 276 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6558,7 +6575,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # Removing this file's own prose obligations takes the headline down by the number of entries
     # that file carries, which is one here — so the figure is the base minus one, and it moves with
     # the base rather than with the runs of fixtures that inject a debt.
-    assert "with 277 declared debt(s)" in result.stdout
+    assert "with 274 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6969,7 +6986,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 279 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 276 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7075,7 +7092,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 279 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 276 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -8639,17 +8656,34 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     # value* and into the ready bucket.
     gaps: list = []
     after = plant.step(world, values, plant.tick_seconds(world), gaps)
-    for sid in ("aps_state", "dps_state", "sps_state", "guidance_mode"):
+    # The four the mission's start settles, and — since round 80 — the three the launch checklist
+    # publishes, which the tick now holds rather than refusing.
+    for sid in (
+        "aps_state",
+        "dps_state",
+        "sps_state",
+        "guidance_mode",
+        "bus_tie_closed",
+        "telemetry_rate",
+        "antenna_selection",
+    ):
         assert not [gap for gap in gaps if gap.state.id == sid], sid
     assert after["sps_state"] == "off"
+    assert after["bus_tie_closed"] == "closed"
+    assert after["telemetry_rate"] == 51200
+    assert after["antenna_selection"] == "omni_b"
 
-    # The four are the ones the mission's start settles, and the other nine are still owed.
+    # The seven are the ones the block declares — four decided, three published — and the other six
+    # are still owed.
     mission = yaml.safe_load((VEHICLE / "mission.yaml").read_text())
     assert sorted(mission["launch_state"]["states"]) == [
+        "antenna_selection",
         "aps_state",
+        "bus_tie_closed",
         "dps_state",
         "guidance_mode",
         "sps_state",
+        "telemetry_rate",
     ]
     owed = [
         state.id
@@ -8660,15 +8694,12 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
         and state.spec.get("initial") == "UNCONFIGURED"
     ]
     assert sorted(owed) == [
-        "antenna_selection",
         "breaker_panel",
-        "bus_tie_closed",
         "cabin_regulator_position",
         "comm_mode",
         "computer_mode",
         "hatch_state",
         "mode",
-        "telemetry_rate",
     ], sorted(owed)
 
     def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
@@ -8695,6 +8726,145 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
         '    aps_state: "off"\n',
         "",
         "cites `mission.yaml:launch_state` as where its starting position comes from",
+    )
+
+
+def test_a_published_launch_position_is_not_a_decision(tmp_path):
+    """The launch positions are a lookup, and this block could only call them a decision.
+
+    Round 76 left nine positions owed, and the sentence it left them on is inside this file's own
+    refusal: *"A launch position no source publishes is a decision, and the `reason` is what
+    separates it from a number somebody typed."* That is true of the four machines the mission's own
+    start settles — no engine has been commanded, so the engines are `off` — and it was carried as a
+    general truth. **A source does publish them**: `Apollo 17 CSM Launch Checklist (Basic)`, the
+    panel-by-panel launch configuration, states `MN BUS TIE (2) - on (up)` (pp. 11, 22), `PCM BIT
+    RATE - HI` (p. 10) and `S BD ANT - OMNI` with `S BO ANT OMNI - B` (p. 10). Three of the nine are
+    that: a lookup the corpus kept as an open question to the operator.
+
+    So the block gained a `source` — the document — and a `sourced` map giving each position its own
+    locator in it, and the state's own `basis` is joined to that map **in both directions**. A
+    position read out of a document is `historical`; one the mission's own start settles is
+    `derived`; and the two are not interchangeable, which is what the four refusals below hold.
+
+    **And the round corrects four notes that told the next reader to stop looking.** The sharpest is
+    `cabin_regulator_position`, whose note asserted in passing that "`closed` is the launch
+    configuration" while the checklist's ECS panels read `MAIN REG vlv (2) - OPEN` (p. 18) — a guess
+    at a launch configuration wearing the clothes of a fact, in the one place a source could settle
+    it. `comm_mode` is the opposite case and is worth the note it now carries: two of its four
+    members (`sband_high`, `sband_low`) are the same choice `telemetry_rate` owns, so the source
+    answers the rate and cannot answer the mode — one decision declared in two states, where a
+    lookup for one of them is not a lookup for the other.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1200:]
+
+    mission = yaml.safe_load((VEHICLE / "mission.yaml").read_text())
+    block = mission["launch_state"]
+    assert block["source"].startswith("Apollo 17 CSM Launch Checklist")
+    assert block["sourced"] == {
+        "bus_tie_closed": "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 "
+        "countdown step at p. 22",
+        "telemetry_rate": "p. 10 (`PCM BIT RATE - HI`; the same panel carries `PCM BIT RATE - LOW` "
+        "as the later in-flight setting the flight checklist switches to)",
+        "antenna_selection": "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)",
+    }
+
+    # The block declares seven positions: the four the mission's start settles and the three the
+    # checklist publishes.
+    assert block["states"] == {
+        "aps_state": "off",
+        "dps_state": "off",
+        "sps_state": "off",
+        "guidance_mode": "coast",
+        "bus_tie_closed": "closed",
+        "telemetry_rate": 51200,
+        "antenna_selection": "omni_b",
+    }
+
+    # Every state that cites the block agrees with it, and its `basis` says which half it is in.
+    states: dict[str, dict] = {}
+    for path in sorted((VEHICLE / "domains").glob("*/components.yaml")):
+        for state in (yaml.safe_load(path.read_text()) or {}).get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                states[state["id"]] = state
+    for sid, value in block["states"].items():
+        state = states[sid]
+        assert str(state["initial"]) == str(value), sid
+        provenance = state.get("initial_provenance") or {}
+        assert provenance.get("source") == "mission.yaml:launch_state", sid
+        expected = "historical" if sid in block["sourced"] else "derived"
+        assert provenance.get("basis") == expected, sid
+
+    # The rate is the `high` profile's own number rather than a second copy of it — the same join
+    # `derives` makes everywhere else.
+    rates = {entry["id"]: entry["bps"] for entry in yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())["comms"]["rates"]}
+    assert states["telemetry_rate"]["initial"] == rates["high"] == 51200
+
+    # And the three left owed are owed for reasons the source does not answer, rather than for the
+    # absence of a source. Each note names the document now.
+    for sid in ("computer_mode", "comm_mode", "cabin_regulator_position", "hatch_state", "breaker_panel", "mode"):
+        note = str(states[sid].get("initial_note") or "")
+        assert "launch checklist" in note.lower(), sid
+        assert states[sid]["initial"] == "UNCONFIGURED", sid
+
+    def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        target = definition.joinpath(*path)
+        text = target.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        target.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1400:]}"
+
+    mission_path = ("mission.yaml",)
+    # A position read out of a document whose state says it came from the mission's own start.
+    refusal(
+        "basis-says-derived",
+        ("domains", "power", "components.yaml"),
+        "      basis: historical\n      source: mission.yaml:launch_state",
+        "      basis: derived\n      source: mission.yaml:launch_state",
+        "A published position is `historical`",
+    )
+    # And the mirror: a position cited by the block whose state claims a document.
+    refusal(
+        "sourced-not-cited",
+        mission_path,
+        '    bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"\n',
+        "",
+        "and the block's `sourced` map does not cite it",
+    )
+    # A locator for a position the block does not declare.
+    refusal(
+        "locator-for-nothing",
+        mission_path,
+        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
+        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n'
+        '    comm_mode: "p. 10"\n',
+        "A locator for a position this block does not make is a citation nothing holds",
+    )
+    # A citation with no page, which is a source a reader cannot turn to.
+    refusal(
+        "locator-missing",
+        mission_path,
+        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
+        '    antenna_selection: ""\n',
+        "with no locator",
+    )
+    # The document is what the locators are locators *in*.
+    refusal(
+        "source-missing",
+        mission_path,
+        "  source: >-\n    Apollo 17 CSM Launch Checklist (Basic), NASA Manned Spacecraft Center, Flight Procedures Branch,\n    4 September 1972 — section 1, the launch switch configuration, which lists every panel's switch\n    and circuit-breaker positions for the countdown\n",
+        "",
+        "and no `source`",
+    )
+    # And a document cited for nothing.
+    refusal(
+        "nothing-sourced",
+        mission_path,
+        '  sourced:\n    bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"\n',
+        "",
+        "the citation is a declaration nothing reads",
     )
 
 
@@ -9300,7 +9470,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # so it is the one of the fourteen that reaches *ready* rather than *owes a value*.
     # 37 -> 38 in round 72: `E-WATER-RAD`'s driver was a crowded node with no name for the state it
     # reads, and naming it (`radiator_rejection_w`) made the coolant's discharge computable.
-    assert len(buckets["ready"]) == 45
+    assert len(buckets["ready"]) == 48
     # `rule` went 71 -> 69 -> 82 across two rounds. The first move was `moved_by`: the two still
     # owed put an `UNCONFIGURED` in their spec and `walk_unset` counts any unset scalar as a value
     # the plant wants, so they left this bucket without the code they need going away. The second
@@ -9378,7 +9548,7 @@ def test_the_build_order_is_derived_and_partitions_the_vehicle():
     # 32 -> 33 in round 79: `load_shed_class` joins them, and for a reason one layer in — the band
     # it declares is `bus_a_undervoltage`, which by `coupling.yaml#open_debts`'s rung map selects
     # `none`, so what it owes is the rung-to-class map rather than the comparator that reads it.
-    assert len(buckets["value"]) == 33
+    assert len(buckets["value"]) == 30
     # Two of the twenty-eight "owed an edge" were not owed one at all: the three preloaded tanks
     # are advanceable, and the thirteen `internal` states need code. Three more left the bucket
     # when it stopped asking the integrator's question — a `regimes` table is a *declared*
@@ -10756,7 +10926,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 278 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 275 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -10852,7 +11022,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 278 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 275 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -11741,7 +11911,12 @@ def test_every_stock_declares_where_it_starts():
     # are seeded now that they declare the position they hold.
     # 60 -> 65 in round 76: the four machines `mission.yaml#launch_state` settles, whose node
     # keys are seeded now that they hold a position.
-    assert len(on_nodes) == 65, f"{len(on_nodes)} node keys carry a value"
+    # 65 -> 69 in round 80: the three positions the launch checklist publishes. **Four keys for
+    # three states**, and the arithmetic is the map's own shape rather than a mistake —
+    # `bus_tie_closed` is the only state on `bus_tie`, so it seeds the node alias *and* its own id,
+    # while `telemetry_rate` and `antenna_selection` are sentinel states and seed under their ids
+    # alone.
+    assert len(on_nodes) == 69, f"{len(on_nodes)} node keys carry a value"
     # And the map a tick actually starts from is that seed plus the declared arithmetic, so the
     # resolved states are a strict superset and every one of them is `algebraic`.
     assert seeded_integrators.keys() < seeded.keys(), "the resolution added nothing to the seed"
@@ -11751,11 +11926,13 @@ def test_every_stock_declares_where_it_starts():
     # 12 -> 13 in round 67, with `relief_valve_state`: the sentinel gains a *mode* beside its
     # twelve accumulators, which is the same one state the node-key count above moved for and a
     # different map — this one is the sub-map rather than the ids beside it.
-    assert len(seeded_integrators["internal"]) == 13, sorted(seeded_integrators["internal"])
+    # 13 -> 15 in round 80: `telemetry_rate` and `antenna_selection` are sentinel states with a
+    # position now, so they join this sub-map as well as the ids beside it.
+    assert len(seeded_integrators["internal"]) == 15, sorted(seeded_integrators["internal"])
     # Six of the sentinel's `algebraic` states resolve at t=0 as well — the bus load, the bay heat,
     # the cabin pressure differential and three more — so the sentinel's sub-map is the same map the
     # tick commits, merged rather than replaced.
-    assert len(seeded["internal"]) == 19, sorted(seeded["internal"])
+    assert len(seeded["internal"]) == 21, sorted(seeded["internal"])
     # The map is keyed by node and holds one value per key, so this is **not** a stock count and
     # stopped being one in round 8: four stocks share `cabin_atm` and four share `lm_cabin_atm`, so
     # six of the twenty-four declared values are the last of their key rather than a key of their
@@ -11818,6 +11995,11 @@ def test_every_stock_declares_where_it_starts():
         # three members also says the valve is normally closed, and it is here rather than in a
         # list of its own because the sentinel's sub-map does not care what shape a value has.
         "relief_valve_state",
+        # Round 80: two more modes, and the first ones here whose position comes out of a published
+        # launch checklist rather than a decision — the `high` telemetry profile's 51,200 bit/s and
+        # the S-band omni on antenna B.
+        "telemetry_rate",
+        "antenna_selection",
     }, sorted(seeded_integrators["internal"])
     # **And the six `algebraic` states the resolver adds**, the sentinel's half of the declared
     # arithmetic: the bus load, the bay heat rate, the cabin pressure differential, the two loops'
@@ -11834,7 +12016,16 @@ def test_every_stock_declares_where_it_starts():
     # Zero everywhere except the supply tank's pressure, which is the one seeded sentinel value that
     # is not an accumulator's origin — and, from round 67, `auto`, which is not a number at all and
     # is the reason the value assertions below name their states rather than ranging over the map.
-    assert set(seeded_integrators["internal"].values()) == {0.0, 35.0, 900.0, "auto"}
+    assert set(seeded_integrators["internal"].values()) == {
+        0.0,
+        35.0,
+        900.0,
+        "auto",
+        # Round 80's two, and they are the first pair here that is a *reading* rather than a
+        # constant or an origin: the checklist's `PCM BIT RATE - HI` and `S BO ANT OMNI - B`.
+        51200,
+        "omni_b",
+    }
     assert seeded["internal"]["o2_supply_pressure_psi"] == 900.0
     assert seeded["internal"]["suit_loop_flow_cfm"] == 35.0
 
@@ -13643,7 +13834,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 278 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 275 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -13820,7 +14011,7 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # prose obligation in `coupling.yaml#open_debts` for the three bands whose vocabulary is wider
     # than their comparator. The round adds a field to four states; nothing was answered, so nothing
     # fell.
-    assert owed == "278", "the view must agree with the headline count"
+    assert owed == "275", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -14926,9 +15117,13 @@ def test_the_console_applies_the_effect_and_says_what_changed(tmp_path):
         assert len(bodies) == 1, bodies
         return bodies[0]
 
-    # A node the value map holds.
-    tied = run("set_bus_tie tie=csm_tie_ab state=closed")
-    assert "succeeded" in tied and "bus_tie=closed" in tied, tied
+    # A node the value map holds. **The command opens the tie rather than closing it**, because
+    # round 80 sourced the launch checklist's `MN BUS TIE (2) - on (up)` and the tie now starts
+    # `closed`: closing it again is idempotent, the console correctly reports that no value changed,
+    # and this test would be asserting the effect of a command that has none. The state it is
+    # exercising — a node key written by the command path — is the same one either way.
+    tied = run("set_bus_tie tie=csm_tie_ab state=open")
+    assert "succeeded" in tied and "bus_tie=open" in tied, tied
     # A state on the sentinel, which had no storage before this round.
     mode = run("set_rcs_mode mode=manual")
     assert "succeeded" in mode and "internal:mode=manual" in mode, mode
@@ -15513,7 +15708,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 275 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -15521,7 +15716,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 275 declared debt(s)",
         composes=True,
     )
 
@@ -15536,7 +15731,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-300:]
+    assert "with 276 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -15695,7 +15890,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-400:]
+    assert "with 276 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -15842,7 +16037,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 279 declared debt(s)" in out, out[-400:]
+    assert "with 276 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -15852,7 +16047,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 275 declared debt(s)",
         composes=True,
     )
 
@@ -15994,7 +16189,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 278 declared debt(s)",
+        "COMPOSES, with 275 declared debt(s)",
         composes=True,
     )
 
@@ -18272,7 +18467,9 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # relief valve's starting position is the one the corpus could source.
     # 37 -> 38 in round 72 (the coolant's drain) and 38 -> 41 in round 75, with the three
     # states the effect path owns through a one-way event.
-    assert len(advanced) == 45, sorted(advanced)
+    # 45 -> 48 in round 80, and this is the largest single move a *value* round has made: three
+    # commanded modes the launch checklist publishes a position for, which the hold then carries.
+    assert len(advanced) == 48, sorted(advanced)
 
     # The arithmetic is the corpus's, at the values the corpus declares.
     assert values["cabin_heat_csm"] == 733.0
@@ -18332,7 +18529,9 @@ def test_the_plant_evaluates_the_arithmetic_the_corpus_already_declares():
     # deeper stage — so a sentinel state that cannot resolve at t=0 still lands by the old path.
     # 18 -> 19 in round 67, with `relief_valve_state`: the sentinel's first *mode*, seeded by the
     # same branch that seeds a level and merged into the sub-map rather than replacing it.
-    assert len(values["internal"]) == 19, sorted(values["internal"])
+    # 19 -> 21 in round 80: `telemetry_rate` and `antenna_selection`, the sentinel's second and
+    # third modes.
+    assert len(values["internal"]) == 21, sorted(values["internal"])
     assert values["loop_primary_load_w"] == 1723.0 and values["loop_lm_load_w"] == 1007.0
 
 
@@ -20156,4 +20355,6 @@ def test_the_tick_can_read_what_the_build_order_promises():
     # The figures this rests on, so a round that moves them has to say so here.
     assert len(world.states) == 139
     # 38 -> 41 in round 75: the three event-moved states, held by the tick and moved by the effect.
-    assert len(ready) == 45 and len(advanced) == 45
+    # 41 -> 45 in round 76 and 45 -> 48 in round 80: the seven positions `mission.yaml#launch_state`
+    # now declares, the last three of them read out of the launch checklist.
+    assert len(ready) == 48 and len(advanced) == 48

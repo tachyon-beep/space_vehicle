@@ -365,12 +365,14 @@ state:
     initial: UNCONFIGURED
     initial_note: >-
       the regulator's position at MET 0. `apollo_diode.md:95` gives the vocabulary and its
-      "unexpected mode" event and no source reached says which of the three the vehicle launches
-      in: `primary` is what the crew select once the cabin is on the regulator, `emergency` is a
-      selection made under a fault, and `closed` is the launch configuration. Which one is right
-      is a statement about the mission's start rather than a measurement. What would close it: a
-      launch configuration list, or one decision that the regulator begins closed because nothing
-      has opened it
+      "unexpected mode" event. **This entry used to assert, in passing, that "`closed` is the launch
+      configuration"** — an unsourced claim about a launch configuration, which is the one kind of
+      statement that turned out to be checkable: the launch checklist's ECS panels read `MAIN REG vlv
+      (2) - OPEN` (p. 18), so the regulator is open at the pad and the parenthetical was telling a
+      reader to write down the opposite of what the configuration says. Which of `primary`,
+      `emergency` and `isolated` an open main regulator valve corresponds to is a question about
+      this vocabulary rather than about the launch — `open` is not a member this corpus has. What
+      would close it: that mapping. The `closed` guess is withdrawn rather than kept
     moved_by:
       - "command:set_cabin_regulator"
     dwell:

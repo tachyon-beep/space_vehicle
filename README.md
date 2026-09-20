@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 275 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
-and every one of them named. **104 of the 139 states are fully configured and 35 carry a debt**, and
-a real tick advances **45** of the 139 states, and the build order's **45** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 275 declared debts
+and every one of them named. **105 of the 139 states are fully configured and 34 carry a debt**, and
+a real tick advances **48** of the 139 states, and the build order's **48** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -226,11 +226,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **278** is every obligation the linter can name:
-**200** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **275** is every obligation the linter can name:
+**197** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **200** the plant
+the missing charging efficiency, the pump-speed conversion). The **197** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
@@ -1832,8 +1832,8 @@ the distinction between a value nobody has written down and a state nothing can 
 ```
 139 states, by what blocks them:
 
-    45   32 %  ready now — the states a real tick advances
-    33   24 %  owes a value — the cheapest to close, and the debt count already tracks them
+    48   35 %  ready now — the states a real tick advances
+    30   22 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     46   33 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -17858,6 +17858,105 @@ both. The queue they will schedule onto landed in round 78.
 **The three bands whose vocabulary is wider than their comparator** are one decision, recorded in
 `coupling.yaml#open_debts` rather than guessed in three fields: each wants a second boundary or a
 second band, and for `load_shed_class` that is the same decision as the missing P1 rung.
+
+## The launch positions were a lookup, and the block could only call them a decision
+
+Round 76 left nine positions owed, and the sentence it left them on is inside `check_launch_state`'s
+own refusal: *"A launch position no source publishes is a decision, and the `reason` is what
+separates it from a number somebody typed."* That is true of the four machines the mission's own
+start settles — no engine has been commanded, so the three engines are `off` and the guidance mode is
+`coast` — and it was carried as a general truth. **A source does publish them.** The
+`Apollo 17 CSM Launch Checklist (Basic)` (NASA/MSC, Flight Procedures Branch, 4 September 1972) is
+124 pages of text whose section 1 is the **panel-by-panel launch switch configuration**: every switch
+and every circuit breaker in the vehicle, at the pad. It was in the archive the project's own source
+list has named since the first handover.
+
+So the block gained two fields, and the state's own account of where its position comes from is now
+joined to them in both directions:
+
+```yaml
+launch_state:
+  reason: >-        # the four the mission's own start settles
+  source: >-        # the document: named once
+  sourced:          # the locator: cited per position
+    bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"
+    telemetry_rate: "p. 10 (`PCM BIT RATE - HI`; …)"
+    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"
+```
+
+A position read out of a document is `historical`; one the mission's own start settles is `derived`;
+and a block that cites a document for a position it does not make, or makes one without saying where
+it came from, is refused.
+
+### Three positions the source settles, and six it does not
+
+| state | the checklist's own words | page |
+|---|---|---|
+| `bus_tie_closed` | `MN BUS TIE (2) - on (up)` → **closed** | 11, 22 |
+| `telemetry_rate` | `PCM BIT RATE - HI` → the `high` profile's **51,200 bit/s** | 10 |
+| `antenna_selection` | `S BD ANT - OMNI` with `S BO ANT OMNI - B` → **omni_b** | 10 |
+
+**All three now advance**, which is the round's real movement: they are commanded modes, round 67's
+hold carries them, and what was stopping them was a starting position nobody had looked up.
+
+The other six are not a missing source any more, and each note now says what the checklist *does*
+say and what is genuinely open — which is a different sentence from the one that was there:
+
+- **`cabin_regulator_position`** is the sharpest, because the old note asserted in passing that
+  "`closed` is the launch configuration". The ECS panels read `MAIN REG vlv (2) - OPEN` (p. 18), so
+  the regulator is open at the pad and the parenthetical was telling a reader to write down the
+  opposite of what the configuration says. The guess is withdrawn rather than kept.
+- **`comm_mode`** is the one worth reading: the checklist states the configuration and still cannot
+  settle this state, because two of its four members (`sband_high`, `sband_low`) are the same choice
+  `telemetry_rate` owns. One decision declared in two states, so a source that answers the rate
+  leaves the mode open — which is what a duplicated declaration buys.
+- **`computer_mode`** — the checklist has `G/N PWR - AC1` and `CMC MODE - FREE`, and `FREE` is the
+  CMC's mode *switch*, not this enum's `idle`/`run`. The source names the configuration and not the
+  member.
+- **`hatch_state`**, **`breaker_panel`** and **`mode`** are owed on the corpus's own shape: the
+  checklist reaches the CSM's hatches and not the LM's, the breaker positions are published and
+  `breaker_id` is the missing key space, and `SC CONT - SCS` is a statement about authority rather
+  than about the RCS's own mode.
+
+### The guard this round narrowed, and why that is not a weakened test
+
+`test_the_build_order_is_the_ticks_own_gap_list` asserted that no advanced state may have
+`_classify(state) != "ready"` — and `_classify`'s **own docstring** says the opposite about exactly
+these states: *"A discrete state that also owes a `command_value` mapping has a value it can be given
+without deciding the mover, so it stays where it is — `bus_tie_closed`, `telemetry_rate` and the
+three `command_value.selects` states are that case, and they are correctly filed."*
+
+Both statements were true when written and they had never met, because neither state advanced: both
+owed their `initial`. Resolving the two initials made the tick hold them while the `auto` and
+`emergency`/`normal`/`burst` arguments still owe a value — so the guard fired on precisely the case
+the classifier calls correct. **The contradiction was latent in the pair, and it took a state
+crossing from one class to the other to find it.** The assertion now keeps what round 58 actually
+established — *no state may advance while owing a declaration its own integrator reads* — and a
+`command_value` mapping is read by the command path, not by `advance`.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 278 | **275** |
+| build order · ready now | 45 | **48** |
+| build order · owes a value | 33 | **30** |
+| build order · owes an edge / rule | 15 · 46 | 15 · 46 |
+| a real tick advances | 45 of 139 | **48 of 139** |
+| states fully configured | 104 / 139 | **105 / 139** |
+| states with a debt | 35 / 139 | **34 / 139** |
+| UNCONFIGURED scalars | 200 | **197** |
+| `report.refuse` call sites | 826 | **833** |
+| tests | 332 | **333** |
+
+### What is still owed
+
+Six positions, each with a note that now names the document and the reason it does not settle the
+state. Two of them want a *decision about a vocabulary* rather than a value — `comm_mode`'s
+`sband_high`/`sband_low` against `telemetry_rate`'s two profiles, and `cabin_regulator_position`'s
+four members against the checklist's `OPEN` — and those are the two a next round should take
+together, because both are one question: **what the corpus's own enums mean, where a source states
+the configuration in a different vocabulary.**
 
 ## The invariants, and which of them are enforced
 
