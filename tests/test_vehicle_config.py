@@ -12168,7 +12168,10 @@ def test_every_stock_declares_where_it_starts():
     # `coupling.yaml`, so the narrow version would have read a resolvable link as a broken one.
     linter = _linter()
     documents: dict[str, object] = {}
-    for path in sorted(VEHICLE.rglob("*.yaml")):
+    # **`plant.corpus_files` rather than `VEHICLE.rglob("*.yaml")`**, which is not the corpus: the
+    # round law plants broken copies under `.scratch/rNN/`, and a broken copy is a corpus-shaped tree.
+    # See that function's docstring — sixteen rounds of fixtures were read here as the vehicle.
+    for path in _plant().corpus_files(VEHICLE):
         documents[str(path.relative_to(VEHICLE))] = yaml.safe_load(path.read_text()) or {}
     for path in sorted((VEHICLE / "domains").glob("*/components.yaml")):
         components = documents[str(path.relative_to(VEHICLE))]
@@ -14914,6 +14917,45 @@ def test_the_linter_refuses_a_command_whose_effect_is_not_declared(tmp_path):
     )
 
 
+def test_the_corpus_is_a_declared_set_of_files_and_not_every_yaml_in_the_tree(tmp_path):
+    """Two tests answered "every document the corpus has" with `VEHICLE.rglob("*.yaml")`, and that
+    set is not the corpus.
+
+    **The round law plants broken copies under `.scratch/rNN/fixtures/`**, and a broken copy of the
+    corpus is a corpus-shaped tree — five top-level documents and a `domains/` directory. So every
+    fixture any round had ever planted was read by those two tests as if it were the vehicle:
+    sixteen rounds of them, `r66` through `r81`. It was invisible because a fixture with one field
+    changed is still valid YAML, and it became loud only when round 81 planted a `vehicle.yaml` that
+    does not parse — which is the *right* thing to plant for a check about parse failures and the
+    wrong thing to leave where a glob can find it.
+
+    **The repair is a declaration rather than a better glob**, because a set a test has to infer is a
+    set that will be inferred differently: `plant.corpus_files` says what the vehicle is made of, and
+    the two tests read that instead. This asserts both halves — that the declared set is the corpus's
+    own shape, and that a corpus-shaped copy under a scratch directory is not in it.
+    """
+    plant = _plant()
+    declared = {str(path.relative_to(VEHICLE)) for path in plant.corpus_files(VEHICLE)}
+    domains = sorted(path.name for path in (VEHICLE / "domains").iterdir() if path.is_dir())
+    assert declared == set(plant.CORPUS_TOP_LEVEL) | {
+        f"domains/{domain}/{name}" for domain in domains for name in plant.CORPUS_DOMAIN_FILES
+    }, sorted(declared)
+    # Nothing under a scratch directory is the vehicle, however corpus-shaped it is.
+    assert not [name for name in declared if ".scratch" in name], sorted(declared)
+
+    # And the copy the round law plants is invisible to the declaration — the fixture that broke
+    # this is the one to hand it, non-parsing content and all.
+    where = copy_definition(fixture_dir(tmp_path, "corpus-set"))
+    planted = where / ".scratch" / "r99" / "fixtures" / "broken"
+    planted.mkdir(parents=True)
+    (planted / "vehicle.yaml").write_text("  : :\n")
+    (planted / "mission.yaml").write_text("{}\n")
+    reached = {str(path.relative_to(where)) for path in plant.corpus_files(where)}
+    assert not [name for name in reached if ".scratch" in name], sorted(reached)
+    # The corpus the declaration names is still all there: the copy has the same sixty files.
+    assert len(reached) == len(declared), sorted(reached ^ declared)
+
+
 def test_no_vocabulary_is_written_in_a_word_yaml_reads_as_a_boolean(tmp_path):
     """`values: [on, off]` is the list `[True, False]`, and the fleet is what reads it.
 
@@ -14939,7 +14981,9 @@ def test_no_vocabulary_is_written_in_a_word_yaml_reads_as_a_boolean(tmp_path):
     so the walk is guarded and the refusal is reported before any of them run.
     """
     words: list[str] = []
-    for path in sorted(VEHICLE.rglob("*.yaml")):
+    # `plant.corpus_files`, not `VEHICLE.rglob("*.yaml")` — the round law's fixture trees are
+    # corpus-shaped and were being read here as the vehicle. See that function's docstring.
+    for path in _plant().corpus_files(VEHICLE):
         document = yaml.safe_load(path.read_text())
 
         def walk(node: object, where: str, named: str) -> None:

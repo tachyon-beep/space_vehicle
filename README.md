@@ -18039,6 +18039,67 @@ link mode (what does the corpus's enum mean where a source states the configurat
 vocabulary), and it is the last one; `computer_mode`, `hatch_state`, `breaker_panel` and `mode` are
 waiting on the corpus's own shape rather than on a source.
 
+## The tests' corpus was every YAML in the repository, and the round law puts broken copies in it
+
+Two tests in this file asked for "every document the corpus has" and answered it with
+`VEHICLE.rglob("*.yaml")`. **That set is not the corpus.** The law of a round — the one that produced
+this very section — is that verification happens by breaking copies in `.scratch/rNN/fixtures/`, and
+a broken copy of the corpus is a *corpus-shaped tree*: five top-level documents and a `domains/`
+directory. Sixteen rounds of them were sitting there, `r66` through `r81`, and both tests had been
+reading every one as if it were the vehicle.
+
+### Why nobody noticed for sixteen rounds
+
+Because a fixture with one field changed is still **valid YAML**. `test_no_vocabulary_is_written_in_a_word_yaml_reads_as_a_boolean`
+walked several hundred extra documents and found nothing wrong in them; `test_every_stock_declares_where_it_starts`
+built a `documents` map with dozens of keys nothing ever looked up. The collision was harmless for as
+long as every fixture parsed.
+
+**It became loud when round 81 planted one that does not parse** — which is exactly the right thing
+to plant for a check about a linter crash, and exactly the wrong thing to leave where a glob can find
+it. The suite went red on two tests that have nothing to do with comms, with a `ParserError` naming a
+line of a `vehicle.yaml` no reader had opened.
+
+### The repair is a declaration, not a better glob
+
+A set a test has to *infer* is a set that will be inferred differently. So the vehicle's own tool now
+says what the vehicle is:
+
+```python
+plant.corpus_files(root)   # the five top-level documents and five files per landed domain
+```
+
+and both tests read that. `test_the_corpus_is_a_declared_set_of_files_and_not_every_yaml_in_the_tree`
+asserts both halves — that the declared set is the corpus's own shape, and that a corpus-shaped copy
+under a scratch directory, non-parsing content and all, is not in it.
+
+**And the fixtures are gone.** Each round's verifier now removes its own tree on exit, because the
+hazard is the *combination* of the convention and any reader that globs: a verifier that crashed
+before its cleanup would leave the suite red for a reason belonging to a different round. Sixteen
+trees, about 165 MB, were deleted; the scripts that made them are the durable artefact.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 274 | 274 |
+| build order · ready / value / edge / rule | 49 · 29 · 15 · 46 | 49 · 29 · 15 · 46 |
+| a real tick advances | 49 of 139 | 49 of 139 |
+| `report.refuse` call sites | 837 | 837 |
+| tests | 334 | **335** |
+
+**No corpus figure moved, because this is a tooling round** — the second one this folder has had, and
+the same shape as the first: what was wrong was not a declaration about the vehicle but a reader that
+had invented its own answer to a question the vehicle should answer.
+
+### What this says about the law
+
+The round law is *verify by breaking copies in `.scratch/rNN/`*, and that is still right: a linter
+that has never been seen to refuse is indistinguishable from one that always passes. What was missing
+was the other half of the sentence — **the suite must not read them.** A verification artefact placed
+inside the tree under test is part of the tree under test unless something says otherwise, and for
+sixteen rounds nothing did.
+
 ## The invariants, and which of them are enforced
 
 

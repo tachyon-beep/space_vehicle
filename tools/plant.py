@@ -344,6 +344,42 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text()) or {}
 
 
+# **The corpus, declared once.** Five top-level documents and five files per landed domain, which is
+# the shape `AGENTS.md` states and the linter holds. It is named here because two tests used to answer
+# "every document the corpus has" with `root.rglob("*.yaml")`, and that is a *different set*.
+CORPUS_TOP_LEVEL = (
+    "vehicle.yaml",
+    "mission.yaml",
+    "coupling.yaml",
+    "channels.yaml",
+    "presentation.yaml",
+)
+CORPUS_DOMAIN_FILES = (
+    "components.yaml",
+    "points.yaml",
+    "profiles.yaml",
+    "commands.yaml",
+    "fault_policy.yaml",
+)
+
+
+def corpus_files(root: Path) -> list[Path]:
+    """Every file the vehicle is made of, and nothing else.
+
+    **This exists because `root.rglob("*.yaml")` is not the corpus, and sixteen rounds of fixtures
+    proved it.** The round law requires each round's broken copies to live under
+    `.scratch/rNN/fixtures/`, and a broken copy of the corpus is a corpus-shaped tree — so every
+    fixture any round had ever planted was read by those two tests as if it were the vehicle. It was
+    silent because a fixture with one field changed is still valid YAML; it became loud only when
+    round 81 planted one that does not parse at all. A set of files a test has to *infer* is a set
+    that will be inferred differently, so the vehicle's own tool says what it is.
+    """
+    files = [root / name for name in CORPUS_TOP_LEVEL]
+    for name in CORPUS_DOMAIN_FILES:
+        files.extend(sorted((root / "domains").glob(f"*/{name}")))
+    return [path for path in files if path.exists()]
+
+
 def load_world(root: Path) -> World:
     """Build the world, or refuse the configuration.
 
