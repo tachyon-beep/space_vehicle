@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 276 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 278 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,8 +211,8 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 276 declared debts
-and every one of them named. **105 of the 139 states are fully configured and 34 carry a debt**, and
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 278 declared debts
+and every one of them named. **104 of the 139 states are fully configured and 35 carry a debt**, and
 a real tick advances **45** of the 139 states, and the build order's **45** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
@@ -226,11 +226,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **276** is every obligation the linter can name:
-**199** literal `UNCONFIGURED` scalars and **77** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **278** is every obligation the linter can name:
+**200** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **199** the plant
+the missing charging efficiency, the pump-speed conversion). The **200** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
@@ -1633,7 +1633,7 @@ The reference plant's `advance()` implements two of `plant.md` §3's seven integ
 this was written, and the split is worth stating plainly: **`algebraic`, `discrete` and `dynamics`
 are rules the configuration deliberately does not carry** — `delay` *is* carried, as a `delay_s` and
 a ring, and the vehicle's one delay state is in *ready now* — and counting them together with the
-states a tick cannot reach because a coupling is missing, so 47 of the 139 states need code.
+states a tick cannot reach because a coupling is missing, so 46 of the 139 states need code.
 (This said *before the plant can walk a whole tick*, which was true when it was written and is not
 now: a tick walks all 139 of them and records what it cannot advance. See *The tick stopped at its
 first debt* below.)
@@ -1833,9 +1833,9 @@ the distinction between a value nobody has written down and a state nothing can 
 139 states, by what blocks them:
 
     45   32 %  ready now — the states a real tick advances
-    32   23 %  owes a value — the cheapest to close, and the debt count already tracks them
+    33   24 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
-    47   34 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
+    46   33 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
 
 **Just under half the vehicle owes a rule, and that is by construction.** `plant.md` §3's four rule classes are
@@ -17760,6 +17760,104 @@ No figure in the status section moves, and that is the round's own measurement: 
 schedules yet changes no count.** It adds a capability, a class of refusal and a corpus join, and
 every state's classification is where it was — which is what makes the next round's rule the thing
 that moves them.
+
+## A hysteresis band said when a state flips and never what it becomes
+
+Round 77 made a band say what it reads. This round found the other half of the same declaration
+missing: `hysteresis` and `band_on` together say *when* a state flips and *what it is reading*, and
+nothing anywhere said what it **becomes**. `becomes:` already existed for the two other ways a state
+moves — a `command_value` entry maps a command's argument into the state's own vocabulary, and round
+75's `event_value` does the same for an event — and the band, which is the third, had no equivalent.
+
+**That is not a missing convenience; it is why §5's latch rule cannot be written.** A `hysteresis`
+block carries exactly two boundaries, so a comparator has exactly two outcomes. All four states that
+declare a band with values in it declare a vocabulary wider than that:
+
+| state | band | vocabulary | members the band cannot produce |
+|---|---|---|---|
+| `lcl_tripped` | 1.25 / 1.05 | `closed,tripped,retrying,latched` | `retrying`, `latched` — the reclose lifecycle, not boundaries |
+| `sensor_health` | 3 / 1 | `good,suspect,fault` | `suspect` — nothing bounds it |
+| `innovation_window` | 2 / 1 | `good,suspect,fault` | `fault` — its own source names a second threshold |
+| `load_shed_class` | 26.5 / 27.2 | `none,P3,P2,P1,P0` | **every one: both outcomes are `none`** |
+
+### The sharp case is the state round 77 was written about
+
+`load_shed_class` reports the ladder's position and latches on `bus_a_undervoltage`. The rung map
+`coupling.yaml#open_debts` already records says that tier selects `none` — and the threshold's own
+provenance agrees, calling itself a tier that *"does not shed load"* and *"the tier
+electrical_diode.md's ladder omits entirely"*. So the one band this state declares makes it `none`
+whichever way the bus crosses: **the band cannot move the state at all**, and the three rungs that do
+move it are thresholds the state does not band. A four-rung ladder is not one comparator.
+
+`band_value` is `UNCONFIGURED` there, and the note says why. That is the honest answer rather than a
+plausible pair of members, and it is the difference between a debt and a guess.
+
+### The repair is a field, and the refusals that hold its shape
+
+`band_value` is the third member of the family: one member of the state's own `unit` per boundary.
+
+```yaml
+    hysteresis: {assert: 1.25, clear: 1.05, dwell_ms: 500}
+    band_on: power.lcl_[n]_current_a
+    band_units: "fraction of the rating rather than amperes"
+    band_value: {assert: tripped, clear: closed}
+```
+
+`check_band_value` refuses four ways of writing it wrong, and each is a way the band's effect can
+fail to be an effect:
+
+| break | what it says |
+|---|---|
+| no `band_value` on a band with values | *"nothing says what the band **makes** it … the rule cannot choose between them"* |
+| a member outside the state's `unit` | *"which its `unit` … cannot hold — a transition the vehicle cannot describe afterwards"* |
+| one boundary named and not the other | *"a crossing with no outcome, and … an outcome no boundary produces"* |
+| a `band_value` where no band flips | *"nothing reads the field. An outcome belongs to the band that flips"* |
+
+`UNCONFIGURED` is not refused here — it is counted by the generic unset walk, which is round 77's own
+first mistake avoided rather than repeated: a check that emits its own debt for an unset field reports
+one missing value twice.
+
+### The mistake this round's test made, caught before it landed
+
+Its first version asserted the field's name appeared **once** in `--debts`. It appeared twice, because
+the round's own `open_debts` sentence says `band_value` as well — so the assertion would have failed
+for a reason that had nothing to do with the corpus, and, worse, a version that passed would have been
+satisfied by a prose paragraph on a corpus that had stopped declaring the field at all. The test
+asserts the debt's own **path** now
+(`domains/power/components.yaml.state[11].band_value: is UNCONFIGURED`), which is the same lesson
+round 77 learned about prose and readers, arriving one level up in the instrument.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 276 | **278** |
+| build order · ready now | 45 | 45 |
+| build order · owes a value | 32 | **33** |
+| build order · owes an edge | 15 | 15 |
+| build order · owes a rule | 47 | **46** |
+| a real tick advances | 45 of 139 | 45 of 139 |
+| states fully configured | 105 / 139 | **104 / 139** |
+| states with a debt | 34 / 139 | **35 / 139** |
+| UNCONFIGURED scalars | 199 | **200** |
+| `report.refuse` call sites | 820 | **826** |
+| tests | 331 | **332** |
+
+**One state changed bucket, and it is the same move round 77 made**: `load_shed_class` left *owes a
+rule* for *owes a value*, because what blocks it is the ladder's rung-to-class map — a declaration
+the thresholds do not carry — rather than domain code. Nothing advances, and that is the round's own
+measurement: it adds the declaration §5's rule needs and answers nothing, so nothing falls.
+
+### What is still owed
+
+**§5's self-scheduled events — a comparator's zero crossing, a dwell's expiry — and the rule that
+consumes them.** This round is the second half of the prerequisite round 77 began, not the rule
+itself: round 77 declared what a band reads, this round declares what it makes, and the rule needs
+both. The queue they will schedule onto landed in round 78.
+
+**The three bands whose vocabulary is wider than their comparator** are one decision, recorded in
+`coupling.yaml#open_debts` rather than guessed in three fields: each wants a second boundary or a
+second band, and for `load_shed_class` that is the same decision as the missing P1 rung.
 
 ## The invariants, and which of them are enforced
 

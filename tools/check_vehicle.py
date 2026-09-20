@@ -16377,6 +16377,113 @@ def check_band_on(root: Path, registry: dict[str, dict[str, Any]], report: Repor
                 )
 
 
+def check_band_value(root: Path, report: Report) -> None:
+    """**A band with values has to say what it makes the state, not only when it flips.**
+
+    `hysteresis: {assert: 26.5, clear: 27.2, dwell_ms: 500}` says when the state changes and
+    `band_on` — round 77's field — says what it reads. Neither says what it *becomes*, and a
+    comparator has **two** outcomes where these states declare three to five. `becomes:` already
+    exists for the other two ways a state moves: a `command_value` entry maps a command's argument
+    into the state's own vocabulary, and round 75's `event_value` does the same for an event.
+    `band_value` is the third and it is the same shape — the member the band asserts to and the
+    member it clears to, each held inside the state's own `unit` — and without it §5's latch rule
+    has no output to write.
+
+    This is not a hypothetical, and the sharp case is the state round 77 was written about.
+    `load_shed_class` reports the ladder's position in `enum[none,P3,P2,P1,P0]` and bands only
+    `bus_a_undervoltage` — the tier that, by the rung map `coupling.yaml#open_debts` already records
+    and the threshold's own provenance agrees with, selects `none` and *"does not shed load"*. So
+    both outcomes of the one band this state declares are the same member: the band cannot move the
+    state at all, and the rungs that do move it are three thresholds it does not band.
+    `innovation_window`'s own source names "the two thresholds that separate a warn from a trip"
+    while its state declares one band over three members. **A vocabulary richer than the band is a
+    rule nobody can write**, which is why this is a field and a refusal rather than a sentence in a
+    note.
+
+    `UNCONFIGURED` is the owed form, counted by the generic unset walk like every other, and a
+    band whose own `assert` and `clear` are still owed is not asked for an outcome here — for the
+    same reason `check_band_on` does not ask it for a point: the values come first, and this
+    function is about what a band with values *makes*, not about the values.
+    """
+
+    def held(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for position, state in enumerate(components.get("state") or []):
+            if not isinstance(state, dict):
+                continue
+            band = state.get("hysteresis")
+            configured = (
+                isinstance(band, dict) and held(band.get("assert")) and held(band.get("clear"))
+            )
+            where = f"domains/{path.parent.name}/components.yaml#state[{position}]({state.get('id')})"
+            declared = state.get("band_value")
+            if not configured:
+                # A `band_value` on a state that carries no band with values is a declaration
+                # nothing can read, which is the fault this folder finds most often — and it is
+                # also how a band's outcome survives the band being deleted.
+                if declared is not None:
+                    report.refuse(
+                        where,
+                        "declares what its hysteresis band makes it and carries no band with "
+                        "values in it, so nothing reads the field. An outcome belongs to the band "
+                        "that flips, and this state has none",
+                    )
+                continue
+            if declared is None:
+                report.refuse(
+                    where,
+                    f"carries a hysteresis band ({band['assert']}, {band['clear']}) and no "
+                    "`band_value`, so nothing says what the band *makes* it. A comparator has two "
+                    "outcomes and this state's vocabulary has more than two members, so the rule "
+                    "cannot choose between them: declare `{assert: <member>, clear: <member>}`, or "
+                    "`UNCONFIGURED` if the corpus does not say",
+                )
+                continue
+            if declared == "UNCONFIGURED":
+                # Counted by `walk_unset`, not here — round 77's own first mistake, which was to
+                # report one missing value twice.
+                continue
+            if not isinstance(declared, dict):
+                report.refuse(
+                    where,
+                    f"declares `band_value: {declared!r}`, which is not a mapping. A band has two "
+                    "boundaries and each of them makes one value, so the shape is "
+                    "`{assert: <member>, clear: <member>}`",
+                )
+                continue
+            keys = set(declared)
+            if keys != {"assert", "clear"}:
+                report.refuse(
+                    where,
+                    f"declares `band_value` over {sorted(keys)}, and a band has exactly the two "
+                    "boundaries it flips on: `{assert: <member>, clear: <member>}`. One of the two "
+                    "missing is a crossing with no outcome, and one of the two extra is an outcome "
+                    "no boundary produces",
+                )
+                continue
+            vocabulary = unit_vocabulary(state.get("unit"))
+            if vocabulary is None:
+                report.refuse(
+                    where,
+                    f"declares `band_value` and its `unit` ({state.get('unit')!r}) is not a "
+                    "vocabulary, so there is no way to say whether the members it names are values "
+                    "this state can hold. A latched comparator needs an enumerable vocabulary",
+                )
+                continue
+            for boundary, member in sorted(declared.items()):
+                if str(member) not in vocabulary:
+                    report.refuse(
+                        where,
+                        f"makes the state {member!r} on its `{boundary}` boundary, which its `unit` "
+                        f"({state.get('unit')!r}) cannot hold — the vocabulary is "
+                        f"{sorted(vocabulary)}. A band that puts a state in a value it cannot "
+                        "report is a transition the vehicle cannot describe afterwards",
+                    )
+
+
 def check_mission_bindings(
     channels: dict[str, Any],
     mission: dict[str, Any],
@@ -17725,6 +17832,7 @@ def main(argv: list[str] | None = None) -> int:
         # start rather than about the vehicle file.
         check_launch_state(root, mission, report)
         check_band_on(root, registry, report)
+        check_band_value(root, report)
         check_tick_grain(mission, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)

@@ -421,6 +421,7 @@ state:
       clear: 1
       dwell_ms: 0
     band_on: UNCONFIGURED
+    band_value: {assert: fault, clear: good}
     provenance:
       basis: historical
       source: "avionics_diode.md:380-386 — `bad_count` incremented on an implausible sample, reset on a plausible one, and compared against `trip_count`"
@@ -437,6 +438,13 @@ state:
         there is nothing for the band to be a band on. It is not on a channel's volts and naming
         one would be a lie; what it wants is the disagreement statistic published as a point,
         which is FDIR's own arithmetic and would be the same point its comparison reads.
+        `band_value` is what the band *makes* the state, and this entry's own note supplies it:
+        "three consecutive implausible samples to condemn, one plausible sample to forgive" is
+        `fault` at the assert and `good` at the clear. **`suspect` is the member the band cannot
+        produce** — two boundaries make two values, and nothing here says which comparison, or
+        which second count, puts a class in the middle. That is the same kind of debt as `band_on`
+        rather than a different one: a declaration the state does not carry, not a number it is
+        missing.
 
   - id: redundancy_vote
     node: internal
@@ -538,6 +546,7 @@ state:
       clear: 1
       dwell_ms: 0
     band_on: UNCONFIGURED
+    band_value: {assert: suspect, clear: good}
     provenance:
       basis: historical
       source: "avionics_diode.md:413-418 — `k_of_m_history`, and the two thresholds that separate a warn from a trip"
@@ -554,7 +563,14 @@ state:
         just closed: the two values count *innovations over the warn threshold* in a window of m
         samples, and normalized innovation squared is a statistic the estimator computes rather
         than a point it publishes — so the band's own subject has no registered point yet, and
-        `assert: 2` cannot be read against anything
+        `assert: 2` cannot be read against anything. `band_value` is the band's effect and this
+        entry's own note supplies it too: "two of the last m innovations over the warn threshold
+        reach `suspect`, one sample back under it clears" is `suspect` at the assert and `good` at
+        the clear. **`fault` is the member this band cannot produce**, and the source says why it
+        should exist: `avionics_diode.md:413-418` names "the two thresholds that separate a warn
+        from a trip" while this state declares one band — so the trip threshold is a second
+        boundary the corpus does not carry, and the only member that means "the filter is wrong"
+        is unreachable until it does.
 
   - id: actuator_tracking
     node: internal
