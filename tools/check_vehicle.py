@@ -16233,6 +16233,51 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
                 "once and the page is named per position, because a source a reader cannot turn to "
                 "is a source that cannot be disagreed with",
             )
+    # **And the positions the block does *not* make, which is round 84.** `states` and `sourced`
+    # above are the block's account of what it settles; until this round it had no way to say what
+    # it *owes*, so that half lived in prose — a comment above the block and the docstring of the
+    # test that holds it, both reading *"this covers four of them … the other nine stay owed … a
+    # regulator position, a link mode, an antenna selection and a telemetry profile are choices the
+    # corpus does not make"*. Rounds 80, 81 and 83 made all four of them, and both sentences went on
+    # saying the opposite. Nothing read them, and that is the folder's oldest finding: **a number in
+    # prose has no reader, and a number with no reader does not have to be plausible** — the sentence
+    # this file already wrote for `channels.yaml:coverage`, whose claim drifted for thirty rounds for
+    # the same reason. So the inventory is a field now.
+    owed = block.get("owed")
+    if owed is None:
+        report.refuse(
+            "mission.yaml:launch_state",
+            "declares the positions it makes and no `owed` map, so which positions the launch "
+            "question still owes exists only in prose — and prose is where it went stale: four "
+            "positions this block's own comment called choices the corpus does not make had been "
+            "made by rounds 80, 81 and 83. An empty map is the honest declaration that nothing is "
+            "owed, and it is not the same statement as saying nothing",
+        )
+    elif not isinstance(owed, dict):
+        report.refuse(
+            "mission.yaml:launch_state",
+            f"declares `owed` as {owed!r}, which names no position. The map is keyed by state so "
+            "that a reader can ask of any machine in the launch question whether this block makes "
+            "its position or owes it",
+        )
+        owed = None
+    for sid, wants in sorted((owed or {}).items()):
+        if sid in (states or {}):
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"makes a position for {sid!r} and owes it in the same block (`owed.{sid}` says "
+                f"{wants!r}). A position cannot be both — `states` is what this block settles and "
+                "`owed` is what it does not — and an entry in both is the drift this map exists to "
+                "catch, written where a reader would take it for an answer",
+            )
+        if not (isinstance(wants, str) and wants.strip()):
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"owes {sid!r} with nothing said about what would close it ({wants!r}). A debt "
+                "named and not described is a debt nobody can pay, and the folder's rule is that "
+                "the sentence names what it wants — the document searched, the relation owed, or "
+                "the decision it would take",
+            )
     declared: dict[str, dict[str, Any]] = {}
     domain_of: dict[str, str] = {}
     for path in sorted((root / "domains").glob("*/components.yaml")):
@@ -16262,17 +16307,41 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
                 f"makes it {value!r}. The decision is declared once, in the mission, and this state "
                 "is one of the machines it is about",
             )
+    # **And a position the block owes is one no source has closed**, so the state it names must
+    # still be unconfigured. This is the refusal that would have caught round 84's drift on the day
+    # it happened rather than four rounds later: the round that sources a position adds it to
+    # `states`, and a block that leaves it in `owed` as well is claiming as a debt something it has
+    # already paid. Nothing read the old prose inventory, so nothing could disagree with it — a
+    # *field* can be disagreed with, which is the whole reason `owed` exists.
+    for sid in sorted(owed or {}):
+        state = declared.get(str(sid))
+        if state is None:
+            report.refuse(
+                "mission.yaml:launch_state",
+                f"owes {sid!r}, which is not a state of any domain. A debt owed on a machine that "
+                "does not exist is a sentence nobody can act on",
+            )
+            continue
+        if str(state.get("initial")) != "UNCONFIGURED":
+            report.refuse(
+                f"domains/{domain_of.get(sid, '?')}/components.yaml:state {sid}",
+                f"declares `initial: {state.get('initial')!r}` and `mission.yaml#launch_state` "
+                "still owes it. A debt the state has already paid is a debt left standing, and the "
+                "block's own account of what it owes is exactly what went stale when the launch "
+                "checklist landed the first four positions",
+            )
     for sid, state in sorted(declared.items()):
         provenance = state.get("initial_provenance") or {}
         if str(provenance.get("source") or "") != "mission.yaml:launch_state":
             continue
         where = f"domains/{domain_of.get(sid, '?')}/components.yaml:state {sid}"
-        if sid not in states:
+        if sid not in states and sid not in (owed or {}):
             report.refuse(
                 where,
                 "cites `mission.yaml:launch_state` as where its starting position comes from, and "
-                f"that block does not name it (it names {sorted(states)}). A state claiming a "
-                "decision that does not mention it is a citation nothing holds",
+                f"that block neither makes it (it makes {sorted(states)}) nor owes it (it owes "
+                f"{sorted(owed or {})}). A state claiming the launch question that does not mention "
+                "it is a citation nothing holds",
             )
             continue
         # **And the state's own `basis` has to agree with the block's account of it.** `sourced`

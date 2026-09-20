@@ -73,11 +73,24 @@ tick_hz: 50
 #   **a machine with no commanded burn is `off`, and a guidance mode with no burn in progress is
 #   `coast`.**
 #
-# It is declared once, here, because it is one decision. Thirteen modes were asked for a starting
-# position in the round that landed the commanded family; this covers four of them, `translunar_
-# coast`'s own reading covers none of the other nine (a regulator position, a link mode, an antenna
-# selection and a telemetry profile are choices the corpus does not make), and those stay owed with
-# their reasons named rather than resolved to something plausible.
+# It is declared once, here, because it is one question. The round that landed the commanded family
+# asked fourteen machines for a starting position; one answered itself on the spot
+# (`relief_valve_state`, *"normally closed, with an 'unexpected opening' event"*) and **the other
+# thirteen are this block's: nine are made below and four are owed**, and both halves are fields
+# rather than sentences — which is round 84's whole finding.
+#
+# This paragraph used to read *"this covers four of them … this covers none of the other nine (a
+# regulator position, a link mode, an antenna selection and a telemetry profile are choices the
+# corpus does not make), and those stay owed"*, and the docstring of the test that holds this block
+# said the same thing in the same words. **Rounds 80, 81 and 83 made all four of them**, three from
+# the launch checklist this block now cites, and both sentences went on saying the opposite.
+# Nothing read them: the block could declare the positions it *makes* and had no way to declare the
+# ones it *owes*, so the inventory lived in prose in two files and drifted in both. The folder had
+# already written the sentence for this — *a number in prose has no reader, and a number with no
+# reader does not have to be plausible*, which is what `channels.yaml:coverage` exists to stop
+# after thirty rounds of it. So `owed` is a field now, required beside `states`, and the linter
+# refuses a position that is made and owed at once, a position owed and no longer unconfigured, and
+# a block that states its positions without stating what it still owes.
 #
 # The linter holds every `initial` that cites this block against the value here, and every state
 # this block names against its own `initial`, so the decision cannot be edited in one place and
@@ -127,6 +140,40 @@ launch_state:
     # The regulator, from the same section's ECS panel: the main cabin-pressure regulator open and
     # the emergency one off, which is the state's `primary` member.
     cabin_regulator_position: primary
+  # **The fourth position of the launch question: the ones this block does not make.** A map rather
+  # than a list because the order is not a decision and a sentence is: each key is a state of some
+  # domain, each value is the one-line form of what that state's own `initial_note` argues at
+  # length, and **the argument stays in the note** — a debt is the state's, and this block's job is
+  # to say that the state is one of the ones it is about.
+  #
+  # It is required whenever `states` is, and that is the round-84 finding rather than tidiness: the
+  # block could say what it made and not what it owed, so the inventory lived in prose in this file
+  # and in a test's docstring, and rounds 80, 81 and 83 made four of the positions those sentences
+  # called choices the corpus does not make. Two of the four sentences below are *searches that
+  # failed* rather than gaps, and both name the documents they searched, which is what makes them
+  # checkable — the folder's rule for a debt whose answer is not held.
+  owed:
+    breaker_panel: >-
+      the key space rather than the source. The launch checklist states every panel's breakers
+      outright — `cb Panel 4 - all closed`, `cb Panel 5 all closed except` `INST NONESS`, `ECS
+      XDUCR PRESS GRP 2 MNA` and `WASTE H20/UR DUMP HTR (2)` (p. 11) — so what this map is missing
+      is `breaker_id`, which is the LCL set `set_breaker`'s `lcl` argument is also waiting on
+    computer_mode: >-
+      an avionics source that uses *this* enum's vocabulary at the pad, or a decision about what
+      `idle`/`run`/`standby`/`failed` mean aboard a powered CMC. The checklist reaches the computer
+      and does not use these words: `G/N PWR - AC1` (p. 11) is the power selection and `CMC MODE -
+      FREE` (pp. 6, 21) is the CMC's mode *switch*, whose members are FREE, AUTO and HOLD
+    hatch_state: >-
+      the LM's half of the map, and the search for it is recorded in the state's own note. The
+      CSM's half is published (p. 20, `SIDE HATCH … GEAR BOX sel - LATCH … LOCK PIN REL KNOB -
+      LOCK`); the LM's is not, in any document this folder holds, and the reason is structural
+      rather than a gap in the search — so what would close it is a decision that the two hatches
+      begin at the same value, or an LM stowage record rather than an LM flight checklist
+    mode: >-
+      the attitude-control plan for the early coast, or a decision about what `auto`, `manual` and
+      `free_drift` mean at the pad. `SC CONT - SCS` and `CM RCS LOGIC - on (up)` (p. 6) are about
+      *authority* and `AUTO RCS SEL A/C ROLL A1 - OFF` (p. 12) is about which axes the DAP may
+      roll, and neither is which of these three modes the RCS itself is in
 
 total_ticks: 34560000
 total_ticks_provenance:

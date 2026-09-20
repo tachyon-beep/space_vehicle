@@ -18175,6 +18175,132 @@ that all of them be **sourced** rather than decided, so the next round that take
 the document first: rounds 79–83 have each found one, in an archive the project's own source list has
 named from the start.
 
+## The block that makes the launch positions had no way to say which ones it owes
+
+`mission.yaml#launch_state` is the one place the vehicle says where it starts. Round 80 gave it the
+two fields that let it tell a *published* position from a *decided* one — `source`, the document, and
+`sourced`, a per-state locator inside it — and round 76 gave it the join that makes the decision
+unenforceable in one place only. What it could not do was say the **other** half: which positions it
+still **owes**. So that half lived in a sentence, in two files, both written by the round that landed
+the commanded modes — and rounds 80, 81 and 83 made four of the positions those two sentences said
+the corpus does not make.
+
+### The two halves, and the four rounds that ran between them
+
+| where the inventory lived | what it said |
+|---|---|
+| the comment above the block in `mission.yaml` | *"this covers four of them, `translunar_coast`'s own reading covers none of the other nine (a regulator position, a link mode, an antenna selection and a telemetry profile are choices the corpus does not make), and those stay owed"* |
+| the docstring of `test_the_launch_state_is_declared_once_and_held_in_both_directions`, in `tests/test_vehicle_config.py` | *"The other nine stay owed, and that is the round's other half. A regulator position, a link mode, an antenna selection, a telemetry profile, two breaker and hatch positions and the computer's and RCS's modes are choices this corpus does not make"* |
+| what the block itself declared five lines below the first of them | nine positions in `states` — the four the mission's own start settles, `bus_tie_closed`, `telemetry_rate`, `antenna_selection` and `cabin_regulator_position` out of the launch checklist, and `comm_mode` derived through the rate — with three of them `historical` and cited by page |
+
+**Both sentences are the inverse of the truth, in the same words, and neither had a reader.** The
+comment is parsed by nothing. The docstring is prose inside a test whose *body* rounds 80, 81 and 83
+each updated — so the file disagreed with itself four lines apart, and the suite stayed green.
+
+This is the folder's own finding and it had already written it down. `check_layer_coverage`'s
+docstring records the same drift in `channels.yaml:coverage`: *"a number in prose has no reader, and
+a number with no reader does not have to be plausible"* — a vehicle-wide claim that sat in an
+`open_debts` sentence through several rounds of channel additions with two of its three numbers
+wrong, and was caught the moment it became a field. Round 84 is that finding one block over, and the
+reason it took four rounds to see is the reason it took thirty the first time: nothing could disagree
+with a sentence.
+
+### The repair is a field, six new refusals and one amended
+
+`owed` is required beside `states`: a map from state to the one-line form of what would close it,
+with the argument left where it belongs, in the state's own `initial_note`. A block that makes nine
+positions and owes four now says both, and the count is data a tool can read.
+
+`check_launch_state` refuses every way the two maps can disagree — six call sites that did not exist
+before this round, and one refusal the block already had, widened:
+
+| the broken copy | the linter's own words |
+|---|---|
+| `owed` absent while `states` is declared | *"declares the positions it makes and no `owed` map … An empty map is the honest declaration that nothing is owed, and it is not the same statement as saying nothing"* |
+| `owed` in any shape but a map | *"declares `owed` as ['breaker_panel'], which names no position"* |
+| a position in both maps | *"makes a position for 'bus_tie_closed' and owes it in the same block"* |
+| **a position owed and no longer unconfigured** | *"declares `initial: 'run'` and `mission.yaml#launch_state` still owes it. A debt the state has already paid is a debt left standing"* |
+| an owed name that is no state | *"owes 'not_a_state_at_all', which is not a state of any domain"* |
+| an owed position with an empty sentence | *"owes 'computer_mode' with nothing said about what would close it"* |
+| a state citing the block that is in neither map | *"A state claiming the launch question that does not mention it is a citation nothing holds"* |
+
+The fourth is the one that matters, and it is worth being exact about why: **it would have fired on
+the day round 80 landed the first source.** The round that sources a position adds it to `states`,
+and a block that leaves it in `owed` is claiming as a debt something it has already paid. The
+seventh is the mirror — it cannot fire today, because the four owed states do not cite the block
+(the debt is theirs), and that is exactly what it is for.
+
+### What the round got wrong on the way
+
+The first version of the `owed` values restated each state's argument in full. That is the same
+defect one field over: the block would have carried a second copy of four notes, and the two copies
+would have drifted exactly as the prose did. The values are one line each now and the notes keep
+their arguments, which is also where a reader looking for the reasoning should be sent.
+
+The second thing was a *search that had never been run*. `hatch_state`'s note ended *"the LM's is in
+the LM's own launch checklist"*, and the handover repeated it as a known document. **There is no LM
+launch checklist, and there cannot be one**: the LM was never launched on its own — it flew inside
+the SLA — so no crew launch checklist for it was ever written. The HSI numbering says so without
+ambiguity: `HSI-481248` is the **CSM Launch Checklist**, and `HSI-481249`, `HSI-481252` and
+`HSI-481253` — the numbers either side of it — are the LM **Activation** Checklist.
+
+All three LM crew checklists the archive holds were downloaded and read. All three carry text, and
+all three reach the overhead hatch **only in flight**:
+
+| document | the line | where |
+|---|---|---|
+| `HSI-481253` Basic (Apollo 17, 9/11/72) | `OVHD HATCH-LOCKED` | p. 3-36, **PREP FOR UNDOCKING**, 110:13 |
+| Apollo 15 LM Activation Checklist | `OVHD HATCH-LOCKED` | p. 2-34, PREP FOR UNDOCKING at 100:13:56 |
+| Apollo 11 LM Systems Activation Checklist | `OVHD HATCH=LOCKED` | ACT-62, PREP FOR UNDOCKING at 100:40 |
+
+A hundred hours after the epoch is not the epoch, and reading it there would repeat the mistake this
+folder has already recorded — the A11 *flight* checklist's `MN BUS TIES - ON` read as a launch
+position. Note also which hatch the crew work: the opening step of every edition is *"Activate CABIN
+DUMP VALVE & Open Hatch"* on **IVT TO LM**, and *"CLOSE LM HATCH"* on the way back, and that is the
+**forward** (tunnel) hatch. The overhead hatch is the one `hatch_crew_lm` is, and the only thing any
+held document says about it before the surface EVA is that it is locked at undocking prep.
+
+So the note now says what would actually close the position: **a stowage or acceptance record** —
+the hatch's position as installed, which is a checkout document rather than a crew checklist. That is
+a *documented search that failed*, which is a different thing from a position nobody has looked for,
+and the state's note now says which of the two it is.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| declared debts | 273 | 273 |
+| build order · ready now | 50 | 50 |
+| build order · owes a value | 28 | 28 |
+| build order · owes an edge · owes a rule | 15 · 46 | 15 · 46 |
+| a real tick advances | 50 of 139 | 50 of 139 |
+| states fully configured | 107 / 139 | 107 / 139 |
+| states with a debt | 32 / 139 | 32 / 139 |
+| UNCONFIGURED scalars | 195 | 195 |
+| `report.refuse` call sites | 844 | **850** |
+| tests | 336 | **337** |
+
+**No state, no debt and no bucket moves, and that is the round's shape rather than an apology.** The
+finding is a declaration nothing read; the four positions are the same four, and what changed is that
+the vehicle can now be *asked* how many it owes and which ones they are.
+
+### What is still owed
+
+The same four positions, and each now has a line in `owed` naming what would close it:
+`breaker_panel` wants the LCL set, which is also the key space `set_breaker`'s `lcl` argument is
+waiting on; `computer_mode` wants a source that uses its enum's words at the pad, because `CMC MODE -
+FREE` is the mode switch's vocabulary and not this one's; `mode` wants the early coast's
+attitude-control plan, because `SC CONT - SCS` is about authority; and `hatch_state` wants an LM
+stowage record. The operator's direction stands — **sourced, not decided** — and round 84's
+contribution to it is negative and worth having: the document `hatch_state` was waiting for does not
+exist, so the next round that takes it should look for a checkout record instead of a checklist.
+
+One more thing is now visible that was not before, and it is in the same function: the refusal that
+reports a `states` entry disagreeing with its own declaration names `domains/{path.name}` with `path`
+left over from the loop above it, so it names `structure` whichever domain the state is in. Round 80
+fixed exactly that in the loop below it and wrote the comment saying so; this one was left. It is a
+one-line repair with a broken-copy test, and it is the next round's.
+
 ## The invariants, and which of them are enforced
 
 

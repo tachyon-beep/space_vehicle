@@ -8618,26 +8618,34 @@ def test_a_one_way_event_declares_what_it_makes_of_the_state_it_moves(tmp_path):
 
 
 def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path):
-    """Four machines, one decision, and thirteen of the fourteen starting positions still owed.
+    """Thirteen machines, one question, and the block declares both halves of its answer.
 
-    The round that landed the commanded modes asked all fourteen for a starting position. One was
-    sourced (`relief_valve_state`, *"normally closed, with an 'unexpected opening' event"*) and
-    thirteen were left owed, because the corpus publishes vocabularies and not launch positions.
-    Four of those thirteen share one reason, and it is the mission's own start rather than a
-    measurement: **a machine with no commanded burn is `off`, and a guidance mode with no burn in
-    progress is `coast`** — `phases[0]` is `translunar_coast` and `delta_v_budget`'s first burn is
-    hours after the epoch.
+    The round that landed the commanded modes asked fourteen machines for a starting position. One
+    was sourced on the spot (`relief_valve_state`, *"normally closed, with an 'unexpected opening'
+    event"*) and **thirteen were left owed**, because the corpus publishes vocabularies and not
+    launch positions. Four of those thirteen share one reason, and it is the mission's own start
+    rather than a measurement: **a machine with no commanded burn is `off`, and a guidance mode with
+    no burn in progress is `coast`** — `phases[0]` is `translunar_coast` and `delta_v_budget`'s
+    first burn is hours after the epoch.
 
     So the decision is declared once, in `mission.yaml#launch_state`, and the four states cite it.
     Two files, one question, which is the shape this folder finds drifted — so the join is refused
     in both directions rather than left to a reader: a state the block names must declare that
     value, and a state citing the block must be named in it.
 
-    **The other nine stay owed, and that is the round's other half.** A regulator position, a link
-    mode, an antenna selection, a telemetry profile, two breaker and hatch positions and the
-    computer's and RCS's modes are choices this corpus does not make, and `off`'s own trap is
-    visible in the declaration: YAML reads a bare `off` as a boolean, which is why the values are
-    quoted.
+    **And the block states the other half, which is round 84.** This docstring used to end *"The
+    other nine stay owed … A regulator position, a link mode, an antenna selection, a telemetry
+    profile, two breaker and hatch positions and the computer's and RCS's modes are choices this
+    corpus does not make"* — and rounds 80, 81 and 83 made four of the very positions that sentence
+    named, from the launch checklist the block now cites, while the sentence went on saying the
+    opposite in two files at once. Nothing read it: the block could say what it *makes* and had no
+    way to say what it *owes*, so the inventory lived in prose, and prose drifts — the sentence this
+    file's own linter wrote for `channels.yaml:coverage` after thirty rounds of it is *a number in
+    prose has no reader, and a number with no reader does not have to be plausible*. `owed` is a
+    field now, required beside `states`, and this test breaks it seven ways.
+
+    `off`'s own trap is still visible in the declaration: YAML reads a bare `off` as a boolean,
+    which is why the values are quoted.
     """
     result = run_linter(VEHICLE)
     assert result.returncode == 0, result.stdout[-1200:]
@@ -8810,13 +8818,25 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     rates = {entry["id"]: entry["bps"] for entry in yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())["comms"]["rates"]}
     assert states["telemetry_rate"]["initial"] == rates["high"] == 51200
 
-    # And the four left owed are owed for reasons the source does not answer, rather than for the
-    # absence of a source. Each note names the document now. `comm_mode` left in round 81 and
-    # `cabin_regulator_position` in round 83, which found the position the source states.
-    for sid in ("computer_mode", "hatch_state", "breaker_panel", "mode"):
-        note = str(states[sid].get("initial_note") or "")
-        assert "launch checklist" in note.lower(), sid
+    # **And the other half is the block's own declaration rather than a tuple here**, which is round
+    # 84. This loop used to name the four states outright and assert that each note contained the
+    # words "launch checklist" — a list in a test and a phrase in a note, holding an inventory that
+    # belonged to the block. `owed` is where the inventory lives now, so the test reads it, and what
+    # it asks of each entry is what makes the debt payable: the state is still unconfigured, its own
+    # note names the document or the question it is waiting on, and the block says in a sentence
+    # what would close it. `comm_mode` left this list in round 81 and `cabin_regulator_position` in
+    # round 83, which found the position the source states — and the *prose* that recorded both
+    # departures said the opposite for four rounds, which is the round-84 finding.
+    owed = block["owed"]
+    for sid in sorted(owed):
         assert states[sid]["initial"] == "UNCONFIGURED", sid
+        note = str(states[sid].get("initial_note") or "")
+        assert "checklist" in note.lower(), sid
+        assert len(str(owed[sid]).strip()) > 40, sid
+    # Nine made and four owed is the launch question's whole inventory, and the two maps cannot
+    # overlap — a position this block settles is not one it is still asking for.
+    assert not (set(block["states"]) & set(owed)), sorted(set(block["states"]) & set(owed))
+    assert len(block["states"]) + len(owed) == 13
 
     def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
         definition = copy_definition(fixture_dir(tmp_path, name))
@@ -8890,6 +8910,164 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "",
         "the citation is a declaration nothing reads",
     )
+
+
+def test_the_launch_block_declares_what_it_owes_and_not_only_what_it_makes(tmp_path):
+    """The block's inventory of the launch question lived in prose, and the prose went stale twice.
+
+    `mission.yaml#launch_state` is the one place the vehicle says where it starts. It could say
+    which positions it *makes* (`states`) and which of those it read out of a document (`sourced`),
+    and it had **no way to say which positions it owes** — so that half lived in a sentence, in two
+    files, both written by the round that landed the commanded modes:
+
+    * the comment above the block — *"this covers four of them … a regulator position, a link mode,
+      an antenna selection and a telemetry profile are choices the corpus does not make … those stay
+      owed"*;
+    * the docstring of `test_the_launch_state_is_declared_once_and_held_in_both_directions` — *"The
+      other nine stay owed … are choices this corpus does not make"*.
+
+    **Rounds 80, 81 and 83 made all four of those positions**, three of them out of the launch
+    checklist the block now cites by page, and both sentences went on saying the opposite. Neither
+    was read by anything, and a test cannot read a comment: the count had no reader, so it did not
+    have to be plausible. That is this folder's own finding, written down for
+    `channels.yaml:coverage` — *a number in prose has no reader, and a number with no reader does
+    not have to be plausible* — which is why that claim drifted for thirty rounds and why this one
+    drifted for four.
+
+    The repair is a field. `owed` is required beside `states`, keyed by state, and its four refusals
+    are the ways it can disagree with the corpus: the block making a position and owing it at once;
+    the block owning a position whose state no longer owes anything, which is *precisely* round 84's
+    drift and would have fired on the day it happened; an owed name that is no state at all; and an
+    owed position with nothing said about what would close it. The corpus change beside them is the
+    correction of the two stale sentences and of `hatch_state`'s note, which named a document class
+    that does not exist — the LM was never launched on its own, and the archive's HSI series carries
+    its *activation* checklist where the CSM's launch checklist sits.
+
+    The count those sentences got wrong is a pin now, in the case below and in the round-76 test: a
+    position moving between the two maps moves it.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1200:]
+
+    mission = yaml.safe_load((VEHICLE / "mission.yaml").read_text())
+    block = mission["launch_state"]
+    made, owed = block["states"], block["owed"]
+    assert isinstance(owed, dict), type(owed)
+    # Nine made and four owed; `relief_valve_state` was the fourteenth machine and answered itself,
+    # so it is in neither map.
+    assert len(made) + len(owed) == 13
+    assert not (set(made) & set(owed))
+    assert sorted(owed) == ["breaker_panel", "computer_mode", "hatch_state", "mode"]
+
+    states: dict[str, dict] = {}
+    for path in sorted((VEHICLE / "domains").glob("*/components.yaml")):
+        for state in (yaml.safe_load(path.read_text()) or {}).get("state") or []:
+            if isinstance(state, dict) and state.get("id"):
+                states[state["id"]] = state
+    for sid in sorted(owed):
+        # The two halves of one statement: the block says it owes this position, and the state says
+        # it has no value. A block that owes a position the state has already settled is the drift.
+        assert states[sid]["initial"] == "UNCONFIGURED", sid
+        assert len(str(owed[sid]).strip()) > 40, sid
+    for sid in sorted(made):
+        assert states[sid]["initial"] != "UNCONFIGURED", sid
+
+    def refusal(name: str, path: tuple[str, ...], old: str, new: str, needle: str) -> None:
+        definition = copy_definition(fixture_dir(tmp_path, name))
+        target = definition.joinpath(*path)
+        text = target.read_text()
+        assert old in text, f"the fixture no longer matches {old!r}"
+        target.write_text(text.replace(old, new, 1))
+        out = run_linter(definition).stdout
+        assert needle in out, f"{needle!r} did not fire:\n{out[-1400:]}"
+
+    mission_path = ("mission.yaml",)
+    # **The block stating its positions and not what it owes** — the shape the corpus was in until
+    # this round, and the reason the two prose sentences were the only record of the other half.
+    # Removed as a whole block rather than renamed, so the fixture stays a *plausible* file: the
+    # round law's broken copies are broken by meaning, and a copy that does not parse tests the
+    # parser rather than the refusal.
+    definition = copy_definition(fixture_dir(tmp_path, "owed-missing"))
+    target = definition / "mission.yaml"
+    text = target.read_text()
+    stripped = re.sub(r"(?m)^  owed:\n(?:    .*\n)*", "", text, count=1)
+    assert stripped != text, "the fixture no longer matches the `owed` block"
+    target.write_text(stripped)
+    out = run_linter(definition).stdout
+    assert "declares the positions it makes and no `owed` map" in out, out[-1400:]
+
+    # `owed` as anything but a map, which is the same as naming nothing.
+    refusal(
+        "owed-not-a-map",
+        mission_path,
+        "  owed:\n    breaker_panel: >-\n      the key space rather than the source. The launch",
+        "  owed:\n    - breaker_panel\n  owed_unused:\n    breaker_panel: >-\n"
+        "      the key space rather than the source. The launch",
+        "declares `owed` as ['breaker_panel'], which names no position",
+    )
+    # **A position the block makes and owes at once.** An entry in both maps is the drift `owed`
+    # exists to catch, written where a reader would take it for an answer.
+    refusal(
+        "made-and-owed",
+        mission_path,
+        "    breaker_panel: >-\n      the key space rather than the source.",
+        "    bus_tie_closed: >-\n      a position this block also makes below.\n"
+        "    breaker_panel: >-\n      the key space rather than the source.",
+        "makes a position for 'bus_tie_closed' and owes it in the same block",
+    )
+    # **The refusal that would have caught round 84's drift on the day it landed**: the round that
+    # sources a position adds it to `states`, and a block that leaves it in `owed` is claiming as a
+    # debt something it has already paid.
+    refusal(
+        "owed-and-paid",
+        ("domains", "avionics", "components.yaml"),
+        '    unit: "enum[idle,run,standby,failed]"\n    initial: UNCONFIGURED\n',
+        '    unit: "enum[idle,run,standby,failed]"\n    initial: run\n',
+        "still owes it. A debt the state has already paid is a debt left standing",
+    )
+    # A debt owed on a machine that does not exist.
+    refusal(
+        "owed-nothing-real",
+        mission_path,
+        "    mode: >-\n      the attitude-control plan",
+        "    not_a_state_at_all: >-\n      a debt owed on a machine that does not exist.\n"
+        "    mode: >-\n      the attitude-control plan",
+        "owes 'not_a_state_at_all', which is not a state of any domain",
+    )
+    # And a debt named without saying what would close it, which is a debt nobody can pay.
+    refusal(
+        "owed-says-nothing",
+        mission_path,
+        "    computer_mode: >-\n      an avionics source that uses *this* enum's vocabulary at the pad, or a decision about what\n"
+        "      `idle`/`run`/`standby`/`failed` mean aboard a powered CMC. The checklist reaches the computer\n"
+        "      and does not use these words: `G/N PWR - AC1` (p. 11) is the power selection and `CMC MODE -\n"
+        "      FREE` (pp. 6, 21) is the CMC's mode *switch*, whose members are FREE, AUTO and HOLD\n",
+        '    computer_mode: ""\n',
+        "owes 'computer_mode' with nothing said about what would close it",
+    )
+    # A state claiming the launch question while the block neither makes it nor owes it. The four
+    # owed states do not cite the block — the debt is theirs and the block merely names them — so
+    # this is the join that keeps a *fifth* one from appearing without either side saying so.
+    definition = copy_definition(fixture_dir(tmp_path, "claims-the-block-unaccounted"))
+    target = definition / "domains" / "structure" / "components.yaml"
+    text = target.read_text()
+    anchor = "    unit: \"map[hatch_id,enum[closed,latched,open]]\"\n    initial: UNCONFIGURED\n"
+    assert anchor in text
+    target.write_text(
+        text.replace(
+            anchor,
+            anchor + "    initial_provenance:\n      basis: chosen\n      reason: a state that"
+            " claims the launch question\n      source: mission.yaml:launch_state\n",
+            1,
+        )
+    )
+    mission_target = definition / "mission.yaml"
+    mission_text = mission_target.read_text()
+    trimmed = re.sub(r"(?m)^    hatch_state: >-\n(?:      .*\n)*", "", mission_text, count=1)
+    assert trimmed != mission_text, "the fixture no longer matches the hatch_state debt"
+    mission_target.write_text(trimmed)
+    out = run_linter(definition).stdout
+    assert "A state claiming the launch question that does not mention it is a citation nothing holds" in out, out[-1400:]
 
 
 def test_a_telemetry_profile_says_which_link_mode_carries_it(tmp_path):

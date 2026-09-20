@@ -220,10 +220,20 @@ state:
       does reach the CSM's own hatches (p. 20): `FWD HATCH … ACTR HNDL sel - stow/check locked` and
       `SIDE HATCH … GEAR BOX sel - LATCH … LOCK PIN REL KNOB - LOCK … LOCK PIN ind - flush`, which is
       a *locked* hatch rather than a merely shut one — and it reaches **one** of this state's two
-      ids. `hatch_crew_csm` is the CSM's crew hatch; the LM's is in the LM's own launch checklist,
-      and no document held here states it at the epoch. So the source fills half this map, and half a
-      map is not a position. What would close it: the LM's launch checklist, or a decision that the
-      two hatches begin at the same value
+      ids. `hatch_crew_csm` is the CSM's crew hatch; the LM's is a different article, and **there is
+      no LM launch checklist to hold**: the LM was never launched on its own — it flew inside the
+      SLA — and the HSI series that carries the CSM's launch checklist (481248) carries the LM's
+      *activation* checklist instead (481249, 481252, 481253). Round 84 read the three LM crew
+      checklists this folder holds against this state — `HSI-481253` Basic (p. 3-36, PREP FOR
+      UNDOCKING at 110:13), the Apollo 15 LM activation checklist (p. 2-34, at 100:13:56) and the
+      Apollo 11 LM systems activation checklist (ACT-62, at 100:40) — and all three reach the
+      overhead hatch only in flight, as a verification step: `OVHD HATCH - LOCKED`. That is a
+      position a hundred hours after the epoch, and reading it onto the epoch would be the mistake
+      this folder has already recorded once, when a *flight* checklist's bus-tie setting was read as
+      a launch one. So the source fills half this map, and half a map is not a position. What would
+      close it: an LM stowage or acceptance record — the hatch's position as installed, which is a
+      checkout document rather than a crew checklist — or a decision that the two hatches begin at
+      the same value
     moved_by:
       - "command:set_hatch_valve"
     command_value:
