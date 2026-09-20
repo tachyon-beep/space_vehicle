@@ -106,6 +106,7 @@ launch_state:
     bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"
     telemetry_rate: "p. 10 (`PCM BIT RATE - HI`; the same panel carries `PCM BIT RATE - LOW` as the later in-flight setting the flight checklist switches to)"
     antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"
+    cabin_regulator_position: "p. 18, PANEL 351 (`MAIN REG vlv (2) - OPEN` with `EMER CAB PRESS vlv - OFF` — the main cabin-pressure regulator in service and the emergency one off, which is `primary`)"
   # **Quoted, because YAML reads a bare `off` as a boolean.** `check_boolean_words` refuses a word
   # the parser took as a value, and this is the first declaration in the corpus where the word *is*
   # the value: `off` is a member of all three engines' vocabularies and the parser's `False` is not.
@@ -123,6 +124,9 @@ launch_state:
     # rather than `historical`: the checklist sets the rate, and this follows from it through the
     # correspondence, which is why it is not in `sourced`.
     comm_mode: sband_high
+    # The regulator, from the same section's ECS panel: the main cabin-pressure regulator open and
+    # the emergency one off, which is the state's `primary` member.
+    cabin_regulator_position: primary
 
 total_ticks: 34560000
 total_ticks_provenance:

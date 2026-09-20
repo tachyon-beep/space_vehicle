@@ -362,17 +362,34 @@ state:
     node: cabin_regulator
     method: discrete
     unit: "enum[closed,primary,emergency,isolated]"
-    initial: UNCONFIGURED
-    initial_note: >-
-      the regulator's position at MET 0. `apollo_diode.md:95` gives the vocabulary and its
-      "unexpected mode" event. **This entry used to assert, in passing, that "`closed` is the launch
-      configuration"** — an unsourced claim about a launch configuration, which is the one kind of
-      statement that turned out to be checkable: the launch checklist's ECS panels read `MAIN REG vlv
-      (2) - OPEN` (p. 18), so the regulator is open at the pad and the parenthetical was telling a
-      reader to write down the opposite of what the configuration says. Which of `primary`,
-      `emergency` and `isolated` an open main regulator valve corresponds to is a question about
-      this vocabulary rather than about the launch — `open` is not a member this corpus has. What
-      would close it: that mapping. The `closed` guess is withdrawn rather than kept
+    # **The vocabulary, split by where each member came from.** `apollo_diode.md:95` gives three and
+    # this state holds four. Until round 83 the account of the fourth lived only in the *channel's*
+    # note — `channels.yaml#eclss.cabin_regulator_state` records that the binding caught the channel
+    # publishing three of this state's four — so a reader of the state saw four members beside a note
+    # saying apollo publishes three, with nothing reconciling them.
+    unit_source: [primary, emergency, isolated]
+    unit_added:
+      closed: >-
+        the vehicle's own, and the most consequential of the four: a closed regulator is a cabin
+        isolated from its supply, which is the configuration Apollo 13 flew after the tank failure
+        and the one a crew reaches for when the leak is downstream of the regulator rather than in
+        the cabin. The linter's state/channel binding is what found it — the channel published three
+        values for a state that can take four, so the vehicle could be in a configuration its own
+        telemetry could not report — and the reason is declared here now rather than only there
+    initial: primary
+    initial_provenance:
+      basis: historical
+      source: mission.yaml:launch_state
+      note: >-
+        the launch checklist's ECS panel, read out of `mission.yaml#launch_state`: **`MAIN REG vlv
+        (2) - OPEN`** with **`EMER CAB PRESS vlv - OFF`** (p. 18, PANEL 351). Those two valves are
+        this state's vocabulary in the source's own terms — the main cabin-pressure regulator in
+        service and the emergency one off is `primary`, which `apollo_diode.md:84` calls the mode the
+        CSM cabin is normally maintained in at about 5 psia. This entry used to say that which
+        member an open main regulator corresponds to "is a question about this vocabulary rather
+        than about the launch". It *was* a question about this vocabulary, and the source answers it
+        with two switch positions rather than one word: `emergency` is `EMER CAB PRESS vlv` selected,
+        `isolated` is both shut, and `closed` is the fourth member above
     moved_by:
       - "command:set_cabin_regulator"
     dwell:
@@ -381,7 +398,11 @@ state:
     provenance:
       basis: apollo
       ref: "apollo_diode.md:95"
-      note: "apollo publishes cabin_regulator_state as primary/emergency/isolated with an 'unexpected mode' event. The dwell is one second each way because the regulator is a valve with a mechanical transit and a fleet must not be able to chatter it by re-commanding every tick."
+      note: >-
+        apollo publishes `cabin_regulator_state` as `primary/emergency/isolated` with an "unexpected
+        mode" event — three members, which `unit_source` records — and the fourth is `unit_added`'s.
+        The dwell is one second each way because the regulator is a valve with a mechanical transit
+        and a fleet must not be able to chatter it by re-commanding every tick
   # The supply tank's working pressure, which is what `eclss.o2_supply_pressure_psi` publishes. It is
   # a *pressure* and the corpus had only a *mass*: round 30 found the channel reading `o2_csm` — the
   # shared oxygen stock, in kilograms — under a psi name, and the honest answer was not a conversion

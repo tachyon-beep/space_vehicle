@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 274 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 273 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 274 declared debts
-and every one of them named. **106 of the 139 states are fully configured and 33 carry a debt**, and
-a real tick advances **49** of the 139 states, and the build order's **49** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 273 declared debts
+and every one of them named. **107 of the 139 states are fully configured and 32 carry a debt**, and
+a real tick advances **50** of the 139 states, and the build order's **50** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -226,11 +226,11 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **274** is every obligation the linter can name:
-**196** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **273** is every obligation the linter can name:
+**195** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **196** the plant
+the missing charging efficiency, the pump-speed conversion). The **195** the plant
 reports is a *different* count rather than a smaller one, and the difference is which files are
 walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
 `coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
@@ -1832,8 +1832,8 @@ the distinction between a value nobody has written down and a state nothing can 
 ```
 139 states, by what blocks them:
 
-    49   35 %  ready now — the states a real tick advances
-    29   21 %  owes a value — the cheapest to close, and the debt count already tracks them
+    50   36 %  ready now — the states a real tick advances
+    28   20 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     46   33 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -18099,6 +18099,81 @@ that has never been seen to refuse is indistinguishable from one that always pas
 was the other half of the sentence — **the suite must not read them.** A verification artefact placed
 inside the tree under test is part of the tree under test unless something says otherwise, and for
 sixteen rounds nothing did.
+
+## A vocabulary declared four members and its source gave three, with the account in the other file
+
+`apollo_diode.md:95` gives `cabin_regulator_state` as `primary/emergency/isolated`. The state declares
+`enum[closed,primary,emergency,isolated]` — four. The fourth is real and argued for: `closed` is a
+cabin isolated from its supply, the configuration Apollo 13 flew after the tank failure, and the
+linter's **state/channel binding** is what found it, because the channel published three values for a
+state that can take four.
+
+**But the argument was written down in the channel's note and not the state's.**
+`channels.yaml#eclss.cabin_regulator_state` carries the whole account; the state's own
+`provenance.note` said only that "apollo publishes `cabin_regulator_state` as
+`primary/emergency/isolated`". So a reader of the state saw four members beside a three-member
+citation and nothing reconciling them — **an addition the vehicle argued for and a typo look exactly
+the same.**
+
+### The repair is a declared split
+
+```yaml
+    unit: "enum[closed,primary,emergency,isolated]"
+    unit_source: [primary, emergency, isolated]      # what `apollo_diode.md:95` gives
+    unit_added:
+      closed: >-                                     # the vehicle's own, and why
+        a cabin isolated from its supply, which is the configuration Apollo 13 flew …
+```
+
+`check_unit_provenance` holds the split against the state's own `unit`: every credited member must be
+one the state can take, every member must be accounted for by one list or the other, the two lists
+must not overlap, and an addition must carry a reason. Both fields are optional — most vocabularies
+are the source's own and saying so adds nothing — and a state that declares either must declare a
+split of the vocabulary it actually has.
+
+### And the same round sources the position the last one withdrew
+
+Round 80 withdrew this note's guess that "`closed` is the launch configuration" and left the mapping
+open, saying that which member an open main regulator corresponds to "is a question about this
+vocabulary rather than about the launch". **It was a question about this vocabulary, and the source
+answers it in the source's own terms** — the launch checklist's ECS panel, p. 18, PANEL 351:
+
+```
+PANEL 351
+MAIN REG vlv (2) - OPEN
+EMER CAB PRESS vlv - OFF
+CAB REPRESS vlv - OFF (CCW)
+```
+
+The main cabin-pressure regulator in service and the emergency one off is **`primary`** — the mode
+`apollo_diode.md:84` says the CSM cabin is normally maintained in at about 5 psia. `emergency` is
+`EMER CAB PRESS vlv` selected; `isolated` is both shut; `closed` is the fourth member above. So
+`cabin_regulator_position` is `primary`, sourced through `mission.yaml#launch_state`, and it
+**advances**.
+
+### What moved
+
+| figure | before | after |
+|---|---|---|
+| `declared debts` | 274 | **273** |
+| build order · ready now | 49 | **50** |
+| build order · owes a value | 29 | **28** |
+| build order · owes an edge / rule | 15 · 46 | 15 · 46 |
+| a real tick advances | 49 of 139 | **50 of 139** |
+| states fully configured | 106 / 139 | **107 / 139** |
+| states with a debt | 33 / 139 | **32 / 139** |
+| UNCONFIGURED scalars | 196 | **195** |
+| `report.refuse` call sites | 837 | **844** |
+| tests | 335 | **336** |
+
+### What is still owed
+
+Four positions, none of them a vocabulary question any more: `computer_mode`, `hatch_state`,
+`breaker_panel` and `mode` are each waiting on the corpus's own shape — a missing key space, an enum
+the source expresses differently, a hatch the CSM checklist does not reach. The operator has directed
+that all of them be **sourced** rather than decided, so the next round that takes one should look for
+the document first: rounds 79–83 have each found one, in an archive the project's own source list has
+named from the start.
 
 ## The invariants, and which of them are enforced
 

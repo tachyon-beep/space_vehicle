@@ -16692,6 +16692,98 @@ def check_link_profiles(
             )
 
 
+def check_unit_provenance(root: Path, report: Report) -> None:
+    """**Where a vocabulary came from, and which members the vehicle added to it.**
+
+    A state whose `unit` is an `enum` may cite a corpus line that enumerates the vocabulary — and the
+    vehicle may hold **more** members than that line does. `cabin_regulator_position` is the case:
+    `apollo_diode.md:95` gives `primary/emergency/isolated`, the state declares four, and the fourth
+    (`closed`) was added because the linter's state/channel binding caught the channel publishing
+    three of the state's four. That reason is written down — **in the channel's note, not in the
+    state's**, and not in a field anywhere. So the state reads `enum[closed,primary,emergency,
+    isolated]` beside a note that says apollo publishes three members, with nothing reconciling the
+    two, and a reader has no way to tell an addition the vehicle argued for from a typo.
+
+    `unit_source` names the members the cited source gives and `unit_added` names the ones the
+    vehicle added, each with its reason. Both are optional, because most vocabularies are the
+    source's own and saying so adds nothing; where either is declared this holds the two against the
+    state's `unit`, so the split is complete and cannot overlap.
+    """
+
+    def members(unit: Any) -> set[str]:
+        return unit_vocabulary(unit) or set()
+
+    for path in sorted((root / "domains").glob("*/components.yaml")):
+        components = load(path, Report()) or {}
+        for position, state in enumerate(components.get("state") or []):
+            if not isinstance(state, dict):
+                continue
+            source = state.get("unit_source")
+            added = state.get("unit_added")
+            if source is None and added is None:
+                continue
+            where = f"domains/{path.parent.name}/components.yaml#state[{position}]({state.get('id')})"
+            vocabulary = members(state.get("unit"))
+            if vocabulary is None or not vocabulary:
+                report.refuse(
+                    where,
+                    f"declares `unit_source`/`unit_added` and its `unit` "
+                    f"({state.get('unit')!r}) is not a vocabulary, so there is nothing for the split "
+                    "to be a split of",
+                )
+                continue
+            if source is not None:
+                if not isinstance(source, list) or not source:
+                    report.refuse(
+                        where,
+                        f"declares `unit_source` as {source!r}, which names no member",
+                    )
+                    continue
+                outside = sorted(str(m) for m in source if str(m) not in vocabulary)
+                if outside:
+                    report.refuse(
+                        where,
+                        f"names {outside} in `unit_source`, which its own `unit` "
+                        f"({state.get('unit')!r}) does not hold — a member credited to the source "
+                        "that the state cannot take is a citation of something else",
+                    )
+                    continue
+            if added is not None and (not isinstance(added, dict) or not added):
+                report.refuse(
+                    where,
+                    f"declares `unit_added` as {added!r}. A member the vehicle adds to a source's "
+                    "vocabulary is named with the reason it was added, or it is not declared",
+                )
+                continue
+            credited = {str(m) for m in (source or [])} | set((added or {}).keys())
+            unaccounted = sorted(vocabulary - credited)
+            if unaccounted:
+                report.refuse(
+                    where,
+                    f"declares a vocabulary split and does not account for {unaccounted}: every "
+                    "member of `unit` is either one `unit_source` gives or one `unit_added` names "
+                    "with its reason, or the split is two lists beside the thing they describe",
+                )
+                continue
+            overlap = sorted({str(m) for m in (source or [])} & set((added or {}).keys()))
+            if overlap:
+                report.refuse(
+                    where,
+                    f"names {overlap} in both `unit_source` and `unit_added`. A member is the "
+                    "source's or the vehicle's; a member that is both is a provenance that cannot "
+                    "be read",
+                )
+                continue
+            for member, reason in sorted((added or {}).items()):
+                if not (isinstance(reason, str) and reason.strip()):
+                    report.refuse(
+                        where,
+                        f"adds {member!r} to the source's vocabulary with no reason "
+                        f"({reason!r}). An addition is a decision, and the reason is what separates "
+                        "it from a typo",
+                    )
+
+
 def check_mission_bindings(
     channels: dict[str, Any],
     mission: dict[str, Any],
@@ -18042,6 +18134,7 @@ def main(argv: list[str] | None = None) -> int:
         check_band_on(root, registry, report)
         check_band_value(root, report)
         check_link_profiles(root, vehicle, mission, report)
+        check_unit_provenance(root, report)
         check_tick_grain(mission, report)
         check_scenario_postures(mission, report)
         check_blackout(mission, report)
