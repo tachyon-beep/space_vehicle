@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 273 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 271 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,7 +211,7 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 273 declared debts
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 271 declared debts
 and every one of them named. **107 of the 139 states are fully configured and 32 carry a debt**, and
 a real tick advances **50** of the 139 states, and the build order's **50** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
@@ -226,16 +226,14 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **273** is every obligation the linter can name:
-**195** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
+Two counts, and the difference is deliberate. The **271** is every obligation the linter can name:
+**193** literal `UNCONFIGURED` scalars and **78** prose obligations — the sentences in the
 `open_debts` lists and the per-edge records (thermal time constants, loop transit, the throttle
 law, the inertia tensor, the crisis gains, the source resistance, the missing pack-voltage state,
-the missing charging efficiency, the pump-speed conversion). The **195** the plant
-reports is a *different* count rather than a smaller one, and the difference is which files are
-walked: the plant counts every literal `UNCONFIGURED` reachable from the five top-level documents,
-`coupling.yaml` included, so its 197 is the linter's 197 **plus** the graph's unset edge
-sensitivities, which the linter reports against the edge they belong to instead of against a
-top-level path. The headline number is the debt count, and until round 46 the left-hand number was
+the missing charging efficiency, the pump-speed conversion). The plant independently reports
+**193** literal unset scalars, matching that subtotal; the linter also names the **78** prose
+obligations to produce the larger headline. Graph sensitivities are reported against their owning
+edges rather than added a second time. Until round 46 the scalar subtotal was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
 graph by its edge walk, so every literal `UNCONFIGURED` was counted *except the eleven in the two
 files nothing walks*. `mission.yaml`'s initial position, velocity and
@@ -18322,6 +18320,12 @@ from 337 to 338 tests.
 The Apollo 17 CSM Launch Checklist (Basic), 4 September 1972, changes `MN BUS TIE (2)` to OFF on PDF p. 33 and verifies it on p. 36; selects `PCM BIT RATE - LOW` on p. 35 and repeats LOW after docking and LM ejection on pp. 57 and 59; selects `S BD ANT OMNI - HI GAIN` on p. 56 before docking. The earlier ON, HI and omni B positions on pp. 10–11 describe the pad. `bus_tie_closed` is now `open`, `telemetry_rate` is 1,600 bit/s, `comm_mode` derives `sband_low`, and `antenna_selection` is `high_gain`. The main regulator's documented primary position remains. The four launch debts remain named; the post-docking hatch procedure on p. 58 means a launch hatch assumption cannot settle them.
 
 `check_launch_state` now refuses a disagreement between the discrete-state event, the initial-state event, the MET 0 osculating epoch and the first phase's docked configuration after extraction. Broken-copy tests change the launch event to `pad` and the first configuration to an undocked one, proving both refusals. The source-position tests hold the four corrected values. This fixes a temporal misapplication of published settings; it does not pay the remaining physical and rule debts or advance a new state. The referee grows from 338 to 339 tests.
+
+## The bus current alarm called its published rating unknown
+
+`domains/power/profiles.yaml#bus_a_current_high` owed both its assert and clear limits and said no 28 V bus rating had been found. The frozen electrical design states **40 A continuous per BUS_A/B** and **80 A transient for 1 s** (`electrical_diode.md:251`); the current point's own note already cited the 40 A figure. The design's continuous rating now lives once at `vehicle.yaml#electrical.bus_continuous_current_a`, and the alarm derives its 40 A assert from that field. The 80 A transient rating is a separate envelope and does not become this alarm's continuous limit.
+
+The source gives no clear threshold. This round chooses one measurement quantum of hysteresis: `power.bus_a_current_a` reports at 0.2 A precision, so the alarm clears at **39.8 A**. The provenance says this is an alert policy rather than a historical hardware figure. `check_threshold_derivations` now refuses a clear limit that differs from the declared number of channel quanta below the derived assert. A broken-copy test moves the clear to 39.6 A and another moves the canonical rating to 41 A; both refusals fire. The debt count falls by two scalar obligations (273 → 271), literal unset scalars fall from 195 to 193, and the referee grows from 339 to 340 tests. No state moves into the ready bucket.
 
 ## The invariants, and which of them are enforced
 

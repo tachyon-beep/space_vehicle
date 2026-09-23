@@ -2854,8 +2854,8 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
-    # One block deleted is one debt added: the corpus stands at 273, so the ablation is 274.
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    # One block deleted is one debt added: the corpus stands at 271, so the ablation is 272.
+    assert "COMPOSES, with 272 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2877,7 +2877,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 272 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2891,7 +2891,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 272 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -5052,6 +5052,73 @@ def test_the_linter_refuses_an_event_nothing_implements(tmp_path):
     assert "no threshold watches it" in result.stdout
 
 
+def test_the_bus_current_alarm_uses_the_design_rating_and_one_display_quantum(tmp_path):
+    """A published 40 A continuous limit cannot drift from its alarm or its clear margin."""
+    vehicle_doc = yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())
+    assert vehicle_doc["electrical"]["bus_continuous_current_a"] == 40
+    provenance = vehicle_doc["electrical"]["bus_continuous_current_provenance"]
+    assert provenance["basis"] == "chosen" and "electrical_diode.md:251" in provenance["reason"]
+    profiles_doc = yaml.safe_load((VEHICLE / "domains" / "power" / "profiles.yaml").read_text())
+    alarm = next(t for t in profiles_doc["thresholds"] if t["id"] == "bus_a_current_high")
+    assert (alarm["assert"], alarm["clear"], alarm["clear_margin_from_precision"]) == (40, 39.8, 1)
+
+    definition = copy_definition(fixture_dir(tmp_path, "bus-current-clear"))
+    profiles = definition / "domains" / "power" / "profiles.yaml"
+    text = profiles.read_text()
+    assert "    assert: 40\n    clear: 39.8\n" in text
+    profiles.write_text(text.replace("    assert: 40\n    clear: 39.8\n", "    assert: 40\n    clear: 39.6\n", 1))
+    output = run_linter(definition).stdout
+    assert "bus_a_current_high.clear" in output and "39.8" in output, output[-1400:]
+
+    other = copy_definition(fixture_dir(tmp_path, "bus-current-rating"))
+    vehicle = other / "vehicle.yaml"
+    text = vehicle.read_text()
+    assert "  bus_continuous_current_a: 40\n" in text
+    vehicle.write_text(text.replace("  bus_continuous_current_a: 40\n", "  bus_continuous_current_a: 41\n", 1))
+    output = run_linter(other).stdout
+    assert "bus_a_current_high.assert" in output and "41" in output, output[-1400:]
+
+    unbound = copy_definition(fixture_dir(tmp_path, "bus-current-unbound"))
+    profiles = unbound / "domains" / "power" / "profiles.yaml"
+    text = profiles.read_text()
+    assert "    derives_from: vehicle.yaml:electrical.bus_continuous_current_a\n" in text
+    profiles.write_text(text.replace("    derives_from: vehicle.yaml:electrical.bus_continuous_current_a\n", "", 1))
+    output = run_linter(unbound).stdout
+    assert "bus_a_current_high.clear_margin_from_precision" in output and "requires `derives_from`" in output
+
+    no_margin = copy_definition(fixture_dir(tmp_path, "bus-current-no-margin"))
+    profiles = no_margin / "domains" / "power" / "profiles.yaml"
+    text = profiles.read_text()
+    assert "    clear_margin_from_precision: 1\n" in text
+    profiles.write_text(text.replace("    clear_margin_from_precision: 1\n", "", 1))
+    output = run_linter(no_margin).stdout
+    assert "bus_a_current_high.clear_margin_from_precision" in output and "no checked relation" in output
+
+    no_reason = copy_definition(fixture_dir(tmp_path, "bus-current-no-reason"))
+    vehicle = no_reason / "vehicle.yaml"
+    text = vehicle.read_text()
+    assert "  bus_continuous_current_provenance:\n    basis: chosen\n    reason: >-\n" in text
+    vehicle.write_text(text.replace(
+        "  bus_continuous_current_provenance:\n    basis: chosen\n    reason: >-\n",
+        "  bus_continuous_current_provenance:\n    basis: chosen\n    note: >-\n",
+        1,
+    ))
+    output = run_linter(no_reason).stdout
+    assert "vehicle.yaml:electrical.bus_continuous_current_provenance" in output, output[-1400:]
+
+    no_clear_reason = copy_definition(fixture_dir(tmp_path, "bus-current-no-clear-reason"))
+    profiles = no_clear_reason / "domains" / "power" / "profiles.yaml"
+    text = profiles.read_text()
+    assert "    clear_margin_provenance:\n      basis: chosen\n      reason: >-\n" in text
+    profiles.write_text(text.replace(
+        "    clear_margin_provenance:\n      basis: chosen\n      reason: >-\n",
+        "    clear_margin_provenance:\n      basis: chosen\n      note: >-\n",
+        1,
+    ))
+    output = run_linter(no_clear_reason).stdout
+    assert "bus_a_current_high.clear_margin_provenance" in output, output[-1400:]
+
+
 def test_the_linter_refuses_an_event_class_with_nothing_to_classify(tmp_path):
     """A class on a channel with no events is a field somebody filled in because it was there.
 
@@ -6575,7 +6642,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # Removing this file's own prose obligations takes the headline down by the number of entries
     # that file carries, which is one here — so the figure is the base minus one, and it moves with
     # the base rather than with the runs of fixtures that inject a debt.
-    assert "with 272 declared debt(s)" in result.stdout
+    assert "with 270 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -6986,7 +7053,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 272 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7092,7 +7159,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 272 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -11270,7 +11337,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 271 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -11366,7 +11433,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 271 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -11825,7 +11892,7 @@ def test_the_readme_status_matches_the_tools():
         (f"{channels} channels, {states} states over {nodes} scheduled nodes", "the status line"),
         (f"with {debts} declared debts", "the debt count"),
         (f"Current state: **composes, with {debts} declared debts.**", "the header"),
-        (f"The **{scalars}** the plant", "the plant's narrower count"),
+        (f"**{scalars}** literal unset scalars, matching that subtotal", "the plant's scalar count"),
         (f"so {rule} of the {states} states need code", "the domain-code count"),
         (f"{states} states, by what blocks them", "the build-order view"),
         (
@@ -14186,7 +14253,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 273 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 271 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -14363,7 +14430,7 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # prose obligation in `coupling.yaml#open_debts` for the three bands whose vocabulary is wider
     # than their comparator. The round adds a field to four states; nothing was answered, so nothing
     # fell.
-    assert owed == "273", "the view must agree with the headline count"
+    assert owed == "271", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -16214,7 +16281,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 271 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -16222,7 +16289,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 271 declared debt(s)",
         composes=True,
     )
 
@@ -16237,7 +16304,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-300:]
+    assert "with 272 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -16396,7 +16463,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-400:]
+    assert "with 272 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -16543,7 +16610,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 274 declared debt(s)" in out, out[-400:]
+    assert "with 272 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -16553,7 +16620,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 271 declared debt(s)",
         composes=True,
     )
 
@@ -16695,7 +16762,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 273 declared debt(s)",
+        "COMPOSES, with 271 declared debt(s)",
         composes=True,
     )
 

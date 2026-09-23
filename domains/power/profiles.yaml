@@ -223,8 +223,19 @@ thresholds:
   - id: bus_a_current_high
     point: power.bus_a_current_a
     comparator: above
-    assert: UNCONFIGURED
-    clear: UNCONFIGURED
+    assert: 40
+    clear: 39.8
+    derives_from: vehicle.yaml:electrical.bus_continuous_current_a
+    derives_note: >-
+      the alarm asserts above the continuous current rating of each main bus, published in
+      electrical_diode.md:251 and declared once in vehicle.yaml
+    clear_margin_from_precision: 1
+    clear_margin_provenance:
+      basis: chosen
+      reason: >-
+        one 0.2 A display quantum below the continuous rating avoids a threshold that asserts
+        and clears at the same represented reading; this is an alarm hysteresis policy, not a
+        published hardware limit
     dwell_assert_ms: 1000
     dwell_clear_s: 5
     latched: true
@@ -234,10 +245,10 @@ thresholds:
       basis: apollo
       ref: "apollo_diode.md:74"
       note: >-
-        apollo's event is "> configured bus capacity" and the configured capacity is owed: the
-        28 V bus's current rating is not in any source reached, and `vehicle.yaml#electrical`
-        carries the source models rather than the distribution limit. What makes this alarm worth
-        having before the number exists is that it is the *only* channel that sees a load step
+        apollo's event is "> configured bus capacity". The reference electrical design explicitly
+        rates BUS_A/B at 40 A continuous (`electrical_diode.md:251`); the 80 A for 1 s transient
+        rating is a different envelope and does not become this continuous-current alarm's assert.
+        The five-second clear dwell is a separate alert policy. This is the *only* channel that sees a load step
         without waiting for the voltage to sag: the bus voltage is the consequence and this is
         the cause, one tick earlier
 

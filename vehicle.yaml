@@ -1716,6 +1716,14 @@ comms:
 # --------------------------------------------------------------------------------------
 electrical:
 
+  bus_continuous_current_a: 40
+  bus_continuous_current_provenance:
+    basis: chosen
+    reason: >-
+      electrical_diode.md:251 chooses 40 A continuous for each BUS_A/B and 80 A transient for
+      1 s in the project's reference design. This is a design limit, not a measured Apollo
+      spacecraft rating. The current alarm uses the continuous value through `derives_from`
+
   # **The electrical inventory is declared twice, and nothing joined the two.** This section is the
   # vehicle-level view: what the vehicle carries, with the mass each item contributes to the mass
   # closure. `domains/power/components.yaml` is the domain's view: the same hardware, one entry per

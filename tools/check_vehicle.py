@@ -12759,10 +12759,24 @@ def check_threshold_derivations(root: Path, documents: dict[str, Any], report: R
         for index, threshold in enumerate((document or {}).get("thresholds") or []):
             if not isinstance(threshold, dict):
                 continue
+            where = f"{name}:thresholds[{index}] {threshold.get('id')}"
             source = threshold.get("derives_from")
             if not source:
+                if threshold.get("clear_margin_from_precision") is not None:
+                    report.refuse(
+                        f"{where}.clear_margin_from_precision",
+                        "requires `derives_from`: a clear margin has no reference limit otherwise",
+                    )
                 continue
-            where = f"{name}:thresholds[{index}] {threshold.get('id')}"
+            if source == "vehicle.yaml:electrical.bus_continuous_current_a":
+                electrical = (documents.get("vehicle.yaml") or {}).get("electrical") or {}
+                provenance = electrical.get("bus_continuous_current_provenance") or {}
+                if provenance.get("basis") != "chosen" or "electrical_diode.md:251" not in str(provenance.get("reason") or ""):
+                    report.refuse(
+                        "vehicle.yaml:electrical.bus_continuous_current_provenance",
+                        "must identify the 40 A reference-design rating as a chosen value with "
+                        "a reason citing electrical_diode.md:251",
+                    )
             if not str(threshold.get("derives_note") or "").strip():
                 report.refuse(
                     f"{where}.derives_note",
@@ -12828,6 +12842,57 @@ def check_threshold_derivations(root: Path, documents: dict[str, Any], report: R
                     f"is {threshold['assert']} and `derives_from` resolves to {resolved!r} x "
                     f"{factor:g} = {wanted:g}. One of the two is the quantity and the other is a "
                     "copy of it, and only this check keeps them the same number",
+                )
+            margin_quanta = threshold.get("clear_margin_from_precision")
+            if margin_quanta is None:
+                if threshold.get("id") == "bus_a_current_high":
+                    report.refuse(
+                        f"{where}.clear_margin_from_precision",
+                        "is absent, so the bus current alarm's clear limit has no checked relation "
+                        "to its continuous-current assert",
+                    )
+                continue
+            if not isinstance(margin_quanta, int) or isinstance(margin_quanta, bool) or margin_quanta < 1:
+                report.refuse(f"{where}.clear_margin_from_precision", "must be a positive integer")
+                continue
+            if threshold.get("comparator") != "above":
+                report.refuse(
+                    f"{where}.clear_margin_from_precision",
+                    "requires an `above` comparator so clear is below assert",
+                )
+                continue
+            channels = (documents.get("channels.yaml") or {}).values()
+            point = next(
+                (
+                    item
+                    for entries in channels
+                    if isinstance(entries, list)
+                    for item in entries
+                    if isinstance(item, dict) and item.get("id") == threshold.get("point")
+                ),
+                None,
+            )
+            precision = point.get("precision") if point else None
+            if not isinstance(precision, (int, float)) or precision <= 0:
+                report.refuse(
+                    f"{where}.clear_margin_from_precision",
+                    "requires a channel with positive numeric precision",
+                )
+                continue
+            clear_provenance = threshold.get("clear_margin_provenance") or {}
+            if clear_provenance.get("basis") != "chosen" or not str(clear_provenance.get("reason") or "").strip():
+                report.refuse(
+                    f"{where}.clear_margin_provenance",
+                    "must identify the display-quantum hysteresis as a chosen alarm policy with a reason",
+                )
+            wanted_clear = wanted - margin_quanta * float(precision)
+            clear = threshold.get("clear")
+            if not isinstance(clear, (int, float)) or abs(float(clear) - wanted_clear) > 1e-9:
+                unit = str(point.get("unit") or "point units")
+                report.refuse(
+                    f"{where}.clear",
+                    f"is {clear!r}; {margin_quanta} display quantum of {precision:g} {unit} below the {wanted:g} {unit} "
+                    f"continuous limit is {wanted_clear:g}",
                 )
 
 
