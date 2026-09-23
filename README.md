@@ -18315,6 +18315,14 @@ position and asserts the full location. It failed on the old linter and passes w
 the existing launch-state test still passes. No vehicle quantity or debt moved. The referee grows
 from 337 to 338 tests.
 
+## The launch switches named the pad while the model began after extraction
+
+`mission.yaml#launch_state` called MET 0 the pad and carried the Apollo 17 checklist's pad settings for the main bus ties, PCM bit rate and antenna. The trajectory block called the same instant TLI cutoff, while the first configuration already contained a docked CSM and LM. These three descriptions cannot identify one physical instant. The vehicle's TLI is an external, pre-mission S-IVB burn; the first configuration and structural state already assume completed docking. This round declares MET 0 to be a **chosen synthetic post-extraction transfer start**. The osculating elements are a TLI-equivalent transfer-design initial condition, not a claim that historical docking and TLI cutoff coincided.
+
+The Apollo 17 CSM Launch Checklist (Basic), 4 September 1972, changes `MN BUS TIE (2)` to OFF on PDF p. 33 and verifies it on p. 36; selects `PCM BIT RATE - LOW` on p. 35 and repeats LOW after docking and LM ejection on pp. 57 and 59; selects `S BD ANT OMNI - HI GAIN` on p. 56 before docking. The earlier ON, HI and omni B positions on pp. 10–11 describe the pad. `bus_tie_closed` is now `open`, `telemetry_rate` is 1,600 bit/s, `comm_mode` derives `sband_low`, and `antenna_selection` is `high_gain`. The main regulator's documented primary position remains. The four launch debts remain named; the post-docking hatch procedure on p. 58 means a launch hatch assumption cannot settle them.
+
+`check_launch_state` now refuses a disagreement between the discrete-state event, the initial-state event, the MET 0 osculating epoch and the first phase's docked configuration after extraction. Broken-copy tests change the launch event to `pad` and the first configuration to an undocked one, proving both refusals. The source-position tests hold the four corrected values. This fixes a temporal misapplication of published settings; it does not pay the remaining physical and rule debts or advance a new state. The referee grows from 338 to 339 tests.
+
 ## The invariants, and which of them are enforced
 
 

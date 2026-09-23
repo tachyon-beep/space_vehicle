@@ -325,18 +325,15 @@ state:
     node: internal
     method: discrete
     unit: "enum[high_gain,omni_a,omni_b,sband_steerable]"
-    initial: omni_b
+    initial: high_gain
     initial_provenance:
       basis: historical
       source: mission.yaml:launch_state
       note: >-
-        the launch checklist's own configuration, read out of `mission.yaml#launch_state`: `S BD ANT
-        - OMNI` with `S BO ANT OMNI - B` (p. 10). This entry used to say that which antenna is
-        selected "is a property of the ground-station geometry at the pad rather than of the
-        vehicle" and to ask for the launch-network plan. The plan was not needed — the checklist
-        states the switch position, and it is omni B. The high-gain antenna is the one the same
-        checklist has the crew *power* (`HI-GAIN ANT PWR - PWR`) and point later; it is not the
-        antenna the link starts on
+        the Apollo 17 launch checklist selects `S BD ANT OMNI - HI GAIN` on p. 56, before docking
+        (p. 57) and LM extraction (p. 59). The p. 10 omni B setting was at the pad, and p. 29
+        selects omni C or D after launch. This model begins after extraction, so `high_gain` is
+        the applicable documented selection rather than the pad's omni B
     moved_by:
       - "command:select_antenna"
     dwell:
@@ -357,14 +354,13 @@ state:
     node: internal
     method: discrete
     unit: "enum[sband_high,sband_low,vhf,none]"
-    initial: sband_high
+    initial: sband_low
     initial_provenance:
       basis: derived
       relation: >-
-        the launch checklist sets one switch — `PCM BIT RATE - HI` (p. 10) — and
-        `mission.yaml#launch_state` makes `telemetry_rate` 51,200 bit/s from it; the `high` profile's
-        own `link_mode` in `vehicle.yaml#comms.rates` is `sband_high`, so this follows from the rate
-        the checklist publishes rather than from a second reading of it
+        the launch checklist sets `PCM BIT RATE - LOW` before TLI (p. 35) and verifies LOW after
+        docking (p. 57) and extraction (p. 59). `mission.yaml#launch_state` makes
+        `telemetry_rate` 1,600 bit/s; the `low` profile's `link_mode` is `sband_low`
       source: mission.yaml:launch_state
       note: >-
         **This entry used to be owed, and the reason was a join written as prose.** Round 80's note
@@ -417,17 +413,15 @@ state:
     node: internal
     method: discrete
     unit: bit/s
-    initial: 51200
+    initial: 1600
     initial_provenance:
       basis: historical
       source: mission.yaml:launch_state
       note: >-
-        the `high` profile, from the launch checklist's `PCM BIT RATE - HI` (p. 10). This entry used
-        to say that which profile the mission opens on "is not declared anywhere" and to offer a
-        fallback decision that the vehicle begins at the *low* rate — and `low` is what the flight
-        checklist switches to in orbit, so the fallback would have been wrong in the one direction
-        that matters. The number is `vehicle.yaml#comms.rates`'s `high`, which `apollo_diode.md:7,
-        :165` already carried; what was missing was which of the two the countdown sets
+        the `low` profile: `PCM BIT RATE - LOW` at GET 00:23:27 in the Apollo 17 launch checklist
+        (p. 35), repeated after docking (p. 57) and after LM ejection (p. 59). The pad's HI
+        position at p. 10 does not apply to this model's post-extraction MET 0. The rate is
+        `vehicle.yaml#comms.rates`'s 1,600 bit/s low profile
     moved_by:
       - "command:set_telemetry_profile"
     command_value:

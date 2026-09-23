@@ -16152,8 +16152,8 @@ def check_crew_bindings(
 
 def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> None:
     """**One decision about MET 0, held in both directions.** `mission.yaml#launch_state` declares the
-    machines the mission's own start settles — the three engines are `off` and the guidance mode is
-    `coast`, because no burn has been commanded — and each state's `initial` cites it. The two are
+    machines the mission's own post-extraction start settles — the three onboard engines are `off`
+    and the guidance mode is `coast`; the external TLI burn precedes MET 0. Each state's `initial` cites it. The two are
     written in two files for the usual reason (the decision is the mission's, the value is the
     state's), which is exactly the shape this folder finds drifted: a value edited in one place and
     left standing in the other.
@@ -16174,6 +16174,28 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
     it does not make, or makes one without saying where it came from, is refused.
     """
     block = mission.get("launch_state") or {}
+    initial_state = mission.get("initial_state") or {}
+    elements = initial_state.get("osculating_elements") or {}
+    phases = mission.get("phases") or []
+    first_phase = phases[0] if phases and isinstance(phases[0], dict) else {}
+    as_of_event = block.get("as_of_event")
+    trajectory_event = initial_state.get("as_of_event")
+    if (
+        as_of_event != "post-extraction transfer start"
+        or trajectory_event != as_of_event
+        or initial_state.get("met_at_state") != 0
+        or elements.get("epoch") != "MET 0"
+        or first_phase.get("starts_at_h") != 0
+        or (first_phase.get("configurations") or [None])[0] != "csm_lm_docked"
+        or "TLI complete" not in str(first_phase.get("entry") or "")
+        or "docking and LM extraction complete" not in str(first_phase.get("entry") or "")
+    ):
+        report.refuse(
+            "mission.yaml:launch_state.as_of_event",
+            "must be post-extraction transfer start, matching initial_state.as_of_event, the "
+            "MET 0 osculating epoch and the first phase's docked configuration after extraction; "
+            "a pad or TLI-cutoff switch setting is not an initial position after extraction",
+        )
     states = block.get("states")
     if states is None:
         return

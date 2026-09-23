@@ -518,7 +518,7 @@ state:
       The automatic-selection switches the checklist does set (`AUTO RCS SEL A/C ROLL A1 - OFF`, p.
       12) choose which axes the DAP may roll about, which is a third question again. What would
       close it: the attitude-control plan for the early coast, or a decision about what these three
-      words mean at the pad
+      words mean after LM ejection
     moved_by:
       - "command:set_rcs_mode"
     dwell:

@@ -394,8 +394,9 @@ state:
       (pp. 6, 21) is the CMC's *mode switch*, whose members are FREE, AUTO and HOLD — a different
       question from `idle`/`run`, which asks whether the machine is executing a program at all. So
       the source names the configuration and not the member, and reading FREE onto this vocabulary
-      is a decision about what these four words mean rather than a lookup. What would close it: that
-      mapping, or an avionics source that uses this vocabulary at the pad
+      is a decision about what these four words mean rather than a lookup. What would close it: a
+      mapping from the post-extraction CMC program to this synthetic enum, or a source that names
+      the computer's execution state after LM ejection
     moved_by:
       - "command:set_computer_mode"
     dwell:

@@ -293,19 +293,15 @@ state:
     method: discrete
     node: bus_tie
     unit: "enum[open,closed,tripped]"
-    initial: closed
+    initial: open
     initial_provenance:
       basis: historical
       source: mission.yaml:launch_state
       note: >-
-        the tie is closed at the pad, from the launch checklist's `MN BUS TIE (2) - on (up)` — in
-        the panel-by-panel configuration at p. 11 and again as the T-1:15 countdown step at p. 22.
-        This entry used to offer the opposite as the fallback decision: "one decision that the tie
-        begins open because nothing has yet asked the two buses to work together." Nothing had, and
-        the checklist's answer is still `on` — the two buses are one electrical system from the
-        countdown, which is the same thing `bus_a_load_w`'s note says about the graph. The tie is
-        `closed` even though no fault has asked it to be, and `E-TIE-BUSA`'s drop is a live term at
-        MET 0 rather than a cold one
+        the Apollo 17 launch checklist turns both main bus ties OFF on p. 33 and verifies them OFF
+        on p. 36, before TLI and extraction. The pad configuration on pp. 11 and 22 had them ON;
+        carrying that earlier position into this post-extraction initial state was a temporal
+        error. The synthetic model starts with the tie `open`; any later closure requires a command
     moved_by:
       - "command:set_bus_tie"
     command_value:

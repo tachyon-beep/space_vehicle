@@ -8623,10 +8623,9 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     The round that landed the commanded modes asked fourteen machines for a starting position. One
     was sourced on the spot (`relief_valve_state`, *"normally closed, with an 'unexpected opening'
     event"*) and **thirteen were left owed**, because the corpus publishes vocabularies and not
-    launch positions. Four of those thirteen share one reason, and it is the mission's own start
-    rather than a measurement: **a machine with no commanded burn is `off`, and a guidance mode with
-    no burn in progress is `coast`** — `phases[0]` is `translunar_coast` and `delta_v_budget`'s
-    first burn is hours after the epoch.
+    launch positions. Four of those thirteen share one reason, and it is the mission's chosen
+    post-extraction start rather than a measurement: the onboard engines are not firing and
+    guidance is in `coast`. TLI was an external S-IVB burn before this model's MET 0.
 
     So the decision is declared once, in `mission.yaml#launch_state`, and the four states cite it.
     Two files, one question, which is the shape this folder finds drifted — so the join is refused
@@ -8664,7 +8663,7 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     # value* and into the ready bucket.
     gaps: list = []
     after = plant.step(world, values, plant.tick_seconds(world), gaps)
-    # The four the mission's start settles, the three the launch checklist publishes (round 80), and
+    # The four the mission's start settles, the four the launch checklist publishes, and
     # — since round 81 — the link mode the published rate travels on, which the tick holds too.
     for sid in (
         "aps_state",
@@ -8679,10 +8678,10 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     ):
         assert not [gap for gap in gaps if gap.state.id == sid], sid
     assert after["sps_state"] == "off"
-    assert after["bus_tie_closed"] == "closed"
-    assert after["telemetry_rate"] == 51200
-    assert after["antenna_selection"] == "omni_b"
-    assert after["comm_mode"] == "sband_high"
+    assert after["bus_tie_closed"] == "open"
+    assert after["telemetry_rate"] == 1600
+    assert after["antenna_selection"] == "high_gain"
+    assert after["comm_mode"] == "sband_low"
     assert after["cabin_regulator_position"] == "primary"
 
     # The nine are the ones the block declares — four decided, four published, one derived from a
@@ -8759,6 +8758,25 @@ def test_a_launch_state_disagreement_names_the_state_s_domain(tmp_path):
     assert "domains/propulsion/components.yaml:state sps_state" in output, output[-1400:]
 
 
+def test_the_launch_positions_name_the_post_extraction_trajectory_event(tmp_path):
+    """Pad or cutoff switches cannot silently become post-extraction initial positions."""
+    definition = copy_definition(fixture_dir(tmp_path, "launch-cutoff-event"))
+    target = definition / "mission.yaml"
+    original = target.read_text()
+    assert "  as_of_event: post-extraction transfer start\n" in original
+    target.write_text(original.replace("  as_of_event: post-extraction transfer start\n", "  as_of_event: pad\n", 1))
+    output = run_linter(definition).stdout
+    assert "launch_state.as_of_event" in output and "post-extraction transfer start" in output, output[-1400:]
+
+    other = copy_definition(fixture_dir(tmp_path, "launch-undocked-start"))
+    target = other / "mission.yaml"
+    original = target.read_text()
+    assert "    configurations: [csm_lm_docked]\n" in original
+    target.write_text(original.replace("    configurations: [csm_lm_docked]\n", "    configurations: [csm_alone]\n", 1))
+    output = run_linter(other).stdout
+    assert "mission.yaml:launch_state.as_of_event" in output, output[-1400:]
+
+
 def test_a_published_launch_position_is_not_a_decision(tmp_path):
     """The launch positions are a lookup, and this block could only call them a decision.
 
@@ -8792,11 +8810,9 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     block = mission["launch_state"]
     assert block["source"].startswith("Apollo 17 CSM Launch Checklist")
     assert block["sourced"] == {
-        "bus_tie_closed": "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 "
-        "countdown step at p. 22",
-        "telemetry_rate": "p. 10 (`PCM BIT RATE - HI`; the same panel carries `PCM BIT RATE - LOW` "
-        "as the later in-flight setting the flight checklist switches to)",
-        "antenna_selection": "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)",
+        "bus_tie_closed": "p. 33 (`MN BUS TIE (2) - OFF`), verified at p. 36, before P15 TLI initiate/cutoff at p. 49",
+        "telemetry_rate": "p. 35 (`PCM BIT RATE - LOW` at GET 00:23:27), before P15 TLI initiate/cutoff at p. 49",
+        "antenna_selection": "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59",
         "cabin_regulator_position": "p. 18, PANEL 351 (`MAIN REG vlv (2) - OPEN` with `EMER CAB "
         "PRESS vlv - OFF` — the main cabin-pressure regulator in service and the emergency one "
         "off, which is `primary`)",
@@ -8810,10 +8826,10 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
         "dps_state": "off",
         "sps_state": "off",
         "guidance_mode": "coast",
-        "bus_tie_closed": "closed",
-        "telemetry_rate": 51200,
-        "antenna_selection": "omni_b",
-        "comm_mode": "sband_high",
+        "bus_tie_closed": "open",
+        "telemetry_rate": 1600,
+        "antenna_selection": "high_gain",
+        "comm_mode": "sband_low",
         "cabin_regulator_position": "primary",
     }
 
@@ -8834,7 +8850,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     # The rate is the `high` profile's own number rather than a second copy of it — the same join
     # `derives` makes everywhere else.
     rates = {entry["id"]: entry["bps"] for entry in yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())["comms"]["rates"]}
-    assert states["telemetry_rate"]["initial"] == rates["high"] == 51200
+    assert states["telemetry_rate"]["initial"] == rates["low"] == 1600
 
     # **And the other half is the block's own declaration rather than a tuple here**, which is round
     # 84. This loop used to name the four states outright and assert that each note contained the
@@ -8878,7 +8894,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "sourced-not-cited",
         mission_path,
-        '    bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"\n',
+        '    bus_tie_closed: "p. 33 (`MN BUS TIE (2) - OFF`), verified at p. 36, before P15 TLI initiate/cutoff at p. 49"\n',
         "",
         "and the block's `sourced` map does not cite it",
     )
@@ -8889,8 +8905,8 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "locator-for-nothing",
         mission_path,
-        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
-        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n'
+        '    antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"\n',
+        '    antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"\n'
         '    computer_mode: "p. 10"\n',
         "A locator for a position this block does not make is a citation nothing holds",
     )
@@ -8899,8 +8915,8 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "derived-cited-as-published",
         mission_path,
-        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
-        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n'
+        '    antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"\n',
+        '    antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"\n'
         '    comm_mode: "p. 10"\n',
         "A published position is `historical`",
     )
@@ -8908,7 +8924,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "locator-missing",
         mission_path,
-        '    antenna_selection: "p. 10 (`S BD ANT - OMNI`, with `S BO ANT OMNI - B`)"\n',
+        '    antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"\n',
         '    antenna_selection: ""\n',
         "with no locator",
     )
@@ -8916,7 +8932,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "source-missing",
         mission_path,
-        "  source: >-\n    Apollo 17 CSM Launch Checklist (Basic), NASA Manned Spacecraft Center, Flight Procedures Branch,\n    4 September 1972 — section 1, the launch switch configuration, which lists every panel's switch\n    and circuit-breaker positions for the countdown\n",
+        "  source: >-\n    Apollo 17 CSM Launch Checklist (Basic), NASA Manned Spacecraft Center, Flight Procedures Branch,\n    4 September 1972 — the launch, orbit, TLI and extraction procedures, which show when each\n    switch position changed before this model's post-extraction start\n",
         "",
         "and no `source`",
     )
@@ -8924,7 +8940,7 @@ def test_a_published_launch_position_is_not_a_decision(tmp_path):
     refusal(
         "nothing-sourced",
         mission_path,
-        '  sourced:\n    bus_tie_closed: "p. 11, PANEL 5 (`MN BUS TIE (2) - on (up)`), and again as the T-1:15 countdown step at p. 22"\n',
+        '  sourced:\n    bus_tie_closed: "p. 33 (`MN BUS TIE (2) - OFF`), verified at p. 36, before P15 TLI initiate/cutoff at p. 49"\n',
         "",
         "the citation is a declaration nothing reads",
     )
@@ -9018,9 +9034,9 @@ def test_the_launch_block_declares_what_it_owes_and_not_only_what_it_makes(tmp_p
     refusal(
         "owed-not-a-map",
         mission_path,
-        "  owed:\n    breaker_panel: >-\n      the key space rather than the source. The launch",
+        "  owed:\n    breaker_panel: >-\n      the `breaker_id` key space and the positions reached after extraction. The checklist gives",
         "  owed:\n    - breaker_panel\n  owed_unused:\n    breaker_panel: >-\n"
-        "      the key space rather than the source. The launch",
+        "      the `breaker_id` key space and the positions reached after extraction. The checklist gives",
         "declares `owed` as ['breaker_panel'], which names no position",
     )
     # **A position the block makes and owes at once.** An entry in both maps is the drift `owed`
@@ -9028,9 +9044,9 @@ def test_the_launch_block_declares_what_it_owes_and_not_only_what_it_makes(tmp_p
     refusal(
         "made-and-owed",
         mission_path,
-        "    breaker_panel: >-\n      the key space rather than the source.",
+        "    breaker_panel: >-\n      the `breaker_id` key space and the positions reached after extraction.",
         "    bus_tie_closed: >-\n      a position this block also makes below.\n"
-        "    breaker_panel: >-\n      the key space rather than the source.",
+        "    breaker_panel: >-\n      the `breaker_id` key space and the positions reached after extraction.",
         "makes a position for 'bus_tie_closed' and owes it in the same block",
     )
     # **The refusal that would have caught round 84's drift on the day it landed**: the round that
@@ -9056,10 +9072,10 @@ def test_the_launch_block_declares_what_it_owes_and_not_only_what_it_makes(tmp_p
     refusal(
         "owed-says-nothing",
         mission_path,
-        "    computer_mode: >-\n      an avionics source that uses *this* enum's vocabulary at the pad, or a decision about what\n"
-        "      `idle`/`run`/`standby`/`failed` mean aboard a powered CMC. The checklist reaches the computer\n"
-        "      and does not use these words: `G/N PWR - AC1` (p. 11) is the power selection and `CMC MODE -\n"
-        "      FREE` (pp. 6, 21) is the CMC's mode *switch*, whose members are FREE, AUTO and HOLD\n",
+        "    computer_mode: >-\n      a mapping from the CMC program after LM ejection to this enum's\n"
+        "      `idle`/`run`/`standby`/`failed` values. The launch checklist's earlier `G/N PWR - AC1`\n"
+        "      (p. 11) is power selection and `CMC MODE - FREE` (pp. 6, 21) is a different switch;\n"
+        "      neither establishes this synthetic post-extraction program mode\n",
         '    computer_mode: ""\n',
         "owes 'computer_mode' with nothing said about what would close it",
     )
@@ -9107,7 +9123,7 @@ def test_a_telemetry_profile_says_which_link_mode_carries_it(tmp_path):
     `rate_state` that holds it, and `check_link_profiles` refuses the two positions disagreeing.
 
     `comm_mode` is `derived` rather than `historical` for the same reason: the launch checklist sets
-    one switch (`PCM BIT RATE - HI`, p. 10), that is `telemetry_rate`'s position, and the link mode
+    one switch (`PCM BIT RATE - LOW`, pp. 35 and 59), that is `telemetry_rate`'s position, and the link mode
     follows from it through the correspondence — a relation, not a second reading.
     """
     result = run_linter(VEHICLE)
@@ -9130,8 +9146,8 @@ def test_a_telemetry_profile_says_which_link_mode_carries_it(tmp_path):
                 states[state["id"]] = state
 
     # The two ends of one profile are the two positions the block declares, and they agree.
-    assert states_block["telemetry_rate"] == rates["high"]["bps"] == 51200
-    assert states_block["comm_mode"] == rates["high"]["link_mode"] == "sband_high"
+    assert states_block["telemetry_rate"] == rates["low"]["bps"] == 1600
+    assert states_block["comm_mode"] == rates["low"]["link_mode"] == "sband_low"
     provenance = states["comm_mode"]["initial_provenance"]
     assert provenance["basis"] == "derived" and provenance["source"] == "mission.yaml:launch_state"
 
@@ -9172,15 +9188,15 @@ def test_a_telemetry_profile_says_which_link_mode_carries_it(tmp_path):
     refusal(
         "the-two-disagree",
         ("mission.yaml",),
-        "    comm_mode: sband_high\n",
         "    comm_mode: sband_low\n",
+        "    comm_mode: sband_high\n",
         "so the two positions cannot disagree",
     )
     # A rate that is not one of the declared profiles.
     refusal(
         "rate-not-a-profile",
         ("mission.yaml",),
-        "    telemetry_rate: 51200\n",
+        "    telemetry_rate: 1600\n",
         "    telemetry_rate: 3200\n",
         "which is no telemetry profile's `bps`",
     )
@@ -12324,8 +12340,8 @@ def test_every_stock_declares_where_it_starts():
         # list of its own because the sentinel's sub-map does not care what shape a value has.
         "relief_valve_state",
         # Round 80: two more modes, and the first ones here whose position comes out of a published
-        # launch checklist rather than a decision — the `high` telemetry profile's 51,200 bit/s and
-        # the S-band omni on antenna B.
+        # launch checklist rather than a decision — the `low` telemetry profile's 1,600 bit/s and
+        # the selected high-gain antenna after extraction.
         "telemetry_rate",
         "antenna_selection",
         # Round 81: the link mode that carries that profile, which is `derived` from it rather
@@ -12353,11 +12369,11 @@ def test_every_stock_declares_where_it_starts():
         900.0,
         "auto",
         # Round 80's two, and they are the first pair here that is a *reading* rather than a
-        # constant or an origin: the checklist's `PCM BIT RATE - HI` and `S BO ANT OMNI - B`.
-        51200,
-        "omni_b",
+        # constant or an origin: the checklist's `PCM BIT RATE - LOW` and `S BD ANT OMNI - HI GAIN`.
+        1600,
+        "high_gain",
         # Round 81's, and it is the profile's other half — the link mode the rate travels on.
-        "sband_high",
+        "sband_low",
     }
     assert seeded["internal"]["o2_supply_pressure_psi"] == 900.0
     assert seeded["internal"]["suit_loop_flow_cfm"] == 35.0
@@ -15611,13 +15627,9 @@ def test_the_console_applies_the_effect_and_says_what_changed(tmp_path):
         assert len(bodies) == 1, bodies
         return bodies[0]
 
-    # A node the value map holds. **The command opens the tie rather than closing it**, because
-    # round 80 sourced the launch checklist's `MN BUS TIE (2) - on (up)` and the tie now starts
-    # `closed`: closing it again is idempotent, the console correctly reports that no value changed,
-    # and this test would be asserting the effect of a command that has none. The state it is
-    # exercising — a node key written by the command path — is the same one either way.
-    tied = run("set_bus_tie tie=csm_tie_ab state=open")
-    assert "succeeded" in tied and "bus_tie=open" in tied, tied
+    # The post-extraction tie starts open; close it to exercise a real value change.
+    tied = run("set_bus_tie tie=csm_tie_ab state=closed")
+    assert "succeeded" in tied and "bus_tie=closed" in tied, tied
     # A state on the sentinel, which had no storage before this round.
     mode = run("set_rcs_mode mode=manual")
     assert "succeeded" in mode and "internal:mode=manual" in mode, mode
@@ -15826,10 +15838,10 @@ def test_a_commanded_state_is_guarded_by_a_dwell_and_the_executive_reads_it(tmp_
         assert len(bodies) == 1, bodies
         return bodies[0]
 
-    first = run("select_antenna antenna=high_gain")
-    assert "succeeded" in first and "antenna_selection=high_gain" in first, first
+    first = run("select_antenna antenna=omni_a")
+    assert "succeeded" in first and "antenna_selection=omni_a" in first, first
     # `antenna_selection` holds for ten seconds, so the second command is inside its dwell.
-    second = run("select_antenna antenna=omni_a")
+    second = run("select_antenna antenna=high_gain")
     assert "refused: DWELL." in second, second
     assert "must hold a value for 10 s" in second, second
     # **And an owed guard still refuses rather than being read as zero**, which needs a fixture
