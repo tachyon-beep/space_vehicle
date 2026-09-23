@@ -204,8 +204,8 @@ points:
       is keeping up with the controller; a residual that rises and *stays* means the generator is
       refusing pulses as illegally short, which is a thruster that has stopped firing without
       anything failing — no valve fault, no switch disagreement, no health conclusion. It exists
-      because the minimum qualified firing time is the one RCS constant nobody published, and an
-      unknown that produces a failure needs a channel that can see the failure.
+      because the per-thruster command floor is owed until system membership and command path
+      are known; that uncertainty needs a channel that can show a growing residual.
 
 not_published:
 

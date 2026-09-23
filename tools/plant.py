@@ -7,7 +7,7 @@ is implementable and a list of what is missing, in the order the missing things 
 
 The idea is `simulator-design.md:146-150`'s, applied to the plant instead of to the linter: you
 do not enumerate what a simulator needs up front, you build it, run it, and it tells you what you
-now owe. `check_vehicle.py` does that for the *definition* — it reports 271 declared debts by
+now owe. `check_vehicle.py` does that for the *definition* — it reports 274 declared debts by
 path, and `test_the_readme_status_matches_the_tools` holds that figure in this file as well as in
 the README, because it said 202 here for longer than anybody noticed. This tool does it for the *implementation*: it loads the whole world, builds the tick order,
 and then walks the tick in that order, stopping at the first thing it cannot compute and saying
@@ -510,7 +510,7 @@ def load_world(root: Path) -> World:
         verbs=verbs,
         plant_published=[str(e.get("channel")) for e in presentation.get("plant_published") or []],
         # Counted here rather than taken from the linter, and deliberately a *different* number:
-        # the linter reports 271 declared debts, most of which are prose obligations ("this needs a
+        # the linter reports 274 declared debts, including prose obligations ("this needs a
         # patched-conic design") recorded in `open_debts` lists. This counts only the values that
         # are literally `UNCONFIGURED`, because those are the ones that stop a plant. Two numbers
         # with one name would be worse than either.
@@ -2466,8 +2466,9 @@ def command_dwell(world: World, verb: str) -> list[tuple[State, float | None, fl
     the quantity crossed' and a command does not cross anything" (`check_domain`'s own rule). Until
     this existed **no tool read one**: fifteen commanded states declared the guard and the effect
     path, implemented in round 32, could re-command a mode inside its own dwell with nothing
-    noticing. `rcs.thruster_valve`'s two values are `UNCONFIGURED`, which is an obligation owed to
-    a field nothing consumed — the clearest possible statement that the field had no reader.
+    noticing. `rcs.thruster_valve` once carried one LM pulse command limit into all three RCS
+    systems' group-command dwell; its separate group policy is now chosen as zero in both
+    directions so an immediate safety inhibit remains possible.
 
     **The two values' meaning is stated here rather than in the corpus, and that is the second
     half of the finding.** `dwell` declares `min_on_s` and `min_off_s` on thirty-three states and

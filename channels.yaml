@@ -1482,7 +1482,7 @@ rcs:
       reason: >-
         the unexecuted-impulse accumulator `r_i` of rcs_dode.md:800-825, published because a
         residual that never clears is the *only* evidence of the failure mode the vehicle's
-        one unpublished constant creates: if the minimum qualified firing time is larger than
+        owed per-thruster command floor creates: if the applicable floor is larger than
         the widths the controller keeps requesting, the accumulator grows, every requested
         pulse is refused as illegally short, and the thruster never fires — without a valve
         fault, a switch disagreement or a health conclusion. This channel is that fault's

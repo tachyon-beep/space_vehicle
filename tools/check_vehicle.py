@@ -391,8 +391,8 @@ FORBIDDEN_VERB = {
         "`:9`. An agent that names a thruster and a duration is inside the control loop"
     ),
     r"^set_minimum_(pulse|firing|impulse)": (
-        "the qualified minimum firing time is a hardware constant (`rcs_dode.md:375`); a verb that "
-        "set it would let a fleet choose how finely it may command illegal pulses"
+        "the applicable pulse command floor is vehicle-side (`rcs_dode.md:375`); a verb that "
+        "sets it would let a fleet choose how finely it may command pulses"
     ),
     r"^(set|write|force)_(sensor|quality|body_rate|prop_mass|nav_state|attitude_state)": (
         "measurement integrity: an agent-writable estimate or quality code is a channel through "
@@ -12310,14 +12310,10 @@ def check_same_as(documents: dict[str, Any], report: Report) -> None:
     another declaration's value carries a `same_as` mapping beside it, keyed by the field it
     constrains, and this walk holds every one of them against what it names:
 
-    ```yaml
-        dwell:
-          min_on_s: 0.01
-          min_off_s: 0.05
-          same_as:
-            min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
-            min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
-    ```
+    The old RCS example no longer has such a link. Its group-command dwell is a chosen 0/0
+    policy, while the per-thruster pulse floor is owed; neither copies an engine command time.
+    The referee injects a synthetic `same_as` into a broken copy to keep these generic refusals
+    exercised without pretending that the live group dwell is a hardware timing limit.
 
     It is deliberately not a list of pairs in this file. The round that joined the absorber's three
     ratings wrote its own lesson down: *"a hand-written list of what to compare is the bug"* — the
@@ -12405,6 +12401,84 @@ def check_same_as(documents: dict[str, Any], report: Report) -> None:
 
     for name, document in sorted(documents.items()):
         walk(document, name)
+
+
+def check_rcs_command_on_scope(documents: dict[str, Any], report: Report) -> None:
+    """A pulse command limit belongs to a system and command path, not every 100 lbf jet.
+
+    The LM study guide publishes 10 ms for LM pulse-mode command ON time. The Block II CSM
+    operations handbook gives 12 ms as the earliest OFF command from the SM automatic controller,
+    and does not publish a corresponding CM hardware minimum. The 14 ms SM/CM figures in R-577
+    are simulator limits. Until a thruster-to-system and command-path map exists, the per-thruster
+    pulse floor cannot consume any of these numbers as one scalar. The group enable/inhibit
+    command has a separate chosen zero dwell, preserving immediate inhibit and re-enable.
+    """
+    raw_rcs = documents.get("domains/rcs/components.yaml")
+    rcs = raw_rcs if isinstance(raw_rcs, dict) else {}
+    raw_capability = rcs.get("capability")
+    capability = raw_capability if isinstance(raw_capability, dict) else {}
+    where = "domains/rcs/components.yaml:capability"
+    if "minimum_firing_time" in capability:
+        report.refuse(
+            where,
+            "declares one RCS command ON time for SM, CM and LM. The LM 10 ms pulse-mode command "
+            "and SM automatic-controller 12 ms earliest OFF command have different scopes; CM "
+            "hardware timing is owed. A simulator minimum is not a hardware qualification",
+        )
+    scoped = capability.get("minimum_command_on_s")
+    if not isinstance(scoped, dict) or set(scoped) != {"rcs_sm", "rcs_cm", "rcs_lm"}:
+        report.refuse(
+            where,
+            "minimum_command_on_s must name rcs_sm, rcs_cm and rcs_lm separately",
+        )
+        return
+    expected = {
+        "rcs_sm": (0.012, "automatic_controller", "historical", "aoh-v1-2-05-rcs.pdf"),
+        "rcs_cm": ("UNCONFIGURED", "automatic_controller", "UNCONFIGURED", "R-577-sec6-rev1.pdf"),
+        "rcs_lm": (0.01, "engine_pulse_mode", "historical", "lm_propulsion_rcs_study_guide.pdf"),
+    }
+    for system, (duration, path, basis, source_name) in expected.items():
+        entry = scoped.get(system)
+        raw_provenance = entry.get("provenance") if isinstance(entry, dict) else None
+        provenance = raw_provenance if isinstance(raw_provenance, dict) else {}
+        if (
+            not isinstance(entry, dict)
+            or entry.get("value") != duration
+            or entry.get("path") != path
+            or provenance.get("basis") != basis
+            or source_name not in str(provenance.get("source") or "")
+        ):
+            report.refuse(
+                f"{where}.minimum_command_on_s.{system}",
+                f"must declare {duration!r} s for {path} with {basis} provenance and the "
+                f"{source_name} citation; a different system or command path cannot inherit "
+                "this source's limit",
+            )
+    states = {state.get("id"): state for state in rcs.get("state") or [] if isinstance(state, dict)}
+    raw_valve = (states.get("thruster_valve") or {}).get("dwell")
+    valve = raw_valve if isinstance(raw_valve, dict) else {}
+    valve_provenance = valve.get("provenance") if isinstance(valve, dict) else None
+    if not isinstance(valve_provenance, dict):
+        valve_provenance = {}
+    if (
+        valve.get("min_on_s") != 0
+        or valve.get("min_off_s") != 0
+        or valve_provenance.get("basis") != "chosen"
+        or not valve_provenance.get("reason")
+        or "same_as" in valve
+    ):
+        report.refuse(
+            "domains/rcs/components.yaml:state thruster_valve.dwell",
+            "must be a chosen zero-duration group policy in both directions, so inhibit and "
+            "deliberate re-enable remain available; injector timing is a different path",
+        )
+    pulse = states.get("pulse_width") or {}
+    if pulse.get("t_min_on_s") != "UNCONFIGURED" or "same_as" in pulse:
+        report.refuse(
+            "domains/rcs/components.yaml:state pulse_width.t_min_on_s",
+            "consumes a global command ON time before thruster system and command path are "
+            "declared; keep the shared scalar UNCONFIGURED",
+        )
 
 
 def state_advance_order(
@@ -18194,6 +18268,7 @@ def main(argv: list[str] | None = None) -> int:
     # A carried value says what it carries, and every run re-reads the declaration it names. It sits
     # beside the other whole-document walks because a `same_as` may point from any file to any other.
     check_same_as(documents, report)
+    check_rcs_command_on_scope(documents, report)
     # And the claims that a figure is not to be had, which are the folder's most productive defect
     # and the only kind of declaration that can be false without naming anything.
     check_unavailability_claims(documents, report)

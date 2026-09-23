@@ -134,34 +134,49 @@ capability:
         impulse above this figure is not a thruster that has been busy, it is a spent tank. Most
         of it will be attitude control rather than translation, so the figure prices an
         emergency translation, not an available budget
-  minimum_firing_time:
-    value: 0.01
-    unit: s
-    provenance:
-      basis: historical
-      source: >-
-        `lm_propulsion_rcs_study_guide.pdf`, PDF p. 89, printed p. 77, "pulse mode operation":
-        "In pulse mode operation the total command 'on' time may be as low as 10 milliseconds and
-        propellant transients make up the whole run. Engine thrust is just beginning to rise when
-        the shutdown command is given and only a very small amount of propellant will be injected
-        into the combustion chamber. Under these conditions of 'minimum impulse' the full 100
-        pounds of thrust will not be achieved and engine operation will be comparatively
-        inefficient." The same page and the "Design and Performance Characteristics" block on PDF
-        p. 90 together give the minimum on time, both life limits, the restart capability and the
-        build-up and tailoff stages. What they do not give is a thrust-versus-time curve: Figure 54
-        is a graph, and a value read off a graph is not a citation
-      note: >-
-        the qualified minimum firing time, `t_min_on`, and it is the same constant the pulse
-        generator's floor (`state.pulse_width.t_min_on_s`) and the valve's minimum dwell
-        (`state.thruster_valve.dwell.min_on_s`) are two further copies of — both carry `same_as`
-        pointing here, which is what stops the three drifting apart. **The round that landed this
-        corrected a claim rather than a value**: the entry this replaces said "the only figure in
-        the corpus is rcs_dode.md:91's Voyager anecdote" and left the constant unset, and the
-        thruster's own qualification block had been in the manifest since the folder began. The
-        Voyager figure is a different engine and is still refused; this is the 100 lbf thruster's
-        own number. What the page also bounds is the *impulse* of a minimum pulse — the full 100
-        pounds is not achieved in 10 ms — so `vehicle.yaml#propulsion.rcs_*.minimum_impulse_bit_ns`
-        stays owed with a ceiling of 445 N * 10 ms = 4.45 N*s rather than with no bound at all
+  minimum_command_on_s:
+    rcs_sm:
+      value: 0.012
+      path: automatic_controller
+      provenance:
+        basis: historical
+        source: >-
+          Apollo Operations Handbook, SM2A-03-BLOCK II-(1), Vol. 1, subsection 2.5,
+          PDF p. 17, printed p. 2.5-18, Figure 2.5-9 discussion:
+          https://www.ibiblio.org/apollo/ApolloProjectOnline/Documents/SMA2A-03-BLOCK%20II%20Volume%201%2019691015/aoh-v1-2-05-rcs.pdf
+          The SM controller reaction jet ON-OFF assembly takes 12–18 ms before it can send OFF
+          to the automatic injector coils; 12 ms is the earliest electrical OFF signal.
+        note: >-
+          This is the earliest SM automatic-controller OFF command, not a qualified engine
+          minimum, a direct-manual-coil limit, or delivered impulse. Figure 2.5-9 continues
+          thrust after electrical OFF and the handbook requires integrating the full curve.
+    rcs_cm:
+      value: UNCONFIGURED
+      path: automatic_controller
+      provenance:
+        basis: UNCONFIGURED
+        source: >-
+          Apollo Operations Handbook, SM2A-03-BLOCK II-(1), Vol. 1, subsection 2.5,
+          PDF pp. 31–32, CM RCS valve discussion and Figure 2.5-12:
+          https://www.ibiblio.org/apollo/ApolloProjectOnline/Documents/SMA2A-03-BLOCK%20II%20Volume%201%2019691015/aoh-v1-2-05-rcs.pdf
+          R-577 Section 6 Rev. 1 PDF p. 58 gives 14 ms for a CM simulator, not CM hardware:
+          https://www.ibiblio.org/apollo/NARA-SW/R-577-sec6-rev1.pdf
+        note: >-
+          The handbook calls CM pulse operation similar to SM and gives valve response times,
+          but no CM automatic-controller minimum electrical ON duration. A simulator constant
+          cannot qualify the flight hardware; leave this value owed.
+    rcs_lm:
+      value: 0.01
+      path: engine_pulse_mode
+      provenance:
+        basis: historical
+        source: >-
+          LM Propulsion/RCS Study Guide, PDF p. 89, printed p. 77, pulse-mode operation:
+          https://www.ibiblio.org/apollo/Documents/lm_propulsion_rcs_study_guide.pdf
+          the total command ON time may be as low as 10 ms.
+        note: >-
+          This is the LM engine's pulse-mode command ON duration. It is not a bound on
+          delivered impulse: thrust starts late and continues after the electrical OFF command.
 
   engine_life:
     steady_s: 500
@@ -239,22 +254,26 @@ state:
           thrusters on an isolated branch are not commanded closed — they are unfeedable, and the
           valve map says so for each of them
     dwell:
-      min_on_s: 0.01
-      min_off_s: 0.05
-      same_as:
-        min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
-        min_off_s: domains/rcs/components.yaml:state.thruster_thrust.tau_fall_s
+      min_on_s: 0
+      min_off_s: 0
+      provenance:
+        basis: chosen
+        reason: >-
+          `set_rcs_quad` changes group enable/inhibit preference, not an injector-coil pulse.
+          Its help promises inhibit is always allowed and permits re-enabling a latched group;
+          no source qualifies a minimum group-command hold or cooldown. Both directions use
+          zero policy dwell so a safety inhibit and a deliberate recovery can take effect
+          immediately. Pulse timing remains owed on `state.pulse_width`.
     provenance:
       basis: apollo
       ref: "apollo_diode.md:149"
       note: >-
         `rcs.thruster_[n]_valve` is apollo's, and it is a *commanded* state — which is why the
-        protection is a dwell rather than a hysteresis band. The two dwell values are the
-        pulse generator's `t_min_on` and `t_min_off` (rcs_dode.md:801-804), and they are the
-        same unpublished hardware constants the `capability` block declines to invent: a valve
-        that can be re-commanded inside its own closing time is a valve that chatters on
-        command, and the minimum on *and* off times are what stop it. A commanded machine with
-        neither is the one case the linter refuses outright.
+        protection is a dwell rather than a hysteresis band. This state is moved by
+        `set_rcs_quad`, so the dwell guards group enable/inhibit rather than an injector-coil
+        pulse. `set_rcs_quad` promises that inhibiting is always allowed and a latched group
+        may be deliberately re-enabled. Its group policy dwell is zero in both directions;
+        that is not a claim that an injector can produce a zero-duration pulse.
 
   - id: thruster_thrust
     node: rcs_thrust
@@ -317,23 +336,17 @@ state:
     node: internal
     method: algebraic
     unit: "map[thruster_id,us]"
-    t_min_on_s: 0.01
-    same_as:
-      t_min_on_s: domains/rcs/components.yaml:capability.minimum_firing_time.value
+    t_min_on_s: UNCONFIGURED
     provenance:
       basis: derived
       relation: "t_i = quantize(I_acc / F_eff, dt_q), subject to t_i >= t_min_on (rcs_dode.md:816-820)"
       note: >-
         the last width the pulse generator committed to, published per pulse so that "the valve
         was commanded" becomes "the valve was commanded *for this long*". The quantization
-        step is derived (the plant's microsecond grid); the floor is the thruster's qualified
-        minimum firing time, carried here with `same_as` rather than written a second time, and
-        the floor is the interlock — a width below it is refused rather than truncated, because a
-        truncated width is a pulse whose delivered impulse nobody can predict. **Both this field and
-        the valve's `dwell.min_on_s` are the same constant as `capability.minimum_firing_time`, and
-        the three were declared in one file for as long as the domain has existed with nothing
-        joining them**: the note on `thruster_valve` said "the two dwell values are the pulse
-        generator's `t_min_on` and `t_min_off`", which is a sentence rather than a link
+        step is derived (the plant's microsecond grid). The per-thruster command floor stays owed
+        until a thruster-to-system map and the applicable automatic or pulse-mode command path
+        select the scoped capability value. A width below its eventual floor must be refused
+        rather than truncated, because the delivered impulse of a truncated pulse is unknown
 
   - id: impulse_total
     node: internal
@@ -640,7 +653,7 @@ components:
 open_debts:
   - "**A string is not a thruster.** `thruster_valve` is keyed by `thruster_id` and `set_rcs_quad` names a `group` — `sm_primary`, `sm_secondary`, `cm`, `lm` — so the key declaration says which argument selects the elements and the argument cannot name them. `rcs_string_sm_primary` and its siblings carry a `thrusters: 8` count and a `vehicle_keys` link; what none of them declares is *membership*, which is the same list the allocator needs for its wrench matrix. `isolate_rcs_manifold` is the other half: `branch` names a feed branch, and which thrusters a branch feeds is owed with the thruster geometry."
 
-  - "The qualified minimum firing time for the 100 lbf thruster, and with it t_max_on and the duty cycle. Not in any source reached; bounded rather than defaulted (header), and RCS-11 is the failure mode of getting it wrong."
+  - "The per-thruster minimum command-ON floor is owed until each thruster has SM, CM or LM membership and the controller path is named. Group enable/inhibit has a chosen zero policy dwell in both directions so inhibit and deliberate re-enable remain available; it is not an injector-pulse qualification. LM pulse-mode 10 ms and SM automatic-controller earliest OFF 12 ms are separately sourced under `capability.minimum_command_on_s`; CM hardware command timing remains unpublished in the sources reached. None is a delivered impulse bit or a universal qualification. The maximum ON time and duty cycle remain owed."
   - "Thrust rise and tailoff time constants. The asymmetry between them is what a total-impulse gauge misreads, and no source gives either."
   - "Inertia tensor and centre of mass, owed by `vehicle.yaml` and owed *to* this domain before the deadband, the allocator's wrench matrix and E-RCS-DYN can exist. Three of this domain's twelve states are waiting on it. **The docked stack's tensor landed in round 9** (`vehicle.yaml#mass_properties`) and four configurations' are still owed there by name; what this domain still cannot build is the wrench matrix, which needs the thrusters' own lever arms rather than the vehicle's tensor."
   - "Thruster geometry: the unit thrust direction and lever arm of each of the 44 thrusters. Without it the allocator has no B matrix (rcs_dode.md:685-693)."

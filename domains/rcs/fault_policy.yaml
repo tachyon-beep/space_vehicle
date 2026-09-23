@@ -21,8 +21,8 @@
 #
 # ## The fault that is the vehicle's own unknown
 #
-# RCS-11 is the reason the residual accumulator is a published channel. If the qualified minimum
-# firing time is larger than the widths the controller keeps requesting, the accumulator grows,
+# RCS-11 is the reason the residual accumulator is a published channel. If the applicable
+# per-thruster command floor is larger than the widths the controller keeps requesting, the residual grows,
 # every pulse is refused as illegally short, and the thruster never fires. Nothing has failed:
 # no valve fault, no switch disagreement, no driver evidence, no health conclusion. The only
 # trace is `rcs.thruster_[n]_residual_ns` climbing while `rcs.thruster_[n]_valve` never asserts —
@@ -431,9 +431,9 @@ faults:
       basis: derived
       relation: >-
         the failure mode of `rcs_dode.md:807-825`'s accumulator when `t_min_on` exceeds the
-        requested widths, at this vehicle's 10 ms
-        `capability.minimum_firing_time`. It is derived rather than historical because the corpus
-        supplies the mechanism and `lm_propulsion_rcs_study_guide.pdf` p. 89 supplies the limit
+        requested widths. It is derived rather than historical because the corpus supplies the
+        mechanism; `capability.minimum_command_on_s` records different source scopes for LM and
+        SM, while the CM hardware limit and per-thruster binding remain owed
       note: >-
         this is the fault that justifies publishing `rcs.thruster_[n]_residual_ns`. Every other
         channel in the domain could be replaced by an inference from something else; this one

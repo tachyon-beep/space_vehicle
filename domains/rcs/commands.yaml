@@ -387,13 +387,12 @@ not_implemented:
 
   - verb: set_minimum_pulse_width
     why: >-
-      the most interesting refusal on the vehicle. The minimum firing time is the thruster's
-      *qualified* limit (10 ms, `components.yaml#capability.minimum_firing_time`), and a fleet that
-      could set it would be choosing how fine its own control resolution is — which sounds like a
-      capability and is actually a way to command pulses the hardware is not qualified for and then
-      blame the vehicle for the result. The value being published makes this refusal sharper rather
-      than softer: a settable limit is one a fleet can *lower* past qualification, and the residual
-      accumulator is what keeps the mean impulse right without ever exposing the limit.
+      the pulse command floor belongs to the selected thruster system and command path, and
+      `components.yaml#capability.minimum_command_on_s` separates LM pulse mode from the SM
+      automatic controller while CM remains owed. A fleet allowed to set this floor could command
+      pulses shorter than the applicable hardware path supports and blame the vehicle for the
+      result. Its unconfigured per-thruster binding must be resolved by the vehicle, not by a
+      fleet command. The residual accumulator records unmet requested impulse.
       `rcs_dode.md:375` forbids the verb.
 
   - verb: override_plume_keep_out

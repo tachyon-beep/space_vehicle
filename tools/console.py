@@ -483,9 +483,8 @@ class Console:
                     f"refused: GUARD OWED. {verb!r} moves {state.id!r}, whose dwell is "
                     "UNCONFIGURED — so the vehicle cannot say how long that mode must be held "
                     "before it may be commanded again, and a command it cannot guard is a command "
-                    "it must not accept. `rcs.thruster_valve`'s two values are the pulse "
-                    "generator's `t_min_on` and `t_min_off` (`rcs_dode.md:801-804`), which no "
-                    "source reached publishes.\n"
+                    "it must not accept. An owed dwell must stay visible until its command "
+                    "policy or hardware path is resolved.\n"
                 )
             held = (now - datetime.fromisoformat(str(last["changed_at"]))).total_seconds()
             if held < min_on_s:
