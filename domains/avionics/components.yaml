@@ -386,17 +386,25 @@ state:
     node: internal
     method: discrete
     unit: "enum[idle,run,standby,failed]"
-    initial: UNCONFIGURED
+    initial: idle
+    initial_provenance:
+      basis: historical
+      source: mission.yaml:launch_state
+      note: >-
+        Apollo 17 CSM Launch Checklist (Basic), 4 September 1972, PDF p. 59 (printed 3-6)
+        selects `F37 00E` in POST LM EJECTION. Apollo Operations Handbook, Block II Spacecraft,
+        SM2A-03-BLOCK II, G&C sections 4.6-4.8, PDF p. 74, section 4.8.1.1 calls P00 the CMC
+        Idling Program and says the computer remains in operate condition, updating CSM and LM
+        state vectors. The adjacent P06 procedure is power down to standby. The model's `idle`
+        names that operative P00 major mode, not a stopped CPU or a disabled autopilot.
     initial_note: >-
-      the mode the guidance computer is in at MET 0. `apollo_diode.md:176` gives the vocabulary and
-      its "restart/mode change" event. The launch checklist does reach the computer, and what it says
-      does not use this enum: `G/N PWR - AC1` (p. 11) is the power selection, and `CMC MODE - FREE`
-      (pp. 6, 21) is the CMC's *mode switch*, whose members are FREE, AUTO and HOLD — a different
-      question from `idle`/`run`, which asks whether the machine is executing a program at all. So
-      the source names the configuration and not the member, and reading FREE onto this vocabulary
-      is a decision about what these four words mean rather than a lookup. What would close it: a
-      mapping from the post-extraction CMC program to this synthetic enum, or a source that names
-      the computer's execution state after LM ejection
+      the mode the guidance computer is in at the post-ejection P00 start, before V49. The
+      checklist's `F37 00E` on p. 59 selects P00 after LM ejection; the Block II operations
+      handbook calls P00 the CMC Idling Program in operate condition (PDF p. 74). In this enum,
+      `idle` means that idling major mode; `run` means another active mission major mode,
+      `standby` means a powered-down standby condition, and `failed` means a fault. `CMC MODE -
+      AUTO` is a separate attitude-control switch, so the P00 idling computer can coexist with
+      an active RCS DAP and the RCS domain's derived `auto` mode.
     moved_by:
       - "command:set_computer_mode"
     dwell:

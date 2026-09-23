@@ -70,13 +70,13 @@ tick_hz: 50
 # the phase ladder opens at `translunar_coast` after the external TLI burn and extraction, and
 # that settles four of them by one rule rather than four judgements:
 #
-#   **an onboard engine not firing at the post-extraction start is `off`, and a guidance mode with
+#   **an onboard engine not firing at the post-ejection P00 start is `off`, and a guidance mode with
 #   no burn in progress is `coast`.** TLI was an external S-IVB burn before this model's start.
 #
 # It is declared once, here, because it is one question. The round that landed the commanded family
 # asked fourteen machines for a starting position; one answered itself on the spot
 # (`relief_valve_state`, *"normally closed, with an 'unexpected opening' event"*) and **the other
-# thirteen are this block's: nine are made below and four are owed**, and both halves are fields
+# thirteen are this block's: eleven are made below and two are owed**, and both halves are fields
 # rather than sentences — which is round 84's whole finding.
 #
 # This paragraph used to read *"this covers four of them … this covers none of the other nine (a
@@ -97,14 +97,15 @@ tick_hz: 50
 # left standing in another.
 # --------------------------------------------------------------------------------------
 launch_state:
-  as_of_event: post-extraction transfer start
+  as_of_event: post-ejection P00, before V49 maneuver
   reason: >-
-    the mission begins at a chosen post-extraction transfer start, after the external S-IVB TLI
-    burn, CSM separation, docking, and LM ejection. This fictional splice uses a docked stack on
-    a TLI-equivalent transfer orbit; no booster or docking procedure is simulated. The onboard
-    engines are not firing and guidance is in coast. The link mode follows the telemetry rate
-    through `vehicle.yaml#comms.rates`; the checklist positions are those reached by this event.
-  # **Four of the positions below are not a decision at all — they are published**, and round 76
+    the mission begins at a chosen post-ejection transfer start, after the Apollo 17 launch
+    checklist's p. 59 `F37 00E` selects P00 and before its p. 60 `V49E` S-IVB-view maneuver.
+    The external S-IVB TLI burn, CSM separation, docking, and LM ejection have happened. This
+    fictional splice uses a docked stack on a TLI-equivalent transfer orbit; no booster or docking
+    procedure is simulated. The onboard engines are not firing and guidance is in coast. The link
+    mode follows the telemetry rate through `vehicle.yaml#comms.rates`.
+  # **Five of the positions below are not a decision at all — they are published**, and round 76
   # left nine of them owed on the strength of this block's own refusal message: *"a launch position
   # no source publishes is a decision."* That sentence was written as a general truth and it is not
   # one: a launch checklist states the whole panel-by-panel configuration, and the project's own
@@ -113,13 +114,15 @@ launch_state:
   # because a source a reader cannot turn to is a source that cannot be disagreed with.
   source: >-
     Apollo 17 CSM Launch Checklist (Basic), NASA Manned Spacecraft Center, Flight Procedures Branch,
-    4 September 1972 — the launch, orbit, TLI and extraction procedures, which show when each
-    switch position changed before this model's post-extraction start
+    4 September 1972 — launch through post-LM-ejection; and Apollo Operations Handbook, Block II
+    Spacecraft, SM2A-03-BLOCK II, G&C sections 4.6-4.8 — the P00/P06 program meanings and RCS DAP
+    control modes. Page locators below refer to the PDF page numbers in those two documents
   sourced:
     bus_tie_closed: "p. 33 (`MN BUS TIE (2) - OFF`), verified at p. 36, before P15 TLI initiate/cutoff at p. 49"
     telemetry_rate: "p. 35 (`PCM BIT RATE - LOW` at GET 00:23:27), before P15 TLI initiate/cutoff at p. 49"
     antenna_selection: "p. 56 (`S BD ANT OMNI - HI GAIN`), before docking at p. 57 and LM ejection at p. 59"
     cabin_regulator_position: "p. 18, PANEL 351 (`MAIN REG vlv (2) - OPEN` with `EMER CAB PRESS vlv - OFF` — the main cabin-pressure regulator in service and the emergency one off, which is `primary`)"
+    computer_mode: "Apollo 17 checklist p. 59 (printed 3-6), `F37 00E` after LM ejection; Block II handbook p. 74, section 4.8.1.1, P00 CMC Idling Program in operate condition, distinct from P06 standby"
   # **Quoted, because YAML reads a bare `off` as a boolean.** `check_boolean_words` refuses a word
   # the parser took as a value, and this is the first declaration in the corpus where the word *is*
   # the value: `off` is a member of all three engines' vocabularies and the parser's `False` is not.
@@ -128,7 +131,7 @@ launch_state:
     dps_state: "off"
     sps_state: "off"
     guidance_mode: coast
-    # Read out of the checklist at the model's post-extraction start: ties OFF, low PCM rate,
+    # Read out of the checklist at the model's post-ejection P00 start: ties OFF, low PCM rate,
     # and high-gain antenna selected before docking.
     bus_tie_closed: open
     telemetry_rate: 1600
@@ -140,7 +143,14 @@ launch_state:
     # The regulator, from the same section's ECS panel: the main cabin-pressure regulator open and
     # the emergency one off, which is the state's `primary` member.
     cabin_regulator_position: primary
-  # **The fourth position of the launch question: the ones this block does not make.** A map rather
+    # The post-ejection F37 00E selects the operating P00 idling major mode. The DAP remains
+    # available in P00; `idle` does not mean the computer or its autopilot is powered down.
+    computer_mode: idle
+    # The checklist's loaded/active DAP, selected CMC controller and CMC MODE AUTO together put
+    # the computer in charge of attitude. `auto` is the vehicle's interpretation of that setup,
+    # derived from the switches through the command vocabulary, not a quoted Apollo mode name.
+    mode: auto
+  # **The positions still owed by the launch question.** A map rather
   # than a list because the order is not a decision and a sentence is: each key is a state of some
   # domain, each value is the one-line form of what that state's own `initial_note` argues at
   # length, and **the argument stays in the note** — a debt is the state's, and this block's job is
@@ -149,30 +159,21 @@ launch_state:
   # It is required whenever `states` is, and that is the round-84 finding rather than tidiness: the
   # block could say what it made and not what it owed, so the inventory lived in prose in this file
   # and in a test's docstring, and rounds 80, 81 and 83 made four of the positions those sentences
-  # called choices the corpus does not make. Two of the four sentences below are *searches that
-  # failed* rather than gaps, and both name the documents they searched, which is what makes them
+  # called choices the corpus does not make. The remaining two sentences are *searches that
+  # failed* rather than guesses, and both name the documents they searched, which is what makes them
   # checkable — the folder's rule for a debt whose answer is not held.
   owed:
     breaker_panel: >-
       the `breaker_id` key space and the positions reached after extraction. The checklist gives
       pad panel positions on p. 11 and later changes breakers during orbit, TLI and docking; the
       pad list cannot be copied to MET 0. `set_breaker`'s `lcl` argument awaits the same LCL ids
-    computer_mode: >-
-      a mapping from the CMC program after LM ejection to this enum's
-      `idle`/`run`/`standby`/`failed` values. The launch checklist's earlier `G/N PWR - AC1`
-      (p. 11) is power selection and `CMC MODE - FREE` (pp. 6, 21) is a different switch;
-      neither establishes this synthetic post-extraction program mode
     hatch_state: >-
       each modeled crew hatch's position after extraction. The CSM side hatch is locked in the
       launch checklist (p. 20), but the post-docking tunnel hatch is removed and reinstalled
-      (p. 58), and it is a different hatch id. The LM crew hatch needs a stowage or acceptance
-      source, or an explicit post-extraction initial-position decision; a launch-era equivalence
-      between hatches would not answer this event
-    mode: >-
-      the attitude-control plan for the early coast, or a decision about what `auto`, `manual` and
-      `free_drift` mean after LM ejection. `SC CONT - SCS` and `CM RCS LOGIC - on (up)` (p. 6) are about
-      *authority* and `AUTO RCS SEL A/C ROLL A1 - OFF` (p. 12) is about which axes the DAP may
-      roll, and neither is which of these three modes the RCS itself is in
+      (p. 58), and it is a different hatch id. The modeled LM crew hatch is the forward surface
+      EVA hatch, not the overhead docking hatch. It needs a forward-hatch stowage or acceptance
+      source, or an explicit post-extraction initial-position decision; the overhead hatch's
+      later flight configuration would not answer this event
 
 total_ticks: 34560000
 total_ticks_provenance:
@@ -290,7 +291,7 @@ phases:
     duration_h: 73.0
     starts_at_h: 0.0
     configurations: [csm_lm_docked]
-    entry: "TLI complete; docking and LM extraction complete; the vehicle is on a free-return-capable translunar trajectory"
+    entry: "TLI complete; docking and LM extraction complete; post-ejection P00 selected before V49; the vehicle is on a free-return-capable translunar trajectory"
     exit: "LOI burn armed and committed, or the trajectory is unrecoverable"
     provenance:
       basis: chosen
@@ -1049,7 +1050,7 @@ initial_state:
 
   frame: EARTH_J2000
   met_at_state: 0.0
-  as_of_event: post-extraction transfer start
+  as_of_event: post-ejection P00, before V49 maneuver
   earth_parking_orbit:
 
     perigee_altitude_km: 183.7          # 99.2 nmi
@@ -1076,7 +1077,8 @@ initial_state:
 
   # ------------------------------------------------------------------------------------
   # The patched-conic osculating elements at MET 0. This is a chosen model splice after LM
-  # extraction: the docked stack is initialized on a TLI-equivalent transfer at perigee. The
+  # extraction and the p. 59 P00 selection, before the p. 60 V49 maneuver: the docked stack is
+  # initialized on a TLI-equivalent transfer at perigee. The
   # fields named `*_at_cutoff` retain the transfer-design vocabulary and do not assert that
   # Apollo's historical cutoff and docking happened at the same instant. A physical timeline
   # through extraction would need a propagated state and is not represented here.
@@ -1148,8 +1150,9 @@ initial_state:
         behind the Moon's leading edge by the angle the flyby turns the velocity through.
     finite_burn_note: >-
       the historical reference burn is 346.87 s, which at parking-orbit speed is about 24 degrees
-      of arc. The model begins after extraction on a chosen TLI-equivalent osculating orbit; it
-      does not simulate the finite burn, docking interval or state propagation between them.
+      of arc. The model begins after extraction and P00 selection, before the V49 maneuver, on a
+      chosen TLI-equivalent osculating orbit; it does not simulate the finite burn, docking interval
+      or state propagation between them.
     provenance:
       basis: derived
       relation: "Kepler's equation solved for the semi-major axis that reaches the Moon's arrival radius in 73.0 h from r = 6,563.2 km, then vis-viva at the model's TLI-equivalent perigee"

@@ -16291,7 +16291,7 @@ def check_crew_bindings(
 
 def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> None:
     """**One decision about MET 0, held in both directions.** `mission.yaml#launch_state` declares the
-    machines the mission's own post-extraction start settles — the three onboard engines are `off`
+    machines the mission's own post-ejection P00 start settles — the three onboard engines are `off`
     and the guidance mode is `coast`; the external TLI burn precedes MET 0. Each state's `initial` cites it. The two are
     written in two files for the usual reason (the decision is the mission's, the value is the
     state's), which is exactly the shape this folder finds drifted: a value edited in one place and
@@ -16320,7 +16320,7 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
     as_of_event = block.get("as_of_event")
     trajectory_event = initial_state.get("as_of_event")
     if (
-        as_of_event != "post-extraction transfer start"
+        as_of_event != "post-ejection P00, before V49 maneuver"
         or trajectory_event != as_of_event
         or initial_state.get("met_at_state") != 0
         or elements.get("epoch") != "MET 0"
@@ -16328,12 +16328,15 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
         or (first_phase.get("configurations") or [None])[0] != "csm_lm_docked"
         or "TLI complete" not in str(first_phase.get("entry") or "")
         or "docking and LM extraction complete" not in str(first_phase.get("entry") or "")
+        or "post-ejection P00 selected before V49" not in str(first_phase.get("entry") or "")
     ):
         report.refuse(
             "mission.yaml:launch_state.as_of_event",
-            "must be post-extraction transfer start, matching initial_state.as_of_event, the "
-            "MET 0 osculating epoch and the first phase's docked configuration after extraction; "
-            "a pad or TLI-cutoff switch setting is not an initial position after extraction",
+            "must be post-ejection P00, before V49 maneuver, matching "
+            "initial_state.as_of_event, the MET 0 osculating epoch and the first phase's docked "
+            "configuration after extraction; the checklist selects P00 on p. 59 and V49 follows "
+            "on p. 60, so a pad, TLI-cutoff or instant-of-ejection switch setting is not the "
+            "initial position at this cut",
         )
     states = block.get("states")
     if states is None:
@@ -16492,7 +16495,15 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
                 "checklist landed the first four positions",
             )
     for sid, state in sorted(declared.items()):
-        provenance = state.get("initial_provenance") or {}
+        provenance = state.get("initial_provenance")
+        if provenance is not None and not isinstance(provenance, dict):
+            if sid in states or sid in (owed or {}):
+                report.refuse(
+                    f"domains/{domain_of.get(sid, '?')}/components.yaml:state {sid}.initial_provenance",
+                    f"must be a mapping of starting-position evidence, got {provenance!r}",
+                )
+            continue
+        provenance = provenance or {}
         if str(provenance.get("source") or "") != "mission.yaml:launch_state":
             continue
         where = f"domains/{domain_of.get(sid, '?')}/components.yaml:state {sid}"
@@ -16526,6 +16537,39 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
                 "declares `basis: historical` for a position `mission.yaml#launch_state` makes, "
                 "and the block's `sourced` map does not cite it — so the block's own account of "
                 "where these positions come from is silent about this one",
+            )
+
+    # The RCS `auto` start is a mapping from three published settings, not an Apollo switch name.
+    # The generic `derived` check only asks for some relation; replacing that relation with a
+    # sentence unrelated to CMC DAP control would leave the initial `auto` looking sourced. Keep
+    # the three settings, their checklist pages, and the handbook rule next to the result. This
+    # check cannot authenticate the scans, but it can refuse a model result that no longer follows
+    # from the declared source configuration.
+    if "mode" in states:
+        rcs_state = declared.get("mode") or {}
+        initial_provenance = rcs_state.get("initial_provenance")
+        if not isinstance(initial_provenance, dict):
+            initial_provenance = {}
+        source_configuration = {
+            "dap_active": {"action": "V46E", "checklist_pdf_page": 53},
+            "sc_cont_cmc": {"position": "CMC", "checklist_pdf_page": 55},
+            "cmc_mode_auto": {"position": "AUTO", "checklist_pdf_page": 59},
+            "mapping_authority": {"handbook_pdf_page": 57, "section": "4.7.1.6"},
+        }
+        relation = "dap_active and sc_cont_cmc and cmc_mode_auto => auto"
+        if (
+            states["mode"] != "auto"
+            or initial_provenance.get("basis") != "derived"
+            or initial_provenance.get("source") != "mission.yaml:launch_state"
+            or initial_provenance.get("relation") != relation
+            or initial_provenance.get("source_configuration") != source_configuration
+        ):
+            report.refuse(
+                "domains/rcs/components.yaml:state mode.initial_provenance",
+                "the post-ejection `auto` mode must derive from the active RCS DAP (checklist PDF "
+                "p. 53), SC CONT CMC (p. 55), and CMC MODE AUTO (p. 59), under Block II handbook "
+                "section 4.7.1.6 (PDF p. 57). Keep `basis: derived`, the source configuration "
+                "and its relation together so `auto` cannot survive a changed input",
             )
 
 

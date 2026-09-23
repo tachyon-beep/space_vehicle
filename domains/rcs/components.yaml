@@ -520,18 +520,35 @@ state:
     node: internal
     method: discrete
     unit: "enum[auto,manual,free_drift]"
-    initial: UNCONFIGURED
+    initial: auto
+    initial_provenance:
+      basis: derived
+      source: mission.yaml:launch_state
+      relation: "dap_active and sc_cont_cmc and cmc_mode_auto => auto"
+      source_configuration:
+        dap_active: {action: V46E, checklist_pdf_page: 53}
+        sc_cont_cmc: {position: CMC, checklist_pdf_page: 55}
+        cmc_mode_auto: {position: AUTO, checklist_pdf_page: 59}
+        mapping_authority: {handbook_pdf_page: 57, section: "4.7.1.6"}
+      note: >-
+        in the Apollo 17 CSM Launch Checklist (Basic), 4 September 1972, the RCS DAP is loaded
+        (PDF pp. 49 and 53) and activated by `V46E` (p. 53), AUTO RCS SELECT is set to MNA/MNB
+        with MANATT at RATE CMD (p. 54), SC CONT is set to CMC (p. 55), and CMC MODE is set to
+        AUTO at LM ejection (p. 59), with no intervening contrary selection before the post-ejection
+        P00 start. Apollo Operations Handbook, Block II Spacecraft, SM2A-03-BLOCK II, G&C sections
+        4.6-4.8, PDF p. 57, section 4.7.1.6 identifies CMC, ISS and active RCS DAP as the
+        autopilot-control path. Map that CMC DAP ownership to this vehicle's `auto`, whose
+        command help defines it as the service flying the attitude loop. The mapping is a model
+        interpretation of published switch/program settings, not a historical Apollo mode name.
     initial_note: >-
-      the RCS mode at MET 0. `apollo_diode.md:147` gives the three modes and this state's own note
-      argues `manual`'s weight — in it the crew are the controller — so the starting mode decides
-      who is flying the attitude loop before anything is commanded. The launch checklist reaches the
-      attitude system without answering this: `SC CONT - SCS` (p. 6) says which *controller* is
-      selected and `CM RCS LOGIC - on (up)` says the logic is powered, and both are statements about
-      authority rather than about which of `auto`, `manual` and `free_drift` the RCS itself is in.
-      The automatic-selection switches the checklist does set (`AUTO RCS SEL A/C ROLL A1 - OFF`, p.
-      12) choose which axes the DAP may roll about, which is a third question again. What would
-      close it: the attitude-control plan for the early coast, or a decision about what these three
-      words mean after LM ejection
+      the RCS mode at the post-ejection P00 start, before the later V49 maneuver. The launch
+      checklist's CMC control selection and active RCS DAP, followed by CMC MODE AUTO at LM
+      ejection, make the computer the attitude-loop controller at this cut. The Block II handbook
+      explains how those pieces enable autopilot control; `initial_provenance.relation` records
+      the mapping to the vehicle's synthetic `auto`. P00 is an operative idling computer major mode
+      and does not itself disable DAP attitude control. `manual` hands the loop to crew switches;
+      `free_drift` leaves no attitude controller. `V49E` later can request an automatic or manual
+      maneuver and is deliberately outside the MET 0 cut; it is not evidence for this initial mode.
     moved_by:
       - "command:set_rcs_mode"
     dwell:

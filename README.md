@@ -78,7 +78,7 @@ flag.
 It needs `PyYAML`. It is deliberately *not* wired into the operator-side services, which are
 standard library only.
 
-Current state: **composes, with 274 declared debts.** A debt is reported and is fatal under
+Current state: **composes, with 272 declared debts.** A debt is reported and is fatal under
 `--strict`; a refusal is fatal always. The linter refuses a build, it does not warn:
 
 **The direction of travel, because the headline alone reads the wrong way.** The count went
@@ -211,9 +211,9 @@ ladder sums to exactly 192.0 h, so the 34,560,000-tick figure `review-findings.m
 pricing is now derived from a phase list rather than assumed.
 
 **All eleven domains have landed** — 148 channels, 139 states over 59 scheduled nodes, 142
-thresholds, 58 verbs and 128 classified events across the eleven directories, with 274 declared debts
-and every one of them named. **106 of the 139 states are fully configured and 33 carry a debt**, and
-a real tick advances **50** of the 139 states, and the build order's **50** ready are that same set
+thresholds, 58 verbs and 128 classified events across the eleven directories, with 272 declared debts
+and every one of them named. **108 of the 139 states are fully configured and 31 carry a debt**, and
+a real tick advances **52** of the 139 states, and the build order's **52** ready are that same set
 — the second of those figures is the objective's own second completion criterion, and both
 are read out of `tools/plant.py`'s output by `test_the_readme_status_matches_the_tools`. Since round
 58 the first line of `--build-order` *is* a tick's own gap list rather than a second opinion about
@@ -226,9 +226,9 @@ recurring finding arriving at its own status section. That completes the design'
 asks for the dictionary and linter, then a spike on electrical, thermal and consumables) and goes
 well past it: what remains is not a domain but the **plant**, and the debts are its shopping list.
 
-Two counts, and the difference is deliberate. The **274** is every obligation the linter can name:
-**196** literal `UNCONFIGURED` scalars and **78** prose obligations in `open_debts` and edge records.
-The plant independently reports **196** literal unset scalars, matching that subtotal; the linter
+Two counts, and the difference is deliberate. The **272** is every obligation the linter can name:
+**194** literal `UNCONFIGURED` scalars and **78** prose obligations in `open_debts` and edge records.
+The plant independently reports **194** literal unset scalars, matching that subtotal; the linter
 also names the **78** prose obligations. Graph sensitivities are reported against their owning
 edges rather than added a second time. Until round 46 the scalar subtotal was
 itself incomplete: the domain files were walked for unset values by `check_domain` and the coupling
@@ -1819,8 +1819,8 @@ the distinction between a value nobody has written down and a state nothing can 
 ```
 139 states, by what blocks them:
 
-    50   36 %  ready now — the states a real tick advances
-    29   21 %  owes a value — the cheapest to close, and the debt count already tracks them
+    52   37 %  ready now — the states a real tick advances
+    27   19 %  owes a value — the cheapest to close, and the debt count already tracks them
     15   11 %  owes an edge — a coupling with no sensitivity, or a state nothing drives
     45   32 %  owes a rule — `algebraic`, `discrete`, `dynamics` or `hazard`: domain code
 ```
@@ -18349,6 +18349,36 @@ and prevents the pulse floor or group dwell from reusing one as a scalar. The ba
 271 obligations, 107 fully configured states and 340 referee tests. This round has 274 debts,
 106 fully configured states and 341 tests; a tick still advances 50 states. The extra obligations
 name the CM hardware limit and per-thruster pulse floor rather than silently qualifying them.
+
+## The post-ejection computer idles while its RCS autopilot controls attitude
+
+The model begins with a docked CSM/LM on a chosen TLI-equivalent orbit. That is a synthetic
+transfer state, but its **onboard configuration has a precise checklist cut**: after `F37 00E`
+in POST LM EJECTION on PDF p. 59 (printed 3-6) and before the S-IVB-view `V49E` on PDF p. 60
+(printed 3-7) of the [*Apollo 17 CSM Launch Checklist (Basic)*, 4 September 1972](https://www.ibiblio.org/apollo/Documents/apollo_17_csm_launch_checklist_basic.pdf).
+Both `launch_state.as_of_event` and `initial_state.as_of_event` name that cut. The first
+`translunar_coast` phase and the trajectory note agree; no historical extraction interval is
+compressed into MET 0.
+
+| State | Evidence and model relation | Initial provenance |
+|---|---|---|
+| `avionics.computer_mode = idle` | The checklist selects P00 after ejection, p. 59. [*Apollo Operations Handbook, Block II Spacecraft*, SM2A-03-BLOCK II, G&C §§4.6–4.8](https://www.ibiblio.org/apollo/Documents/SM2A-03-BLOCKII-4.6_4.8.pdf), PDF p. 74 (§4.8.1.1), names P00 the CMC Idling Program **in operate condition**, updating CSM and LM state vectors; P06 is the separate standby power-down procedure. | `historical`: `idle` denotes operative P00, not a stopped CPU. |
+| `rcs.mode = auto` | Checklist PDF pp. 49 and 53 load the RCS DAP, p. 53 activates it with `V46E`, p. 55 sets `SC CONT - CMC`, and p. 59 sets `CMC MODE - AUTO`. The Block II handbook, PDF p. 57 (§4.7.1.6), identifies CMC, ISS and active RCS DAP as the autopilot-control path. | `derived`: these published settings map to this vehicle's `auto`, meaning its service owns the attitude loop. `auto` is a model interpretation, not a quoted Apollo state name. |
+
+P00 and active attitude control can coexist: P00 is the idling **major mode**, while the RCS DAP
+remains available to fly the loop. The handbook describes the Block II control path; the Apollo 17
+checklist provides the mission-specific sequence. The later `V49E` can request an automatic or
+manual maneuver and therefore does not establish this earlier initial mode. `breaker_panel` still
+owes the synthetic LCL keyspace and post-extraction positions; `hatch_state` still owes the LM
+**forward surface EVA hatch** position, distinct from the overhead docking and CSM tunnel hatches.
+
+`check_launch_state` now refuses a P00 epoch that drifts from either state block or the first phase.
+It also reads the RCS provenance as three source conditions plus the handbook mapping, and refuses
+an `auto` result if a condition, relation, basis or locator changes. The broken-copy referee deletes
+the P00 locator, changes an RCS source condition while leaving `auto`, changes its relation and
+changes its basis. This round reduces declared debts **274 → 272** and literal unset scalars
+**196 → 194**; fully configured states rise **106 → 108**, ready-now states **50 → 52**, and the
+referee grows **341 → 342** tests. The remaining two launch positions stay owed.
 
 ## The invariants, and which of them are enforced
 
