@@ -348,18 +348,15 @@ state:
   - id: zone_csm_service_t
     initial: UNCONFIGURED
     initial_note: >-
-      the service bay's temperature at MET 0, owed with the lumped mass this state already
-      declares UNCONFIGURED: that one scalar closes `E-BAY-HEAT`'s sensitivity and this time
-      constant, and where the bay starts is the same analysis rather than a second figure.
-      `thermal_diode.md:965` is why neither is published
-    # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
-    # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
-    # watt is, and it follows from this mass by division once `c_p` is stated with it
+      the CSM service bay's temperature at the model's MET 0 is owed. A CSM thermal analysis
+      with the same configuration and epoch must establish it separately from the effective
+      thermal mass; neither is published by `thermal_diode.md:965`
+    # `G = C/tau` with chosen `tau` makes the edge evaluable when a mass is sourced; the resulting
+    # `G` remains a model consequence until a CSM heat-transfer path is independently checked.
     method: lag
     node: service_bay_zone_t
-    # `C = m x c_p` and `G = C / tau`, so ONE number closes the edge above: the lumped mass. The
-    # propellant is the mass and the tank wall is the path, which is what the state's own reason
-    # says; what is owed is that mass, not the conductance, because `tau` is already declared.
+    # A mass would make the chosen `tau` relation arithmetically evaluable. It would not validate
+    # the actual thermal conductance of the bay, which needs a CSM heat-transfer path model.
     lumped_mass_kg: UNCONFIGURED
     specific_heat_j_per_kg_k: 900
     unit: K
@@ -371,15 +368,19 @@ state:
         is a much larger lump than the cabin; twice the cabin's time constant because the propellant
         is the mass and the tank wall is the path
       note: >-
-        the comment above this entry said the arithmetic and nothing evaluated it: "`C = m x c_p` and
-        `G = C / tau`, so ONE number closes the edge above: the lumped mass". `c_p` is stated now, so
-        what remains is genuinely one scalar and `E-BAY-HEAT-CSM` carries the derivation that reads
-        it. What would source it is a thermal *math model* rather than a description: the LM's is
-        `LM0-510-1036`, "Revised Thermal Nodal Diagrams for LM-3", dated 17 December 1968 and cited
-        as reference 5 of `lmo-510-1070_lm-3_thermal_analysis_6.pdf`. **That memo has now been read
-        and does not have it** — it predicts node temperatures, and its appendices hold mission
-        timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*; the capacitances
-        are in the nodal-diagram document it references rather than in itself
+        the chosen time constant and specific heat do not establish a historical CSM bay mass or
+        heat-transfer conductance. The archive index lists TIR 580-S-7159, "Apollo Service Module
+        Thermal Model Handbook (Block 2)", dated 5 October 1967. Only the catalog entry was
+        examined; the handbook's scan and applicability to the Apollo 11 CSM configuration
+        have not been verified. A usable value needs the CSM node
+        capacities, connection conductances and an explicit reduction to this service-bay zone
+      source_audit:
+        modeled_vehicle: CSM
+        candidate_document: TIR 580-S-7159
+        catalog_url: https://www.ibiblio.org/apollo/NARASWoverflow/CorporateIndexSupplement.pdf
+        candidate_effectivity: Block 2 CSM; Apollo 11 applicability unverified
+        evidence_status: index_only
+        missing: CSM node capacities and connection conductances mapped to the service-bay zone
   - id: zone_lm_cabin_t
     method: lag
     node: lm_cabin_zone_t
@@ -407,12 +408,11 @@ state:
   - id: zone_lm_descent_t
     initial: UNCONFIGURED
     initial_note: >-
-      the descent stage's temperature at MET 0, owed with its lumped mass and for the same
-      reason as the service bay above: `LM0-510-1036` is the document this state's own note
-      names, and it answers both the bay's rise per watt and where the bay starts
-    # `G = C/tau` with `tau` declared, so ONE scalar closes the edge above and this is it. The
-    # relation is not restated here because the edge carries it: 1/G is what the bay's rise per
-    # watt is, and it follows from this mass by division once `c_p` is stated with it
+      the LM-5 descent stage's temperature at the model's MET 0 is owed separately from its
+      effective thermal mass. The LM-3 temperature history in LM0-510-1070 has a different
+      vehicle and mission epoch and cannot supply this starting value directly
+    # `G = C/tau` with chosen `tau` makes the edge evaluable when a mass is sourced; the resulting
+    # `G` remains a model consequence until an LM-5 heat-transfer path is independently checked.
     method: lag
     node: descent_bay_zone_t
     lumped_mass_kg: UNCONFIGURED
@@ -426,9 +426,19 @@ state:
         to the loop; the longest constant in the vehicle, and the one that makes the frozen-line
         chain slow enough to be diagnosable
       note: >-
-        as the service bay above and owed for the same reason: `E-BAY-HEAT-LM`'s sensitivity is
-        `tau / (m x 900)` K per W, so this one scalar closes the descent bay's edge as well as its
-        time constant. `LM0-510-1036` is what would answer both
+        `E-BAY-HEAT-LM` would evaluate `tau / (m x 900)` K per W once an effective mass is known,
+        but the chosen tau does not validate a physical conductance. LM0-510-1070 (31 January
+        1969), reference 5, cites LM0-510-1036, "Revised Thermal Nodal Diagrams for LM-3"
+        (17 December 1968). That separate document has not been examined. Its title establishes
+        LM-3 nodal scope, not the presence of capacity data or applicability to Apollo 11 LM-5.
+        A usable LM-5 zone needs capacity and coupling data for its descent stage plus a stated
+        aggregation of those nodes
+      source_audit:
+        modeled_vehicle: LM-5
+        candidate_document: LM0-510-1036
+        candidate_effectivity: LM-3 only; LM-5 applicability unverified
+        evidence_status: citation_only
+        missing: LM-5 descent node capacities and conductances mapped to the descent-bay zone
   - id: radiator_eq_t
     node: radiator_eq
     method: algebraic

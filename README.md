@@ -8861,11 +8861,11 @@ that owes a value of its own. Two debts left the headline and no obligation did.
 **The two bay masses are still owed, and the round says who by.** `lmo-510-1070_lm-3_thermal_analysis_6.pdf`
 — the document the manifest named for exactly this — has been downloaded, extracted (314 pages) and
 read, and it does **not** carry them: it is a temperature-prediction memo whose appendices hold
-mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*, and its
-capacitance data is in the document it cites as reference 5, `LM0-510-1036` "Revised Thermal Nodal
-Diagrams for LM-3", dated 17 December 1968, which is not in the library by that name. Each of the two
-provenances now names it, so the debt is one field wide with a named source rather than a conductance
-of unknown origin.
+mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*. Its
+reference 5 cites `LM0-510-1036` "Revised Thermal Nodal Diagrams for LM-3", dated 17 December
+1968. That separate document was not examined, so its capacity data and LM-5 applicability
+remain unverified; it cannot source a CSM bay. The two masses and their physical heat-transfer
+paths remain owed.
 
 What the same memo *did* yield, for a later round: the LM's blanket effective emittance is **0.01** for
 both stages (PDF p. 37), its launch condition is 65–75 °F cabin with both skins at 70 °F (p. 11), the
@@ -12945,11 +12945,11 @@ that owes a value of its own. Two debts left the headline and no obligation did.
 **The two bay masses are still owed, and the round says who by.** `lmo-510-1070_lm-3_thermal_analysis_6.pdf`
 — the document the manifest named for exactly this — has been downloaded, extracted (314 pages) and
 read, and it does **not** carry them: it is a temperature-prediction memo whose appendices hold
-mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*, and its
-capacitance data is in the document it cites as reference 5, `LM0-510-1036` "Revised Thermal Nodal
-Diagrams for LM-3", dated 17 December 1968, which is not in the library by that name. Each of the two
-provenances now names it, so the debt is one field wide with a named source rather than a conductance
-of unknown origin.
+mission timelines, solar/IR node inputs, equipment timelines and nodal *diagrams*. Its
+reference 5 cites `LM0-510-1036` "Revised Thermal Nodal Diagrams for LM-3", dated 17 December
+1968. That separate document was not examined, so its capacity data and LM-5 applicability
+remain unverified; it cannot source a CSM bay. The two masses and their physical heat-transfer
+paths remain owed.
 
 What the same memo *did* yield, for a later round: the LM's blanket effective emittance is **0.01** for
 both stages (PDF p. 37), its launch condition is 65–75 °F cabin with both skins at 70 °F (p. 11), the
@@ -18379,6 +18379,27 @@ the P00 locator, changes an RCS source condition while leaving `auto`, changes i
 changes its basis. This round reduces declared debts **274 → 272** and literal unset scalars
 **196 → 194**; fully configured states rise **106 → 108**, ready-now states **50 → 52**, and the
 referee grows **341 → 342** tests. The remaining two launch positions stay owed.
+## An LM-3 nodal citation was offered as the CSM and LM-5 bay masses
+
+`zone_csm_service_t` cited `LM0-510-1036` as the CSM service-bay thermal model, while
+`zone_lm_descent_t` said the same unseen document would answer its mass and MET 0 temperature.
+The former crosses spacecraft; the latter crosses LM effectivity and treats a citation as
+inspected data. Both notes also implied that an effective mass and the chosen `tau_s` establish
+a physical conductance. They only make the model's `G = m c_p / tau` arithmetic evaluable.
+
+| Source actually checked | Scope and result | Model use |
+|---|---|---|
+| [Grumman LM0-510-1070, *D Mission LM-3 Thermal Analysis No. 6* (31 Jan 1969)](https://www.ibiblio.org/apollo/Documents/lmo-510-1070_lm-3_thermal_analysis_6.pdf), PDF p. 7 reference 5 and pp. 310–314 appendix D figures 1–5 | Cites `LM0-510-1036`, *Revised Thermal Nodal Diagrams for LM-3* (17 Dec 1968). The scanned figures show LM-3 ascent, cabin, glycol and descent node arrangements. They do not give either six-zone aggregate heat capacity or its heat-transfer path. The separate `1036` document was not examined. | LM-3 topology can guide a later LM node mapping; no `zone_lm_descent_t` mass, conductance or starting temperature is filled. |
+| [NARA corporate index](https://www.ibiblio.org/apollo/NARASWoverflow/CorporateIndexSupplement.pdf), entry `TIR 580-S-7159` | Lists *Apollo Service Module Thermal Model Handbook (Block 2)*, 5 Oct 1967. Only the catalog entry was examined; the handbook's data and Apollo 11 effectivity are unverified. | CSM-specific lead for `zone_csm_service_t`; no mass, conductance or starting temperature is filled. |
+| [NASA-CR-108468 / LTV 350.22 revised LM ascent-stage thermal handbook](https://ntrs.nasa.gov/citations/19700024673), 8 May 1970, printed pp. 5–6 | Section 4 describes LM-6 node connections in appendices A–C; reference 6 cites `LM0-510-1446`, *Revised Thermal Nodal Diagrams for LM-6, 7, 8, and 9*. The NTRS PDF was indexed, but its download was unavailable in this investigation. It concerns later ascent stages. | Candidate for a separately justified LM ascent/cabin reduction, not the LM-5 descent bay or any CSM zone. |
+
+Both bay states now carry a `source_audit` with modeled vehicle, candidate effectivity, evidence
+status and the missing node-to-zone reduction. `check_thermal_bay_source_scope` refuses a CSM note
+that cites the LM-3 document, a promoted LM-5 effectivity claim, a false verified status, or a
+missing audit field. A broken-copy test exercises those refusals; an independent verifier also
+compares the clean definition with broken copies. No thermal number changed: **272 declared debts**
+and **194 literal unset scalars** remain, and a tick still advances **52** states. The vehicle
+referee grows from **342 to 343 tests**.
 
 ## The invariants, and which of them are enforced
 

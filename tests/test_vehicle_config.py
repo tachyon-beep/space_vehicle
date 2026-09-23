@@ -18234,6 +18234,42 @@ def test_a_zones_time_constant_is_its_lump_over_its_conductance(tmp_path):
     assert "which is a time constant of 3600 s" in result.stdout, result.stdout[-900:]
 
 
+def test_the_thermal_bays_refuse_a_source_from_the_wrong_vehicle_or_an_unverified_capacity_claim(tmp_path):
+    """An LM-3 diagram citation was presented as the missing CSM and LM-5 bay masses.
+
+    LM0-510-1070 only cites LM0-510-1036; the latter scan has not been examined. Its title
+    limits it to LM-3, and no nodal diagram establishes this model's aggregate heat capacity
+    or conductance without an explicit node-to-zone reduction. Break a complete copy so the
+    provenance guard must read both bays and their source audit, not just the clean definition.
+    """
+    source = VEHICLE / "domains" / "thermal" / "components.yaml"
+    clean = yaml.safe_load(source.read_text())
+    states = {state["id"]: state for state in clean["state"]}
+    assert states["zone_csm_service_t"]["lumped_mass_kg"] == "UNCONFIGURED"
+    assert states["zone_lm_descent_t"]["lumped_mass_kg"] == "UNCONFIGURED"
+    for name, old, new in (
+        ("cross_vehicle", "candidate_document: TIR 580-S-7159", "candidate_document: LM0-510-1036"),
+        ("false_effectivity", "candidate_effectivity: LM-3 only; LM-5 applicability unverified", "candidate_effectivity: LM-5"),
+        ("false_verification", "evidence_status: citation_only", "evidence_status: verified"),
+        ("missing_audit", "        modeled_vehicle: CSM\n", ""),
+        ("malformed_audit", None, None),
+    ):
+        definition = copy_definition(tmp_path / name)
+        path = definition / "domains" / "thermal" / "components.yaml"
+        if name == "malformed_audit":
+            thermal = yaml.safe_load(path.read_text())
+            state = next(state for state in thermal["state"] if state["id"] == "zone_csm_service_t")
+            state["provenance"]["source_audit"] = "malformed"
+            path.write_text(yaml.safe_dump(thermal, sort_keys=False))
+        else:
+            text = path.read_text()
+            assert old in text, f"the {name} broken copy no longer matches the live source"
+            path.write_text(text.replace(old, new, 1))
+        result = run_linter(definition)
+        assert result.returncode == 1, (name, result.stdout[-1000:])
+        assert "thermal source audit" in result.stdout, (name, result.stdout[-1000:])
+
+
 def test_an_edge_that_names_where_its_value_comes_from_is_not_a_second_debt(tmp_path):
     """The obligation is counted where the quantity lives — the rule the derivation check states.
 

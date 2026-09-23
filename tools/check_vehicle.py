@@ -14371,6 +14371,79 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 )
 
 
+def check_thermal_bay_source_scope(root: Path, report: Report) -> None:
+    """Keep a cited thermal model within its vehicle and verified source scope.
+
+    The LM-3 analysis LM0-510-1070 cites LM0-510-1036 as nodal diagrams. Neither the citation
+    nor the diagram title establishes a capacity, a conductance, or LM-5 effectivity. The CSM
+    service-bay note once offered this LM document for a CSM mass. The CSM candidate TIR
+    580-S-7159 is visible only as a catalog entry, not as inspected handbook data. These are
+    distinct evidence states, and both bay values stay owed until node data and an aggregation
+    to the model's zone have been established.
+    """
+    thermal = load(root / "domains" / "thermal" / "components.yaml", report) or {}
+    states = {
+        state.get("id"): state
+        for state in thermal.get("state") or []
+        if isinstance(state, dict)
+    }
+    expected = {
+        "zone_csm_service_t": {
+            "modeled_vehicle": "CSM",
+            "candidate_document": "TIR 580-S-7159",
+            "catalog_url": "https://www.ibiblio.org/apollo/NARASWoverflow/CorporateIndexSupplement.pdf",
+            "candidate_effectivity": "Block 2 CSM; Apollo 11 applicability unverified",
+            "evidence_status": "index_only",
+        },
+        "zone_lm_descent_t": {
+            "modeled_vehicle": "LM-5",
+            "candidate_document": "LM0-510-1036",
+            "candidate_effectivity": "LM-3 only; LM-5 applicability unverified",
+            "evidence_status": "citation_only",
+        },
+    }
+    for state_id, required in expected.items():
+        state = states.get(state_id) or {}
+        where = f"domains/thermal/components.yaml:state {state_id}.provenance.source_audit"
+        provenance = state.get("provenance")
+        if not isinstance(provenance, dict):
+            report.refuse(where, "thermal source audit needs a provenance mapping")
+            continue
+        audit = provenance.get("source_audit")
+        if not isinstance(audit, dict):
+            report.refuse(where, "thermal source audit must be a mapping")
+            continue
+        for field, value in required.items():
+            if audit.get(field) != value:
+                report.refuse(
+                    where,
+                    f"thermal source audit {field} must be {value!r}; got {audit.get(field)!r}. "
+                    "A catalog entry or cross-vehicle citation cannot certify this zone's mass",
+                )
+        missing = audit.get("missing")
+        if not isinstance(missing, str) or not all(
+            term in missing.lower() for term in ("capacit", "conduct", "zone")
+        ):
+            report.refuse(
+                where,
+                "thermal source audit must name the missing node capacities, conductances, "
+                "and zone mapping",
+            )
+        note = " ".join(
+            str(value) for value in (state.get("initial_note"), provenance.get("note"))
+        ).lower()
+        if state_id == "zone_csm_service_t" and "lm0-510-1036" in note:
+            report.refuse(where, "thermal source audit: an LM-3 document cannot source the CSM bay")
+        if state_id == "zone_lm_descent_t" and (
+            "lm0-510-1036 is what would answer" in note or "capacitances are in" in note
+        ):
+            report.refuse(
+                where,
+                "thermal source audit: the cited LM-3 nodal-diagram document has not been "
+                "examined for capacities or LM-5 applicability",
+            )
+
+
 def check_thermal_lumps(root: Path, report: Report) -> None:
     """A zone's time constant is its lump over its conductance, and the lump is data now.
 
@@ -18380,6 +18453,7 @@ def main(argv: list[str] | None = None) -> int:
     # And the lumps the time constants above them are computed from: three fields and one relation,
     # where the relation used to be a sentence in each state's provenance.
     check_thermal_lumps(root, report)
+    check_thermal_bay_source_scope(root, report)
     check_cabin_volumes(root, vehicle, report)
     check_cabin_equilibrium(root, vehicle, report)
     check_metabolic_rules(root, vehicle, mission, report)
