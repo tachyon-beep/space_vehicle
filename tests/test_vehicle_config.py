@@ -2854,8 +2854,8 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares 148 registered channel(s) and no census block" in result.stdout, result.stdout[-900:]
     assert "derived here as 20 unperturbed, 15 of them `service`" in result.stdout
-    # One block deleted is one debt added: the corpus stands at 272, so the ablation is 273.
-    assert "COMPOSES, with 273 declared debt(s)." in result.stdout
+    # One block deleted is one debt added: the corpus stands at 273, so the ablation is 274.
+    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
 
     # The failure chains, which are owed *and* refused: the README's front table names fifteen.
     definition = copy_definition(fixture_dir(tmp_path, "no-chains"))
@@ -2877,7 +2877,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "declares no coverage block. The domain publishes 15 channel(s)" in result.stdout
     assert "no fault perturbs 1 of them" in result.stdout
-    assert "COMPOSES, with 273 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
 
     # The filter's rates. The block is nested rather than top level, and the obligation is C-07's
     # rather than this check's — which is why the first reading of it in this round was wrong.
@@ -2891,7 +2891,7 @@ def test_a_block_that_is_absent_is_reported_rather_than_skipped(tmp_path):
     assert result.returncode == 0, result.stdout[-900:]
     assert "domains/gnc/components.yaml:estimator.sub_stepping: is not declared" in result.stdout
     assert "C-07's resolution requires the interface" in result.stdout
-    assert "COMPOSES, with 273 declared debt(s)." in result.stdout
+    assert "COMPOSES, with 274 declared debt(s)." in result.stdout
 
 
 def test_the_readme_s_chain_count_is_held_against_the_file(tmp_path):
@@ -6642,7 +6642,7 @@ def test_a_debt_written_in_a_key_nobody_reads_is_not_a_debt(tmp_path):
     # Removing this file's own prose obligations takes the headline down by the number of entries
     # that file carries, which is one here — so the figure is the base minus one, and it moves with
     # the base rather than with the runs of fixtures that inject a debt.
-    assert "with 271 declared debt(s)" in result.stdout
+    assert "with 272 declared debt(s)" in result.stdout
 
 
 THERMAL_CABIN_LOADS = (
@@ -7053,7 +7053,7 @@ def test_the_trajectory_check_compares_every_element_it_computes(tmp_path):
     set_element("transfer_period_h", "UNCONFIGURED")
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 273 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
@@ -7159,7 +7159,7 @@ def test_an_argument_that_names_a_vocabulary_says_so(tmp_path):
     path.write_text(yaml.safe_dump(doc, sort_keys=False, width=100))
     result = run_linter(fixture)
     assert result.returncode == 0, result.stdout[-800:]
-    assert "with 273 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 274 declared debt(s)" in result.stdout, result.stdout[-400:]
     assert "every one of which is a declared `frame`" in result.stdout
     assert "declare `names: frame`" in result.stdout
 
@@ -11462,7 +11462,7 @@ def test_every_heated_zone_declares_the_state_that_carries_its_heat(tmp_path):
     # The debt is closed, and the check still reports an absent link when one comes back.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 272 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
     assert "names no heat-rate state" not in intact.stdout
 
     def fixture(name: str, old: str, new: str) -> subprocess.CompletedProcess[str]:
@@ -11558,7 +11558,7 @@ def test_a_loop_s_collected_load_is_the_sum_over_the_zones_that_name_it(tmp_path
     # The note rather than a debt, in the linter's own words, and the count unmoved by it.
     intact = run_linter(VEHICLE)
     assert intact.returncode == 0
-    assert "COMPOSES, with 272 declared debt(s)." in intact.stdout
+    assert "COMPOSES, with 273 declared debt(s)." in intact.stdout
     assert (
         "vehicle.yaml#thermal.loops.loop_secondary.load_state: is not declared, and no zone names "
         "this loop" in intact.stdout
@@ -14383,7 +14383,7 @@ def test_a_threshold_with_no_limit_is_one_debt_not_two():
     )
 
     # And the count is the honest one, not the inflated one.
-    assert "with 272 declared debt(s)" in result.stdout, result.stdout[-400:]
+    assert "with 273 declared debt(s)" in result.stdout, result.stdout[-400:]
 
 
 def test_a_note_that_only_points_at_another_entry_is_refused(tmp_path):
@@ -14560,7 +14560,7 @@ def test_the_debts_view_groups_by_what_each_one_wants():
     # prose obligation in `coupling.yaml#open_debts` for the three bands whose vocabulary is wider
     # than their comparator. The round adds a field to four states; nothing was answered, so nothing
     # fell.
-    assert owed == "272", "the view must agree with the headline count"
+    assert owed == "273", "the view must agree with the headline count"
 
 
 def test_a_placeholder_inside_an_owed_entry_says_so(tmp_path):
@@ -16397,7 +16397,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         CO2,
         CO2.replace("    precision: 0.1\n", "    precision: 0.05\n"),
-        "COMPOSES, with 272 declared debt(s)",
+        "COMPOSES, with 273 declared debt(s)",
         composes=True,
     )
     refusal(
@@ -16405,7 +16405,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         components,
         PRESSURE,
         PRESSURE.replace("    range: [0, 10]\n", "    range: [4.8, 5.2]\n"),
-        "COMPOSES, with 272 declared debt(s)",
+        "COMPOSES, with 273 declared debt(s)",
         composes=True,
     )
 
@@ -16420,7 +16420,7 @@ def test_an_instrument_states_what_it_measures_in_the_channels_own_vocabulary(tm
         "cannot be held against the channel's `range`",
         composes=True,
     )
-    assert "with 273 declared debt(s)" in out, out[-300:]
+    assert "with 274 declared debt(s)" in out, out[-300:]
 
 
 def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
@@ -16579,7 +16579,7 @@ def test_a_stocks_rating_is_joined_to_the_counter_it_is_spent_at(tmp_path):
         "no component in any domain is the article of",
         composes=True,
     )
-    assert "with 273 declared debt(s)" in out, out[-400:]
+    assert "with 274 declared debt(s)" in out, out[-400:]
 
     # A rating on an article whose counter is owed is skipped by the join rather than refused twice:
     # the unset `node` is already a debt, and one missing datum under two names reads like two.
@@ -16726,7 +16726,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "names no `power_load`",
         composes=True,
     )
-    assert "with 273 declared debt(s)" in out, out[-400:]
+    assert "with 274 declared debt(s)" in out, out[-400:]
     # And the LM pump's figures are unchecked by this join *because* it names no load — the case
     # documents the gap the debt reports rather than a property worth having. Moving its rating
     # 200 -> 210 changes nothing: no other file states it, so there is nothing to disagree with.
@@ -16736,7 +16736,7 @@ def test_a_pump_is_one_article_declared_in_two_domains(tmp_path):
         "domains/thermal/components.yaml",
         LM_PUMP,
         LM_PUMP.replace("    rated_w: 200\n", "    rated_w: 210\n"),
-        "COMPOSES, with 272 declared debt(s)",
+        "COMPOSES, with 273 declared debt(s)",
         composes=True,
     )
 
@@ -16878,7 +16878,7 @@ def test_a_zones_temperature_state_is_named_rather_than_guessed(tmp_path):
         "vehicle.yaml",
         "        temperature_state: zone_radiator_t\n",
         "        temperature_state: zone_radiator_t\n",
-        "COMPOSES, with 272 declared debt(s)",
+        "COMPOSES, with 273 declared debt(s)",
         composes=True,
     )
 
@@ -18553,7 +18553,8 @@ def test_the_docked_configuration_s_mass_properties_re_derive_from_the_data_book
     assert "Figures 2-16 and 2-17" in frame["provenance"]["source"]
     # The transformations themselves, which are what make a station a physical offset.
     assert "4578.805" in frame["definition"] and "X_A = X_E + 399.5" in frame["definition"]
-    assert "1110.25" in frame["definition"] and "712.0" in frame["definition"]
+    assert "X_A = 1422.75 - X_E" in frame["definition"]
+    assert "Rev 2" in frame["provenance"]["source"]
 
     table = {t["id"]: t for t in block["tables"]}["ODB_3_2_21"]
     assert table["configuration"] == "csm_lm_docked"
@@ -18607,7 +18608,7 @@ def test_the_docked_configuration_s_mass_properties_re_derive_from_the_data_book
     assert sorted(owed) == ["csm_lm_ascent_docked"], sorted(owed)
     entry = owed["csm_lm_ascent_docked"]
     assert entry["table"] == "ODB_3_2_22 + ODB_3_2_26"
-    assert "owed to **an epoch, not a document**" in entry["note"]
+    assert "matched mass epoch" in entry["note"] and "lateral rotation" in entry["note"]
 
 
 def test_the_linter_refuses_a_mass_property_table_that_disagrees_with_itself(tmp_path):
@@ -18673,11 +18674,9 @@ def test_the_other_three_configurations_mass_properties_re_derive_from_their_own
     (3.2-25, **LM coordinates**) and the ascent stage at liftoff (3.2-26, LM coordinates). The
     fourth — the CSM docked to an ascent stage — no table covers, and stays owed.
 
-    The frame is the half that is easy to get wrong: 3.2-25's X-BAR is about 186 inches and the
-    docked stack's is about 1046, not because one vehicle is longer but because the LM's own origin
-    is 399.5 inches along the Apollo axis. A tensor transfers between the two by nothing at all —
-    the book's transformation is a pure translation — which is exactly why the frame has to be
-    declared rather than assumed.
+    The frame is the half that is easy to get wrong: 3.2-25's X-BAR is about 186 inches in
+    the LM's own coordinates, while the docked stack's is about 1046 in Apollo coordinates.
+    Figure 2-17 reverses their axial directions; the J-2 lateral rotation remains owed.
     """
     vehicle = yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())
     block = vehicle["mass_properties"]
@@ -18728,19 +18727,17 @@ def test_the_other_three_configurations_mass_properties_re_derive_from_their_own
         izz = entry["inertia_kg_m2"]["izz"]["value"]
         assert ixx + iyy > izz and iyy + izz > ixx and izz + ixx > iyy, config_id
 
-    # The LM's stations are LM stations: the ascent stage's centre of mass is 6.2 m along the LM's
-    # own axis, which in the Apollo frame is 399.5 in = 10.1 m further along — the reason the frame
-    # could not be left to a reader's assumption.
+    # The LM-only table stays in its native frame; no Apollo translation is applied here.
     ascent = next(c for c in block["configurations"] if c["id"] == "lm_ascent_stage")
     assert 6.0 < ascent["x_bar_m"]["value"] < 6.4
-    assert "399.5" in next(f for f in block["frames"] if f["id"] == "LM_XE")["definition"]
+    assert "1422.75 - X_E" in next(f for f in block["frames"] if f["id"] == "LM_XE")["definition"]
 
 
 def test_the_linter_refuses_a_mass_property_table_whose_frame_is_not_declared(tmp_path):
     """A tensor in an unnamed frame is a tensor nothing can rotate or offset.
 
-    The LM tables are in LM coordinates and the CSM's in Apollo's, and the difference is 399.5
-    inches of station — so a table that names a frame the file does not declare is refused by name
+    The LM tables are in LM coordinates and the CSM's in Apollo's, so a table that names a
+    frame the file does not declare is refused by name
     rather than read as though the two were interchangeable. The second fixture is the other half
     of the interpolation rule, on a configuration that is not the docked one: the rows a
     derivation names must bracket the weight it is interpolating at.
@@ -18773,45 +18770,34 @@ def test_the_linter_refuses_a_mass_property_table_whose_frame_is_not_declared(tm
     assert "the moment of inertia declares" in result.stdout, result.stdout[-900:]
 
 
-def test_the_two_vehicles_do_not_add_up_to_the_docked_table_s_own_row():
-    """A frame offset is a property of the configuration — and adding two tables is not a vehicle.
+def test_the_docked_lm_axial_station_reverses_direction_and_lateral_clocking_remains_owed():
+    """Rev 2 Figure 2-17 reverses X_E against X_A, with no J-2 full rotation claim.
 
-    `mass_properties.frames.LM_XE` carried `X_A = X_E + 399.5` — which is Figure 2-16's relation,
-    and Figure 2-16 is the **launch configuration**, where the LM sits in the adapter with its
-    docking interface 398.25 inches below the CSM's. Docked, Figure 2-17 mates the two interfaces
-    at X_A = 1110.25 with X_E = 312.5 there, so the offset is 797.75. The corpus had the launch
-    figure applied to docked tables: **10.1 m at every LM station.**
-
-    This test is the evidence for both halves of the round. First the offset: the docked relation
-    is the one that puts the two docking interfaces at the same station, and the launch relation
-    does not. Then the reason the last configuration is still owed after the offset is settled:
-    the addition itself does not work. Composing `csm_alone` with `lm_alone_descent` — which is
-    what `csm_lm_docked` is *defined* as, and whose masses sum to its 44,085 kg — misses the
-    station Table 3.2-21 tabulates for that weight by 22 %, because a weight-indexed table's row
-    and a reference-state sum are different vehicles at the same mass.
+    The old +797.75 in translation matched the mated interface but reversed the direction
+    for every other LM station. Figure 2-16's launch +399.5 in relation is a separate
+    configuration. The Rev 3 Amendment 114 J-2 mass tables remain in their native frames.
     """
     vehicle = yaml.safe_load((VEHICLE / "vehicle.yaml").read_text())
     block = vehicle["mass_properties"]
-    frames = {f["id"]: f for f in block["frames"]}
-    lm = frames["LM_XE"]
-    offsets = {o["configuration"]: o["offset_in"] for o in lm["offsets"]}
-    assert offsets == {"launch": 399.5, "docked": 797.75}, offsets
+    lm = next(f for f in block["frames"] if f["id"] == "LM_XE")
+    transforms = {t["configuration"]: t for t in lm["axial_transforms"]}
+    assert set(transforms) == {"launch", "docked"}
+    launch, docked = transforms["launch"], transforms["docked"]
+    assert (launch["scale"], launch["origin_in"]) == (1, 399.5)
+    assert (docked["scale"], docked["origin_in"]) == (-1, 1422.75)
+    assert docked["lateral_rotation"] == "UNCONFIGURED"
+    assert "Rev 2" in docked["source"]
+    assert launch["scale"] * 312.5 + launch["origin_in"] == 712.0
+    assert docked["scale"] * 312.5 + docked["origin_in"] == 1110.25
+    assert docked["scale"] * 0 + docked["origin_in"] == 1422.75
+    assert docked["scale"] * 400 + docked["origin_in"] == 1022.75
 
-    # The physical constraint, from the book's own numbers: docked, the LM's docking interface
-    # (X_E = 312.5) and the CM's (X_A = 1110.25) are the same station.
-    assert 312.5 + offsets["docked"] == 1110.25
-    # And in the launch configuration the same interface is at X_A = 712.0 — the adapter position —
-    # which is 398.25 inches lower. Both figures are right about different vehicles.
-    assert 312.5 + offsets["launch"] == 712.0
-    assert offsets["docked"] - offsets["launch"] == 398.25
-
-    # Every table in that frame says which reading it uses, or why none applies.
     for table in block["tables"]:
         if table["frame"] == "LM_XE":
-            assert table.get("offset_configuration") or table.get("offset_not_applicable"), table["id"]
+            assert table.get("transform_configuration") or table.get("transform_not_applicable"), table["id"]
 
-    # The addition, done here so that nobody lands it believing it works. All four quantities are
-    # in the corpus; this is the arithmetic the corpus refuses to carry.
+    # This axial-only comparison is a diagnostic, not a tensor composition. The separate
+    # tables' reference states have not been matched at one mission epoch.
     def entry(config_id):
         return next(c for c in block["configurations"] if c["id"] == config_id)
 
@@ -18822,52 +18808,57 @@ def test_the_two_vehicles_do_not_add_up_to_the_docked_table_s_own_row():
         rows = sorted(tables[e["table"]]["rows"], key=lambda r: r["weight_lb"])
         w = e["weight_lb"]["value"]
         lo, hi = rows[0], rows[1]
-        f = (w - lo["weight_lb"]) / (hi["weight_lb"] - lo["weight_lb"])
-        return lo[field] + f * (hi[field] - lo[field])
+        fraction = (w - lo["weight_lb"]) / (hi["weight_lb"] - lo["weight_lb"])
+        return lo[field] + fraction * (hi[field] - lo[field])
 
-    halves = (("csm_alone", 28807.0, "APOLLO_XA"), ("lm_alone_descent", 15278.0, "LM_XE"))
-    for label, offset_in in (("launch", offsets["launch"]), ("docked", offsets["docked"])):
-        total = sum(m for _, m, _ in halves)
-        stations = []
-        for config_id, mass, frame_id in halves:
-            station = interpolated(config_id, "x_bar_in")
-            if frame_id == "LM_XE":
-                station += offset_in
-            stations.append((mass, station))
-        composed = sum(m * x for m, x in stations) / total
-        tabulated = interpolated("csm_lm_docked", "x_bar_in")
-        miss = abs(composed - tabulated) / tabulated
-        # **Both readings miss.** The offset is not what makes the addition wrong — at the correct
-        # docked offset it is still 9 % — which is the finding: the two tables' reference states
-        # are not the docked row's vehicle at the same weight.
-        assert miss > 0.05, (label, composed, tabulated)
-    assert total == pytest.approx(44085.0, abs=0.5)
+    csm_x = interpolated("csm_alone", "x_bar_in")
+    lm_x = interpolated("lm_alone_descent", "x_bar_in")
+    composed_x = (28807 * csm_x + 15278 * (docked["scale"] * lm_x + docked["origin_in"])) / 44085
+    tabulated_x = interpolated("csm_lm_docked", "x_bar_in")
+    assert composed_x == pytest.approx(1037.65045, abs=0.01)
+    assert tabulated_x == pytest.approx(1046.43786, abs=0.01)
+    assert abs(composed_x - tabulated_x) / tabulated_x == pytest.approx(0.00839745, abs=1e-5)
 
-    # And the composition stays owed, with the epoch named rather than a document.
     owed = next(c for c in block["configurations"] if c["id"] == "csm_lm_ascent_docked")
     assert owed["properties"] == "UNCONFIGURED"
-    assert "epoch" in owed["note"] and "44,085" in owed["note"]
+    assert "epoch" in owed["note"] and "lateral rotation" in owed["note"]
 
 
-def test_the_linter_refuses_a_table_in_a_frame_whose_offset_is_configuration_dependent(tmp_path):
-    """Two figures, two vehicles, 398.25 inches apart — so a table has to say which one it means.
-
-    The LM frame's offset to the body frame depends on the configuration, so a table in it that
-    names neither the configuration it is read in nor a reason no offset applies is refused. That
-    is the check that would have caught this round's defect when it was written: the corpus had the
-    launch configuration's offset on tables whose stations are docked ones.
-    """
+def test_the_linter_refuses_an_lm_table_with_no_axial_transform_disposition(tmp_path):
+    """An LM station needs its own frame or a named configuration's axial relation."""
     vehicle_yaml = (VEHICLE / "vehicle.yaml").read_text()
-    definition = copy_definition(fixture_dir(tmp_path, "offsetless"))
+    definition = copy_definition(fixture_dir(tmp_path, "transformless"))
     path = definition / "vehicle.yaml"
-    old = "      offset_not_applicable: >-\n        the LM alone at P.D.I."
+    old = "      transform_not_applicable: >-\n        the LM alone at P.D.I."
     assert old in vehicle_yaml
-    path.write_text(vehicle_yaml.replace(old, "      unused_offset_note: >-\n        the LM alone at P.D.I.", 1))
+    path.write_text(vehicle_yaml.replace(old, "      unused_transform_note: >-\n        the LM alone at P.D.I.", 1))
     result = run_linter(definition)
     assert result.returncode == 1
-    assert "whose offset to the body frame depends on the configuration" in result.stdout, (
+    assert "an LM table must name one launch/docked axial transform" in result.stdout, (
         result.stdout[-900:]
     )
+
+
+def test_the_linter_refuses_the_old_positive_docked_lm_offset(tmp_path):
+    """The one-point offset and a guessed J-2 lateral rotation exceed the cited figure."""
+    vehicle_yaml = (VEHICLE / "vehicle.yaml").read_text()
+    definition = copy_definition(fixture_dir(tmp_path, "positive-docked-axis"))
+    path = definition / "vehicle.yaml"
+    old = "        scale: -1\n        origin_in: 1422.75\n"
+    assert old in vehicle_yaml
+    path.write_text(vehicle_yaml.replace(old, "        scale: 1\n        origin_in: 797.75\n", 1))
+    result = run_linter(definition)
+    assert result.returncode == 1
+    assert "the old docked +797.75 in mapping matches one point but reverses the axis" in result.stdout
+
+    definition = copy_definition(fixture_dir(tmp_path, "guessed-j2-lateral-clock"))
+    path = definition / "vehicle.yaml"
+    old = "        lateral_rotation: UNCONFIGURED\n"
+    assert old in vehicle_yaml
+    path.write_text(vehicle_yaml.replace(old, "        lateral_rotation: identity\n", 1))
+    result = run_linter(definition)
+    assert result.returncode == 1
+    assert "J-2 lateral clocking has no established transform" in result.stdout
 
 
 def test_the_transfer_is_sized_to_the_moon_s_own_distance_at_the_arrival_epoch():

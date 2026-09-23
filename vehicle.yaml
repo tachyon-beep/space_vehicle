@@ -401,59 +401,49 @@ mass_properties:
   frames:
   - id: APOLLO_XA
     definition: >-
-      the Operational Data Book's Apollo coordinates. X_A = 0.0 at launch-vehicle station
-      4578.805 in (X_A = 4578.805 - X_LV), increasing along the stack from the LM's descent
-      engine through the LM docking interface (X_E = 312.5, X_A = 712.0, with X_A = X_E +
-      399.5) and the CM's (X_A = 1110.25) into the service module, so **+X_A is the direction
-      the SPS and the DPS thrust**. That transformation is the whole point of naming the
-      frame: without it a station is a number against nothing, which is what the folder said
-      for a hundred rounds. **The two figures state the launch-vehicle station under two
-      conventions** — Figure 2-16 has X_A = X_LV - 2756.555 and Figure 2-17 has X_A =
-      4578.805 - X_LV, and those two cannot both hold for one X_LV — so the relation to use is
-      the Apollo-to-LM one above; nothing in this file reads the launch-vehicle station. Y is
-      the transverse axis through the crew stations' centreline and Z the other, right-handed
-      with X
+      the Operational Data Book's Apollo X_A station axis. Figure 2-16 (launch) has
+      X_LV = X_A + 2756.555 in and X_LV = X_E + 3156.055 in; +X_A and +X_E both point
+      up the launch stack, giving X_A = X_E + 399.5 in. Figure 2-17 (docked)
+      has X_A = 4578.805 - X_LV and X_E = X_LV - 3156.055; +X_A points down and
+      +X_E points up in that station drawing. They give X_A = 1422.75 - X_E in.
+      The launch and docked figures describe different configurations; neither
+      launch-vehicle-station equation is a configuration-independent frame rule.
     provenance:
       basis: historical
-      source: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, section 2.0 'Configuration and Reference Station Locations', Figures 2-16 and 2-17, PDF pp. 41-42 (printed pp. 2-18/2-19)"
+      source: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 2, section 2.0 'Configuration and Reference Station Locations', Figures 2-16 and 2-17, PDF pp. 41-42 (printed pp. 2-17/2-18); these station figures are Rev 2, while the J-2 mass tables below are Rev 3 Amendment 114"
       note: >-
-        the frame is checkable against the table it is used with: the docked stack's own centre
-        of mass in Table 3.2-21 runs from X_A = 1041.07 in at 102,787.4 lb to X_A = 1110.52 in
-        at 66,787.4 lb, i.e. between the two docking interfaces and moving toward the CM as the
-        service module's propellant is burned, which is where a stack with the LM forward and
-        the SPS aft puts its centre of mass
+        the figures settle the axial station convention at their stated configurations,
+        not a full three-dimensional rotation or the J-2 docking clocking
   - id: LM_XE
     definition: >-
-      the LM's own coordinates, X_E, whose origin is at the foot of the descent stage and whose
-      +X is the same direction as Apollo's — the Operational Data Book transforms between the two
-      by a translation and nothing else, so **a tensor expressed in X_E is the same tensor in the
-      body frame and needs no rotation**, while a station needs the offset. **And the offset is a
-      property of the configuration, not of the frames**: the two figures that state it differ by
-      398.25 inches because they are two different vehicles. Docked (Figure 2-17) the LM's docking
-      interface mates with the CSM's, and both are at X_A = 1110.25 with X_E = 312.5 there, so
-      `X_A = X_E + 797.75`. In the launch configuration (Figure 2-16) the LM sits in the adapter
-      below the CSM with its interface at X_A = 712.0, so `X_A = X_E + 399.5`. **The corpus had the
-      launch figure applied to docked tables**, which puts an LM station 10.1 m from where it is
-    offsets:
+      the LM X_E station axis, with origin at the descent-stage base. Its axial relation
+      to Apollo stations depends on configuration. Launch Figure 2-16 gives
+      X_A = X_E + 399.5 in; docked Figure 2-17 reverses the axial direction and gives
+      X_A = 1422.75 - X_E in. The J-2 docked lateral-axis rotation is UNCONFIGURED;
+      an axial relation alone does not rotate an LM inertia tensor into Apollo axes.
+    axial_transforms:
       - configuration: launch
-        offset_in: 399.5
-        source: "ODB Vol III section 2.0, Figure 2-16, PDF p. 41: X_LV = X_A + 2756.555 and X_LV = X_E + 3156.055"
+        scale: 1
+        origin_in: 399.5
+        source: "SNA-8-D-027(III) Rev 2, Figure 2-16, PDF p. 41 (printed 2-17): X_LV = X_A + 2756.555 and X_LV = X_E + 3156.055"
       - configuration: docked
-        offset_in: 797.75
-        source: "ODB Vol III section 2.0, Figure 2-17, PDF p. 42: the LM docking interface at X_E = 312.5 has X_LV = 3468.555, and X_A = 4578.805 - X_LV gives X_A = 1110.25, which is the station the same figure gives the CM docking interface — the two are mated, so the offset is 1110.25 - 312.5"
+        scale: -1
+        origin_in: 1422.75
+        lateral_rotation: UNCONFIGURED
+        source: "SNA-8-D-027(III) Rev 2, Figure 2-17, PDF p. 42 (printed 2-18): X_A = 4578.805 - X_LV and X_E = X_LV - 3156.055; the mated interface is X_E = 312.5, X_A = 1110.25"
     provenance:
       basis: historical
-      source: "as APOLLO_XA: ODB Vol III section 2.0, Figures 2-16 and 2-17, PDF pp. 41-42"
+      source: "SNA-8-D-027(III) Rev 2, Figures 2-16 and 2-17, PDF pp. 41-42; the J-2 tables are Rev 3 Amendment 114"
       note: >-
-        3.2-25 and 3.2-26 below are in this frame, and so is every LM station in the corpus; what
-        the two offsets settle is which Apollo station an LM station corresponds to, which is what
-        a docked composition needs. A table in this frame therefore has to say which configuration
-        it is being read in, and `check_mass_properties` refuses one that does not
+        Tables 3.2-25 and 3.2-26 are LM-only and need no Apollo transform. An LM station
+        placed in an Apollo configuration must name its axial transform. A full docked
+        tensor composition also needs the J-2 lateral rotation and matched mass epochs.
   body_axes: >-
-    `frames`' `BODY` frame **is** this frame: +X is the thrust axis and the tensor below is
-    expressed in it, so the axes `attitude_q` and `body_rate` are integrated in are the axes
-    the inertia is tabulated in and no rotation sits between them. Until this block existed
-    `BODY` declared `axes: "body axes"`, which is a name rather than a definition
+    The Apollo-coordinate CSM and docked tables use APOLLO_XA; the LM-only tables use
+    LM_XE. The static BODY label does not itself supply the transform between them.
+    The Rev 2 station figures do not establish a J-2 LM-to-Apollo three-dimensional
+    rotation. No mixed-frame inertia tensor or full thruster effectiveness matrix is
+    claimed from these axial data.
   tables:
     - id: ODB_3_2_21
       configuration: csm_lm_docked
@@ -540,10 +530,9 @@ mass_properties:
       document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
       pages: "PDF p. 359 (printed p. 3.2-123)"
       columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2)"
-      offset_not_applicable: >-
+      transform_not_applicable: >-
         the LM alone at P.D.I.: this table's stations are LM stations and the vehicle it describes
-        carries no CSM, so no Apollo offset applies to it. The offset is needed only when an LM
-        station is placed against a docked stack, and then it is the docked one — 797.75 in
+        carries no CSM, so no Apollo transform applies to it
       note: >-
         the two rows bracketing `lm_alone_descent` at 15,278 kg = 33,682.2 lb, in **LM
         coordinates** — the frame above — and this table carries **no AVERAGE column**, so the
@@ -581,9 +570,9 @@ mass_properties:
       document: "CSM/LM Operational Data Book, SNA-8-D-027(III) Rev 3, Volume III, 'Mission J-2 Mass Property Data Tables', Amendment 114, 9/15/71"
       pages: "PDF p. 361 (printed p. 3.2-125)"
       columns: "WEIGHT LBS | X-BAR, Y-BAR, Z-BAR (INCHES) | IXX, IYY, IZZ, PXY, PXZ, PYZ (SLUG-FT2)"
-      offset_not_applicable: >-
+      transform_not_applicable: >-
         the ascent stage alone at liftoff: as 3.2-25, an LM-only vehicle's stations are its own,
-        and the docked offset applies when this stage is composed with a CSM
+        while a docked composition needs the configuration's complete frame transform
       note: >-
         the two rows bracketing `lm_ascent_stage` at 4,888 kg = 10,776.2 lb, in LM coordinates.
         **IZZ is not monotone across this table** (5,463 then 5,771 then 5,577 then 5,383 down the
@@ -1058,19 +1047,13 @@ mass_properties:
       table: ODB_3_2_22 + ODB_3_2_26
       properties: UNCONFIGURED
       note: >-
-        owed to **an epoch, not a document**. Both halves are declared above — `csm_alone`'s tensor
-        from Table 3.2-22 and `lm_ascent_stage`'s from Table 3.2-26 — and the parallel-axis
-        composition of the two is arithmetic this file could do. **It is not landed because it does
-        not reproduce the one case that can be checked.** Composing `csm_alone` with
-        `lm_alone_descent`, whose masses sum to `csm_lm_docked`'s 44,085 kg, gives a centre of mass
-        22 % forward of the station Table 3.2-21 tabulates for that weight (and 9 % off with the
-        docked frame offset instead of the launch one). The tables are indexed by **weight**, and
-        at one weight the reference mission's two vehicles are not at the states their own tables
-        are referenced to: the docked row's CSM has burned propellant the CSM-alone table's has
-        not. So a composed tensor would be the tensor of this corpus's construction — two
-        reference states added — rather than of any vehicle the book tabulates, and that is a
-        distinction worth a round rather than a number. What would land it is the CSM+ascent-stage
-        configuration tabulated at its own epoch, which the volume does not have
+        owed to a matched mass epoch and the J-2 LM-to-Apollo lateral rotation. Tables
+        3.2-22 and 3.2-26 describe separate vehicles at different reference states;
+        their mass sum does not identify a historical CSM/ascent-stage stack at one
+        epoch. The Rev 2 station figures supply only the axial relation, while the
+        mass tables here are J-2 Rev 3 Amendment 114. A full parallel-axis tensor
+        composition needs both components at a common epoch and a sourced three-dimensional
+        rotation. These inputs remain UNCONFIGURED rather than assumed.
 
 # --------------------------------------------------------------------------------------
 # Propulsion. Loads are flight-measured. The linter flies each engine's burns in phase order

@@ -14080,15 +14080,17 @@ def check_mass_properties(root: Path, report: Report) -> None:
     `vehicle.yaml#open_debts` said the axis datum "lives in the CSM/LM Operational Data Book
     (SNA-8-D-027), which is not reachable". **The book is in the library.** It defines the
     frame in section 2.0 and tabulates the mass properties in section 3.2, and both are now in
-    the corpus — the frame as a definition with its two transformations, and Table 3.2-21 as
+    the corpus — the frame as a definition with its two axial transformations, and Table 3.2-21 as
     *two rows carried whole*, not as an interpolated number.
 
-    Four things are refused, and the second is the one that makes a hand-read fold-out
+    These failures are refused, and the row-average check makes a hand-read fold-out
     trustworthy at all:
 
       - a configuration the file declares with neither values nor a named table, because a
         configuration with no mass properties and no record of what would give it them is a
         silence rather than a debt;
+      - an LM axial transform that contradicts the Rev 2 launch or docked station figures,
+        or a claimed J-2 lateral rotation those figures do not establish;
       - **a row whose `AVERAGE` column is not `(IYY + IZZ) / 2 / 10`.** The Operational Data
         Book prints that column in every row, it is arithmetic over two numbers in the same row,
         and no plausible misreading of a rotated scan preserves it. It is the only reason the
@@ -14122,18 +14124,41 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 f"vehicle.yaml:mass_properties.frames {frame_id}",
                 "declares no definition, so a table in this frame is a table against nothing",
             )
-        # **A frame whose offset to the body frame depends on the configuration has to be read
-        # with one.** The LM's does: the two figures that state it differ by 398.25 inches because
-        # one is the LM in the launch adapter and the other is the LM mated to the CSM, and a
-        # table that used the wrong one would be 10 m out at every station.
-        offsets = frame.get("offsets")
-        if isinstance(offsets, list):
-            names = [str(o.get("configuration")) for o in offsets if isinstance(o, dict)]
-            if len(set(names)) != len(names) or any(not n or n == "None" for n in names):
-                report.refuse(
-                    f"vehicle.yaml:mass_properties.frames {frame_id}.offsets",
-                    f"declares {names}, which is not one offset per configuration",
-                )
+        # The Rev 2 station figures give affine X-station relations. In docked Figure 2-17
+        # +X_A and +X_E oppose each other, so a positive offset is not the relation even
+        # though it maps the docking-interface point correctly.
+        if frame_id == "LM_XE":
+            where = "vehicle.yaml:mass_properties.frames LM_XE.axial_transforms"
+            transforms = frame.get("axial_transforms")
+            if "offsets" in frame or not isinstance(transforms, list):
+                report.refuse(where, "must carry axial scale and origin, not translation-only offsets")
+                transforms = []
+            names = [t.get("configuration") for t in transforms if isinstance(t, dict)]
+            if len(transforms) != 2 or sorted(str(n) for n in names) != ["docked", "launch"]:
+                report.refuse(where, "must name one launch and one docked axial transform")
+            expected = {"launch": (1, 399.5), "docked": (-1, 1422.75)}
+            for transform in transforms:
+                if not isinstance(transform, dict):
+                    report.refuse(where, "contains a non-mapping transform")
+                    continue
+                configuration = transform.get("configuration")
+                if not isinstance(configuration, str) or configuration not in expected:
+                    continue
+                scale, origin = expected[configuration]
+                if (type(transform.get("scale")) not in (int, float)
+                        or type(transform.get("origin_in")) not in (int, float)
+                        or transform["scale"] != scale or transform["origin_in"] != origin):
+                    report.refuse(
+                        f"{where}.{configuration}",
+                        f"must use X_A = {scale} * X_E + {origin} in from ODB Rev 2 "
+                        f"Figure 2-{'16' if configuration == 'launch' else '17'}; "
+                        "the old docked +797.75 in mapping matches one point but reverses the axis",
+                    )
+                if configuration == "docked" and transform.get("lateral_rotation") != "UNCONFIGURED":
+                    report.refuse(
+                        f"{where}.docked.lateral_rotation",
+                        "J-2 lateral clocking has no established transform in the cited Rev 2 station figure",
+                    )
     tables = {
         str(t.get("id")): t
         for t in block.get("tables") or []
@@ -14156,18 +14181,22 @@ def check_mass_properties(root: Path, report: Report) -> None:
                 f"names {table.get('frame')!r}, which is not a frame this block declares. A "
                 "tensor whose frame is unnamed is a tensor nothing can rotate or offset",
             )
-        elif isinstance(frames[str(table.get("frame"))].get("offsets"), list) and not (
-            table.get("offset_configuration") or table.get("offset_not_applicable")
-        ):
-            # The frame's offset is configuration-dependent, so the table must say which
-            # configuration it is read in — or, for a vehicle tabulated on its own, say that no
-            # offset applies to it at all.
-            report.refuse(
-                f"vehicle.yaml:mass_properties.tables.{table_id}",
-                f"is in {table.get('frame')}, whose offset to the body frame depends on the "
-                "configuration, and the table names neither the configuration it is read in "
-                "nor a reason no offset applies. A station 10 metres wrong is still a number",
-            )
+        elif table.get("frame") == "LM_XE":
+            # An LM-only table remains in its native frame. A cross-vehicle reading must
+            # select the configuration before converting even its X station.
+            chosen = table.get("transform_configuration")
+            native = table.get("transform_not_applicable")
+            if bool(chosen) == bool(native) or chosen and chosen not in ("launch", "docked"):
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.tables.{table_id}",
+                    "an LM table must name one launch/docked axial transform or explain why "
+                    "its native LM stations need no Apollo transform",
+                )
+            if "offset_configuration" in table or "offset_not_applicable" in table:
+                report.refuse(
+                    f"vehicle.yaml:mass_properties.tables.{table_id}",
+                    "uses a translation-only offset marker for a frame whose docked X axis reverses",
+                )
         for index, row in enumerate(rows):
             where = f"vehicle.yaml:mass_properties.tables.{table_id}.rows[{index}]"
             average = row.get("average_moment")
