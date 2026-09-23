@@ -16302,7 +16302,7 @@ def check_launch_state(root: Path, mission: dict[str, Any], report: Report) -> N
             continue
         if str(state.get("initial")) != str(value):
             report.refuse(
-                f"domains/{path.name}:state {sid}",
+                f"domains/{domain_of[str(sid)]}/components.yaml:state {sid}",
                 f"declares `initial: {state.get('initial')!r}` and `mission.yaml#launch_state` "
                 f"makes it {value!r}. The decision is declared once, in the mission, and this state "
                 "is one of the machines it is about",

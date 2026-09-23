@@ -18301,6 +18301,20 @@ left over from the loop above it, so it names `structure` whichever domain the s
 fixed exactly that in the loop below it and wrote the comment saying so; this one was left. It is a
 one-line repair with a broken-copy test, and it is the next round's.
 
+## A launch disagreement named the last domain read, not the state that disagreed
+
+`check_launch_state` already records each state's domain while reading `components.yaml`, because
+the reverse citation check needs that map. Its forward check used the loop variable `path` after
+the domain scan ended. A changed `sps_state` therefore produced a refusal at
+`domains/components.yaml:state sps_state` instead of propulsion. The value was refused, but the
+message directed a repair to a file that does not exist.
+
+The forward refusal now uses the same per-state domain map as the reverse check and names
+`domains/propulsion/components.yaml:state sps_state`. A broken-copy test changes the SPS launch
+position and asserts the full location. It failed on the old linter and passes with the repair;
+the existing launch-state test still passes. No vehicle quantity or debt moved. The referee grows
+from 337 to 338 tests.
+
 ## The invariants, and which of them are enforced
 
 

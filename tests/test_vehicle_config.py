@@ -8741,6 +8741,24 @@ def test_the_launch_state_is_declared_once_and_held_in_both_directions(tmp_path)
     )
 
 
+def test_a_launch_state_disagreement_names_the_state_s_domain(tmp_path):
+    """A launch-state refusal must point to the state that disagrees, not the last domain read.
+
+    The linter builds a per-state domain map but this refusal still uses the `path` left over from
+    scanning every components file. A useful refusal must send the reader to propulsion for SPS.
+    """
+    definition = copy_definition(fixture_dir(tmp_path, "launch-state-domain"))
+    target = definition / "domains" / "propulsion" / "components.yaml"
+    original = target.read_text()
+    old = '    initial: "off"\n    initial_provenance:\n      basis: derived\n      relation: "the vehicle at MET 0'
+    new = '    initial: "standby"\n    initial_provenance:\n      basis: derived\n      relation: "the vehicle at MET 0'
+    assert old in original
+    target.write_text(original.replace(old, new, 1))
+
+    output = run_linter(definition).stdout
+    assert "domains/propulsion/components.yaml:state sps_state" in output, output[-1400:]
+
+
 def test_a_published_launch_position_is_not_a_decision(tmp_path):
     """The launch positions are a lookup, and this block could only call them a decision.
 
