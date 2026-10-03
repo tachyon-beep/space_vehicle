@@ -1,5 +1,14 @@
 # vehicle/
 
+## Development and completion
+
+Start with [the delivery roadmap](ROADMAP.md), [completion gates](docs/completion.md)
+and [contribution workflow](CONTRIBUTING.md). [Evidence policy](docs/evidence.md),
+[decision records](docs/decisions/README.md) and [release guidance](docs/release.md)
+define how work is reviewed and accepted. Development green is a checkpoint;
+vehicle and mission acceptance require separate evidence. The existing numerical
+status and round log below remain the tool-checked model record.
+
 The vehicle: the far side of the window that `space_chassis` deliberately does not contain. It is
 its own repository, vendored into `space_chassis` as a git submodule at `docs/deep_research/vehicle`
 so that a checkout of the chassis has a vehicle to run — and a second vehicle is a second submodule

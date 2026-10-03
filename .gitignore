@@ -14,3 +14,6 @@ __pycache__/
 # Round verifiers, and any diode directory a console was pointed at.
 .scratch/
 volumes/
+
+# Isolated development environments.
+.venv/

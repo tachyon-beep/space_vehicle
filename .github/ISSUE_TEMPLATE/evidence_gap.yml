@@ -1,0 +1,25 @@
+name: Evidence gap
+description: Resolve an applicable model input without inventing a value
+title: "[Evidence] "
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Exact question and blocked consumer
+      description: Link the work package and canonical field/rule. Include units, variant, operating regime and required precision/bounds.
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Evidence and applicability
+      description: Cite primary sources with page/section, derivations, searches and rejected alternatives. Frozen corpus references are read-only.
+    validations:
+      required: true
+  - type: textarea
+    id: resolution
+    attributes:
+      label: Resolution and independent validation
+      description: State the applicable answer or named blocker, reviewer/decision owner, and how the consumer will be checked. Missing values stay UNCONFIGURED.
+    validations:
+      required: true

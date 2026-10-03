@@ -1,0 +1,23 @@
+name: Defect
+description: Reproduce a concrete refusal, model or executive defect
+title: "[Defect] "
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and environment
+      description: Exact source SHA, locked environment, input and command. Redact credentials and private runtime data.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+      description: Cite the contract or independent reference, and include bounded logs/artifacts.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Affected package and acceptance regression
+      description: Link the roadmap package and specify the check that will prove repair.
