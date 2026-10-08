@@ -11163,6 +11163,22 @@ CONFORMANCE_STATUSES = {
     "vacuous",
 }
 
+# **The four citations into `space_chassis`, by their canonical identity.** Each names a file in the
+# other repository — the frozen contract, its probe, the corpus document the graph was generated
+# from, and the design section that fixes its provenance rule — and this linter may not open any of
+# them. Existence is asserted where they live (`space_chassis/tests/test_vehicle_reconciliation.py`);
+# what is asserted here is *identity*: the exact path, and the fragment where the citation is to a
+# section rather than a file. A citation that differs from this table has been renamed, misspelt or
+# re-pointed, and that is refused without any lookup — so no file that happens to sit in an ancestor
+# or the working directory can rescue it. Moving one of these targets on the chassis side is a
+# cross-repository change, and it moves this table in the vehicle commit that adopts it.
+EXTERNAL_CITATIONS: dict[str, str] = {
+    "presentation.yaml:contract": "docs/diode-contract.md",
+    "presentation.yaml:contract_probe": "contract/diode_probe.py",
+    "coupling.yaml:generated_from": "docs/deep_research/apollo_diode.md",
+    "coupling.yaml:provenance_rules": "docs/deep_research/integration/simulator-design.md#31",
+}
+
 
 def check_cabin_volumes(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The denominator of every partial pressure the crew read, declared seven times.
@@ -11301,9 +11317,18 @@ def check_presentation_references(
 
     So existence is asserted where the targets are —
     `space_chassis/tests/test_vehicle_reconciliation.py` holds each name to a file — and what is
-    checkable here is the citation's shape. An absent or empty reference is refused, and so is one
-    that cannot be repository-relative at all: an absolute path, or one that climbs out with `..`,
-    names something no checkout of the citing repository contains.
+    checkable here is the citation's shape and its identity. An absent or empty reference is
+    refused, and so is one that cannot be repository-relative at all: an absolute path, or one that
+    climbs out with `..`, names something no checkout of the citing repository contains.
+
+    **Shape alone let a renamed citation through, and that was the repair's own mistake.** The
+    first version of this standalone check kept only the shape rules and deleted the test that
+    refused `docs/diode-contract-v2.md`, on the reasoning that a rename can only be caught where
+    the target lives. It can be caught here too, without a lookup: the four citations are to frozen
+    files, so each has one canonical identity (`EXTERNAL_CITATIONS`), and a citation that differs
+    from it — another path, a dropped `#31`, a fragment on a file citation — is refused by
+    comparison. Nothing is resolved against the filesystem, so a decoy file beside or above the
+    vehicle cannot make a wrong citation compose.
 
     The conformance table is the vehicle's claim to satisfy `docs/diode-contract.md` §9, and it is
     twelve rows against the contract's twelve numbered checks. Nothing joined the two, so a row
@@ -11329,6 +11354,22 @@ def check_presentation_references(
                 f"names {value!r}, which is not relative to the citing repository's root. The "
                 "target is resolved in `space_chassis`, and a path that is absolute or climbs out "
                 "of it names a file no checkout of that repository holds",
+            )
+        elif str(value) != EXTERNAL_CITATIONS[where]:
+            canonical = EXTERNAL_CITATIONS[where]
+            path, _, fragment = canonical.partition("#")
+            if target != path:
+                difference = f"the path differs from the canonical {path!r}"
+            elif fragment:
+                difference = f"the fragment differs from the canonical section `#{fragment}`"
+            else:
+                difference = f"{path!r} is cited as a whole file and carries no fragment"
+            report.refuse(
+                where,
+                f"names {value!r}, and the canonical citation is {canonical!r}: {difference}. A "
+                "renamed or re-pointed reference reads exactly like a correct one, and this "
+                "linter cannot open the target to tell them apart, so the identity is pinned "
+                "(`EXTERNAL_CITATIONS`) and a change to it is a deliberate cross-repository edit",
             )
 
     rows = presentation.get("conformance")

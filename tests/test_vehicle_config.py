@@ -13443,10 +13443,26 @@ def test_the_presentation_references_resolve_and_the_table_is_whole(tmp_path):
         "vacuous",
     }
 
-    # A renamed reference can only be caught where its target lives, so the linter does not try:
-    # what it refuses is a citation that could not be repository-relative at all, and a table with
-    # a hole in it. The linter used to stat these by walking up from the vehicle, which refused
-    # all four correct references in a standalone checkout and failed this repository's own CI.
+    # A renamed reference is refused by its identity rather than by a lookup: the linter used to
+    # stat these by walking up from the vehicle, which refused all four correct references in a
+    # standalone checkout and failed this repository's own CI, and the first standalone repair
+    # dropped this case altogether. `test_an_external_citation_is_held_to_its_canonical_identity`
+    # holds the rest — fragments, decoys and a foreign working directory.
+    definition = copy_definition(tmp_path / "refs")
+    path = definition / "presentation.yaml"
+    text = path.read_text()
+    broken = text.replace(
+        "contract: docs/diode-contract.md", "contract: docs/diode-contract-v2.md", 1
+    )
+    assert broken != text, "the fixture no longer matches presentation.yaml"
+    path.write_text(broken)
+    result = run_linter(definition)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "presentation.yaml:contract" in result.stdout, result.stdout[-900:]
+    assert "the path differs from the canonical" in result.stdout, result.stdout[-900:]
+
+    # And a citation that could not be repository-relative at all is refused as that, not as a
+    # rename, because the fix for it is different.
     for escaped in ("../docs/diode-contract.md", "/docs/diode-contract.md"):
         definition = copy_definition(tmp_path / f"refs{len(escaped)}")
         path = definition / "presentation.yaml"
@@ -13468,6 +13484,94 @@ def test_the_presentation_references_resolve_and_the_table_is_whole(tmp_path):
     result = run_linter(definition)
     assert result.returncode == 1, result.stdout[-900:]
     assert "skips [12]" in result.stdout, result.stdout[-900:]
+
+
+def test_an_external_citation_is_held_to_its_canonical_identity_and_no_ambient_file_rescues_it(
+    tmp_path,
+):
+    """The four citations into `space_chassis` are checked by identity, never by a lookup.
+
+    Issue #16: the linter resolved these by walking up from the vehicle directory and from the
+    process's working directory, so it passed inside a chassis checkout and refused all four
+    correct citations in a standalone one. The first repair kept only the shape rules — no
+    absolute path, no `..` — and with them a renamed contract, a dropped section fragment, or a
+    fragment on a whole-file citation all composed. Those are the failures the check exists for:
+    a reference whose target has been renamed reads exactly like a reference whose target is there.
+
+    So each case below plants a *decoy* first — the wrong file, created both in an ancestor of the
+    copy and in the working directory the linter runs from — because the old resolver would have
+    accepted exactly those, and a check that can be rescued by an ambient file is a check on the
+    machine rather than on the vehicle. The unbroken copy composes from that same foreign working
+    directory, which is the standalone property CI depends on.
+    """
+    foreign = tmp_path / "foreign_cwd"
+    foreign.mkdir()
+
+    def lint_from(definition: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(LINTER), "--dir", str(definition)],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=foreign,
+        )
+
+    clean = copy_definition(fixture_dir(tmp_path, "clean"))
+    result = lint_from(clean)
+    assert result.returncode == 0, result.stdout[-900:]
+    assert "COMPOSES" in result.stdout, result.stdout[-900:]
+
+    cases = (
+        (
+            "presentation.yaml",
+            "contract: docs/diode-contract.md",
+            "contract: docs/diode-contrat.md",
+            "presentation.yaml:contract",
+            "the path differs from the canonical",
+        ),
+        (
+            "presentation.yaml",
+            "contract_probe: contract/diode_probe.py",
+            "contract_probe: contract/fake_diode.py",
+            "presentation.yaml:contract_probe",
+            "the path differs from the canonical",
+        ),
+        (
+            "coupling.yaml",
+            "generated_from: docs/deep_research/apollo_diode.md",
+            "generated_from: docs/deep_research/apollo_diode.md#7",
+            "coupling.yaml:generated_from",
+            "is cited as a whole file and carries no fragment",
+        ),
+        (
+            "coupling.yaml",
+            "provenance_rules: docs/deep_research/integration/simulator-design.md#31",
+            "provenance_rules: docs/deep_research/integration/simulator-design.md",
+            "coupling.yaml:provenance_rules",
+            "the fragment differs from the canonical section `#31`",
+        ),
+        (
+            "coupling.yaml",
+            "provenance_rules: docs/deep_research/integration/simulator-design.md#31",
+            "provenance_rules: docs/deep_research/integration/simulator-design.md#3",
+            "coupling.yaml:provenance_rules",
+            "the fragment differs from the canonical section `#31`",
+        ),
+    )
+    for filename, old, new, where, words in cases:
+        definition = copy_definition(fixture_dir(tmp_path, "citation"))
+        path = definition / filename
+        text = path.read_text()
+        broken = text.replace(old, new, 1)
+        assert broken != text, f"the fixture no longer matches {filename}"
+        path.write_text(broken)
+        decoy = new.split(": ", 1)[1].split("#", 1)[0]
+        for base in (definition.parent, foreign):
+            (base / decoy).parent.mkdir(parents=True, exist_ok=True)
+            (base / decoy).write_text("a decoy that a filesystem lookup would have accepted\n")
+        result = lint_from(definition)
+        assert result.returncode == 1, (new, result.stdout[-900:])
+        assert where in result.stdout and words in result.stdout, (new, result.stdout[-1200:])
 
 
 def test_the_guidance_model_is_re_derived_rather_than_trusted(tmp_path):
