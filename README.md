@@ -63,11 +63,11 @@ python3 tools/faults.py --check                             # adding a fault mov
 python3 tools/faults.py --list                              # every fault, its kind and its seeding
 
 # the vehicle's side of the frozen window, and the operator side's instrument against it
-python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --init
-python3 tools/console.py --diode-dir .scratch/diode --slug vehicle --cycles 300 --poll 0.2
+python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --init
+python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --cycles 300 --poll 0.2
 # ... and from a *space_chassis* checkout, where the probe lives:
 #   python3 contract/diode_probe.py --diode-dir docs/deep_research/vehicle/.scratch/diode \
-#       --slug vehicle --poll-seconds 1
+#       --slug alpha --poll-seconds 1
 ```
 
 **The probe is not in this repository**, and the path says so: `contract/diode_probe.py` is
@@ -18519,6 +18519,69 @@ cases against the quiet tick's ring, cursor and gap list.
 | figure | before | after |
 |---|---:|---:|
 | referee tests | 345 | **346** |
+
+No configuration value, debt or state class moved.
+
+## Every window flew its own vehicle
+
+`tools/console.py` was one process per `<slug>` directory, and each process held its own
+`initial_values(world)`: the chassis starts one console per agent, so ten agents commanded ten
+copies of the vehicle, none of which was ever stepped — `plant.step` had no caller outside the tests,
+a "tick" was a loop iteration, dwell and queue age ran on the wall clock, the frame was the whole
+value map (stock residuals and the 52,100-slot coolant transport ring included), and arm tokens,
+dwell and counters were restored on restart from `pending.json`, a file the agent can write.
+Completion gate I needs one authoritative state commanded and observed through two windows, and the
+first two-window tracer found there was no such state to observe.
+
+`docs/decisions/0001-shared-executive.md` is the decision and this round is its first slice. One
+`Executive` owns the world: the truth map, the integer tick, a global receipt sequence, a per-tick
+lineage (`sha256(previous + state_hash(truth) + digest of the tick's effects)`), the commanded-state
+dwell records in simulated microseconds, and the conflict claims of the current tick. A `Window` is
+attached to it by slug and holds ingress, gate preferences, results, deferrals, arm tokens and a ring
+— no truth. Each cycle visits the windows in sorted-slug order rotated by the tick (choice A),
+settles and claims each, validates every line through one chain — empty, unknown, phase and gate,
+interlocks, dwell, argument resolution, conflict — stages the accepted effects at `offset_us = 0` in
+arbitration order, steps the plant **once**, and then writes results, mirrors, records and one frame
+per window from the stepped truth. `tools/console.py --slug a --slug b` is one executive.
+
+| | before | after |
+|---|---|---|
+| physical worlds for *n* windows | *n*, one per process, never stepped | one, `plant.step` once per cycle |
+| the frame's `values` | the whole truth map, residuals and rings included | `plant.emit_frame` from the stepped truth: 47 registered channels, identical across windows |
+| `set_rcs_mode mode=manual` from window A | changed A's copy; B's frames never saw it | both rings carry `rcs.mode == "manual"` in the same tick; B's `mode=auto` one tick later is refused `DWELL` at 0.0 s held |
+| a verb with a declared interlock the executive cannot evaluate (`set_bus_tie`, `start_burn`, `arm_event`, `execute_event`) | applied, labelled "interlock(s) clear" | refused `INTERLOCK UNEVALUATED`, naming each interlock and the missing link — `tie_dv_limit` reads `power.dc_bus_a_v`, whose `algebraic` rule is UNCONFIGURED (choice C) |
+| the same verb twice in one domain, different arguments | both applied (`winner != verb`) | first valid wins; the other is `CONFLICT_SUPERSEDED` naming the winner's verb, window and receipt; identical text is a `DUPLICATE` |
+| which window wins a domain | whichever process ran first | `sorted(slugs)[tick % n]` first — a pure function of (slugs, tick) |
+| invalid, half-written, non-object or oversized `console.json` | read as an empty batch, silently | one refusal result, and the console is claimed with its last known variables |
+| a batch of 33 commands | all run | refused whole, one result naming `--max-batch 32` (choice B) |
+| dwell and queue age | wall-clock seconds | `tick × tick_us + offset_us`; `--poll 0` no longer means nothing expires |
+| a second process on the same window | resumed ticks, tokens and dwell from `pending.json` | exit 3: the window is bound to another world (choice D); a legacy window (ticks, no `world_id`) is refused too; `--init` prepares without binding |
+| a second process on the same directory | two worlds, two consoles | exit 3: `fcntl.flock` on `.executive.lock` names the holder |
+| one window's `output/` unwritable | the process died | the failure is recorded, the window is skipped for that tick, the tick and the other windows proceed |
+| a result's last line | — | `receipt: world=<id> seq=<n> window=<slug> tick=<t> offset_us=0 state=<...>` |
+
+What the slice substitutes, and where the substitution is written down: the instrument between truth
+and frame is the identity (`Window.write_frame`; WP09 owns the models), threshold evaluation is not
+implemented (`Executive.interlock_reason`; WP05), one tick per cycle is inherited and the wall-clock
+multiplier is **not decided** (`Executive.cycle`; WP08), and there is no persistence or restart
+(WP08). A deployed stack still runs one world per agent until `containers/serve_vehicle.sh` passes
+every slug to one process — a chassis commit, named in the ADR.
+
+Three things the tests got wrong on the way. The first draft of the isolation probe had the flooding
+window and its neighbour both on `crew.alerts`, and the flood correctly superseded the neighbour
+every tick: isolation is about files and ticks, not arbitration, and the neighbour now commands in
+its own domain. The old cross-process tests — arm token, deferral, expiry, scenario, ring, re-bound,
+sixth file, effect, dwell — each restarted a window and relied on the record being read back; every
+one keeps its property under the ADR (driven in one process, or prepared with `--init`), and where
+the ADR deliberately changes the behaviour the docstring says so: `execute_event` no longer fires,
+`set_bus_tie` no longer closes, `request_translation` and `start_burn` are refused for their
+interlocks, so the deferred path is proved on `request_imu_alignment` and the owed-value path on
+`point_hga`. And the mirror used to be written before the frame, so its `newest_seq` ran one behind
+the ring; it is written after it now.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 345 | **353** |
 
 No configuration value, debt or state class moved.
 
