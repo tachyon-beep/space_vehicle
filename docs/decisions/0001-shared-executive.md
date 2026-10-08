@@ -88,8 +88,11 @@ would silently reset its physics, and restart continuity is WP08's to decide.
 
 ## Acceptance and consequences
 
-- Two windows on one executive see the same `world_id`, tick and lineage; a command from either
-  changes the one truth; both rings carry the outcome in the same tick.
+- Two windows on one executive see the same `world_id` and tick; a command from either changes
+  the one truth; both rings carry the outcome in the same tick. The lineage is the executive's,
+  in process and in its journal, never in a window file. A result's receipt carries the world,
+  the tick, and the *window's own* result sequence; the executive's global sequence stays in the
+  journal, and a loser is told the winner's window and the winner's window-local receipt.
 - Conflicting, duplicate, malformed, oversized and over-cap input, a write failure in one window,
   and a second executive all have deterministic, tested outcomes with one result each.
 - No published file carries a truth-only key.
@@ -115,3 +118,67 @@ would silently reset its physics, and restart continuity is WP08's to decide.
 | B — per-window batch bound | whole-batch refusal above `--max-batch` (default 32) | refuse only the excess lines (one result each, unbounded output); no bound |
 | C — interlock that cannot be evaluated | refuse `INTERLOCK UNEVALUATED` | apply and label it unevaluated (the console's current behaviour) |
 | D — window already bound to another world | refuse until WP08 | explicit operator flag that starts a new world and records the discontinuity |
+
+## Clarifications after independent review, 2026-10-09
+
+Decided by the owner on the reviewer's findings against the first slice; each is implemented and
+tested in the slice. Two items are the implementer's interpretations where the decision text was
+silent, marked *(implementer; pending the owner's confirmation)*.
+
+- **The directory's record is authoritative, not a window's.** Binding and identity (`world_id`,
+  the slugs served, scenario, seed, each window's ring bound, the tick) live in
+  `<diode-dir>/.executive.json`, written atomically beside `.executive.lock` by the executive at
+  `--init` (unbound) and at every tick, and read only under the lock. A record that cannot be
+  read — unreadable, oversized, a link, malformed — refuses the start; it is never treated as a
+  fresh directory. A window's `pending.json` still carries the identity keys for its reader and is
+  read for nothing but the refuse-only legacy check: `ticks > 0` or a `world_id` on a slug the
+  directory's record does not name refuses the start. One directory is therefore one identity.
+  *(implementer; pending the owner's confirmation)*: a second `--init` on an unbound directory
+  adds its slug to the record and inherits the recorded identity unless the caller names another,
+  in which case the named pair becomes the directory's for every slug it records. **This assumes
+  the agents are mounted on `/diode/<slug>/` and cannot write the diode root** — a chassis mount
+  property, named here for the chassis follow-up.
+- **Adding a window to a live directory requires clearing it**, until WP08 defines continuity: a
+  bound record refuses every start, `--init` included. *(implementer; pending the owner's
+  confirmation)*: `--plan` and `--plan-json` bind and write nothing, so they are answered on a
+  bound directory — under the lock, so a *live* directory still refuses them for the lock's reason.
+- **Deferrals settle first.** At the start of each cycle every window's due deferrals are settled
+  in rotation order, before any window's ingress. A deferral's *acceptance* does not claim its
+  conflict domain; its *settlement* — the moment of effect — does. `apollo_diode.md:578` is "first
+  valid command *received*", and a command due now was received earlier than any claimed now.
+  Settlement verdicts are published whether or not the same window's claim then fails; a
+  publication failure is recorded.
+- **The window is an adversary's directory, and the operations on it are handle-relative.** A
+  check-then-act — `is_symlink()` and then a write by path — leaves the gap between the two to an
+  agent that swaps `output/` or `telemetry/` for a link inside it. So the diode directory, each
+  window's directory and its two subdirectories are opened `O_RDONLY | O_DIRECTORY | O_NOFOLLOW`
+  once per cycle, and every read, write, rename, unlink and listing is relative to those handles
+  (`dir_fd`): a link or a file where a directory should be is refused at the open (`ENOTDIR`, or
+  `ELOOP`), which is the window's recorded failure for the cycle with no write, and a link swapped
+  in after the open is simply not where the handle points. The console is opened `O_NOFOLLOW |
+  O_NONBLOCK`, refused unless a regular file within `MAX_READ_BYTES`, and any decoder exception is
+  "not JSON"; the five files are `lstat`ed through the handle, regular where they exist and never a
+  link; temporaries are created `O_CREAT | O_EXCL | O_NOFOLLOW` under random names; a result file is
+  made with `os.link`, which never replaces. **Agent `variables` are preserved and selectively
+  honoured, and the two are different questions.** Preserved: the claim rewrites the console with
+  `variables` exactly as the agent last wrote them (replace, not merge; a file without a
+  `variables` object keeps the previous map), which the contract requires ("persistent — the
+  vehicle never clears it") and which is bounded by construction, the file being at most
+  `MAX_READ_BYTES`. Honoured, computed from the preserved map each cycle: published (instantiated)
+  gate names with bool values, and `allowance` as a non-negative integer clamped to the operator's
+  ceiling (§9 check 8: lower, never raise); anything else is simply not honoured — a gate keeps its
+  default, the ceiling stays in force — and no JSON value can raise. No result file is written
+  about variables, because a result answers a command. The first remediation stripped the map and
+  wrote a `variables_ignored` result; the chassis's contract probe caught both. A command's
+  arguments are held to its `argument_schema`: an undeclared name, an enum value off its list, a
+  value past its `max_length` or 128 bytes. Anything one window raises in its claim or publication
+  is that window's failure, recorded (a count and the most recent entries), and the tick proceeds.
+- **A refusal never prints a live value.** An interlock refusal says the point has or has no
+  reading, never the number (`plant.md` §7).
+- **Bounds in memory.** The executive keeps the latest lineage link and a bounded recent window;
+  the journal holds the whole history. The ring is counted by frame number, and a file in
+  `telemetry/` that is not a numbered regular frame is neither held, pruned nor counted.
+- **Budget semantics are WP08's.** `budget.oldest_expires_in_seconds` still counts the wall
+  clock; the allowance is clamped and reported, not yet enforced.
+- **The mirror carries no roster.** `state.json.executive` is `{world_id, tick}`; which other
+  windows exist is the directory's record's.

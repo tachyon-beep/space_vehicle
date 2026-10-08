@@ -18558,7 +18558,11 @@ per window from the stepped truth. `tools/console.py --slug a --slug b` is one e
 | a second process on the same window | resumed ticks, tokens and dwell from `pending.json` | exit 3: the window is bound to another world (choice D); a legacy window (ticks, no `world_id`) is refused too; `--init` prepares without binding |
 | a second process on the same directory | two worlds, two consoles | exit 3: `fcntl.flock` on `.executive.lock` names the holder |
 | one window's `output/` unwritable | the process died | the failure is recorded, the window is skipped for that tick, the tick and the other windows proceed |
-| a result's last line | — | `receipt: world=<id> seq=<n> window=<slug> tick=<t> offset_us=0 state=<...>` |
+| a result's last line | — | `receipt: world=<id> seq=<window's own n> window=<slug> tick=<t> offset_us=0 state=<...>` |
+| a window's `variables` | merged untyped; `{"allowance": "lots"}` took the executive down | preserved verbatim as the contract requires; *honoured* only as published gate names with bool values and an integer `allowance` clamped to the operator's ceiling — anything else keeps the default and nothing raises |
+| a FIFO, a device or a link at `console.json`; a link at `telemetry/` or `output/` | read for ever; followed | the window's directories are opened once per cycle as handles that follow no link, and every operation is relative to them: a swap before the open is `ELOOP` and the window is skipped with no write; a swap after it is not where the handle points |
+| a command's arguments | handed to the plant unchecked | held to `argument_schema`: undeclared name, enum off its list, value past its bound — refused by name |
+| which window is bound to which world | `pending.json`, which the agent writes | `<diode-dir>/.executive.json`, written by the executive, read under the lock, refused when unreadable |
 
 What the slice substitutes, and where the substitution is written down: the instrument between truth
 and frame is the identity (`Window.write_frame`; WP09 owns the models), threshold evaluation is not
@@ -18566,6 +18570,32 @@ implemented (`Executive.interlock_reason`; WP05), one tick per cycle is inherite
 multiplier is **not decided** (`Executive.cycle`; WP08), and there is no persistence or restart
 (WP08). A deployed stack still runs one world per agent until `containers/serve_vehicle.sh` passes
 every slug to one process — a chassis commit, named in the ADR.
+
+**Independent review of the slice, and what it found.** The delay-ring test's oracle compared a
+split tick's transport-ring slots with a quiet tick's, which holds only while E-PUMP-COOL's
+sensitivity is owed; it now holds the ring's structure and the slot to the run's own driver, and
+`_walk` requires `tick_dt` (commit `e680835`). The executive itself treated a window as a trusted
+directory: `{"allowance": "lots"}` in one agent's `variables` was a `ValueError` in every tick's
+publication; a FIFO or a link to `/dev/zero` at `console.json` blocked the read for ever; a
+hundred thousand `[` was a `RecursionError` the JSON handler did not catch; `alpha/telemetry ->
+../bravo/telemetry` let one ring prune another; `sorted(glob("*.json"))` put `1000.json` before
+`999.json` and froze the ring at a thousand frames — twenty seconds at 50 Hz; a refusal printed a
+point's live value; and binding read the agent-writable `pending.json`. Each is a probe and a fix in
+this round, and `docs/decisions/0001-shared-executive.md` carries the owner's clarifications: the
+directory's own record `.executive.json` is authoritative, deferrals settle before any ingress and
+claim their domain only at settlement, receipts are window-local, the mirror carries no roster, and
+every window operation is relative to directory handles opened once per cycle without following
+links — a security review of the first remediation found the check-then-act version racy, and the
+handles close the gap. The chassis's contract probe then caught the first remediation of the
+variables map stripping it to the names the vehicle could honour and writing a result that answered
+no command; preserved and honoured are separated now, and the probe's marker survives the claim.
+
+**Measured, not fixed here (WP12).** One cycle with one window costs ≈45 ms on this machine, of
+which ≈42 ms is `state_hash` over the 52,100-slot coolant transport ring and ≈3 ms is `plant.step`
+— above the 20 ms a live tick has at a multiplier of one. The lineage is specified over the
+canonical state and the ring is part of it; a cheaper compare-point (a rolling hash the delay
+updates incrementally, or a hash over the ring's cursor and the slots the tick wrote) is a WP12
+decision about what the compare-point must cover, not a change this slice may make quietly.
 
 Three things the tests got wrong on the way. The first draft of the isolation probe had the flooding
 window and its neighbour both on `crew.alerts`, and the flood correctly superseded the neighbour
@@ -18581,7 +18611,7 @@ the ring; it is written after it now.
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 345 | **353** |
+| referee tests | 345 | **364** |
 
 No configuration value, debt or state class moved.
 
