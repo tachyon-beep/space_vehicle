@@ -18562,7 +18562,8 @@ per window from the stepped truth. `tools/console.py --slug a --slug b` is one e
 | a window's `variables` | merged untyped; `{"allowance": "lots"}` took the executive down | preserved verbatim as the contract requires; *honoured* only as published gate names with bool values and an integer `allowance` clamped to the operator's ceiling — anything else keeps the default and nothing raises |
 | a FIFO, a device or a link at `console.json`; a link at `telemetry/` or `output/` | read for ever; followed | the window's directories are opened once per cycle as handles that follow no link, and every operation is relative to them: a swap before the open is `ELOOP` and the window is skipped with no write; a swap after it is not where the handle points |
 | a command's arguments | handed to the plant unchecked | held to `argument_schema`: undeclared name, enum off its list, value past its bound — refused by name |
-| which window is bound to which world | `pending.json`, which the agent writes | `<diode-dir>/.executive.json`, written by the executive, read under the lock, refused when unreadable |
+| which window is bound to which world | `pending.json`, which the agent writes | `<diode-dir>/.executive.json`, written by the executive, read under the lock, refused when unreadable; a window's `pending.json`/`state.json` repeat the identity and may lag it one tick after a second `--init` — **and the record is only as authoritative as the mount: today's compose mounts every agent on the whole `/diode` root read-write, a chassis follow-up before gate I** |
+| a window whose directory or `output/`/`telemetry/` is gone | dark for the rest of the run | one recorded dark tick, then re-prepared handle-relative with the identity the executive kept; a planted link or wrong type stays a skip |
 
 What the slice substitutes, and where the substitution is written down: the instrument between truth
 and frame is the identity (`Window.write_frame`; WP09 owns the models), threshold evaluation is not
@@ -18611,7 +18612,7 @@ the ring; it is written after it now.
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 345 | **364** |
+| referee tests | 345 | **368** |
 
 No configuration value, debt or state class moved.
 

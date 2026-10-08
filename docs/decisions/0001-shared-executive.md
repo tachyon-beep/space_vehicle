@@ -137,9 +137,21 @@ the owner's revision. Two items filled gaps the decision text left silent; they 
   directory's record does not name refuses the start. One directory is therefore one identity.
   *(gap filled)*: a second `--init` on an unbound directory
   adds its slug to the record and inherits the recorded identity unless the caller names another,
-  in which case the named pair becomes the directory's for every slug it records. **This assumes
-  the agents are mounted on `/diode/<slug>/` and cannot write the diode root** — a chassis mount
-  property, named here for the chassis follow-up.
+  in which case the named pair becomes the directory's for every slug it records. **This assumes the agents are mounted on `/diode/<slug>/` and cannot write the diode root —
+  and that assumption is currently unmet.** In the deployed chassis compose today every `agent_N`
+  mounts `./volumes/diode:/diode` read-write (only `DIODE_DUTY_DIR` points at the slug), so an
+  agent can forge or garble `.executive.json`, hold `.executive.lock`, and write another window's
+  `console.json`. The record is authoritative only once the chassis mounts each agent on its own
+  slug or makes the root unwritable: a chassis follow-up required before completion gate I.
+- **The directory's record is authoritative for identity, and a window's files may lag it.** A
+  second `--init` rewrites `.executive.json` at once; a window's `pending.json` and `state.json`
+  repeat the identity for their reader and are rewritten at the next tick that serves the window,
+  so for one tick after a second `--init` (or a re-preparation) they may show the previous value.
+- **A window that fails its pre-claim check keeps its due deferrals queued.** They are neither
+  settled nor dropped while the window is dark; they settle — or `EXPIRE`, which is the one
+  production path to `EXPIRED` — once it heals. Absence (`ENOENT`) heals itself: the directory or
+  subdirectory is re-prepared handle-relative for the next cycle, with the dark tick recorded; a
+  planted link or a wrong type stays a skip until it is cleared.
 - **Adding a window to a live directory requires clearing it**, until WP08 defines continuity: a
   bound record refuses every start, `--init` included. *(gap filled)*: `--plan` and `--plan-json` bind and write nothing, so they are answered on a
   bound directory — under the lock, so a *live* directory still refuses them for the lock's reason.
@@ -168,7 +180,9 @@ the owner's revision. Two items filled gaps the decision text left silent; they 
   `MAX_READ_BYTES`. Honoured, computed from the preserved map each cycle: published (instantiated)
   gate names with bool values, and `allowance` as a non-negative integer clamped to the operator's
   ceiling (§9 check 8: lower, never raise); anything else is simply not honoured — a gate keeps its
-  default, the ceiling stays in force — and no JSON value can raise. No result file is written
+  default, the ceiling stays in force — and no JSON value can raise. JSON is RFC 8259's on both
+  sides: `NaN`, `Infinity` and `-Infinity` in a console are "not valid JSON", and the vehicle
+  encodes with `allow_nan=False`. No result file is written
   about variables, because a result answers a command. The first remediation stripped the map and
   wrote a `variables_ignored` result; the chassis's contract probe caught both. A command's
   arguments are held to its `argument_schema`: an undeclared name, an enum value off its list, a
