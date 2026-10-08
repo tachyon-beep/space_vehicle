@@ -257,8 +257,23 @@ def write_text_atomic(
             os.close(opened)
 
 
+def _no_json_constants(name: str) -> Any:
+    """`NaN`, `Infinity` and `-Infinity` are Python's, not JSON's (RFC 8259): refuse them on the way in."""
+    raise ValueError(f"{name} is not a JSON value (RFC 8259)")
+
+
+def loads_json(text: str | bytes) -> Any:
+    """`json.loads` as a conforming reader on the far side would do it: no non-finite numbers."""
+    return json.loads(text, parse_constant=_no_json_constants)
+
+
+def dumps_json(payload: Any, **kwargs: Any) -> str:
+    """`json.dumps` with `allow_nan=False`: nothing the vehicle publishes is unreadable to a conforming reader."""
+    return json.dumps(payload, allow_nan=False, **kwargs)
+
+
 def write_json_atomic(path: str | os.PathLike[str], payload: Any, *, dir_fd: int | None = None) -> None:
-    write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n", dir_fd=dir_fd)
+    write_text_atomic(path, dumps_json(payload, indent=2, sort_keys=False) + "\n", dir_fd=dir_fd)
 
 
 def read_regular_bounded(
@@ -342,9 +357,9 @@ def read_ingress(
     except UnicodeDecodeError as exc:
         return None, f"console.json is not UTF-8 ({exc.reason} at byte {exc.start})"
     try:
-        loaded = json.loads(text)
+        loaded = loads_json(text)
     except Exception as exc:  # noqa: BLE001 - any decoder failure is "not JSON", RecursionError included
-        detail = f"{exc.msg} at character {exc.pos}" if isinstance(exc, json.JSONDecodeError) else type(exc).__name__
+        detail = f"{exc.msg} at character {exc.pos}" if isinstance(exc, json.JSONDecodeError) else f"{type(exc).__name__}: {exc}"
         return None, (
             f"console.json is not valid JSON ({detail}); a half-written file lands here too, and "
             "the contract's answer is that refusing is correct"
@@ -365,21 +380,24 @@ def read_json_bounded(path: str | os.PathLike[str], *, dir_fd: int | None = None
     if raw is None:
         return None
     try:
-        loaded = json.loads(raw.decode("utf-8"))
+        loaded = loads_json(raw.decode("utf-8"))
     except Exception:  # noqa: BLE001 - a record that does not parse has nothing to refuse on
         return {}
     return loaded if isinstance(loaded, dict) else {}
 
 
 def read_root_record(
-    path: str | os.PathLike[str], *, dir_fd: int | None = None
+    path: str | os.PathLike[str], *, dir_fd: int | None = None, postures: set[str] | None = None
 ) -> tuple[dict[str, Any] | None, str | None]:
     """`<diode-dir>/.executive.json`, or `(None, None)` for a directory that has none, or a refusal.
 
     The record is the operator's and the executive's, never an agent's, so a record that cannot be
     read is a *problem* and not a fresh directory: an unreadable, oversized or malformed record is
     refused at startup rather than treated as "no world here", because the one thing a start must not
-    do is reset a world it could not see.
+    do is reset a world it could not see. Every field present is vouched for — the world, the slugs,
+    the rings, the scenario (one of `postures`, when the caller has them), the seed and the tick —
+    because the start resolves the run's identity from the last three and an identity it cannot
+    replay is not one to run. A field absent is the defaults' business, not a refusal.
     """
     label = Path(os.fspath(path)).name
     try:
@@ -408,6 +426,20 @@ def read_root_record(
         isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in rings.values()
     ):
         return None, f"{label} carries ring_slots that are not positive integers per slug"
+    scenario = loaded.get("scenario")
+    if scenario is not None and (
+        not isinstance(scenario, str) or not scenario or (postures is not None and scenario not in postures)
+    ):
+        return None, (
+            f"{label} carries scenario {scenario!r}, which is not one of the vehicle's postures"
+            + (f" {sorted(postures)}" if postures is not None else "")
+        )
+    seed = loaded.get("seed")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or seed < 0):
+        return None, f"{label} carries seed {seed!r}, which is not a non-negative integer"
+    tick = loaded.get("tick")
+    if tick is not None and (isinstance(tick, bool) or not isinstance(tick, int) or tick < 0):
+        return None, f"{label} carries tick {tick!r}, which is not a non-negative integer"
     return loaded, None
 
 
@@ -608,6 +640,17 @@ class Executive:
             for window in order:
                 try:
                     window.open_handles()
+                except WindowAbsent as exc:
+                    # A dark tick, then back: the directory is made again (handle-relative, following
+                    # no link) and served next cycle with the identity the executive kept.
+                    self._record_failure(window, "check", exc, tick)
+                    try:
+                        window.prepare()
+                    except Exception as again:  # noqa: BLE001 - recorded, like the absence
+                        self._record_failure(window, "prepare", again, tick)
+                    finally:
+                        window.close_handles()
+                    continue
                 except Exception as exc:  # noqa: BLE001 - the window's directory is the window's
                     self._record_failure(window, "check", exc, tick)
                     continue
@@ -694,7 +737,7 @@ class Executive:
             "failures": self.failure_count,
         }
         with self.journal.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(line, sort_keys=True) + "\n")
+            handle.write(dumps_json(line, sort_keys=True) + "\n")
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
@@ -1302,6 +1345,15 @@ class Executive:
         )
 
 
+class WindowAbsent(RuntimeError):
+    """A window's directory or subdirectory is gone (`ENOENT`) — distinct from a link or a wrong type.
+
+    Nothing was planted and there is nothing to follow; the window's identity (its `seq`, `boot_id`
+    and queue) is the executive's, not the directory's. So the executive records the dark tick and
+    re-prepares the directory for the next one, where a planted link or a wrong type stays a skip.
+    """
+
+
 @dataclass
 class Handles:
     """One cycle's open directories of one window: the directory, `output/`, `telemetry/`."""
@@ -1356,6 +1408,9 @@ class Window:
         # file of at most `MAX_READ_BYTES` and the rewrite is no larger), and what the vehicle
         # *honours* of it is computed from it each cycle by `honoured()`.
         self.variables: dict[str, Any] = {}
+        # `honoured()`'s answer for the current preserved map, computed once per cycle after the
+        # claim and invalidated when the map is replaced.
+        self._honoured: tuple[dict[str, bool], int] | None = None
         self.deferred: list[dict[str, Any]] = []
         # Outstanding arm tokens, by event, bound to this window. Never read back from a file.
         self.arms: dict[str, str] = {}
@@ -1380,11 +1435,15 @@ class Window:
         self.close_handles()
 
         def opened(name: str, dir_fd: int) -> int:
+            where = name if dir_fd == self.executive.diode_fd else f"{self.slug}/{name}"
             try:
                 return open_directory(name, dir_fd=dir_fd)
+            except FileNotFoundError as exc:
+                raise WindowAbsent(
+                    f"{where} is absent (ENOENT); the window is re-prepared for the next cycle"
+                ) from exc
             except OSError as exc:
                 code = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
-                where = name if dir_fd == self.executive.diode_fd else f"{self.slug}/{name}"
                 raise RuntimeError(
                     f"{where}: {code} ({exc.strerror}); a window is a directory of regular files and "
                     "directories, and the vehicle follows no link an agent plants"
@@ -1462,7 +1521,7 @@ class Window:
             write_json_atomic(self.console, {"commands": [], "variables": {}}, dir_fd=handles.root)
 
     # -- the claim --------------------------------------------------------------------------
-    def claim(self) -> tuple[list[Any] | str, list[str]]:
+    def claim(self) -> list[Any] | str:
         """Read the console and clear it, *before* acting on anything.
 
         The contract is unambiguous about the order: "**Intake is destructive and atomic.** Each
@@ -1470,14 +1529,15 @@ class Window:
         preserved... **Clear before you act.**" So the rewrite happens here and the commands are
         returned for the executive to validate afterwards. A console that is not one — absent, a
         link, not a regular file, oversized, invalid, not an object — is *also* claimed, with the
-        last known variables, and the reason is returned for the one refusal result (ADR 0001).
+        previous variables, and the reason is returned instead of a batch for the one refusal result
+        (ADR 0001).
 
-        **What is preserved is what the vehicle can hold.** The agent's `variables` reached the
-        mirror untyped, so `{"allowance": "lots"}` was a `ValueError` in every tick's publication —
-        one window taking the executive down. A name is kept only where the registry publishes a
-        gate of that name, as a bool, plus `allowance`, an integer clamped to the operator's ceiling
-        (§9 check 8: lower, never raise). Everything else is dropped, named in the second return
-        value for one result, and absent from the rewritten console.
+        **Preserved verbatim; honoured separately.** `variables` is "persistent — the vehicle never
+        clears it": the object the agent wrote becomes the preserved map as written (replace, not
+        merge; a payload without a `variables` object keeps the previous map), and it is bounded by
+        construction because it came from a file of at most `MAX_READ_BYTES`. What the vehicle acts
+        on is `honoured()`'s business, computed from the preserved map once per cycle, after the
+        claim, and never raising on any JSON value.
         """
         root = self._handles().root
         payload, problem = read_ingress(self.console, dir_fd=root)
@@ -1490,6 +1550,7 @@ class Window:
         # `variables` object keeps the previous one, which is what "never clears it" means.
         if isinstance(variables, dict):
             self.variables = variables
+            self._honoured = None
         write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
         if commands is None:
             return []
@@ -1511,6 +1572,8 @@ class Window:
         may lower, never raise) — anything else leaves the ceiling in force. `{"allowance": "lots"}`
         was a `ValueError` in every tick's publication before this split.
         """
+        if self._honoured is not None:
+            return self._honoured
         gates: dict[str, bool] = {}
         allowance = DEFAULT_ALLOWANCE
         for name, value in self.variables.items():
@@ -1520,7 +1583,8 @@ class Window:
                     allowance = min(value, DEFAULT_ALLOWANCE)
             elif key in self.executive.gate_names and isinstance(value, bool):
                 gates[key] = value
-        return gates, allowance
+        self._honoured = (gates, allowance)
+        return self._honoured
 
     @property
     def allowance(self) -> int:
@@ -1672,17 +1736,19 @@ class Window:
 
         `sorted(glob("*.json"))` put `1000.json` before `999.json`, so from the thousandth frame the
         pruner deleted the newest frame every tick and the ring froze. The frames are the regular,
-        non-link entries of the `telemetry/` handle whose stem is all digits, ordered by `int(stem)`;
-        anything else in the directory is neither held, nor pruned, nor counted, so junk dropped
-        there cannot push a real frame out. The `NNN` minimum-three-digit naming stays for readers
-        that already sort it.
+        non-link entries of the `telemetry/` handle whose stem is all digits **and below the window's
+        own `seq`** — a number this boot has written — ordered by `int(stem)`; anything else in the
+        directory is neither held, nor pruned, nor counted, so junk dropped there, numbered or not,
+        cannot push a real frame out (`900000.json` sorts after every real frame and would otherwise
+        have been held as the newest). The `NNN` minimum-three-digit naming stays for readers that
+        already sort it.
         """
         telemetry = self._handles().telemetry
         frames: list[tuple[int, str]] = []
         with os.scandir(telemetry) as entries:
             for entry in entries:
                 stem, dot, suffix = entry.name.rpartition(".")
-                if not dot or suffix != "json" or not stem.isdigit():
+                if not dot or suffix != "json" or not stem.isdigit() or int(stem) >= self.seq:
                     continue
                 try:
                     if not entry.is_file(follow_symlinks=False):
@@ -1880,7 +1946,7 @@ def main(argv: list[str] | None = None) -> int:
         os.close(diode_fd)
         return 3
 
-    record, problem = read_root_record(RECORD_FILE, dir_fd=diode_fd)
+    record, problem = read_root_record(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
     if problem is not None:
         return refuse(
             f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "

@@ -22151,12 +22151,12 @@ def test_variables_survive_the_claim_verbatim_and_only_gates_and_the_allowance_a
         "big": 10**40,
     }
     submit(alpha, ["set_rcs_mode mode=manual", "ack_alarm alert_id=closed_by_gate"], written)
-    submit(bravo, [], {"allowance": 1e999})
+    submit(bravo, [], {"allowance": 10**40})
     executive.cycle()
     assert executive.tick == 1 and executive.failure_count == 0, list(executive.failures)
     # Preserved: exactly what was written, nothing removed and nothing added.
     assert json.loads((alpha / "console.json").read_text()) == {"commands": [], "variables": written}
-    assert json.loads((bravo / "console.json").read_text())["variables"] == {"allowance": float("inf")}
+    assert json.loads((bravo / "console.json").read_text())["variables"] == {"allowance": 10**40}
     # One result per command, and no other result file.
     names = sorted(p.name for p in (alpha / "output").glob("*.txt"))
     assert len(names) == 2 and all("_alpha_" in n for n in names), names
@@ -22661,7 +22661,10 @@ def test_a_subdirectory_swapped_for_a_link_to_a_sibling_is_neither_written_nor_p
         assert len(own) == 1 and "_bravo_" in own[0] and "through_the_link" not in own[0], own
         frames = sorted(int(p.stem) for p in (bravo / "telemetry").glob("*.json"))
         assert len(frames) == 2 and frames[-1] == executive.windows["bravo"].seq - 1, frames
-    assert set(sibling_frames) < {p.name for p in (bravo / "telemetry").glob("*.json")} or True
+    # The sibling's ring moved on by its own three frames and lost its own three oldest: nothing of
+    # the two frames it started with survives a ring of two, and nothing foreign arrived.
+    now = {p.name for p in (bravo / "telemetry").glob("*.json")}
+    assert now.isdisjoint(sibling_frames) and len(now) == 2, (sorted(now), sorted(sibling_frames))
     assert json.loads((alpha / "console.json").read_text())["commands"] == ["ack_alarm alert_id=through_the_link"]
 
 
@@ -22722,3 +22725,182 @@ def test_a_swap_between_the_open_and_the_write_cannot_redirect_a_write(tmp_path)
     bravo_now = {p.name: p.read_bytes() for p in (bravo / "telemetry").glob("*.json")}
     assert len(bravo_now) == 2 and "002.json" in bravo_now and "001.json" in bravo_now, sorted(bravo_now)
     assert bravo_now["001.json"] == sibling_frames["001.json"]
+
+
+
+def test_an_absent_window_directory_is_re_prepared_while_a_planted_link_stays_a_skip(tmp_path):
+    """`ENOENT` is not `ENOTDIR`: a window that is simply gone comes back; a planted link stays a skip.
+
+    The handle-relative open refused every failure the same way, so a window whose agent (or
+    operator) removed `output/`, or the whole directory, stayed dark for the rest of the run. Absence
+    is a different fact from a link or a wrong type: nothing was planted, there is nothing to follow,
+    and the window's identity — its `seq`, `boot_id`, deferral queue — is the executive's, not the
+    directory's. So an absent directory or subdirectory is recorded as the window's failure for the
+    dark tick and re-prepared, `dir_fd`-relative and following no link, so the next cycle serves it;
+    the neighbour and the physics are untouched throughout. A link or a file where a directory
+    should be is still a skip, every cycle, until it is cleared.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    alpha_window = executive.attach("alpha", ring_slots=4)
+    executive.attach("bravo", ring_slots=4)
+    alpha, bravo = diode / "alpha", diode / "bravo"
+    submit(alpha, ["set_rcs_mode mode=manual"])
+    executive.cycle()
+    assert newest_frame(alpha)["values"]["rcs.mode"] == "manual"
+    executive.cycle()
+    assert alpha_window.seq == 2
+
+    def dark_then_back(kind: str) -> None:
+        clear_results(bravo)
+        submit(bravo, ["set_deadband profile=nominal"])
+        failures = executive.failure_count
+        lineage_before = executive.lineage_head
+        executive.cycle()
+        assert executive.failure_count == failures + 1, list(executive.failures)
+        failure = executive.failures[-1]
+        assert failure["window"] == "alpha" and "absent" in failure["error"].lower(), failure
+        assert len(results_of(bravo)) == 1, "the neighbour is served through the dark tick"
+        assert executive.lineage_head != lineage_before, "the world ticked"
+        # Back next cycle, with the identity the executive kept: the sequence continues.
+        seq_before = alpha_window.seq
+        clear_results(bravo)
+        submit(alpha, ["ack_alarm alert_id=back"])
+        submit(bravo, ["set_deadband profile=nominal"])
+        executive.cycle()
+        assert executive.failure_count == failures + 1, (kind, list(executive.failures))
+        assert len(results_of(alpha)) == 1 and "accepted" in results_of(alpha)[0], results_of(alpha)
+        assert alpha_window.seq == seq_before + 1
+        frame = newest_frame(alpha)
+        assert frame["seq"] == seq_before and frame["boot_id"] == alpha_window.boot_id
+        assert frame["values"]["rcs.mode"] == "manual", "the physics is the executive's, not the directory's"
+        for name in ("console.json", "state.json", "HELP.md", "README.md", "pending.json"):
+            assert (alpha / name).is_file(), (kind, name)
+        assert json.loads((alpha / "pending.json").read_text())["world_id"] == executive.world_id
+
+    shutil.rmtree(alpha / "output")
+    dark_then_back("subdirectory")
+    shutil.rmtree(alpha)
+    dark_then_back("directory")
+
+    # A planted link is not absence: it stays a skip, cycle after cycle, and nothing is written.
+    shutil.rmtree(alpha / "output")
+    (alpha / "output").symlink_to(bravo / "output")
+    for _ in range(2):
+        failures = executive.failure_count
+        executive.cycle()
+        assert executive.failure_count == failures + 1
+        assert "absent" not in executive.failures[-1]["error"].lower()
+        assert (alpha / "output").is_symlink()
+    (alpha / "output").unlink()
+    executive.cycle()
+    assert executive.failure_count == failures + 2, "absent again: one dark tick, then back"
+    executive.cycle()
+    assert (alpha / "output").is_dir()
+
+
+def test_frames_the_window_never_wrote_are_neither_held_pruned_nor_counted(tmp_path):
+    """A numbered frame the window did not write is not the window's frame.
+
+    Counting by number closed the thousandth-frame freeze and left a hole: `900000.json` dropped into
+    `telemetry/` by the agent sorts *after* every real frame, so it would have been held as the newest
+    and would have pushed a real frame out of a ring of three. The rule is the simplest correct one:
+    a frame is the window's only if its number is below the window's own `seq` — a number this boot
+    has written — and everything else in the directory is neither held, pruned nor counted.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    window = executive.attach("alpha", ring_slots=3)
+    telemetry = diode / "alpha" / "telemetry"
+    for number in (900000, 900001, 900002):
+        (telemetry / f"{number}.json").write_text("{}")
+    for _ in range(4):
+        executive.cycle()
+    names = sorted(p.name for p in telemetry.glob("*.json"))
+    assert names == ["001.json", "002.json", "003.json", "900000.json", "900001.json", "900002.json"], names
+    ring = json.loads((diode / "alpha" / "state.json").read_text())["ring"]
+    assert ring == {"slots": 3, "held": 3, "losses": 1, "newest_seq": 3}, ring
+    assert window.seq == 4
+    for number in (900000, 900001, 900002):
+        assert (telemetry / f"{number}.json").read_text() == "{}"
+
+
+def test_the_directory_record_is_validated_field_by_field(tmp_path):
+    """`.executive.json` is the operator's record, and a field it cannot vouch for is a refusal.
+
+    `read_root_record` checked `world_id`, `slugs` and `ring_slots` and took `scenario` and `seed`
+    on trust — the two values the start resolves the run's identity from. A scenario that is not one
+    of the mission's postures, or a seed that is not a non-negative integer (a bool is not one), is
+    now a named refusal like the others, and the entrypoint exits 3 on it rather than resolving an
+    identity it cannot replay.
+    """
+    console, _plant, _world = console_tools()
+    postures = {"nominal", "degraded", "crisis"}
+    good = {"world_id": None, "slugs": ["alpha"], "scenario": "crisis", "seed": 42, "ring_slots": {"alpha": 5}, "tick": 0}
+    record_path = tmp_path / ".executive.json"
+    record_path.write_text(json.dumps(good))
+    loaded, problem = console.read_root_record(record_path, postures=postures)
+    assert problem is None and loaded["seed"] == 42, (loaded, problem)
+    for field, value, needle in (
+        ("scenario", "phantom", "scenario"),
+        ("scenario", 3, "scenario"),
+        ("seed", -1, "seed"),
+        ("seed", True, "seed"),
+        ("seed", "7", "seed"),
+        ("seed", 1.5, "seed"),
+        ("tick", -2, "tick"),
+    ):
+        broken = dict(good)
+        broken[field] = value
+        record_path.write_text(json.dumps(broken))
+        loaded, problem = console.read_root_record(record_path, postures=postures)
+        assert loaded is None and problem is not None and needle in problem, (field, value, problem)
+    # Absent fields are the defaults' business, not a refusal: a record may predate a field.
+    record_path.write_text(json.dumps({"world_id": None}))
+    loaded, problem = console.read_root_record(record_path, postures=postures)
+    assert problem is None, problem
+
+    # And the entrypoint refuses on it.
+    diode = tmp_path / "diode"
+    diode.mkdir()
+    (diode / ".executive.json").write_text(json.dumps({**good, "scenario": "phantom"}))
+    refused = subprocess.run(
+        [sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode), "--slug", "alpha", "--init"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode == 3 and ".executive.json" in refused.stderr and "scenario" in refused.stderr, refused.stderr
+    assert not (diode / "alpha").exists()
+
+
+def test_a_console_with_a_non_finite_number_is_not_json_and_the_vehicle_writes_none(tmp_path):
+    """`NaN`, `Infinity` and `-Infinity` are Python's, not JSON's (RFC 8259), and neither side may use them.
+
+    Python's decoder accepts the three by default and its encoder emits them, so an agent could write
+    `{"allowance": Infinity}` and the vehicle would preserve it verbatim — a console that a conforming
+    reader on the far side cannot parse. The console is decoded with `parse_constant` refusing all
+    three, which makes such a file "not valid JSON" with one refusal result, and the vehicle encodes
+    with `allow_nan=False`, so a non-finite value in anything it publishes is an error it records
+    rather than a file nobody else can read.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("alpha")
+    root = diode / "alpha"
+    for literal in ("NaN", "Infinity", "-Infinity"):
+        clear_results(root)
+        (root / "console.json").write_text(
+            '{"commands": ["ack_alarm alert_id=x"], "variables": {"allowance": ' + literal + "}}", encoding="utf-8"
+        )
+        executive.cycle()
+        bodies = results_of(root)
+        assert len(bodies) == 1 and "not valid JSON" in bodies[0], (literal, bodies)
+        assert json.loads((root / "console.json").read_text()) == {"commands": [], "variables": {}}
+    with pytest.raises(ValueError):
+        console.write_json_atomic(tmp_path / "bad.json", {"x": float("inf")})
+    assert not (tmp_path / "bad.json").exists()
+    assert not list(tmp_path.glob(".bad.json.*")), "the temporary is cleaned up"
