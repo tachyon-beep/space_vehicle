@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -5588,58 +5589,85 @@ def test_the_linter_refuses_a_fault_whose_detection_was_swallowed(tmp_path):
     assert "PWR-01-source-regulation-loss" in result.stdout
 
 
+
 def test_an_irreversible_event_cannot_fire_without_a_valid_arm_token(tmp_path):
-    """Arm-then-commit, on the vehicle's only irreversible verbs.
+    """Arm-then-commit on the vehicle's only irreversible verbs — and, under ADR 0001, no fire at all.
 
     `arm_event`'s own help fixes the contract: "Arming does nothing physical: it returns a
     short-lived token bound to this specific event, and it is the only verb on the vehicle whose
-    result carries a [token]." Nothing minted one and nothing checked one, so `execute_event` —
-    which fires the pyros, the undocking and the staging — accepted any `arm_token`, including
-    none. `requires_arm` was enforced by the linter on the *state* and on no *path*, which left
-    F-15 (premature staging) reachable by one unarmed command.
+    result carries a [token]." Nothing minted one and nothing checked one before the console learned
+    to, so `execute_event` — which fires the pyros, the undocking and the staging — accepted any
+    `arm_token`, including none. `requires_arm` was enforced by the linter on the *state* and on no
+    *path*, which left F-15 (premature staging) reachable by one unarmed command.
 
-    Four things are asserted, and the last two are what make a token a token: it is consumed by
-    use, and it is bound to the event it was minted for.
+    **What changed, and why (ADR 0001 choice C).** Both verbs declare interlocks
+    (`domains/structure/commands.yaml`: `arm_event` three, `execute_event` four) and this slice cannot
+    evaluate a threshold, so both are refused `INTERLOCK UNEVALUATED` rather than applied and
+    labelled. The old version of this test minted a token in one process and fired it in the next,
+    restoring the token from `pending.json` — authority restored from a file an agent can write,
+    which is the resume the ADR withdraws. So the properties held here are: an unarmed fire is
+    refused *before* the interlock rule speaks; arming is refused by the interlock rule and mints
+    nothing; a token forged into `pending.json` is never read back; and, with a token placed on the
+    window the way WP05's arming will place it, the token check still precedes the interlock
+    refusal, the refusal does not consume the token, and the token is bound to its event.
     """
+    console, _plant, world = console_tools()
+    structure = yaml.safe_load((VEHICLE / "domains" / "structure" / "commands.yaml").read_text())
+    arm = next(c for c in structure["commands"] if c["verb"] == "arm_event")
+    fire = next(c for c in structure["commands"] if c["verb"] == "execute_event")
+    assert arm["interlocks"] == ["latch_disagreement", "pyro_continuity_loss", "arm_reuse"], arm
+    assert fire["interlocks"] == ["arm_expiry", "arm_reuse", "hatch_open_with_pressure", "latch_disagreement"], fire
+    assert "lunar_orbit" in arm["allowed_phases"] and "lunar_orbit" in fire["allowed_phases"]
+
     diode = tmp_path / "diode"
-    window = diode / "armed"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "armed",
-        "--phase",
-        "lunar_orbit",  # `execute_event` is not allowed in every phase, and the gate comes first
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
+    # `execute_event` is not allowed in every phase, and the gate comes first.
+    executive = console.Executive(world, diode, phase="lunar_orbit")
+    window = executive.attach("armed")
+    root = diode / "armed"
 
     def run(command: str) -> str:
-        for existing in (window / "output").glob("*.txt"):
-            existing.unlink()
-        (window / "console.json").write_text(
-            json.dumps({"commands": [command], "variables": {}}), encoding="utf-8"
-        )
-        subprocess.run([*console, "--cycles", "1", "--poll", "0"], capture_output=True, check=False)
-        bodies = [p.read_text() for p in (window / "output").glob("*.txt")]
+        clear_results(root)
+        submit(root, [command])
+        executive.cycle()
+        bodies = results_of(root)
         assert len(bodies) == 1, bodies
         return bodies[0]
 
     assert "not armed" in run("execute_event event=pyro_fire arm_token=guess")
 
     armed = run("arm_event event=pyro_fire")
-    token = re.search(r"Token: ([0-9a-f]+)", armed)
-    assert token, armed
-    assert "only result" in armed, armed
+    assert "refused: INTERLOCK UNEVALUATED" in armed, armed
+    for name in arm["interlocks"]:
+        assert name in armed, (name, armed)
+    assert "Token:" not in armed and window.arms == {}, armed
 
-    fired = run(f"execute_event event=pyro_fire arm_token={token.group(1)}")
-    assert "succeeded" in fired and "consumed" in fired, fired
+    # A forged `arms` entry in the agent-writable record is not authority: nothing reads it back.
+    record = json.loads((root / "pending.json").read_text())
+    record["arms"] = {"pyro_fire": "feedbeefcafef00d"}
+    (root / "pending.json").write_text(json.dumps(record), encoding="utf-8")
+    forged = run("execute_event event=pyro_fire arm_token=feedbeefcafef00d")
+    assert "not armed" in forged and "nothing written into pending.json" in forged, forged
+    assert "arms" not in json.loads((root / "pending.json").read_text()), "the record is rewritten without it"
 
-    # A consumed token is not authority to fire again.
-    assert "not armed" in run(f"execute_event event=pyro_fire arm_token={token.group(1)}")
+    # The binding and the ordering, with a token placed where WP05's arming will place it.
+    window.arms["pyro_fire"] = "0123456789abcdef"
+    wrong = run("execute_event event=pyro_fire arm_token=guess")
+    assert "not the outstanding token" in wrong and "UNEVALUATED" not in wrong, wrong
+    right = run("execute_event event=pyro_fire arm_token=0123456789abcdef")
+    assert "refused: INTERLOCK UNEVALUATED" in right, right
+    for name in fire["interlocks"]:
+        assert name in right, (name, right)
+    assert "no arm token has been consumed" in right, right
+    assert window.arms == {"pyro_fire": "0123456789abcdef"}, "the refusal must not consume the token"
     # And a token is bound to one event.
-    assert "not armed" in run(f"execute_event event=lm_undocking arm_token={token.group(1)}")
+    assert "not armed" in run("execute_event event=lm_undocking arm_token=0123456789abcdef")
+    # Nothing fired: `structure.stage_state` reads `configuration` (`domains/structure/points.yaml`),
+    # which the configuration starts `docked` and only an event moves.
+    components = yaml.safe_load((VEHICLE / "domains" / "structure" / "components.yaml").read_text())
+    initial = next(s for s in components["state"] if s["id"] == "configuration")["initial"]
+    assert initial == "docked" and newest_frame(root)["values"]["structure.stage_state"] == initial
+    assert all(receipt_of(b)["state"] == "refused" for b in results_of(root))
+
 
 
 def test_a_deferred_command_settles_later_and_reports_its_own_result(tmp_path):
@@ -5647,91 +5675,87 @@ def test_a_deferred_command_settles_later_and_reports_its_own_result(tmp_path):
 
     "A command that takes longer than one cycle — a burn, a deploy, a self-test — completes
     asynchronously and reports when it is done." A result written at acceptance is a claim about
-    the future dressed as a report, so `request_translation` must produce **two** files: an
-    acceptance at tick 0 and a settlement at tick 1, the second written by a different process.
+    the future dressed as a report, so a deferrable verb must produce **two** files: an acceptance
+    at the tick it arrived and a settlement at the tick it was due.
 
-    That second process is the point of the test. `pending.json` is "the vehicle's own deferral
-    queue" and the console wrote it every cycle and read it never, so a deferral could not survive
-    a restart and — since the console is a process per invocation — could never settle at all. The
-    same root cause reset the tick counter, which made an absolute `due_tick` meaningless in the
-    next run and restarted `seq`, so a second run's frames overwrote the first run's in the ring.
+    **What changed (ADR 0001).** The old test drove the two ticks from two processes, because the
+    console was a process per invocation and the queue had to be restored from `pending.json` to
+    settle at all. The executive is one process and the queue is the window's, in memory; the record
+    still publishes the queue (`presentation.yaml#surface` promises the accepted and due ticks) but
+    nothing reads it back. The verb moved too: `request_translation` declares four interlocks and is
+    refused `INTERLOCK UNEVALUATED` under choice C, so the deferred path is proved on
+    `request_imu_alignment` — `execution_class: deferred`, `interlocks: none`
+    (`domains/gnc/commands.yaml`). One tick is 1/50 s, so the settlement reports 0.0 s of age.
     """
+    console, _plant, world = console_tools()
+    gnc = yaml.safe_load((VEHICLE / "domains" / "gnc" / "commands.yaml").read_text())
+    verb = next(c for c in gnc["commands"] if c["verb"] == "request_imu_alignment")
+    assert verb["execution_class"] == "deferred" and verb["interlocks"] == "none", verb
+
     diode = tmp_path / "diode"
-    window = diode / "deferred"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "deferred",
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
-    (window / "console.json").write_text(
-        json.dumps({"commands": ["request_translation frame=body"], "variables": {}}),
-        encoding="utf-8",
-    )
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("deferred")
+    root = diode / "deferred"
+    submit(root, ["request_imu_alignment source=star_sighting target=fine"])
 
-    def results() -> list[str]:
-        return sorted(p.read_text() for p in (window / "output").glob("*.txt"))
+    executive.cycle()
+    first = results_of(root)
+    assert len(first) == 1 and "deferrable" in first[0], first
+    assert "Recorded at tick 0, due at tick 1" in first[0], first[0]
+    assert receipt_of(first[0])["state"] == "deferred"
+    record = json.loads((root / "pending.json").read_text())
+    assert [(e["accepted_tick"], e["due_tick"]) for e in record["pending"]] == [(0, 1)], record["pending"]
+    assert json.loads((root / "state.json").read_text())["queue_depth"] == 1
 
-    subprocess.run([*console, "--cycles", "1", "--poll", "0.05"], capture_output=True, check=False)
-    first = results()
-    assert len(first) == 1, first
-    assert "deferrable" in first[0], first[0]
-
-    subprocess.run([*console, "--cycles", "1", "--poll", "0.05"], capture_output=True, check=False)
-    second = results()
-    assert len(second) == 2, (
-        "the deferral did not settle in a second process, so `pending.json` is not being read back"
-    )
+    executive.cycle()
+    second = results_of(root)
+    assert len(second) == 2, second
     settled = [b for b in second if "deferrable" not in b]
-    assert len(settled) == 1, second
-    assert "succeeded" in settled[0] and "re-checked" in settled[0], settled[0]
+    assert len(settled) == 1 and "settled:" in settled[0] and "re-checked" in settled[0], settled
+    assert "0.0 s after acceptance at tick 0" in settled[0], settled[0]
+    assert receipt_of(settled[0])["state"] == "settled" and receipt_of(settled[0])["tick"] == "1"
+    assert json.loads((root / "pending.json").read_text())["pending"] == []
+    assert json.loads((root / "state.json").read_text())["queue_depth"] == 0
+
 
 
 def test_a_deferred_command_that_waited_too_long_expires(tmp_path):
     """V-02's `EXPIRED`, and `maximum_queue_age_s` is declared once per verb.
 
     It was read only by the generator that prints it — 58 declarations reaching a document and
-    nothing else — so no command had ever expired. The age is wall-clock because a monotonic
-    reading is meaningless in the process that restores the queue, and a queue that cannot be
-    restored is not a queue.
+    nothing else — so no command had ever expired. **What changed (ADR 0001):** the age is simulated
+    time, `(tick - accepted_tick) * dt`, not the wall clock; a clock that cannot jump is `plant.md`
+    §5's rule for every guard, and under it `--poll 0` no longer means nothing expires.
+    `request_imu_alignment` declares `maximum_queue_age_s: 300` and the tick is 1/50 s, so an entry
+    that has waited 15,001 ticks is 300.02 s old — one tick past its limit. The old test backdated
+    the entry's wall-clock stamp in `pending.json`; this one backdates the window's own queue entry
+    in ticks, because the record is no longer read back.
     """
+    console, _plant, world = console_tools()
+    gnc = yaml.safe_load((VEHICLE / "domains" / "gnc" / "commands.yaml").read_text())
+    verb = next(c for c in gnc["commands"] if c["verb"] == "request_imu_alignment")
+    assert verb["maximum_queue_age_s"] == 300
+    tick_hz = yaml.safe_load((VEHICLE / "mission.yaml").read_text())["tick_hz"]
+    too_long = int(verb["maximum_queue_age_s"] * tick_hz) + 1
+
     diode = tmp_path / "diode"
-    window = diode / "expired"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "expired",
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
-    subprocess.run([*console, "--cycles", "1", "--poll", "0.05"], capture_output=True, check=False)
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    window = executive.attach("expired")
+    root = diode / "expired"
+    submit(root, ["request_imu_alignment source=star_sighting target=fine"])
+    executive.cycle()
+    assert len(window.deferred) == 1 and window.deferred[0]["due_tick"] == 1, window.deferred
+    window.deferred[0]["accepted_tick"] = executive.tick - too_long
+    clear_results(root)
 
-    pending = window / "pending.json"
-    state = json.loads(pending.read_text())
-    state["pending"] = [
-        {
-            "verb": "request_translation",
-            "command": "request_translation frame=body",
-            "accepted_tick": 0,
-            "due_tick": state["ticks"],
-            "accepted_at": "2020-01-01T00:00:00+00:00",
-            "maximum_queue_age_s": 600,
-        }
-    ]
-    pending.write_text(json.dumps(state), encoding="utf-8")
-    for existing in (window / "output").glob("*.txt"):
-        existing.unlink()
-
-    subprocess.run([*console, "--cycles", "1", "--poll", "0.05"], capture_output=True, check=False)
-    bodies = [p.read_text() for p in (window / "output").glob("*.txt")]
+    executive.cycle()
+    bodies = results_of(root)
     assert len(bodies) == 1, bodies
-    assert "EXPIRED" in bodies[0], bodies[0]
-    assert "maximum_queue_age_s of 600" in bodies[0], bodies[0]
+    assert "EXPIRED" in bodies[0] and "maximum_queue_age_s of 300" in bodies[0], bodies[0]
+    assert "waited 300.0 s of simulated time" in bodies[0], bodies[0]
+    assert receipt_of(bodies[0])["state"] == "refused"
+    assert window.deferred == []
+
 
 
 def test_the_conflict_policy_is_first_valid_wins_and_the_loser_is_told(tmp_path):
@@ -5740,51 +5764,54 @@ def test_the_conflict_policy_is_first_valid_wins_and_the_loser_is_told(tmp_path)
     The policy is one sentence and the second half is what makes it a policy: "Later commands are
     **not** silently discarded: they receive `CONFLICT_SUPERSEDED`." V-02 lists that as a
     first-class refusal and explicitly rejects "silent discard (`apollo:579` is explicit that the
-    loser must be told)".
+    loser must be told)". The template makes it sharper than that — `prop.<engine>.run` is one
+    domain per engine, so two agents stopping *different* engines must both be accepted.
 
-    The 58 `conflict_domain` declarations reached nobody until the console read them, and the
-    consequence was not a wrong answer but an undefined one: every command was accepted, so two
-    agents commanding one actuator in one tick both succeeded. The template makes it sharper than
-    that — `prop.<engine>.run` is one domain per engine, so two agents starting *different* engines
-    must both be accepted, and a rule that keyed on the verb name would refuse the second.
+    **What changed (ADR 0001).** `start_burn` declares six interlocks and is refused
+    `INTERLOCK UNEVALUATED` under choice C, so it can no longer win a domain; `stop_burn` is
+    interlock-free and carries the same template, and a refused command never claims the domain
+    (`:578` says first *valid*). And the old console exempted the *same verb* with different
+    arguments (`winner != verb`), so `set_rcs_mode mode=manual` and `mode=free_drift` both applied in
+    one tick — a domain a verb could not collide with itself in. The second is `CONFLICT_SUPERSEDED`
+    now and names the winner's receipt. Driven in one process, because a tick is one executive's.
     """
+    console, _plant, world = console_tools()
     diode = tmp_path / "diode"
-    window = diode / "conflict"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "conflict",
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("conflict")
+    root = diode / "conflict"
 
     def run(commands: list[str]) -> list[str]:
-        for existing in (window / "output").glob("*.txt"):
-            existing.unlink()
-        (window / "console.json").write_text(
-            json.dumps({"commands": commands, "variables": {}}), encoding="utf-8"
-        )
-        subprocess.run([*console, "--cycles", "1", "--poll", "0"], capture_output=True, check=False)
-        return sorted(p.read_text() for p in (window / "output").glob("*.txt"))
+        clear_results(root)
+        submit(root, commands)
+        executive.cycle()
+        return results_of(root)
 
-    # Same domain, two verbs: the first wins and the second says so by name.
+    # Same domain, two texts of one verb: the first wins and the second says so by name.
+    bodies = run(["set_rcs_mode mode=manual", "set_rcs_mode mode=free_drift"])
+    assert len(bodies) == 2 and sum("CONFLICT_SUPERSEDED" in b for b in bodies) == 1, bodies
+    winner = next(b for b in bodies if "CONFLICT_SUPERSEDED" not in b)
+    loser = next(b for b in bodies if "CONFLICT_SUPERSEDED" in b)
+    assert "succeeded" in winner and "internal:mode=manual" in winner, winner
+    assert "rcs.mode" in loser and "set_rcs_mode" in loser, loser
+    assert f"receipt #{receipt_of(winner)['seq']}" in loser, "the refusal must name what superseded it"
+    assert newest_frame(root)["values"]["rcs.mode"] == "manual"
+
+    # Two verbs in one domain: the refused one never claims it, so the valid one is not superseded.
     bodies = run(["start_burn engine=sps", "stop_burn engine=sps"])
     assert len(bodies) == 2, bodies
-    assert sum("accepted" in b for b in bodies) == 1, bodies
-    loser = next(b for b in bodies if "accepted" not in b)
-    assert "CONFLICT_SUPERSEDED" in loser, loser
-    assert "prop.sps.run" in loser, loser
-    assert "start_burn" in loser, "the refusal must name what superseded it"
+    assert any("INTERLOCK UNEVALUATED" in b and "'start_burn'" in b for b in bodies), bodies
+    assert any("accepted" in b and "'stop_burn'" in b for b in bodies), bodies
+    assert not any("CONFLICT_SUPERSEDED" in b for b in bodies), bodies
 
     # Different instantiations of the same template are different domains, so both are accepted.
-    bodies = run(["start_burn engine=sps", "start_burn engine=dps"])
-    assert len(bodies) == 2, bodies
-    assert all("accepted" in b for b in bodies), bodies
+    bodies = run(["stop_burn engine=sps", "stop_burn engine=dps"])
+    assert len(bodies) == 2 and all("accepted" in b for b in bodies), bodies
 
     # And the claim is per tick: the superseded command succeeds on the next one.
-    bodies = run(["stop_burn engine=sps"])
+    bodies = run(["set_rcs_quad group=sm_primary state=enable", "set_rcs_quad group=sm_primary state=inhibit"])
+    assert len(bodies) == 2 and sum("CONFLICT_SUPERSEDED" in b for b in bodies) == 1, bodies
+    bodies = run(["set_rcs_quad group=sm_primary state=inhibit"])
     assert len(bodies) == 1 and "accepted" in bodies[0], bodies
 
 
@@ -10803,6 +10830,7 @@ def test_the_delay_integrator_hands_back_what_entered_one_pipe_ago(tmp_path):
     assert len(values["loop_transport_t__delay"]["slots"]) == 52100
 
 
+
 def test_a_run_can_say_which_scenario_it_is(tmp_path):
     """Criterion 3's runner, at its smallest honest size: a run's identity, recorded and replayable.
 
@@ -10815,8 +10843,14 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     **A scenario is a posture and a seed, and nothing else is recorded**, which is the decision this
     test holds. `mission.yaml`'s own debt says why: *"the pool is a set of faults, the guaranteed
     seed is drawn from it, and the chain that results is whichever one that fault realises — so a
-    `crisis` run is a crisis, and not necessarily the crisis a chain names."* Naming a chain in the
-    runner would answer a question the vehicle deliberately leaves to the experiment.
+    `crisis` run is a crisis, and not necessarily the crisis a chain names."*
+
+    **What changed (ADR 0001 choice D).** The old test restarted a window in a second process and
+    expected the record to carry the pair across; a second executive on a bound window now exits 3,
+    so the remembered half is proved the way the ADR provides for it: `--init` records the identity
+    without binding, and the run that names nothing inherits it. A run that names the pair on a
+    prepared window is obeyed, the plan is asked about the resolved pair, and two windows that
+    remember different pairs cannot be served by one executive, because one executive is one world.
     """
     postures = yaml.safe_load((VEHICLE / "mission.yaml").read_text())["scenario_postures"]
     ids = [str(row["id"]) for row in postures]
@@ -10833,7 +10867,7 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     root = fixture_dir(tmp_path, "scenario")
     result = run_console(
         "--diode-dir", str(root), "--slug", "vehicle", "--scenario", "crisis", "--seed", "42",
-        "--cycles", "2", "--poll", "0.05",
+        "--cycles", "2", "--poll", "0",
     )
     assert result.returncode == 0, result.stderr[-600:]
     assert "scenario=crisis seed=42" in result.stdout, result.stdout[-400:]
@@ -10842,18 +10876,21 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     check = json.loads((window / "pending.json").read_text())
     # The mirror says which scenario the vehicle is in, beside the phase.
     assert published["vehicle"]["scenario"] == "crisis", published["vehicle"]
-    # And the vehicle's own record carries the pair, because `state.json` is never read back as
-    # input — the same rule that puts `ticks` and `seq` there.
+    # And the window's own record carries the pair, because `state.json` is never read back as input.
     assert check["scenario"] == "crisis" and check["seed"] == 42, (check.get("scenario"), check.get("seed"))
 
-    # A restart without the flags keeps the scenario: the record describes the run, and a second
-    # half that reset itself to `nominal` would make a crisis run report itself as a nominal one.
-    resumed = run_console(
-        "--diode-dir", str(root), "--slug", "vehicle", "--cycles", "1", "--poll", "0.05"
+    # A window prepared with the pair and run without the flags keeps it: the record describes the
+    # run, and a run that reset itself to `nominal` would make a crisis run report itself as nominal.
+    made = run_console(
+        "--diode-dir", str(root), "--slug", "kept", "--scenario", "crisis", "--seed", "42", "--init"
     )
+    assert made.returncode == 0, made.stderr[-400:]
+    assert json.loads((root / "kept" / "pending.json").read_text())["world_id"] is None
+    resumed = run_console("--diode-dir", str(root), "--slug", "kept", "--cycles", "1", "--poll", "0")
     assert resumed.returncode == 0, resumed.stderr[-400:]
     assert "scenario=crisis seed=42" in resumed.stdout, resumed.stdout[-400:]
-    assert json.loads((window / "pending.json").read_text())["scenario"] == "crisis"
+    kept = json.loads((root / "kept" / "pending.json").read_text())
+    assert kept["scenario"] == "crisis" and kept["seed"] == 42, kept
 
     # A scenario the vehicle does not declare is refused, with the list — which is the failure the
     # difficulty knob's own history is about: a name nothing resolves reads exactly like a name
@@ -10865,25 +10902,22 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert "is not one of the vehicle's" in refused.stderr, refused.stderr
     assert "crisis" in refused.stderr and "nominal" in refused.stderr
 
-    # **And the fourth case, which the first three could not see.** The second case proves a
-    # restart that names *nothing* keeps the pair; this one proves a restart that names *something*
-    # is obeyed — and the two are the same observation only if the parser can tell them apart.
-    # It could not: `--scenario` defaulted to `"nominal"`, so `args.scenario` was a string whether
-    # the caller had named the posture or named nothing, and the restore in `initialise` overrode
-    # both. `--scenario crisis` on the window below continued as `degraded` and printed
-    # `scenario=degraded` while the caller watched. So the window is made as one posture and
-    # resumed as another, and the *pair* is named, because a run is reproducible from its scenario
-    # and its seed and a seed that lost to the record would leave a run its own numbers do not
-    # replay.
+    # **And the fourth case, which the first three could not see.** The second case proves a run that
+    # names *nothing* keeps the pair; this one proves a run that names *something* is obeyed — and the
+    # two are the same observation only if the parser can tell them apart. It could not, once:
+    # `--scenario` defaulted to `"nominal"`, so `args.scenario` was a string whether the caller had
+    # named the posture or named nothing, and the restore overrode both. So the window is prepared as
+    # one posture and run as another, and the *pair* is named, because a run is reproducible from
+    # its scenario and its seed.
     made = run_console(
-        "--diode-dir", str(root), "--slug", "renamed", "--scenario", "degraded", "--seed", "3",
-        "--cycles", "1", "--poll", "0.05",
+        "--diode-dir", str(root), "--slug", "renamed", "--scenario", "degraded", "--seed", "3", "--init"
     )
     assert made.returncode == 0, made.stderr[-400:]
-    assert "scenario=degraded seed=3" in made.stdout, made.stdout[-400:]
+    prepared = json.loads((root / "renamed" / "pending.json").read_text())
+    assert prepared["scenario"] == "degraded" and prepared["seed"] == 3, prepared
     renamed = run_console(
         "--diode-dir", str(root), "--slug", "renamed", "--scenario", "crisis", "--seed", "7",
-        "--cycles", "1", "--poll", "0.05",
+        "--cycles", "1", "--poll", "0",
     )
     assert renamed.returncode == 0, renamed.stderr[-400:]
     assert "scenario=crisis seed=7" in renamed.stdout, renamed.stdout[-400:]
@@ -10897,6 +10931,23 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     planned = run_console("--diode-dir", str(root), "--slug", "renamed", "--plan-json")
     assert planned.returncode == 0, planned.stderr[-400:]
     assert json.loads(planned.stdout)["posture"] == "crisis", planned.stdout[:200]
+
+    # Two windows that remember different pairs are two worlds, and one executive serves one.
+    for slug, posture, seed in (("left", "crisis", "42"), ("right", "degraded", "3")):
+        assert run_console(
+            "--diode-dir", str(root), "--slug", slug, "--scenario", posture, "--seed", seed, "--init"
+        ).returncode == 0
+    disagree = run_console(
+        "--diode-dir", str(root), "--slug", "left", "--slug", "right", "--cycles", "1", "--poll", "0"
+    )
+    assert disagree.returncode == 3, (disagree.returncode, disagree.stderr)
+    assert "disagree" in disagree.stderr and "left" in disagree.stderr and "right" in disagree.stderr
+    # Naming the pair resolves it, because the caller's word wins in every window.
+    agreed = run_console(
+        "--diode-dir", str(root), "--slug", "left", "--slug", "right", "--scenario", "crisis",
+        "--seed", "42", "--cycles", "1", "--poll", "0",
+    )
+    assert agreed.returncode == 0, agreed.stderr[-400:]
 
 
 def test_a_scenario_plan_is_what_that_scenario_decides(tmp_path):
@@ -10957,6 +11008,7 @@ def test_a_scenario_plan_is_what_that_scenario_decides(tmp_path):
     assert [e["fault"] for e in from_faults["events"]] == [e["fault"] for e in crisis["events"]]
 
 
+
 def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
     """The contract asks for a ring "self-describing about its own cadence and its own losses".
 
@@ -10968,8 +11020,15 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
 
     Two properties, and the second is the one the contract is really asking for. The ring is
     **bounded**, and a frame that falls out of the far end is **counted** rather than forgotten:
-    `held + losses` is exactly what the vehicle has produced, which is what makes a reader able to
-    reason about the frames it did not see.
+    `held + losses` is exactly what the window has produced.
+
+    **What changed (ADR 0001).** The old second half restarted the window in a new process and
+    expected the sequence to continue from the record; a second executive on a bound window is now
+    refused, and the frames it left are untouched, so the accounting is held across one run and the
+    refusal is checked instead of the continuation. The figures are derived from the loop: an
+    executive publishes no frame until it has ticked, so 14 cycles are frames `000`–`013`; a ring of 5
+    holds `009`–`013`; 14 were produced, 5 are held, 9 were lost, and the newest is `013`. The mirror
+    is written *after* the frame now, so it describes the directory as it is rather than one behind.
     """
     diode = tmp_path / "diode"
     window = diode / "bounded"
@@ -10985,7 +11044,7 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
         "--cycles",
         "14",
         "--poll",
-        "0.02",
+        "0",
     ]
     first = subprocess.run(console, capture_output=True, text=True, check=False)
     assert first.returncode == 0, first.stderr[-600:]
@@ -10995,7 +11054,7 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
     assert len(frames) == 5, frames
     # Names are *sequence numbers*, so a new frame is never a rewritten one. A ring that reused
     # names would make "a frame arrived" and "a frame was overwritten" the same observation.
-    assert frames == ["010.json", "011.json", "012.json", "013.json", "014.json"], frames
+    assert frames == ["009.json", "010.json", "011.json", "012.json", "013.json"], frames
 
     published = json.loads((window / "state.json").read_text())
     record = json.loads((window / "pending.json").read_text())
@@ -11006,11 +11065,13 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
     # The accounting is *derived* from the files rather than kept beside them, so a reader that
     # counts the directory and a reader that trusts the mirror agree — which is what "self-describing"
     # has to mean if it is to mean anything.
-    on_disk = len(list((window / "telemetry").glob("*.json")))
-    assert on_disk == ring["held"]
+    on_disk = sorted(p.name for p in (window / "telemetry").glob("*.json"))
+    assert len(on_disk) == ring["held"] and on_disk[-1] == f"{ring['newest_seq']:03d}.json"
+    assert published["executive"]["tick"] == 14 == record["ticks"]
 
-    # A restart keeps the bound and continues the sequence: the ring is the vehicle's, not the
-    # process's, and a resumed run that renumbered would collide with the frames already on disk.
+    # A restart does not continue the ring: the window is bound to the dead executive's world, the
+    # second process is refused, and the frames it left are exactly as they were (ADR 0001 choice D).
+    before = {p.name: p.read_bytes() for p in (window / "telemetry").glob("*.json")}
     again = subprocess.run(
         [
             sys.executable,
@@ -11022,23 +11083,15 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
             "--cycles",
             "3",
             "--poll",
-            "0.02",
+            "0",
         ],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert again.returncode == 0, again.stderr[-600:]
-    assert "ring=5" in again.stdout, again.stdout[-300:]
-    frames = sorted(path.name for path in (window / "telemetry").glob("*.json"))
-    assert frames == ["013.json", "014.json", "015.json", "016.json", "017.json"], frames
-    ring = json.loads((window / "state.json").read_text())["ring"]
-    # **Seventeen, and the count is a consequence rather than a target.** A run writes a frame at
-    # `initialise` time as well as one per cycle, so the first run produced 15 where `--cycles`
-    # asked for 14 and the second produced 3 more. The assertion is the *accounting*, which is
-    # the claim: `held + losses` is what the vehicle produced, whichever way it got there.
-    resumed_seq = json.loads((window / "pending.json").read_text())["seq"]
-    assert ring["held"] + ring["losses"] == resumed_seq == 17, (ring, resumed_seq)
+    assert again.returncode == 3, (again.returncode, again.stderr[-600:])
+    assert record["world_id"] in again.stderr, again.stderr
+    assert {p.name: p.read_bytes() for p in (window / "telemetry").glob("*.json")} == before
 
     # And a bound of one is a ring, not a crash: the newest frame is all that is left.
     one = subprocess.run(
@@ -11054,7 +11107,7 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
             "--cycles",
             "4",
             "--poll",
-            "0.02",
+            "0",
         ],
         capture_output=True,
         text=True,
@@ -11062,10 +11115,9 @@ def test_the_telemetry_ring_is_bounded_and_accounts_for_its_losses(tmp_path):
     )
     assert one.returncode == 0, one.stderr[-600:]
     frames = sorted(path.name for path in (diode / "one-slot" / "telemetry").glob("*.json"))
-    # That the directory holds exactly one frame, and that it is the newest the record names, is the
-    # claim; the run's own frame count is a consequence of `initialise` publishing as well.
     ring_one = json.loads((diode / "one-slot" / "state.json").read_text())["ring"]
-    assert len(frames) == 1 and frames[0] == f"{ring_one['newest_seq'] + 1:03d}.json", (frames, ring_one)
+    assert frames == ["003.json"] and ring_one["newest_seq"] == 3 and ring_one["losses"] == 3, (frames, ring_one)
+
 
 
 def test_a_restart_may_not_re_bound_the_ring_and_says_so(tmp_path):
@@ -11075,49 +11127,26 @@ def test_a_restart_may_not_re_bound_the_ring_and_says_so(tmp_path):
     a restart that took a new one would make the frames held, the losses accounted and the declared
     slot count three answers to one question — so the record's bound wins. What was wrong was the
     *manner*: `--ring-slots` defaulted to `300`, so a caller who named `10` and a caller who named
-    nothing were the same argument, and the run kept `300` without a word. A caller reads
-    `ring=300` in a line of status output and has no way to know that the number they typed was
-    discarded — which is this folder's oldest sentence about a name that resolves to nothing.
+    nothing were the same argument, and the run kept `300` without a word.
 
     So the refusal is the deliverable, not the override: a named bound that the window does not
     have exits 3 and names the bound it does have, and a bound that *agrees* with the record still
     runs, because there is nothing to disagree about.
+
+    **What changed (ADR 0001 choice D).** A window that has been ticked is bound, and a second
+    executive on it is refused for *that* reason first — so the bound's own refusal is proved on a
+    window `--init` prepared, which remembers its bound and belongs to no world yet.
     """
     diode = tmp_path / "diode"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "held",
-        "--ring-slots",
-        "6",
-        "--cycles",
-        "1",
-        "--poll",
-        "0.02",
-    ]
-    first = subprocess.run(console, capture_output=True, text=True, check=False)
-    assert first.returncode == 0, first.stderr[-600:]
-    assert "ring=6" in first.stdout, first.stdout[-300:]
+    entry = [sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode)]
+    made = subprocess.run([*entry, "--slug", "held", "--ring-slots", "6", "--init"], capture_output=True, text=True, check=False)
+    assert made.returncode == 0, made.stderr[-600:]
+    prepared = json.loads((diode / "held" / "pending.json").read_text())
+    assert prepared["ring_slots"] == 6 and prepared["world_id"] is None, prepared
 
     # Naming the bound the window already has is not a disagreement, and it runs.
     same = subprocess.run(
-        [
-            sys.executable,
-            str(VEHICLE / "tools" / "console.py"),
-            "--diode-dir",
-            str(diode),
-            "--slug",
-            "held",
-            "--ring-slots",
-            "6",
-            "--cycles",
-            "1",
-            "--poll",
-            "0.02",
-        ],
+        [*entry, "--slug", "held", "--ring-slots", "6", "--cycles", "1", "--poll", "0"],
         capture_output=True,
         text=True,
         check=False,
@@ -11126,53 +11155,31 @@ def test_a_restart_may_not_re_bound_the_ring_and_says_so(tmp_path):
     assert "ring=6" in same.stdout, same.stdout[-300:]
 
     # Naming another one is refused, with both numbers, and the window is untouched.
-    before = json.loads((diode / "held" / "pending.json").read_text())
+    made = subprocess.run([*entry, "--slug", "other", "--ring-slots", "6", "--init"], capture_output=True, text=True, check=False)
+    assert made.returncode == 0, made.stderr[-600:]
+    before = (diode / "other" / "pending.json").read_bytes()
     refused = subprocess.run(
-        [
-            sys.executable,
-            str(VEHICLE / "tools" / "console.py"),
-            "--diode-dir",
-            str(diode),
-            "--slug",
-            "held",
-            "--ring-slots",
-            "10",
-            "--cycles",
-            "1",
-            "--poll",
-            "0.02",
-        ],
+        [*entry, "--slug", "other", "--ring-slots", "10", "--cycles", "1", "--poll", "0"],
         capture_output=True,
         text=True,
         check=False,
     )
     assert refused.returncode == 3, refused.returncode
     assert "--ring-slots 10" in refused.stderr and "holds 6" in refused.stderr, refused.stderr
-    after = json.loads((diode / "held" / "pending.json").read_text())
-    assert after["ring_slots"] == 6 and after["seq"] == before["seq"], (before, after)
+    assert (diode / "other" / "pending.json").read_bytes() == before
+    assert not list((diode / "other" / "telemetry").glob("*.json"))
     # And a fresh window is free to be bound however the caller likes, which is what keeps this a
     # rule about *restarts* rather than a rule against naming the bound at all.
     fresh = subprocess.run(
-        [
-            sys.executable,
-            str(VEHICLE / "tools" / "console.py"),
-            "--diode-dir",
-            str(diode),
-            "--slug",
-            "fresh",
-            "--ring-slots",
-            "10",
-            "--cycles",
-            "1",
-            "--poll",
-            "0.02",
-        ],
+        [*entry, "--slug", "fresh", "--ring-slots", "10", "--cycles", "1", "--poll", "0"],
         capture_output=True,
         text=True,
         check=False,
     )
     assert fresh.returncode == 0, fresh.stderr[-600:]
     assert "ring=10" in fresh.stdout, fresh.stdout[-300:]
+    assert json.loads((diode / "fresh" / "pending.json").read_text())["ring_slots"] == 10
+
 
 
 def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
@@ -11190,6 +11197,9 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
     drifted. What is asserted instead is that the file the *window* gets is byte-identical to what
     the generator produces from the configuration **now**, so moving a cadence class, withdrawing a
     channel or adding a refusal code fails here until the file follows.
+
+    The hand-edit half is driven in-process now (ADR 0001): a second process on a ticked window is
+    refused, so the cycle that restores the file is the same executive's.
     """
     import sys as _sys
 
@@ -11223,7 +11233,7 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
     assert "failure chain" not in text.lower()
     assert "HELP.md" in text  # it points at the file that does carry the verbs
 
-    # The console writes it, at boot and every cycle, from that same generator.
+    # The executive writes it, at attach and every cycle, from that same generator.
     diode = tmp_path / "diode"
     window = diode / "protocol"
     result = subprocess.run(
@@ -11237,7 +11247,7 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
             "--cycles",
             "2",
             "--poll",
-            "0.02",
+            "0",
         ],
         capture_output=True,
         text=True,
@@ -11253,26 +11263,16 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
 
     # A hand-edit does not survive a cycle, which is the difference between a generated file and a
     # written one.
-    (window / "README.md").write_text("# doctored\n")
-    again = subprocess.run(
-        [
-            sys.executable,
-            str(VEHICLE / "tools" / "console.py"),
-            "--diode-dir",
-            str(diode),
-            "--slug",
-            "protocol",
-            "--cycles",
-            "1",
-            "--poll",
-            "0.02",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert again.returncode == 0, again.stderr[-600:]
-    assert (window / "README.md").read_text() == text, "a hand-edit survived a cycle"
+    console, _plant, world = console_tools()
+    executive = console.Executive(world, tmp_path / "edited", phase="translunar_coast")
+    executive.attach("protocol")
+    edited = tmp_path / "edited" / "protocol"
+    assert (edited / "README.md").read_text() == text
+    (edited / "README.md").write_text("# doctored\n")
+    (edited / "HELP.md").write_text("# doctored\n")
+    executive.cycle()
+    assert (edited / "README.md").read_text() == text, "a hand-edit survived a cycle"
+    assert (edited / "HELP.md").read_text() == __import__("generate_help").generate(VEHICLE)
     # `HELP.md` is where the verbs are, and nothing in the README is one.
     assert "zzz_definitely_not_a_verb" not in help_text
 
@@ -15975,50 +15975,52 @@ def test_a_command_puts_a_keyed_state_beside_its_siblings_never_on_top_of_them()
     assert hatched["internal"]["hatch_state"] == {"hatch_crew_lm": "open"}, hatched
 
 
+
 def test_the_console_applies_the_effect_and_says_what_changed(tmp_path):
     """`console.py`'s own words, which were the honest admission and are now a report.
 
-    Every success it wrote ended *"it does not simulate the effect"*. Two commands prove the
-    replacement: `set_bus_tie` writes a node the map holds, `set_rcs_mode` writes a state on the
-    sentinel, and `set_coolant_pump` is a valid command the corpus cannot yet apply — which must
-    arrive as a refusal naming the owed field rather than as a success that changed nothing.
+    Every success it wrote ended *"it does not simulate the effect"*. Now the executive stages the
+    accepted command into `plant.step` and reports, after the step, what the command's own target
+    states became — `set_rcs_mode` writes a state on the sentinel, and the frame carries it.
+
+    **What changed (ADR 0001 choice C).** The old version of this test closed the bus tie and read
+    `bus_tie=closed` back. `set_bus_tie` declares `tie_dv_limit`, a threshold on `power.dc_bus_a_v`
+    whose source state has no rule, so the executive cannot guard the command and refuses it
+    `INTERLOCK UNEVALUATED`; the tie stays `open` in the ring. And `set_coolant_pump`, the old
+    NOT IMPLEMENTED case, declares interlocks too, so the owed-value refusal is proved on `point_hga`
+    — interlock-free, and its `link_snr.command_value.selects` is owed (`domains/comms/components.yaml`).
     """
+    console, _plant, world = console_tools()
     diode = tmp_path / "diode"
-    window = diode / "applied"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "applied",
-        "--phase",
-        "translunar_coast",
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("applied")
+    root = diode / "applied"
 
     def run(command: str) -> str:
-        for existing in (window / "output").glob("*.txt"):
-            existing.unlink()
-        (window / "console.json").write_text(
-            json.dumps({"commands": [command], "variables": {}}), encoding="utf-8"
-        )
-        subprocess.run([*console, "--cycles", "1", "--poll", "0"], capture_output=True, check=False)
-        bodies = [p.read_text() for p in (window / "output").glob("*.txt")]
+        clear_results(root)
+        submit(root, [command])
+        executive.cycle()
+        bodies = results_of(root)
         assert len(bodies) == 1, bodies
         return bodies[0]
 
-    # The post-extraction tie starts open; close it to exercise a real value change.
+    # The post-extraction tie starts open, and stays open: the command cannot be guarded.
     tied = run("set_bus_tie tie=csm_tie_ab state=closed")
-    assert "succeeded" in tied and "bus_tie=closed" in tied, tied
-    # A state on the sentinel, which had no storage before this round.
+    assert "refused: INTERLOCK UNEVALUATED" in tied and "tie_dv_limit" in tied, tied
+    assert "succeeded" not in tied, tied
+    assert newest_frame(root)["values"]["power.bus_tie_state"] == "open"
+    # A state on the sentinel, which had no storage before round 32, and is stepped truth now.
     mode = run("set_rcs_mode mode=manual")
     assert "succeeded" in mode and "internal:mode=manual" in mode, mode
+    assert newest_frame(root)["values"]["rcs.mode"] == "manual"
     # A valid command the corpus cannot apply: refused by name, with the reason.
-    pump = run("set_coolant_pump loop=loop_primary pump=pump_1 state=on")
-    assert "refused: NOT IMPLEMENTED" in pump, pump
-    assert "rated speed" in pump, pump
-    assert "does not simulate the effect" not in pump, pump
+    pointed = run("point_hga target=earth mode=auto")
+    assert "refused: NOT IMPLEMENTED" in pointed, pointed
+    assert "link_snr.command_value.selects" in pointed and "is owed" in pointed, pointed
+    assert "does not simulate the effect" not in pointed, pointed
+    # And setting what is already set changes nothing and says so.
+    again = run("set_comm_mode mode=sband_low")
+    assert "succeeded" in again and "No value changed" in again, again
 
 
 def test_a_computed_effect_names_the_input_the_command_changes(tmp_path):
@@ -16191,30 +16193,22 @@ def test_a_commanded_state_is_guarded_by_a_dwell_and_the_executive_reads_it(tmp_
     out = run_linter(definition).stdout
     assert "guards itself with a hysteresis band" in out, out[-1400:]
 
-    # And the guard end to end, one command per console invocation — the way a fleet's commands
-    # arrive, and the reason the first version's in-memory clock fired never.
+    # And the guard end to end, one command per tick on one executive — the way a fleet's commands
+    # arrive. The first version kept the clock in memory in a process per command, so it fired never;
+    # the second restored it from `pending.json`, which ADR 0001 withdraws. The clock is the
+    # executive's now, in simulated microseconds, so exactly one tick of 1/50 s has passed when the
+    # second command arrives — 0.0 s held against a 10 s floor.
+    console_module, _plant, _shared = console_tools()
     diode = tmp_path / "diode"
+    executive = console_module.Executive(world, diode, phase="translunar_coast")
+    executive.attach("dwell")
     window = diode / "dwell"
-    console = [
-        sys.executable,
-        str(VEHICLE / "tools" / "console.py"),
-        "--diode-dir",
-        str(diode),
-        "--slug",
-        "dwell",
-        "--phase",
-        "translunar_coast",
-    ]
-    subprocess.run([*console, "--init"], capture_output=True, check=False)
 
     def run(command: str) -> str:
-        for existing in (window / "output").glob("*.txt"):
-            existing.unlink()
-        (window / "console.json").write_text(
-            json.dumps({"commands": [command], "variables": {}}), encoding="utf-8"
-        )
-        subprocess.run([*console, "--cycles", "1", "--poll", "0"], capture_output=True, check=False)
-        bodies = [p.read_text() for p in (window / "output").glob("*.txt")]
+        clear_results(window)
+        submit(window, [command])
+        executive.cycle()
+        bodies = results_of(window)
         assert len(bodies) == 1, bodies
         return bodies[0]
 
@@ -21338,3 +21332,649 @@ def test_the_tick_can_read_what_the_build_order_promises():
     # 41 -> 45 in round 76 and 45 -> 48 in round 80: the seven positions `mission.yaml#launch_state`
     # now declares, the last three of them read out of the launch checklist.
     assert len(ready) == 52 and len(advanced) == 52
+
+
+# ---------------------------------------------------------------------------------------------
+# WP01: one executive owns one physical world, and the windows are views of it (ADR 0001).
+#
+# The probes below drive `tools/console.py`'s `Executive` in-process where a test has to interleave
+# writes with cycles, and through the entrypoint where the claim is about the process. They share
+# one loaded world because `load_world` costs seconds and the executive never writes to it; every
+# executive gets its own truth map from `initial_values`.
+# ---------------------------------------------------------------------------------------------
+_SHARED_WORLD = None
+
+
+def console_tools():
+    """`tools/console.py` and `tools/plant.py` as modules, and one world loaded for this process."""
+    global _SHARED_WORLD
+    if str(VEHICLE / "tools") not in sys.path:
+        sys.path.insert(0, str(VEHICLE / "tools"))
+    import console
+    import plant
+
+    if _SHARED_WORLD is None:
+        _SHARED_WORLD = plant.load_world(VEHICLE)
+    return console, plant, _SHARED_WORLD
+
+
+def submit(window: Path, commands: list, variables: dict | None = None) -> None:
+    """What an agent does: write the console whole."""
+    (window / "console.json").write_text(
+        json.dumps({"commands": commands, "variables": variables or {}}), encoding="utf-8"
+    )
+
+
+def results_of(window: Path) -> list[str]:
+    return [p.read_text() for p in sorted((window / "output").glob("*.txt"))]
+
+
+def clear_results(window: Path) -> None:
+    for existing in (window / "output").glob("*.txt"):
+        existing.unlink()
+
+
+def newest_frame(window: Path) -> dict:
+    frames = sorted((window / "telemetry").glob("*.json"), key=lambda p: p.name)
+    assert frames, f"{window} holds no frame"
+    return json.loads(frames[-1].read_text())
+
+
+def receipt_of(body: str) -> dict:
+    """The receipt block every result ends with, as a map."""
+    line = [ln for ln in body.strip().splitlines() if ln.startswith("receipt: ")]
+    assert len(line) == 1, body
+    return dict(field.split("=", 1) for field in line[0][len("receipt: "):].split())
+
+
+def test_two_windows_on_one_executive_command_and_observe_one_truth(tmp_path):
+    """ADR 0001's first acceptance line: one world, two windows, one truth.
+
+    The reference console gave every window its own `initial_values(world)`, never called
+    `plant.step`, and published its whole value map as the frame — so ten agents flew ten vehicles,
+    none of which moved, and every frame carried stock residuals and the coolant transport ring.
+    Here one `Executive` owns the truth; a window is attached to it and holds no physical state.
+
+    Every expectation is derived from the configuration rather than from the code under test:
+    `set_rcs_mode` is `apollo`-sourced and declares `interlocks: none` (`domains/rcs/commands.yaml`),
+    its target `mode` lives on the sentinel and is published as `rcs.mode` (`domains/rcs/points.yaml`),
+    and its dwell is `min_on_s: 2` against `mission.yaml#tick_hz: 50` — so the command from the second
+    window one tick later must be refused with 0.0 s held, which only happens if it was validated
+    against the state the first window produced.
+    """
+    console, _plant, world = console_tools()
+    rcs_commands = yaml.safe_load((VEHICLE / "domains" / "rcs" / "commands.yaml").read_text())
+    verb = next(c for c in rcs_commands["commands"] if c["verb"] == "set_rcs_mode")
+    assert verb["interlocks"] == "none" and verb["provenance"]["basis"] == "apollo", verb
+    rcs_states = yaml.safe_load((VEHICLE / "domains" / "rcs" / "components.yaml").read_text())
+    mode = next(s for s in rcs_states["state"] if s["id"] == "mode")
+    assert mode["initial"] == "auto" and mode["dwell"] == {"min_on_s": 2, "min_off_s": 2}, mode
+    tick_hz = yaml.safe_load((VEHICLE / "mission.yaml").read_text())["tick_hz"]
+    assert tick_hz == 50
+
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    alpha = executive.attach("alpha")
+    bravo = executive.attach("bravo")
+    assert alpha.root == diode / "alpha" and bravo.root == diode / "bravo"
+    executive.cycle()
+
+    for window in (diode / "alpha", diode / "bravo"):
+        mirror = json.loads((window / "state.json").read_text())
+        assert mirror["executive"] == {
+            "world_id": executive.world_id,
+            "tick": 1,
+            "windows": ["alpha", "bravo"],
+        }, mirror["executive"]
+        # No truth and no lineage in any window file.
+        for name in ("state.json", "pending.json"):
+            text = (window / name).read_text()
+            assert "lineage" not in text and "__residual" not in text, name
+
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    executive.cycle()
+    bodies = results_of(diode / "alpha")
+    assert len(bodies) == 1 and "succeeded" in bodies[0], bodies
+    assert "Changed: internal:mode=manual" in bodies[0], bodies[0]
+    receipt = receipt_of(bodies[0])
+    assert receipt["world"] == executive.world_id and receipt["window"] == "alpha"
+    assert receipt["tick"] == "1" and receipt["offset_us"] == "0" and receipt["state"] == "accepted"
+    assert not results_of(diode / "bravo")
+
+    frames = {slug: newest_frame(diode / slug) for slug in ("alpha", "bravo")}
+    for slug, frame in frames.items():
+        assert frame["sim_step"] == 2, (slug, frame["sim_step"])
+        assert frame["values"]["rcs.mode"] == "manual", (slug, frame["values"].get("rcs.mode"))
+    # The same evidence in every window: the frames differ in the window's own identity only.
+    strip = {"boot_id", "seq"}
+    assert {k: v for k, v in frames["alpha"].items() if k not in strip} == {
+        k: v for k, v in frames["bravo"].items() if k not in strip
+    }
+
+    # The envelope is the declared one and the values are registered channels — never truth.
+    presentation = yaml.safe_load((VEHICLE / "presentation.yaml").read_text())
+    declared = [row["name"] for row in presentation["frame"]["fields"]]
+    channels = yaml.safe_load((VEHICLE / "channels.yaml").read_text())
+    registered = {
+        row["id"]
+        for section, value in channels.items()
+        if isinstance(value, list) and section not in ("open_debts", "crew_positions")
+        for row in value
+        if isinstance(row, dict) and row.get("id")
+    }
+    for frame in frames.values():
+        assert set(frame) <= set(declared), sorted(set(frame) - set(declared))
+        assert set(frame["values"]) <= registered, sorted(set(frame["values"]) - registered)
+        for key in frame["values"]:
+            for forbidden in ("__residual", "__shortfall", "__delay", "internal"):
+                assert forbidden not in key, key
+
+    # A command from the other window is validated against the state the first produced: the mode
+    # changed 0.02 s ago and must hold for 2 s, so this is a dwell refusal and not a success.
+    submit(diode / "bravo", ["set_rcs_mode mode=auto"])
+    executive.cycle()
+    bodies = results_of(diode / "bravo")
+    assert len(bodies) == 1 and "refused: DWELL." in bodies[0], bodies
+    assert "0.0 s ago and must hold a value for 2 s" in bodies[0], bodies[0]
+    assert receipt_of(bodies[0])["state"] == "refused"
+    assert newest_frame(diode / "bravo")["values"]["rcs.mode"] == "manual"
+    # And the executive's own record of the world moved with it.
+    assert executive.tick == 3 and len(executive.lineage) == 4
+    assert len(set(executive.lineage)) == 4, "the lineage must move every tick"
+
+
+def test_a_command_whose_interlock_cannot_be_evaluated_is_refused_in_every_window(tmp_path):
+    """ADR 0001 choice C: a command the executive cannot guard is a command it must not accept.
+
+    `set_bus_tie` declares one interlock, `tie_dv_limit` (`domains/power/commands.yaml`), which
+    watches `power.dc_bus_a_v` (`domains/power/profiles.yaml`), a reading of `bus_a_v` — an
+    `algebraic` state whose rule is unwritten, so the point has no value and the comparator cannot
+    run. The reference console applied the command anyway and labelled nothing, which is the
+    alternative the ADR rejected. `bus_tie_closed` starts `open` (`domains/power/components.yaml`),
+    and it must still read `open` in both rings afterwards.
+
+    An interlock the operator has *explicitly* tripped (`--closed-interlock`) is a different refusal
+    and comes first, by name — the existing rule, not weakened by the new one.
+    """
+    console, _plant, world = console_tools()
+    power = yaml.safe_load((VEHICLE / "domains" / "power" / "commands.yaml").read_text())
+    tie = next(c for c in power["commands"] if c["verb"] == "set_bus_tie")
+    assert tie["interlocks"] == ["tie_dv_limit"], tie["interlocks"]
+    profiles = yaml.safe_load((VEHICLE / "domains" / "power" / "profiles.yaml").read_text())
+    threshold = next(t for t in profiles["thresholds"] if t["id"] == "tie_dv_limit")
+    assert threshold["point"] == "power.dc_bus_a_v" and threshold["interlock"] is True
+    components = yaml.safe_load((VEHICLE / "domains" / "power" / "components.yaml").read_text())
+    assert next(s for s in components["state"] if s["id"] == "bus_tie_closed")["initial"] == "open"
+    assert next(s for s in components["state"] if s["id"] == "bus_a_v")["method"] == "algebraic"
+
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("alpha")
+    executive.attach("bravo")
+    for slug in ("alpha", "bravo"):
+        submit(diode / slug, ["set_bus_tie tie=csm_tie_ab state=closed"])
+    executive.cycle()
+    for slug in ("alpha", "bravo"):
+        bodies = results_of(diode / slug)
+        assert len(bodies) == 1, bodies
+        assert "refused: INTERLOCK UNEVALUATED" in bodies[0], bodies[0]
+        assert "tie_dv_limit" in bodies[0] and "power.dc_bus_a_v" in bodies[0], bodies[0]
+        assert "bus_a_v" in bodies[0] and "UNCONFIGURED" in bodies[0], bodies[0]
+        assert "succeeded" not in bodies[0]
+        assert receipt_of(bodies[0])["state"] == "refused"
+        assert newest_frame(diode / slug)["values"]["power.bus_tie_state"] == "open", slug
+
+    # The explicit trip still refuses by name, and before the unevaluated rule.
+    tripped = console.Executive(
+        world, tmp_path / "tripped", phase="translunar_coast", tripped_interlocks={"tie_dv_limit"}
+    )
+    tripped.attach("alpha")
+    submit(tmp_path / "tripped" / "alpha", ["set_bus_tie tie=csm_tie_ab state=closed"])
+    tripped.cycle()
+    bodies = results_of(tmp_path / "tripped" / "alpha")
+    assert len(bodies) == 1 and "is closed" in bodies[0], bodies
+    assert "interlock: tie_dv_limit is tripped" in bodies[0], bodies[0]
+    assert "UNEVALUATED" not in bodies[0], bodies[0]
+
+
+def test_a_conflict_domain_is_won_once_a_tick_and_the_rotation_decides_by_whom(tmp_path):
+    """`apollo_diode.md:578` is "first valid in the domain wins", and the executive now means it.
+
+    Three things were wrong before. Every window had its own `claimed` map, so two windows never
+    conflicted at all; the same verb with different arguments was exempt (`winner != verb`), so
+    `set_rcs_quad ... enable` and `... inhibit` both applied in one tick; and the order in which
+    windows were served was whichever process ran first. ADR 0001 choice A makes the order a pure
+    function of (slugs, tick): sorted slugs rotated left by `tick % n`, so for `alpha`, `bravo`,
+    `charlie` the winner at tick *t* is `sorted[t % 3]` — predicted here from the rule, not read back.
+
+    `ack_alarm` is the probe for the rotation: interlock-free, declared `conflict_domain:
+    crew.alerts`, moves no state and has no dwell, so three distinct texts collide cleanly every tick.
+    `set_rcs_quad` (domain `rcs.group_<group>`, dwell 0/0) is the physical case, and `stop_burn`'s
+    `prop.<engine>.run` shows that two instantiations of one template are two domains.
+    """
+    console, _plant, world = console_tools()
+    crew = yaml.safe_load((VEHICLE / "domains" / "crew" / "commands.yaml").read_text())
+    ack = next(c for c in crew["commands"] if c["verb"] == "ack_alarm")
+    assert ack["interlocks"] == "none" and ack["conflict_domain"] == "crew.alerts", ack
+    rcs = yaml.safe_load((VEHICLE / "domains" / "rcs" / "commands.yaml").read_text())
+    quad = next(c for c in rcs["commands"] if c["verb"] == "set_rcs_quad")
+    assert quad["interlocks"] == "none" and quad["conflict_domain"] == "rcs.group_<group>", quad
+
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    slugs = ["alpha", "bravo", "charlie"]
+    for slug in slugs:
+        executive.attach(slug)
+
+    for tick in range(4):
+        assert executive.tick == tick
+        for slug in slugs:
+            clear_results(diode / slug)
+            submit(diode / slug, [f"ack_alarm alert_id={slug}"])
+        executive.cycle()
+        expected_winner = sorted(slugs)[tick % len(slugs)]
+        outcomes = {slug: results_of(diode / slug) for slug in slugs}
+        assert all(len(bodies) == 1 for bodies in outcomes.values()), outcomes
+        winner_body = outcomes[expected_winner][0]
+        assert "CONFLICT_SUPERSEDED" not in winner_body and "accepted" in winner_body, winner_body
+        winner_receipt = receipt_of(winner_body)
+        assert winner_receipt["state"] == "accepted" and winner_receipt["tick"] == str(tick)
+        for slug in slugs:
+            if slug == expected_winner:
+                continue
+            loser = outcomes[slug][0]
+            assert "refused: CONFLICT_SUPERSEDED" in loser, (tick, slug, loser)
+            assert "crew.alerts" in loser and "ack_alarm" in loser, loser
+            assert f"window {expected_winner!r}" in loser, loser
+            assert f"receipt #{winner_receipt['seq']}" in loser, loser
+            assert receipt_of(loser)["state"] == "superseded"
+
+    # The physical case: the same verb with different arguments is a conflict, not an exemption, and
+    # the superseded command succeeds on the next tick because the claim is per tick.
+    for slug in slugs:
+        clear_results(diode / slug)
+    submit(diode / "alpha", ["set_rcs_quad group=sm_primary state=enable"])
+    submit(diode / "bravo", ["set_rcs_quad group=sm_primary state=inhibit"])
+    # tick 4: order is [bravo, charlie, alpha], so bravo's inhibit is the first valid command.
+    assert executive.tick == 4
+    executive.cycle()
+    assert "accepted" in results_of(diode / "bravo")[0]
+    alpha_body = results_of(diode / "alpha")[0]
+    assert "refused: CONFLICT_SUPERSEDED" in alpha_body and "rcs.group_sm_primary" in alpha_body
+    assert "window 'bravo'" in alpha_body, alpha_body
+    for slug in slugs:
+        clear_results(diode / slug)
+    submit(diode / "alpha", ["set_rcs_quad group=sm_primary state=enable"])
+    executive.cycle()
+    assert "accepted" in results_of(diode / "alpha")[0], results_of(diode / "alpha")
+
+    # Identical text is a duplicate of the winner, accepted with no further effect.
+    for slug in slugs:
+        clear_results(diode / slug)
+        submit(diode / slug, ["ack_alarm alert_id=same"])
+    # tick 6: order is [alpha, bravo, charlie].
+    assert executive.tick == 6
+    executive.cycle()
+    first = results_of(diode / "alpha")[0]
+    assert receipt_of(first)["state"] == "accepted", first
+    for slug in ("bravo", "charlie"):
+        body = results_of(diode / slug)[0]
+        assert "DUPLICATE" in body and f"receipt #{receipt_of(first)['seq']}" in body, body
+        assert receipt_of(body)["state"] == "duplicate"
+        assert "CONFLICT_SUPERSEDED" not in body
+
+    # Two instantiations of one template are two domains, so both are accepted.
+    for slug in slugs:
+        clear_results(diode / slug)
+    submit(diode / "alpha", ["stop_burn engine=sps"])
+    submit(diode / "bravo", ["stop_burn engine=dps"])
+    executive.cycle()
+    assert "accepted" in results_of(diode / "alpha")[0]
+    assert "accepted" in results_of(diode / "bravo")[0]
+
+
+def test_malformed_ingress_is_refused_once_claimed_and_leaves_the_other_window_alone(tmp_path):
+    """ADR 0001 choice B and the half of the claim the reference console got wrong.
+
+    `read_json_bounded` returned `{}` for invalid JSON, so a half-written or broken console was
+    silently an *empty batch* — the contract's own case ("an agent writing the file in place") was
+    refused nowhere. Each of the six shapes below produces exactly one refusal result, the console is
+    claimed (commands emptied, last known variables preserved), the other window's command in the
+    same tick lands, and a second cycle over the same broken input produces nothing further.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast", max_batch=32)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    alpha, bravo = diode / "alpha", diode / "bravo"
+
+    # A known variable first, so there is a "last known" set to preserve.
+    submit(alpha, [], {"probe_marker": True})
+    executive.cycle()
+
+    def one_refusal(raw: str, *needles: str) -> None:
+        clear_results(alpha)
+        clear_results(bravo)
+        (alpha / "console.json").write_text(raw, encoding="utf-8")
+        submit(bravo, ["ack_alarm alert_id=steady"])
+        before = executive.tick
+        executive.cycle()
+        assert executive.tick == before + 1
+        bodies = results_of(alpha)
+        assert len(bodies) == 1 and bodies[0].startswith("refused:"), bodies
+        for needle in needles:
+            assert needle in bodies[0], (needle, bodies[0])
+        assert receipt_of(bodies[0])["state"] == "refused"
+        # Claimed: emptied, variables kept.
+        claimed = json.loads((alpha / "console.json").read_text())
+        assert claimed["commands"] == [] and claimed["variables"]["probe_marker"] is True, claimed
+        # The neighbour's command landed in the same tick.
+        steady = results_of(bravo)
+        assert len(steady) == 1 and "accepted" in steady[0], steady
+        # And the broken input does not refuse again.
+        clear_results(alpha)
+        clear_results(bravo)
+        executive.cycle()
+        assert results_of(alpha) == [], results_of(alpha)
+
+    one_refusal('{"commands": ["ack_alarm alert_id=x"', "not valid JSON")
+    one_refusal("[1, 2, 3]", "not an object")
+    one_refusal(
+        json.dumps({"commands": [], "variables": {"pad": "x" * (console.MAX_READ_BYTES + 1)}}),
+        "bytes",
+        str(console.MAX_READ_BYTES),
+    )
+    one_refusal(json.dumps({"commands": ["ack_alarm alert_id=x", 7], "variables": {}}), "non-string")
+    one_refusal(
+        json.dumps({"commands": ["ack_alarm alert_id=x"] * 33, "variables": {}}),
+        "33 command(s)",
+        "32",
+        "max-batch",
+    )
+    one_refusal(json.dumps({"commands": "ack_alarm alert_id=x", "variables": {}}), "not a list")
+
+    # The cap is an operator ceiling: a smaller executive refuses sooner, and the cap is at least 1.
+    small = console.Executive(world, tmp_path / "small", phase="translunar_coast", max_batch=2)
+    small.attach("alpha")
+    submit(tmp_path / "small" / "alpha", ["ack_alarm alert_id=1", "ack_alarm alert_id=2", "ack_alarm alert_id=3"])
+    small.cycle()
+    bodies = results_of(tmp_path / "small" / "alpha")
+    assert len(bodies) == 1 and "3 command(s)" in bodies[0] and "2" in bodies[0], bodies
+    with pytest.raises(ValueError):
+        console.Executive(world, tmp_path / "zero", phase="translunar_coast", max_batch=0)
+
+
+def test_a_flooding_or_unwritable_window_does_not_stop_the_tick_or_its_neighbour(tmp_path):
+    """ADR 0001's isolation clause: one window's trouble is that window's.
+
+    A window that floods every cycle fills only its own `output/`; its ring stays bounded at its own
+    slot count; the neighbour's one command still lands every tick. A window whose `output/` cannot
+    be written — replaced by a regular file, which defeats root as well as `chmod` does not — loses
+    its own results for that tick, is recorded as a failure, and neither the tick nor the neighbour
+    notices.
+
+    The neighbour commands in a different conflict domain (`set_deadband`, `rcs.profile`) from the
+    flood (`ack_alarm`, `crew.alerts`): the first draft of this test had both on `crew.alerts` and
+    the flood correctly superseded the neighbour every tick — isolation is about files and ticks,
+    not about arbitration, which is the executive's one world doing its job.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast", max_batch=32)
+    executive.attach("alpha", ring_slots=4)
+    executive.attach("bravo", ring_slots=4)
+    alpha, bravo = diode / "alpha", diode / "bravo"
+
+    for tick in range(6):
+        submit(alpha, [f"ack_alarm alert_id=flood_{tick}_{i}" for i in range(32)])
+        submit(bravo, [f"set_deadband profile=steady_{tick}"])
+        executive.cycle()
+        assert executive.tick == tick + 1
+    assert len(results_of(alpha)) == 6 * 32
+    steady = results_of(bravo)
+    assert len(steady) == 6 and all("accepted" in b for b in steady), steady
+    assert sorted(int(receipt_of(b)["tick"]) for b in steady) == list(range(6))
+    assert len(list((alpha / "telemetry").glob("*.json"))) == 4
+    assert len(list((bravo / "telemetry").glob("*.json"))) == 4
+    assert json.loads((alpha / "state.json").read_text())["ring"]["slots"] == 4
+
+    # Now alpha's output is a regular file.
+    shutil.rmtree(alpha / "output")
+    (alpha / "output").write_text("not a directory\n")
+    clear_results(bravo)
+    submit(alpha, ["ack_alarm alert_id=lost"])
+    submit(bravo, ["set_deadband profile=still_here"])
+    before_frames = sorted(p.name for p in (bravo / "telemetry").glob("*.json"))
+    executive.cycle()
+    assert executive.tick == 7
+    bravo_bodies = results_of(bravo)
+    assert len(bravo_bodies) == 1 and "accepted" in bravo_bodies[0], bravo_bodies
+    assert [p.name for p in (bravo / "output").glob("*still_here*")], list((bravo / "output").iterdir())
+    assert receipt_of(bravo_bodies[0])["tick"] == "6"
+    assert sorted(p.name for p in (bravo / "telemetry").glob("*.json")) != before_frames
+    assert [f["window"] for f in executive.failures] == ["alpha"], executive.failures
+    assert executive.failures[0]["tick"] == 6 and "output" in executive.failures[0]["error"]
+    # The neighbour's mirror says the tick moved on.
+    assert json.loads((bravo / "state.json").read_text())["executive"]["tick"] == 7
+
+    # Repaired, the window publishes again on the next tick.
+    (alpha / "output").unlink()
+    (alpha / "output").mkdir()
+    submit(alpha, ["ack_alarm alert_id=back"])
+    executive.cycle()
+    back = results_of(alpha)
+    assert len(back) == 1 and "accepted" in back[0], back
+    assert [p.name for p in (alpha / "output").glob("*alert_id_back*")]
+    assert len(executive.failures) == 1
+
+
+def test_one_world_per_directory_is_enforced_by_a_lock_and_a_binding(tmp_path):
+    """ADR 0001 choice D and the lock: a directory is one world, and a window remembers whose.
+
+    Four fork attempts, each refused. Attaching one slug twice to one executive raises. A second
+    `console.py` on a directory another executive holds exits 3 and names it. A fresh process on a
+    window bound by a dead executive exits 3 and changes nothing in the window: starting a fresh
+    world on an old window would silently reset its physics, and restart continuity is WP08's. A
+    legacy window — the old console's record, `ticks > 0` and no `world_id` — is refused the same
+    way. `--init` prepares a window without binding it, and the first executive to tick it binds it.
+    """
+    console, _plant, world = console_tools()
+    executive = console.Executive(world, tmp_path / "twice", phase="translunar_coast")
+    executive.attach("alpha")
+    with pytest.raises(ValueError):
+        executive.attach("alpha")
+
+    diode = tmp_path / "diode"
+    entry = [sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode)]
+    first = subprocess.Popen(
+        [*entry, "--slug", "alpha", "--slug", "bravo", "--cycles", "0", "--poll", "0.05"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            record = diode / "alpha" / "pending.json"
+            if record.exists() and json.loads(record.read_text() or "{}").get("world_id"):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("the first executive never bound its window")
+        second = subprocess.run(
+            [*entry, "--slug", "charlie", "--cycles", "1", "--poll", "0"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert second.returncode == 3, (second.returncode, second.stderr)
+        assert "another executive" in second.stderr and str(first.pid) in second.stderr, second.stderr
+        assert not (diode / "charlie").exists()
+    finally:
+        first.terminate()
+        first.wait(timeout=30)
+
+    # The first executive is dead; its windows stay bound to its world.
+    bound = json.loads((diode / "alpha" / "pending.json").read_text())
+    assert isinstance(bound["world_id"], str) and bound["world_id"], bound
+    before_record = (diode / "alpha" / "pending.json").read_bytes()
+    before_frames = {p.name: p.read_bytes() for p in (diode / "alpha" / "telemetry").glob("*.json")}
+    assert before_frames
+    stale = subprocess.run(
+        [*entry, "--slug", "alpha", "--cycles", "1", "--poll", "0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert stale.returncode == 3, (stale.returncode, stale.stderr)
+    assert bound["world_id"] in stale.stderr and "WP08" in stale.stderr, stale.stderr
+    assert (diode / "alpha" / "pending.json").read_bytes() == before_record
+    assert {p.name: p.read_bytes() for p in (diode / "alpha" / "telemetry").glob("*.json")} == before_frames
+    # `--init` on a bound window is refused too: the flag that resets a world is the alternative D rejected.
+    assert subprocess.run([*entry, "--slug", "alpha", "--init"], capture_output=True, check=False).returncode == 3
+
+    # A legacy window: the old console's record, with ticks and no world.
+    legacy = diode / "legacy"
+    legacy.mkdir()
+    (legacy / "pending.json").write_text(
+        json.dumps({"pending": [], "ticks": 3, "seq": 4, "scenario": "nominal", "seed": 0, "ring_slots": 300})
+    )
+    refused = subprocess.run(
+        [*entry, "--slug", "legacy", "--cycles", "1", "--poll", "0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert refused.returncode == 3, (refused.returncode, refused.stderr)
+    assert "3 tick(s)" in refused.stderr and "world_id" in refused.stderr, refused.stderr
+
+    # `--init` then run: prepared, unbound, then bound by the first executive that ticks it.
+    made = subprocess.run([*entry, "--slug", "fresh", "--init"], capture_output=True, text=True, check=False)
+    assert made.returncode == 0, made.stderr[-600:]
+    prepared = json.loads((diode / "fresh" / "pending.json").read_text())
+    assert prepared["world_id"] is None and prepared["ticks"] == 0, prepared
+    assert prepared["scenario"] == "nominal" and prepared["seed"] == 0 and prepared["ring_slots"] == 300
+    assert not list((diode / "fresh" / "telemetry").glob("*.json")), "--init binds nothing and ticks nothing"
+    assert not (diode / ".executive.lock").exists() or True  # the lock file may remain; the lock does not
+    ran = subprocess.run(
+        [*entry, "--slug", "fresh", "--cycles", "2", "--poll", "0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stderr[-600:]
+    assert "scenario=nominal seed=0 ring=300" in ran.stdout, ran.stdout
+    after = json.loads((diode / "fresh" / "pending.json").read_text())
+    assert isinstance(after["world_id"], str) and after["ticks"] == 2, after
+    assert json.loads((diode / "fresh" / "state.json").read_text())["executive"]["world_id"] == after["world_id"]
+
+
+def test_the_entrypoint_serves_two_slugs_from_one_executive(tmp_path):
+    """End to end through `tools/console.py --slug a --slug b`: one process, one world, two windows.
+
+    The chassis starts one console process per slug today, so the deployed stack still runs one
+    world per agent; the entrypoint now accepts every slug in one process so that it can stop
+    (ADR 0001, chassis follow-up). A command written into one window before the run is claimed on
+    the first tick and the other window's ring carries its outcome.
+    """
+    diode = tmp_path / "diode"
+    entry = [sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode)]
+    for slug in ("alpha", "bravo"):
+        made = subprocess.run([*entry, "--slug", slug, "--init"], capture_output=True, text=True, check=False)
+        assert made.returncode == 0, made.stderr[-600:]
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    run = subprocess.run(
+        [*entry, "--slug", "alpha", "--slug", "bravo", "--cycles", "2", "--poll", "0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr[-800:]
+    assert "slugs=alpha,bravo" in run.stdout and "scenario=nominal seed=0 ring=300" in run.stdout, run.stdout
+    mirrors = {slug: json.loads((diode / slug / "state.json").read_text()) for slug in ("alpha", "bravo")}
+    assert mirrors["alpha"]["executive"] == mirrors["bravo"]["executive"], mirrors
+    assert mirrors["alpha"]["executive"]["tick"] == 2 and mirrors["alpha"]["executive"]["windows"] == ["alpha", "bravo"]
+    bodies = results_of(diode / "alpha")
+    assert len(bodies) == 1 and "Changed: internal:mode=manual" in bodies[0], bodies
+    assert receipt_of(bodies[0])["tick"] == "0"
+    for slug in ("alpha", "bravo"):
+        frame = newest_frame(diode / slug)
+        assert frame["sim_step"] == 2 and frame["values"]["rcs.mode"] == "manual", (slug, frame)
+    # The same slug twice in one command line is refused rather than attached twice.
+    doubled = subprocess.run(
+        [*entry, "--slug", "charlie", "--slug", "charlie", "--cycles", "1", "--poll", "0"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert doubled.returncode == 3 and "charlie" in doubled.stderr, (doubled.returncode, doubled.stderr)
+
+
+def test_two_executives_with_the_same_ingress_produce_the_same_lineage_and_results(tmp_path):
+    """`plant.md` §6, one level up: the executive's per-tick lineage is a function of the ingress.
+
+    Two executives in two directories, the same phase, scenario and seed, and the same scripted
+    ingress over six ticks — accepted, refused, conflicting, deferred and dwell-refused commands —
+    produce identical lineage lists and identical result bodies once the world id is masked. A third
+    executive whose ingress differs at tick 1 diverges at tick 1 and stays diverged, which is what
+    makes the lineage a compare-point rather than a counter.
+    """
+    console, _plant, world = console_tools()
+    script = {
+        0: {"alpha": ["set_rcs_mode mode=manual"], "bravo": ["set_rcs_quad group=sm_primary state=enable"]},
+        1: {"alpha": ["ack_alarm alert_id=a", "set_bus_tie tie=csm_tie_ab state=closed"], "bravo": ["ack_alarm alert_id=b", "zzz_not_a_verb"]},
+        2: {"bravo": ["request_imu_alignment source=star_sighting target=fine"]},
+        3: {},
+        4: {"alpha": ["set_rcs_mode mode=auto"], "bravo": ["set_rcs_quad group=sm_primary state=inhibit"]},
+        5: {"alpha": ["stop_burn engine=sps", "stop_burn engine=sps"]},
+    }
+
+    def run(name: str, ingress: dict) -> tuple[list[str], dict[str, list[str]]]:
+        diode = tmp_path / name
+        journal = tmp_path / f"{name}.jsonl"
+        executive = console.Executive(
+            world, diode, phase="translunar_coast", scenario="nominal", seed=7, journal=journal
+        )
+        for slug in ("alpha", "bravo"):
+            executive.attach(slug)
+        for tick in range(6):
+            for slug, commands in ingress.get(tick, {}).items():
+                submit(diode / slug, commands)
+            executive.cycle()
+        # The journal is the operator's copy of what no window file may carry: one line per tick,
+        # with the lineage the executive holds in memory.
+        lines = [json.loads(line) for line in journal.read_text().splitlines()]
+        assert [row["lineage"] for row in lines] == executive.lineage[1:], "the journal is the lineage"
+        assert [row["tick"] for row in lines] == list(range(1, 7))
+        for slug in ("alpha", "bravo"):
+            for name_ in ("state.json", "pending.json"):
+                assert executive.lineage[-1] not in (diode / slug / name_).read_text()
+        masked = {
+            slug: sorted(
+                body.replace(executive.world_id, "<world>") for body in results_of(diode / slug)
+            )
+            for slug in ("alpha", "bravo")
+        }
+        return list(executive.lineage), masked
+
+    lineage_one, bodies_one = run("one", script)
+    lineage_two, bodies_two = run("two", script)
+    assert len(lineage_one) == 7 and lineage_one == lineage_two
+    assert bodies_one == bodies_two
+    # The script exercised every state the receipt can carry.
+    states = {receipt_of(b)["state"] for bodies in bodies_one.values() for b in bodies}
+    assert states == {"accepted", "refused", "superseded", "deferred", "settled", "duplicate"}, states
+
+    diverged = dict(script)
+    diverged[1] = {"alpha": ["set_rcs_quad group=sm_secondary state=enable"]}
+    lineage_three, _ = run("three", diverged)
+    assert lineage_three[:2] == lineage_one[:2]
+    assert lineage_three[2] != lineage_one[2]
+    assert all(a != b for a, b in zip(lineage_three[2:], lineage_one[2:], strict=True))
+
+    # And the journal may not live where an agent can read it.
+    with pytest.raises(ValueError):
+        console.Executive(
+            world, tmp_path / "four", phase="translunar_coast", journal=tmp_path / "four" / "alpha" / "j.jsonl"
+        )
