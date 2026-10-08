@@ -121,9 +121,11 @@ would silently reset its physics, and restart continuity is WP08's to decide.
 
 ## Clarifications after independent review, 2026-10-09
 
-Decided by the owner on the reviewer's findings against the first slice; each is implemented and
-tested in the slice. Two items are the implementer's interpretations where the decision text was
-silent, marked *(implementer; pending the owner's confirmation)*.
+Decided by the implementing session's coordinator on the independent reviewer's findings, under
+the owner's standing instruction (2026-10-09) to close open choices by picking the best-supported
+answer rather than stopping; each is implemented and tested in the slice, and each remains open to
+the owner's revision. Two items filled gaps the decision text left silent; they are marked
+*(gap filled)*.
 
 - **The directory's record is authoritative, not a window's.** Binding and identity (`world_id`,
   the slugs served, scenario, seed, each window's ring bound, the tick) live in
@@ -133,14 +135,13 @@ silent, marked *(implementer; pending the owner's confirmation)*.
   fresh directory. A window's `pending.json` still carries the identity keys for its reader and is
   read for nothing but the refuse-only legacy check: `ticks > 0` or a `world_id` on a slug the
   directory's record does not name refuses the start. One directory is therefore one identity.
-  *(implementer; pending the owner's confirmation)*: a second `--init` on an unbound directory
+  *(gap filled)*: a second `--init` on an unbound directory
   adds its slug to the record and inherits the recorded identity unless the caller names another,
   in which case the named pair becomes the directory's for every slug it records. **This assumes
   the agents are mounted on `/diode/<slug>/` and cannot write the diode root** — a chassis mount
   property, named here for the chassis follow-up.
 - **Adding a window to a live directory requires clearing it**, until WP08 defines continuity: a
-  bound record refuses every start, `--init` included. *(implementer; pending the owner's
-  confirmation)*: `--plan` and `--plan-json` bind and write nothing, so they are answered on a
+  bound record refuses every start, `--init` included. *(gap filled)*: `--plan` and `--plan-json` bind and write nothing, so they are answered on a
   bound directory — under the lock, so a *live* directory still refuses them for the lock's reason.
 - **Deferrals settle first.** At the start of each cycle every window's due deferrals are settled
   in rotation order, before any window's ingress. A deferral's *acceptance* does not claim its
