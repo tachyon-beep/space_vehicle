@@ -18612,7 +18612,7 @@ the ring; it is written after it now.
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 345 | **368** |
+| referee tests | 346 | **369** |
 
 No configuration value, debt or state class moved.
 
