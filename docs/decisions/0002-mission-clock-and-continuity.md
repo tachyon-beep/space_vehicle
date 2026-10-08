@@ -1,10 +1,10 @@
 # 0002 — The mission clock, private checkpoints and restart continuity
 
-- Status: proposed. The **operator** decides the clock policy — A (scheduler and the *value* of `m`), C (overload), D (pause), F (downtime) — and confirms the three fleet-visible mechanics B (publication cadence), E (budget clock) and L(b) (result stamps). The **vehicle maintainer, with the chassis reviewer**, decides the persistence and recovery mechanics — G, H, I, J, K, L(a) and M — per `docs/decisions/README.md` rows one and two. Every section ends with an `Answer:` line for the owner's decision to drop into; all are pending.
-- Date: 2026-10-09; revised the same day after independent review ("sound with findings", at `8205e06`)
+- Status: **accepted** — the operator's choices A–F, K and L(b) on 2026-10-09; the maintainer-owned items G, H, I, J, K mechanics, L(a), M and the encoder question accepted under the owner's standing delegation, open to the maintainer's revision; **chassis review of the adapter consequences pending** (H and the cross-repository list). The **operator** owns the clock policy — A (scheduler and the *value* of `m`), C (overload), D (pause), F (downtime) — and confirmed the three fleet-visible mechanics B (publication cadence), E (budget clock) and L(b) (result stamps). The **vehicle maintainer, with the chassis reviewer**, owns the persistence and recovery mechanics — G, H, I, J, K, L(a) and M — per `docs/decisions/README.md` rows one and two. Every section ends with an `Answer:` line recording who decided what.
+- Date: 2026-10-09; revised the same day after independent review ("sound with findings", at `8205e06`); accepted the same day
 - Decision owner: operator for A, C, D, F (and the confirmations B, E, L(b)); vehicle maintainer with chassis reviewer for the rest
 - Related work package / evidence gaps: WP08 (#8) implements it; WP09 (#9) and WP10 (#10) wait on it; WP12 (#12) measures the budgets it names; ADR 0001 choice D, its "restart consequence" and its clarification on the authoritative record are amended by it
-- Reviewers and review evidence: one independent review of the first draft (findings F1–F12 and nits, all addressed below); no review of this revision yet; the operator's answers are being gathered in parallel and are not in
+- Reviewers and review evidence: one independent review of the first draft (findings F1–F12 and nits, all addressed in the revision); the operator answered the questions on 2026-10-09 and the answers are on the `Answer:` lines; the maintainer items were accepted by the implementing session's coordinator under the owner's standing delegation (2026-10-09), as ADR 0001's clarifications were; chassis reviewer pending
 - Supersedes / superseded by: amends ADR 0001 (see §Consequences for existing records); supersedes nothing
 
 ## Question and constraints
@@ -212,7 +212,13 @@ schemas (`presentation.yaml`) do not grow a field for it. Changing `m` between s
 permitted and journaled (the trace is tick-keyed, so a different `m` is a different wall schedule
 for the same mission).
 
-Answer (A, scheduler): _pending_. Answer (A, the value of `m`, burst bound, lag ceiling): _pending_.
+Answer (A, scheduler): **A2** — operator, 2026-10-09. Answer (A, the value of `m`): **`m = 1`
+for the first integrated run**, raised later only by an explicit manifest decision after child 6's
+measurement — operator, 2026-10-09. Answer (A, lag ceiling, C3's trigger): **30 wall seconds
+behind schedule** — operator, 2026-10-09. Answer (A, catch-up burst bound): **`2k` ticks per
+cycle (10 at `k = 5`)**, so the scheduler catches up at no more than twice the scheduled rate and
+publication I/O never more than doubles — coordinator, under the owner's delegation; open to
+revision (the question was not put to the operator).
 
 ### B — Publication and claim cadence `k`, separated from the tick (maintainer; operator confirms)
 
@@ -251,7 +257,8 @@ own" is met at any `k`.
 checkpoint. The maintainer's in form; listed for the operator's confirmation because it fixes what
 the fleet sees and how fast a command lands.
 
-Answer (B): _pending_.
+Answer (B): **B2, `k = 5`** — 10 Hz frames, consoles claimed at the same cadence — operator,
+2026-10-09.
 
 ### C — Overload: a tick misses its `20 ms / m` deadline (operator)
 
@@ -275,7 +282,8 @@ then C3; never C4.** The ceiling and the burst bound are the operator's numbers 
 Whether the fleet is *told* about dilation beyond what the two published clocks already reveal: **no
 new signal** — the schemas are declared and the existing pair is sufficient for an agent that looks.
 
-Answer (C): _pending_.
+Answer (C): **shed (static `HELP.md`/`README.md`, then frames; never the mirror) → dilate within
+the recorded bound → stop with a recorded hold; never drop ticks** — operator, 2026-10-09.
 
 ### D — Pause and operator hold (operator)
 
@@ -302,7 +310,7 @@ because none of them are on the wall clock. The claim is deliberately *not* perf
 the contract's claim is a promise that the batch is evaluated against the current truth, and a
 claimed-but-unticked command would be neither refused nor run.
 
-Answer (D): _pending_.
+Answer (D): **D1** — operator, 2026-10-09.
 
 ### E — The command budget's time base (maintainer; operator confirms)
 
@@ -330,7 +338,7 @@ clock and explicit that receipts are the vehicle's. In the checkpoint the spend 
 versioned subsection** (`spend: {version, …}`) so that child 1 (the format) does not wait on this
 answer.
 
-Answer (E): _pending_.
+Answer (E): **E2, the mission hour** — operator, 2026-10-09.
 
 ### F — Downtime: the process or container is down (operator)
 
@@ -354,7 +362,8 @@ graceful stop on `SIGTERM`** — finish the current cycle, write the checkpoint 
 and **a kill mid-write leaves the previous generation valid** (I), so an abrupt end costs at most
 the ticks since the published tick, which J recovers.
 
-Answer (F): _pending_.
+Answer (F): **F1** — freeze; resume at the recovered tick; the gap journaled — operator,
+2026-10-09.
 
 ### G — What the checkpoint contains (maintainer)
 
@@ -392,7 +401,8 @@ across a restart). `--max-batch` and the allowance ceiling join the manifest's r
 | G1 — arm tokens across a restart | `arm_event` tokens are bound to the arming window and event (ADR 0001) and salted with the window's `boot_id`; nothing in the token is checked against the current boot. Options: **survive** (the token is an accepted command's outcome; `execute_event` revalidates everything at the moment of effect anyway) or **expire** with a named refusal at the first `execute_event` after a restart. Recommendation: **survive**, because contract §6 says nothing executed is forgotten and an arm *was* executed; expiring it would make a restart a safety event the crew never saw. |
 | G2 — the deferral queue | Fixed by ADR 0001's clarification: deferrals keep their `accepted_tick` and `due_tick`, settle or `EXPIRE` by simulated age, and the pause/downtime policies above do not age them. Listed because the queue is per window and the obvious implementation forgets it. |
 
-Answer (G1): _pending_.
+Answer (G, field list and G1 survive, G2 as fixed): **as recommended** — coordinator, under the
+owner's standing delegation (2026-10-09); open to the maintainer's revision.
 
 ### H — Where the checkpoint lives (maintainer with chassis reviewer)
 
@@ -420,7 +430,9 @@ authoritative" is amended to "the checkpoint is authoritative and the record is 
 truth) for its one line per agent. **This is the one decision that blocks deployment evidence** for
 the resume path; local tests use a scratch directory and are not blocked.
 
-Answer (H): _pending_.
+Answer (H): **H1, with the three ADR 0001 consequences** — coordinator, under the owner's standing
+delegation (2026-10-09); open to the maintainer's revision. The mount itself is a chassis follow-up
+and the chassis reviewer is pending.
 
 ### I — Atomicity, integrity and compatibility (maintainer)
 
@@ -448,7 +460,9 @@ no engine may be assumed to read an arbitrary saved world. The mechanics follow:
 - **Cost**: 1.0–1.4 ms p50 per durable write of a 270–470 KB checkpoint, p95 under 2.1 ms in both
   tool runs, with a 32 ms tail seen once; J's cadence does not rest on the p50.
 
-Answer (I, `engine`): _pending_.
+Answer (I, mechanics and `engine` as the file hash with the commit recorded beside it): **as
+recommended** — coordinator, under the owner's standing delegation (2026-10-09); open to the
+maintainer's revision.
 
 ### J — Checkpoint cadence, the durable record, and what a frame may describe (maintainer)
 
@@ -495,7 +509,8 @@ apart), one per publication for the mark (1.0–1.4 ms p50 every `k` ticks), one
 **Recommendation: J2**, `N` a run input required with no default (recommended `tick_hz`, one
 mission second; recovery ≈ 1.1 s today, ≈ 0.5 s after child 6), `k` per B.
 
-Answer (J, `N`): _pending_.
+Answer (J): **J2 with the three rules; `N = tick_hz`** — coordinator, under the owner's standing
+delegation (2026-10-09); open to the maintainer's revision.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
@@ -514,7 +529,10 @@ failed, and the flag. An *incompatible* checkpoint (I) is never fallen back from
 generation was written by the same engine, Python and platform as the current one, so it is
 incompatible too.
 
-Answer (K): _pending_.
+Answer (K): **K2 — fall back to the previous verified generation, refuse if both fail; `--new-world`
+the only recorded escape** — operator, 2026-10-09; the mechanics (one-shot invocation, the
+discontinuity record) accepted by the coordinator under the owner's standing delegation, open to the
+maintainer's revision.
 
 ### L — What agents see on a restart (L(a) maintainer; L(b) operator confirms)
 
@@ -541,7 +559,9 @@ idempotent and "exactly one result per command" needs no second durable write). 
 **MET rendered as UTC** — every other time the vehicle publishes is already MET, and this is the one
 that is not.
 
-Answer (L(a)): _pending_. Answer (L(b)): _pending_.
+Answer (L(a)): **L1** — coordinator, under the owner's standing delegation (2026-10-09); open to
+the maintainer's revision. Answer (L(b)): **result stamps are MET rendered as UTC** — operator,
+2026-10-09.
 
 ### M — The phase is a function of the tick (maintainer)
 
@@ -556,15 +576,21 @@ capability snapshot** (today both are computed once in `__init__` for the static
 `mission.phase_entry_seq`, and checkpoints both. The posture machine (`REQUEST_HOLD` and the rest)
 stays WP05's.
 
-Answer (M): _pending_.
+Answer (M): **as recommended**, and child 6's encoder swap with it — coordinator, under the
+owner's standing delegation (2026-10-09); open to the maintainer's revision.
 
 ## Decision
 
-Proposed. Nothing here is accepted. The operator decides A, C, D and F and confirms B, E and L(b);
-the vehicle maintainer with the chassis reviewer decides G, H, I, J, K, L(a) and M and the encoder
-question A pulls forward. The implementation may proceed on the policy-independent children listed
-below and on nothing else; the owners' answers are recorded on the `Answer:` lines and this record's
-status changes when all of them are in.
+Accepted, 2026-10-09. The operator decided A (A2; `m = 1` for the first integrated run; lag
+ceiling 30 wall seconds), C (shed, dilate, stop; never drop ticks), D (D1), F (F1), K (K2 with
+`--new-world` the only escape) and confirmed B (`k = 5`), E (E2) and L(b) (MET rendered as UTC).
+The maintainer-owned items — G, H, I, J, K's mechanics, L(a), M and the compare-point encoder —
+were accepted as recommended by the implementing session's coordinator under the owner's standing
+delegation, and each stays open to the maintainer's revision; the one number nobody was asked, the
+catch-up burst bound, is `2k` on the same footing. Two things this acceptance does **not** do: it
+does not raise `m` above 1 — that is a later manifest decision after child 6's measurement — and it
+does not settle the chassis side, whose reviewer is pending for H and the cross-repository list. The
+answers are on each section's `Answer:` line, with who gave them.
 
 ## Acceptance and consequences
 
@@ -649,6 +675,8 @@ lettered answer named.
 | 11 | Phase from the tick, `phase_entry_seq`, gate names and capability recomputed at a boundary (`M`) | A run started a few ticks before `translunar_coast → lunar_orbit` (tick 13,140,000) publishes the boundary at that tick, its capability snapshot changes with it, and a restart on that tick reports the same phase and entry count | — (maintainer) |
 | 12 | Result filename stamps on the chosen clock and idempotent re-publication (`L(b)`, `J` rule 3) | Under MET-as-UTC, two replays of one trace produce identical `output/` listings and a crash between record and result yields exactly one file | 4; L(b) |
 
-Children 1, 2, 4, 5, 6 and 11 can be reviewed and merged with the status of this record still
-`proposed`, because none of them fixes a policy; child 5 ships with `m`, `k` and `N` *required* and
-no default, so nothing deployed can run before the operator names the numbers.
+Children 1, 2, 4, 5, 6 and 11 fix no policy and could have started before the answers were in; with
+the record accepted, every child is unblocked on policy and waits only on the children before it in
+the table. Child 5 still ships with `m`, `k` and `N` *required* and no default: the accepted values
+(`m = 1`, `k = 5`, `N = tick_hz`, burst `2k`, ceiling 30 s) are what the deployed stack and the
+manifest name, not what the console assumes.
