@@ -9710,7 +9710,12 @@ def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
     assert plant.step(world, values, dt, None, effects=swapped)["configuration"] == "undocked"
 
     # And the split tick is the same run as four short ticks with the effects between them. The
-    # horizons are 5 ms, 5 ms, 5 ms and the remainder, in both.
+    # horizons are 5 ms, 5 ms, 5 ms and the remainder, in both — for every state that integrates
+    # over a horizon. **Not for a transport delay**, and this identity hid that: a delay is a ring
+    # with one slot per *tick* (`plant.md` §3), so four 5 ms ticks and a split tick both built a
+    # 208,400-slot ring for a 52,100-tick pipe and advanced it four times, and compared equal by
+    # being wrong the same way. The delay is held to the plain tick instead — one advance per tick
+    # however the queue cut it — and the rest of the map to the short ticks.
     split = plant.step(world, values, dt, None, effects=[separate, jettison, undock])
     manual = plant.step(world, values, 0.005)
     for effect in (undock, separate, jettison):
@@ -9718,10 +9723,21 @@ def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
             manual, plant.apply_command(world, manual, effect.verb, effect.arguments)
         )
         manual = plant.step(world, manual, 0.005)
-    assert split == manual, [
-        (key, split.get(key), manual.get(key)) for key in set(split) | set(manual)
+    delayed = {
+        key
+        for state in world.states
+        if state.method == "delay"
+        for key in (state.id, state.node, f"{state.id}__delay")
+    }
+    assert delayed, "the fixture no longer has a transport delay to hold"
+    assert {k: v for k, v in split.items() if k not in delayed} == {
+        k: v for k, v in manual.items() if k not in delayed
+    }, [
+        (key, split.get(key), manual.get(key)) for key in (set(split) | set(manual)) - delayed
         if split.get(key) != manual.get(key)
     ][:6]
+    quiet = plant.step(world, values, dt)
+    assert {k: split.get(k) for k in delayed} == {k: quiet.get(k) for k in delayed}
 
     # §5's two refusals, and both are refused rather than corrected: a stamp outside the tick would
     # otherwise be clamped into a merge, and a verb that stages nothing would look like an effect
@@ -9746,6 +9762,60 @@ def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
     assert plant.step(world, values, dt, None, effects=[event("lm_undocking", 19_999)])[
         "configuration"
     ] == "undocked"
+
+
+def test_a_command_inside_a_tick_is_walked_as_one_tick_not_as_several():
+    """The sub-tick queue cut a tick into segments, and two parts of the walk took each for a tick.
+
+    `step(effects=...)` had one caller until an executive needed it — the identity test above, whose
+    four 5 ms ticks went wrong in the same way as the split tick and so compared equal. Driving one
+    real command through it found three symptoms of the one defect:
+
+    - **A transport delay advanced once per segment.** The ring is indexed by tick (`plant.md` §3)
+      and `advance` sizes it as `delay_s / dt`; given a 10 ms segment, the coolant transport built a
+      104,200-slot ring for its 52,100-tick pipe and stepped it twice, so one command halved the
+      transit time for the rest of the run and doubled the state every compare-point hashes.
+    - **An effect at the tick's first microsecond crashed the tick.** `offset_us = 0` is inside
+      `[0, tick_us)` and `_stamped` accepts it, and the zero-length walk before it divided the
+      delay's length by zero. Two effects stamped at one microsecond did the same between them.
+    - **Every gap was reported once per segment**, so a tick with three commands owed three times
+      what a quiet tick owes, which reads as the configuration getting worse.
+
+    The expected values are the quiet tick's, which no effect touches: the ring, its cursor and the
+    gap list. `set_rcs_mode` is used because it stages one state and has no interlock to evaluate.
+    """
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    world = plant.load_world(VEHICLE)
+    values = plant.initial_values(world)
+    dt = plant.tick_seconds(world)
+    delays = [state for state in world.states if state.method == "delay"]
+    assert delays, "the fixture no longer has a transport delay to hold"
+
+    quiet_gaps: list = []
+    quiet = plant.step(world, values, dt, quiet_gaps)
+
+    def mode(at_us: int, value: str = "free_drift") -> plant.Effect:
+        return plant.Effect(offset_us=at_us, verb="set_rcs_mode", arguments={"mode": value})
+
+    for effects in (
+        [mode(10_000)],
+        [mode(0)],
+        [mode(5_000), mode(5_000, "manual"), mode(15_000)],
+    ):
+        gaps: list = []
+        stepped = plant.step(world, values, dt, gaps, effects=effects)
+        for state in delays:
+            ring = f"{state.id}__delay"
+            assert stepped[ring] == quiet[ring], (effects, len(stepped[ring]["slots"]))
+        assert [(g.state.id, g.where) for g in gaps] == [
+            (g.state.id, g.where) for g in quiet_gaps
+        ], (effects, len(gaps), len(quiet_gaps))
+        assert stepped["mode"] == "free_drift", effects
 
 
 def test_the_tick_is_a_whole_number_of_microseconds(tmp_path):

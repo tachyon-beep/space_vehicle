@@ -18497,6 +18497,31 @@ residue suite's assertion.
 
 No configuration value or debt moved.
 
+## A command inside a tick was walked as several ticks
+
+`plant.step(effects=...)` cuts a tick at each effect's integer-microsecond stamp and walks the
+pieces (`plant.md` §5, §9 step 3). Its only caller was a test whose comparison — four 5 ms ticks —
+went wrong in the same way, so the first real command driven through it (WP01's executive) was the
+first thing to see the difference between a segment and a tick:
+
+| symptom | before | after |
+|---|---|---|
+| coolant transport ring after one mid-tick command | 104,200 slots, advanced twice | 52,100 slots, advanced once |
+| an effect stamped at `offset_us = 0`, or two at one microsecond | `ZeroDivisionError` | the effect lands; no zero-length walk |
+| gaps reported by a tick with three commands | 3 × 87 | 87 |
+
+A transport delay is a ring indexed by tick (§3), so it now advances once, on the segment that
+closes the tick, with the tick's `dt`; every integrating class still sees the segment, which is why
+the split tick remains the same arithmetic as short ticks for them. The existing identity test now
+holds the delay to a quiet tick rather than to four short ones, and a new test drives the three
+cases against the quiet tick's ring, cursor and gap list.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 345 | **346** |
+
+No configuration value, debt or state class moved.
+
 ## The invariants, and which of them are enforced
 
 
