@@ -16,6 +16,9 @@ review; a vehicle record cannot unilaterally alter the frozen diode contract.
 | Profile-driven runtime optimisation and replay budget feasibility | Vehicle maintainer; operator for target changes | WP12 performance acceptance |
 | Exact release/adoption and campaign protocol | Operator with vehicle/chassis maintainers | WP13 adoption; experiment trials |
 
-These are unresolved design questions, not extra product features. Link each
+Records: [0001](0001-shared-executive.md) — one executive owns the physical world; windows are
+ingress and evidence views (accepted 2026-10-09; chassis review pending).
+
+The table lists design questions, not extra product features. Link each
 record from its public work package. The roadmap can proceed through research
 and design while dependent implementation waits for the required decision.
