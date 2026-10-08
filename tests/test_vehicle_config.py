@@ -13544,6 +13544,13 @@ def test_an_external_citation_is_held_to_its_canonical_identity_and_no_ambient_f
             "is cited as a whole file and carries no fragment",
         ),
         (
+            "presentation.yaml",
+            "contract_probe: contract/diode_probe.py",
+            "contract_probe: [contract/diode_probe.py]",
+            "presentation.yaml:contract_probe",
+            "is a list",
+        ),
+        (
             "coupling.yaml",
             "provenance_rules: docs/deep_research/integration/simulator-design.md#31",
             "provenance_rules: docs/deep_research/integration/simulator-design.md",
@@ -13565,7 +13572,7 @@ def test_an_external_citation_is_held_to_its_canonical_identity_and_no_ambient_f
         broken = text.replace(old, new, 1)
         assert broken != text, f"the fixture no longer matches {filename}"
         path.write_text(broken)
-        decoy = new.split(": ", 1)[1].split("#", 1)[0]
+        decoy = new.split(": ", 1)[1].split("#", 1)[0].strip("[]")
         for base in (definition.parent, foreign):
             (base / decoy).parent.mkdir(parents=True, exist_ok=True)
             (base / decoy).write_text("a decoy that a filesystem lookup would have accepted\n")

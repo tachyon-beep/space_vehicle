@@ -11345,6 +11345,14 @@ def check_presentation_references(
         if value is None:
             report.refuse(where, "is absent. The reference is the whole content of the field")
             continue
+        if not isinstance(value, str):
+            report.refuse(
+                where,
+                f"is a {type(value).__name__} ({value!r}), not a citation. A reference is a path, "
+                "and a value of another type would be refused below as a path that differs, which "
+                "names the wrong problem",
+            )
+            continue
         target = str(value).split("#", 1)[0]
         if not target.strip():
             report.refuse(f"{where}.{value}", "names no file")

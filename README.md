@@ -18467,6 +18467,36 @@ corpora against the linter's own result.
 The added debt is the explicit J-2 lateral rotation; no state was advanced by this source
 correction.
 
+## A standalone citation check let a renamed reference compose
+
+`presentation.yaml` and `coupling.yaml` cite four files that live in `space_chassis`: the frozen
+contract, its probe, the corpus document the graph was generated from, and the design section that
+fixes its provenance rule. The linter used to stat them by walking up from the vehicle and from the
+working directory, which passed only inside a chassis checkout (issue #16). The first repair
+stopped looking them up and kept only the shape rules — and deleted the test that refused
+`docs/diode-contract-v2.md`, so a renamed contract, a dropped `#31` or a fragment on a whole-file
+citation composed again.
+
+The four targets are frozen, so each has one canonical identity, and `EXTERNAL_CITATIONS` pins it.
+A citation that differs is refused by comparison, naming whether the path or the fragment moved; a
+value that is not a string is refused as that. Nothing is looked up, so a decoy file in an
+ancestor or in the working directory cannot rescue a wrong citation; existence stays the chassis
+residue suite's assertion.
+
+| case | before | after |
+|---|---|---|
+| `docs/diode-contrat.md`, `contract/fake_diode.py` | composed | refused: path differs |
+| `simulator-design.md` without `#31`, or `#3` | composed | refused: fragment differs |
+| `apollo_diode.md#7` | composed | refused: whole-file citation carries a fragment |
+| a list where a path belongs | refused as a path that differs | refused as a list |
+| the unbroken copy, from a foreign working directory with decoys planted | composed | composes |
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 344 | **345** |
+
+No configuration value or debt moved.
+
 ## The invariants, and which of them are enforced
 
 
