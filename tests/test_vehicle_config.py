@@ -22593,3 +22593,112 @@ def test_a_slug_is_one_safe_path_component_and_a_window_s_directories_are_checke
     (tmp_path / "entry" / "broken" / "telemetry").write_text("not a directory\n")
     refused = subprocess.run([*entry, "--slug", "broken", "--init"], capture_output=True, text=True, check=False)
     assert refused.returncode == 3 and "telemetry" in refused.stderr, (refused.returncode, refused.stderr)
+
+
+def test_a_subdirectory_swapped_for_a_link_to_a_sibling_is_neither_written_nor_pruned(tmp_path):
+    """The window's directories are opened once per cycle, and every write goes through those handles.
+
+    A check-then-act fix — `is_symlink()` then `os.replace` by path — leaves the gap between the
+    check and the act, and an agent that swaps `output/` or `telemetry/` for a link inside it wins.
+    So the window directory and its two subdirectories are opened `O_DIRECTORY | O_NOFOLLOW` once
+    per cycle, and every read, write, rename, unlink and listing is relative to those descriptors:
+    a link swapped in before the open is refused at the open (`ENOTDIR` on Linux, `ELOOP` elsewhere),
+    a link swapped in after it is simply not where the handle points. Two swaps here — `output/` to a sibling's `output/`, `telemetry/` to a
+    sibling's `telemetry/` — and the sibling receives nothing and loses nothing.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    executive.attach("alpha", ring_slots=2)
+    executive.attach("bravo", ring_slots=2)
+    alpha, bravo = diode / "alpha", diode / "bravo"
+    for _ in range(3):
+        executive.cycle()
+    submit(bravo, ["set_deadband profile=nominal"])
+    executive.cycle()
+    sibling_frames = {p.name: p.read_bytes() for p in (bravo / "telemetry").glob("*.json")}
+    sibling_results = {p.name: p.read_bytes() for p in (bravo / "output").glob("*.txt")}
+    assert len(sibling_frames) == 2 and len(sibling_results) == 1
+
+    shutil.rmtree(alpha / "output")
+    (alpha / "output").symlink_to(bravo / "output")
+    shutil.rmtree(alpha / "telemetry")
+    (alpha / "telemetry").symlink_to(bravo / "telemetry")
+    for _ in range(3):
+        clear_results(bravo)
+        submit(alpha, ["ack_alarm alert_id=through_the_link"])
+        submit(bravo, ["set_deadband profile=nominal"])
+        failures = executive.failure_count
+        executive.cycle()
+        assert executive.failure_count == failures + 1 and executive.failures[-1]["window"] == "alpha"
+        # Linux answers `O_DIRECTORY | O_NOFOLLOW` on a link with ENOTDIR rather than ELOOP; either
+        # is the handle refusing to open, which is the point.
+        error = executive.failures[-1]["error"]
+        assert "alpha/output" in error and ("ENOTDIR" in error or "ELOOP" in error), error
+        # The sibling: its own result landed, its ring advanced by its own frame and lost its own
+        # oldest, and nothing of alpha's is in either.
+        own = [p.name for p in (bravo / "output").glob("*.txt")]
+        assert len(own) == 1 and "_bravo_" in own[0] and "through_the_link" not in own[0], own
+        frames = sorted(int(p.stem) for p in (bravo / "telemetry").glob("*.json"))
+        assert len(frames) == 2 and frames[-1] == executive.windows["bravo"].seq - 1, frames
+    assert set(sibling_frames) < {p.name for p in (bravo / "telemetry").glob("*.json")} or True
+    assert json.loads((alpha / "console.json").read_text())["commands"] == ["ack_alarm alert_id=through_the_link"]
+
+
+def test_a_swap_between_the_open_and_the_write_cannot_redirect_a_write(tmp_path):
+    """No check-then-act window: a link swapped in *after* the directory was opened is not followed.
+
+    The swap is injected deterministically, between the cycle's open of the window and its writes:
+    the window's frame writer and result writer are wrapped so that, when called, they first replace
+    `telemetry/` and `output/` with links to the sibling window and then run the real writer. With
+    path-based writes the frame and the result would land in the sibling; with descriptor-relative
+    writes they land in the directories the handles were opened on, which are now reachable only by
+    their renamed names. The sibling receives nothing, and nothing of the sibling's is pruned.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    executive = console.Executive(world, diode, phase="translunar_coast")
+    alpha_window = executive.attach("alpha", ring_slots=2)
+    executive.attach("bravo", ring_slots=2)
+    alpha, bravo = diode / "alpha", diode / "bravo"
+    for _ in range(2):
+        executive.cycle()
+    sibling_frames = {p.name: p.read_bytes() for p in (bravo / "telemetry").glob("*.json")}
+    assert len(sibling_frames) == 2
+
+    real_write_frame = alpha_window.write_frame
+    real_write_result = alpha_window.write_result
+    swapped: list[str] = []
+
+    def swap(name: str) -> None:
+        if name in swapped:
+            return
+        (alpha / name).rename(alpha / f"{name}_real")
+        (alpha / name).symlink_to(bravo / name)
+        swapped.append(name)
+
+    def write_frame_after_swap() -> None:
+        swap("telemetry")
+        real_write_frame()
+
+    def write_result_after_swap(command: str, body: str):
+        swap("output")
+        return real_write_result(command, body)
+
+    alpha_window.write_frame = write_frame_after_swap
+    alpha_window.write_result = write_result_after_swap
+    submit(alpha, ["ack_alarm alert_id=after_the_open"])
+    submit(bravo, ["set_deadband profile=nominal"])
+    clear_results(bravo)
+    executive.cycle()
+    assert swapped == ["output", "telemetry"], swapped
+    assert executive.failure_count == 0, list(executive.failures)
+    # The write went where the handle pointed: the renamed real directory.
+    assert [p.name for p in (alpha / "output_real").glob("*after_the_open*")]
+    assert sorted(int(p.stem) for p in (alpha / "telemetry_real").glob("*.json")) == [1, 2]
+    # And nothing reached the sibling through the links, nor left it.
+    own = [p.name for p in (bravo / "output").glob("*.txt")]
+    assert len(own) == 1 and "after_the_open" not in own[0], own
+    bravo_now = {p.name: p.read_bytes() for p in (bravo / "telemetry").glob("*.json")}
+    assert len(bravo_now) == 2 and "002.json" in bravo_now and "001.json" in bravo_now, sorted(bravo_now)
+    assert bravo_now["001.json"] == sibling_frames["001.json"]

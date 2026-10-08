@@ -200,54 +200,88 @@ def sanitise(command: str) -> str:
     return encoded[:FILENAME_LIMIT_BYTES].decode("utf-8", "ignore")
 
 
-def write_text_atomic(path: Path, text: str) -> None:
+def open_directory(path: str | os.PathLike[str], *, dir_fd: int | None = None) -> int:
+    """A directory handle that follows no link: `O_RDONLY | O_DIRECTORY | O_NOFOLLOW`.
+
+    Every window operation is relative to a handle opened this way once per cycle, so a link an
+    agent swaps in *after* the open is not where the handle points, and one swapped in *before* it
+    is `ELOOP`. A file where a directory should be is `ENOTDIR`. Both are the caller's to record.
+    """
+    return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+
+
+def write_text_atomic(
+    path: str | os.PathLike[str], text: str, *, dir_fd: int | None = None, noclobber: bool = False
+) -> None:
     """Write through a temporary file and rename, the way the contract requires of the claim.
 
-    A reader that opens the path sees either the old file or the new one. `os.replace` is atomic
-    within a filesystem, which is the reason the temporary lives beside the target rather than in
-    a temporary directory — and `os.replace` renames *over* a symlink rather than through it, so a
-    link an agent planted at the target's path becomes a regular file and the thing it pointed at is
-    untouched. The temporary itself is created `O_EXCL | O_NOFOLLOW` under a random name: a link
-    planted at a predictable temporary path (`.state.json.<pid>.tmp`) would otherwise have been
-    written through.
+    A reader that opens the path sees either the old file or the new one. Everything happens relative
+    to a directory handle — the caller's `dir_fd`, or the target's parent opened here for a plain path
+    — so no step resolves a path an agent can redirect between one step and the next: the temporary
+    is created `O_CREAT | O_EXCL | O_NOFOLLOW` under a random name (a link planted at a predictable
+    `.state.json.<pid>.tmp` would otherwise have been written through), and `os.replace` with the
+    same handle renames *over* a link rather than through it, so a link planted at the target becomes
+    a regular file and the thing it pointed at is untouched. With `noclobber`, the final name is made
+    with `os.link`, which fails `EEXIST` rather than replacing anything — a result file is never
+    overwritten, and the caller picks another name.
     """
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    fd = os.open(
-        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644
-    )
+    name = os.fspath(path)
+    opened: int | None = None
+    if dir_fd is None:
+        target = Path(name)
+        opened = dir_fd = os.open(target.parent if str(target.parent) else ".", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        name = target.name
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(temporary)
-        raise
-    os.replace(temporary, path)
+        temporary = f".{name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+        fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o644,
+            dir_fd=dir_fd,
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            if noclobber:
+                os.link(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+                os.unlink(temporary, dir_fd=dir_fd)
+            else:
+                os.replace(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary, dir_fd=dir_fd)
+            raise
+    finally:
+        if opened is not None:
+            os.close(opened)
 
 
-def write_json_atomic(path: Path, payload: Any) -> None:
-    write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+def write_json_atomic(path: str | os.PathLike[str], payload: Any, *, dir_fd: int | None = None) -> None:
+    write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n", dir_fd=dir_fd)
 
 
-def read_regular_bounded(path: Path) -> tuple[bytes | None, str | None]:
+def read_regular_bounded(
+    path: str | os.PathLike[str], *, dir_fd: int | None = None
+) -> tuple[bytes | None, str | None]:
     """The bytes of a regular file of bounded size, or the sentence that says why not.
 
     **A FIFO or a device at an agent-writable path blocked the read for ever.** `Path.read_text`
     on a FIFO with no writer never returns, and a symlink to `/dev/zero` returns zeros without end —
     one window could hang every window's executive. So the file is opened `O_RDONLY | O_NOFOLLOW |
-    O_NONBLOCK`, `fstat`ed, refused unless it is a regular file, and read to at most
-    `MAX_READ_BYTES + 1` so an oversized file is named rather than loaded. Every agent-writable read
-    goes through here; the operator's own record does too, because a rule with an exemption is a rule
-    with a hole.
+    O_NONBLOCK`, relative to the caller's directory handle where one is given, `fstat`ed, refused
+    unless it is a regular file, and read to at most `MAX_READ_BYTES + 1` so an oversized file is
+    named rather than loaded. Every agent-writable read goes through here; the operator's own record
+    does too, because a rule with an exemption is a rule with a hole.
     """
+    label = Path(os.fspath(path)).name
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
     except FileNotFoundError:
-        return None, f"{path.name} is absent"
+        return None, f"{label} is absent"
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            return None, f"{path.name} is a symlink, and the vehicle follows no link an agent plants"
-        return None, f"{path.name} could not be opened ({type(exc).__name__}: {exc.strerror})"
+            return None, f"{label} is a symlink, and the vehicle follows no link an agent plants"
+        return None, f"{label} could not be opened ({type(exc).__name__}: {exc.strerror})"
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
@@ -258,10 +292,10 @@ def read_regular_bounded(path: Path) -> tuple[bytes | None, str | None]:
                 else "a socket" if stat.S_ISSOCK(info.st_mode)
                 else "not a file"
             )
-            return None, f"{path.name} is not a regular file ({kind})"
+            return None, f"{label} is not a regular file ({kind})"
         if info.st_size > MAX_READ_BYTES:
             return None, (
-                f"{path.name} is {info.st_size} bytes, past the {MAX_READ_BYTES} bytes this vehicle "
+                f"{label} is {info.st_size} bytes, past the {MAX_READ_BYTES} bytes this vehicle "
                 "will read of an agent-writable file"
             )
         chunks: list[bytes] = []
@@ -273,19 +307,21 @@ def read_regular_bounded(path: Path) -> tuple[bytes | None, str | None]:
             chunks.append(chunk)
             remaining -= len(chunk)
     except OSError as exc:
-        return None, f"{path.name} could not be read ({type(exc).__name__}: {exc.strerror})"
+        return None, f"{label} could not be read ({type(exc).__name__}: {exc.strerror})"
     finally:
         os.close(fd)
     raw = b"".join(chunks)
     if len(raw) > MAX_READ_BYTES:
         return None, (
-            f"{path.name} grew past the {MAX_READ_BYTES} bytes this vehicle will read of an "
+            f"{label} grew past the {MAX_READ_BYTES} bytes this vehicle will read of an "
             "agent-writable file while it was being read"
         )
     return raw, None
 
 
-def read_ingress(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+def read_ingress(
+    path: str | os.PathLike[str], *, dir_fd: int | None = None
+) -> tuple[dict[str, Any] | None, str | None]:
     """The console's payload, or the sentence that says why it is not one.
 
     **The old reader returned `{}` for invalid JSON, so a half-written console was silently an empty
@@ -297,7 +333,7 @@ def read_ingress(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     let through to the executive. The caller claims the console in every one of these cases, so a
     broken writer produces one refusal and not one per cycle (ADR 0001).
     """
-    raw, problem = read_regular_bounded(path)
+    raw, problem = read_regular_bounded(path, dir_fd=dir_fd)
     if raw is None:
         return None, problem
     try:
@@ -317,14 +353,14 @@ def read_ingress(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return loaded, None
 
 
-def read_json_bounded(path: Path) -> dict[str, Any] | None:
+def read_json_bounded(path: str | os.PathLike[str], *, dir_fd: int | None = None) -> dict[str, Any] | None:
     """A JSON object from a regular, bounded file, or `None` for anything else.
 
     The refuse-only reader of a window's `pending.json` at startup: the legacy check reads it to
     *refuse* a window the old console ticked, and reads nothing else from it. `None` and `{}` are
     both "nothing to refuse on".
     """
-    raw, _problem = read_regular_bounded(path)
+    raw, _problem = read_regular_bounded(path, dir_fd=dir_fd)
     if raw is None:
         return None
     try:
@@ -334,7 +370,9 @@ def read_json_bounded(path: Path) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def read_root_record(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+def read_root_record(
+    path: str | os.PathLike[str], *, dir_fd: int | None = None
+) -> tuple[dict[str, Any] | None, str | None]:
     """`<diode-dir>/.executive.json`, or `(None, None)` for a directory that has none, or a refusal.
 
     The record is the operator's and the executive's, never an agent's, so a record that cannot be
@@ -342,28 +380,33 @@ def read_root_record(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     refused at startup rather than treated as "no world here", because the one thing a start must not
     do is reset a world it could not see.
     """
-    if not path.exists() and not path.is_symlink():
+    label = Path(os.fspath(path)).name
+    try:
+        os.lstat(path, dir_fd=dir_fd)
+    except FileNotFoundError:
         return None, None
-    raw, problem = read_regular_bounded(path)
+    except OSError as exc:
+        return None, f"{label} cannot be examined ({exc.strerror})"
+    raw, problem = read_regular_bounded(path, dir_fd=dir_fd)
     if raw is None:
         return None, problem
     try:
         loaded = json.loads(raw.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - the refusal names the shape
-        return None, f"{path.name} is not valid JSON ({type(exc).__name__})"
+        return None, f"{label} is not valid JSON ({type(exc).__name__})"
     if not isinstance(loaded, dict):
-        return None, f"{path.name} is a JSON {type(loaded).__name__}, not an object"
+        return None, f"{label} is a JSON {type(loaded).__name__}, not an object"
     world_id = loaded.get("world_id")
     if world_id is not None and not (isinstance(world_id, str) and world_id):
-        return None, f"{path.name} carries a world_id that is neither null nor a name"
+        return None, f"{label} carries a world_id that is neither null nor a name"
     slugs = loaded.get("slugs", [])
     if not isinstance(slugs, list) or not all(isinstance(s, str) and SLUG_PATTERN.match(s) for s in slugs):
-        return None, f"{path.name} carries a slugs list that is not a list of slugs"
+        return None, f"{label} carries a slugs list that is not a list of slugs"
     rings = loaded.get("ring_slots", {})
     if not isinstance(rings, dict) or not all(
         isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in rings.values()
     ):
-        return None, f"{path.name} carries ring_slots that are not positive integers per slug"
+        return None, f"{label} carries ring_slots that are not positive integers per slug"
     return loaded, None
 
 
@@ -471,6 +514,11 @@ class Executive:
         # Generated once, because the configuration does not change while an executive runs.
         self.readme_text = generate_readme(world.root)
         self.help_text = generate_help(world.root)
+        # The diode directory, as a handle that follows no link: every window is opened relative to
+        # it, and the directory's own record is written through it. The operator's path is resolved
+        # first because it is the operator's to alias; nothing below it is.
+        self.diode_dir.mkdir(parents=True, exist_ok=True)
+        self.diode_fd = open_directory(self.diode_dir.resolve())
         # The names the registry publishes as gate variables, instantiated: the only names an
         # agent's `variables` may carry besides `allowance`.
         self.gate_names: set[str] = {
@@ -504,8 +552,16 @@ class Executive:
             window.prepare()
         except Exception as exc:  # noqa: BLE001 - the window's failure, recorded, not the executive's
             self._record_failure(window, "prepare", exc, self.tick)
+        finally:
+            window.close_handles()
         self._write_root_record()
         return window
+
+    def close(self) -> None:
+        """Release the directory handle. The windows' handles live for one cycle and are closed by it."""
+        if self.diode_fd is not None:
+            os.close(self.diode_fd)
+            self.diode_fd = None
 
     def order(self) -> list[Window]:
         """This tick's visiting order: sorted slugs rotated left by `tick % n` (ADR choice A).
@@ -542,49 +598,55 @@ class Executive:
         applied: list[Verdict] = []
         order = self.order()
         healthy: list[Window] = []
-        for window in order:
-            problem = window.check_paths(creating=False)
-            if problem is not None:
-                self._record_failure(window, "check", RuntimeError(problem), tick)
-                continue
-            healthy.append(window)
-            try:
-                verdicts[window.slug] = self._settle(window)
-            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
-                self._record_failure(window, "settle", exc, tick)
-                verdicts.setdefault(window.slug, [])
-        for window in healthy:
-            try:
-                verdicts[window.slug].extend(self._ingest(window))
-            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
-                self._record_failure(window, "claim", exc, tick)
-        for window in healthy:
-            for verdict in verdicts.get(window.slug, []):
-                if verdict.effect is not None:
-                    effects.append(verdict.effect)
-                    applied.append(verdict)
+        try:
+            # **The window's directories are opened once, here, and every operation this cycle is
+            # relative to those handles.** A check-then-act — `is_symlink()` then a write by path —
+            # leaves the gap between the two to an agent that swaps `output/` for a link inside it;
+            # a handle has no gap: a link swapped in before the open is `ELOOP`, one swapped in
+            # after it is not where the handle points.
+            for window in order:
+                try:
+                    window.open_handles()
+                except Exception as exc:  # noqa: BLE001 - the window's directory is the window's
+                    self._record_failure(window, "check", exc, tick)
+                    continue
+                healthy.append(window)
+                try:
+                    verdicts[window.slug] = self._settle(window)
+                except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
+                    self._record_failure(window, "settle", exc, tick)
+                    verdicts.setdefault(window.slug, [])
+            for window in healthy:
+                try:
+                    verdicts[window.slug].extend(self._ingest(window))
+                except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
+                    self._record_failure(window, "claim", exc, tick)
+            for window in healthy:
+                for verdict in verdicts.get(window.slug, []):
+                    if verdict.effect is not None:
+                        effects.append(verdict.effect)
+                        applied.append(verdict)
 
-        before = self.truth
-        self.truth = step(self.world, before, self.dt, None, effects)
-        for verdict in applied:
-            verdict.body += self._report_effect(verdict, before, self.truth)
-        self.tick += 1
-        self.lineage_head = self._lineage_link(self.lineage_head, self.truth, effects)
-        self.lineage.append(self.lineage_head)
-        self._journal(effects, verdicts)
-        self._write_root_record()
+            before = self.truth
+            self.truth = step(self.world, before, self.dt, None, effects)
+            for verdict in applied:
+                verdict.body += self._report_effect(verdict, before, self.truth)
+            self.tick += 1
+            self.lineage_head = self._lineage_link(self.lineage_head, self.truth, effects)
+            self.lineage.append(self.lineage_head)
+            self._journal(effects, verdicts)
+            self._write_root_record()
 
-        written: list[Path] = []
-        for window in healthy:
-            problem = window.check_paths(creating=False)
-            if problem is not None:
-                self._record_failure(window, "check", RuntimeError(problem), tick)
-                continue
-            try:
-                written.extend(window.publish(verdicts.get(window.slug, [])))
-            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
-                self._record_failure(window, "publish", exc, tick)
-        return written
+            written: list[Path] = []
+            for window in healthy:
+                try:
+                    written.extend(window.publish(verdicts.get(window.slug, [])))
+                except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
+                    self._record_failure(window, "publish", exc, tick)
+            return written
+        finally:
+            for window in order:
+                window.close_handles()
 
     def _record_failure(self, window: Window, stage: str, exc: BaseException, tick: int) -> None:
         """Isolation: the failure is counted and recorded, on stderr and here, and the tick goes on without the window."""
@@ -649,8 +711,7 @@ class Executive:
         }
 
     def _write_root_record(self) -> None:
-        self.diode_dir.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(self.diode_dir / RECORD_FILE, self.root_record())
+        write_json_atomic(RECORD_FILE, self.root_record(), dir_fd=self.diode_fd)
 
     # -- ingress ------------------------------------------------------------------------------
     def _verdict(self, window: Window, command: str, state: str, body: str, **extra: Any) -> Verdict:
@@ -1253,6 +1314,20 @@ class Executive:
         )
 
 
+@dataclass
+class Handles:
+    """One cycle's open directories of one window: the directory, `output/`, `telemetry/`."""
+
+    root: int
+    output: int
+    telemetry: int
+
+    def close(self) -> None:
+        for fd in (self.root, self.output, self.telemetry):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
 class Window:
     """One `<slug>` directory: ingress, gate preferences, results, deferrals, ring. No physics.
 
@@ -1260,8 +1335,11 @@ class Window:
     the vehicle it reads from the executive at publication time. What it owns is the fleet-facing
     half of the contract for one principal: the claim, the result files, the variables the agent
     may lower, the deferral queue, the arm tokens bound to it, and the ring's slot count. It is an
-    agent's directory, so every path in it is checked before it is touched.
+    agent's directory, so it is opened once per cycle as a set of handles that follow no link, and
+    every read, write, rename, unlink and listing is relative to them.
     """
+
+    FILES = ("console.json", "state.json", "HELP.md", "README.md", "pending.json")
 
     def __init__(self, executive: Executive, root: Path, slug: str, *, ring_slots: int) -> None:
         self.executive = executive
@@ -1273,13 +1351,16 @@ class Window:
         # own losses". `presentation.yaml#ring` declares the cadence *structure* and deliberately
         # declines to set the count — "a slot count is a memory decision" — so the run declares it.
         self.ring_slots = max(1, int(ring_slots))
-        self.console = root / "console.json"
-        self.output = root / "output"
-        self.telemetry = root / "telemetry"
-        self.state = root / "state.json"
-        self.help_file = root / "HELP.md"
-        self.readme = root / "README.md"
-        self.pending = root / "pending.json"
+        # The window's files, by *name*: every operation on them is relative to the directory handle
+        # of the cycle, never by a path an agent can redirect.
+        self.console = "console.json"
+        self.output = "output"
+        self.telemetry = "telemetry"
+        self.state = "state.json"
+        self.help_file = "HELP.md"
+        self.readme = "README.md"
+        self.pending = "pending.json"
+        self.handles: Handles | None = None
         self.variables: dict[str, Any] = {}
         self.allowance = DEFAULT_ALLOWANCE
         self.deferred: list[dict[str, Any]] = []
@@ -1292,42 +1373,62 @@ class Window:
         self.accepted = 0
 
     # -- the directory ----------------------------------------------------------------------
-    def check_paths(self, *, creating: bool) -> str | None:
-        """Every path of the window is a non-link of the expected type, or the window is not touched.
+    def open_handles(self) -> Handles:
+        """Open the window's directory and its two subdirectories, following no link, and check the files.
 
         `alpha/telemetry -> ../bravo/telemetry` let alpha's ring prune bravo's frames; `alpha/output
-        -> <anywhere>` wrote result files outside the diode directory. So before a claim and before a
-        publication each path is `lstat`ed: the directory and the two subdirectories must be
-        directories, the five files must be regular where they exist, and nothing may be a link.
-        With `creating`, a missing directory or file is allowed because `prepare` is about to make
-        it; otherwise a missing directory is a problem too.
+        -> <anywhere>` wrote result files outside the diode directory. The three directories are opened
+        `O_DIRECTORY | O_NOFOLLOW` relative to the diode handle and to each other — a link is `ELOOP`
+        and a file where a directory should be is `ENOTDIR`, and either is this window's failure for
+        the cycle, with no write — and the five files are `lstat`ed through the directory handle:
+        regular where they exist, never a link. The handles are what every operation of the cycle
+        then uses, which is what makes the check more than a check.
         """
-        checks: list[tuple[Path, str, bool]] = [
-            (self.root, "directory", True),
-            (self.output, "directory", False),
-            (self.telemetry, "directory", False),
-            (self.console, "file", False),
-            (self.state, "file", False),
-            (self.help_file, "file", False),
-            (self.readme, "file", False),
-            (self.pending, "file", False),
-        ]
-        for path, kind, required in checks:
+        self.close_handles()
+
+        def opened(name: str, dir_fd: int) -> int:
             try:
-                info = os.lstat(path)
-            except FileNotFoundError:
-                if required or (kind == "directory" and not creating):
-                    return f"{path.relative_to(self.root.parent)} is missing"
-                continue
+                return open_directory(name, dir_fd=dir_fd)
             except OSError as exc:
-                return f"{path.relative_to(self.root.parent)} cannot be examined ({exc.strerror})"
-            if stat.S_ISLNK(info.st_mode):
-                return f"{path.relative_to(self.root.parent)} is a symlink, and the vehicle follows none"
-            if kind == "directory" and not stat.S_ISDIR(info.st_mode):
-                return f"{path.relative_to(self.root.parent)} is not a directory"
-            if kind == "file" and not stat.S_ISREG(info.st_mode):
-                return f"{path.relative_to(self.root.parent)} is not a regular file"
-        return None
+                code = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+                where = name if dir_fd == self.executive.diode_fd else f"{self.slug}/{name}"
+                raise RuntimeError(
+                    f"{where}: {code} ({exc.strerror}); a window is a directory of regular files and "
+                    "directories, and the vehicle follows no link an agent plants"
+                ) from exc
+
+        root = opened(self.slug, self.executive.diode_fd)
+        output = telemetry = None
+        try:
+            output = opened(self.output, root)
+            telemetry = opened(self.telemetry, root)
+            for name in self.FILES:
+                try:
+                    info = os.lstat(name, dir_fd=root)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISLNK(info.st_mode):
+                    raise RuntimeError(f"{self.slug}/{name} is a symlink, and the vehicle follows none")
+                if not stat.S_ISREG(info.st_mode):
+                    raise RuntimeError(f"{self.slug}/{name} is not a regular file")
+        except BaseException:
+            for fd in (root, output, telemetry):
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+            raise
+        self.handles = Handles(root, output, telemetry)
+        return self.handles
+
+    def close_handles(self) -> None:
+        if self.handles is not None:
+            self.handles.close()
+            self.handles = None
+
+    def _handles(self) -> Handles:
+        if self.handles is None:
+            raise RuntimeError(f"window {self.slug!r} is not open; a window is used inside a cycle")
+        return self.handles
 
     # -- setup ------------------------------------------------------------------------------
     def prepare(self) -> None:
@@ -1336,18 +1437,23 @@ class Window:
         `console.json` is written last, because it is the file a reader treats as "the vehicle is
         here": a window with the console and not yet the mirror is a vehicle that appears to publish
         nothing. The record says `world_id: null` and `ticks: 0` — the first cycle to tick this
-        window binds it — and that is also exactly what `--init` leaves behind.
+        window binds it — and that is also exactly what `--init` leaves behind. The directories are
+        made relative to the diode handle and checked by opening them; a window whose `output/` is a
+        file is a `RuntimeError` the executive records against the window.
         """
-        if not self.root.exists():
-            self.root.mkdir(parents=True)
-        problem = self.check_paths(creating=True)
-        if problem is not None:
-            raise RuntimeError(problem)
-        self.output.mkdir(exist_ok=True)
-        self.telemetry.mkdir(exist_ok=True)
-        write_text_atomic(self.readme, self.executive.readme_text)
-        write_text_atomic(self.help_file, self.executive.help_text)
-        write_json_atomic(self.state, self.mirror())
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(self.slug, dir_fd=self.executive.diode_fd)
+        root = open_directory(self.slug, dir_fd=self.executive.diode_fd)
+        try:
+            for name in (self.output, self.telemetry):
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(name, dir_fd=root)
+        finally:
+            os.close(root)
+        handles = self.open_handles()
+        write_text_atomic(self.readme, self.executive.readme_text, dir_fd=handles.root)
+        write_text_atomic(self.help_file, self.executive.help_text, dir_fd=handles.root)
+        write_json_atomic(self.state, self.mirror(), dir_fd=handles.root)
         write_json_atomic(self.pending, {
             "pending": [],
             "ticks": 0,
@@ -1356,9 +1462,11 @@ class Window:
             "seed": self.executive.seed,
             "ring_slots": self.ring_slots,
             "world_id": None,
-        })
-        if not self.console.exists():
-            write_json_atomic(self.console, {"commands": [], "variables": {}})
+        }, dir_fd=handles.root)
+        try:
+            os.lstat(self.console, dir_fd=handles.root)
+        except FileNotFoundError:
+            write_json_atomic(self.console, {"commands": [], "variables": {}}, dir_fd=handles.root)
 
     # -- the claim --------------------------------------------------------------------------
     def claim(self) -> tuple[list[Any] | str, list[str]]:
@@ -1378,10 +1486,11 @@ class Window:
         (§9 check 8: lower, never raise). Everything else is dropped, named in the second return
         value for one result, and absent from the rewritten console.
         """
-        payload, problem = read_ingress(self.console)
+        root = self._handles().root
+        payload, problem = read_ingress(self.console, dir_fd=root)
         dropped: list[str] = []
         if payload is None:
-            write_json_atomic(self.console, {"commands": [], "variables": self.variables})
+            write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
             return str(problem), dropped
         commands = payload.get("commands")
         variables = payload.get("variables")
@@ -1410,7 +1519,7 @@ class Window:
                     self.variables[key] = value
         elif variables is not None:
             dropped.append(f"`variables` is a JSON {type(variables).__name__}, not an object")
-        write_json_atomic(self.console, {"commands": [], "variables": self.variables})
+        write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
         if commands is None:
             return [], dropped
         if not isinstance(commands, list):
@@ -1440,19 +1549,23 @@ class Window:
     def write_result(self, command: str, body: str) -> Path:
         """One file per command, refusals included, and nothing ever overwritten.
 
-        The name is `<stamp>_<slug>_<sanitised command>.txt`. A filename collision inside one
+        The name is `<stamp>_<slug>_<sanitised command>.txt`, made with `os.link` relative to the
+        `output/` handle, which fails rather than replaces: a filename collision inside one
         microsecond is possible when a batch repeats a command, and the contract forbids
         overwriting — so the second one gets a suffix rather than replacing the first.
         """
+        output = self._handles().output
         moment = utc_now()
-        name = f"{stamp(moment)}_{self.slug}_{sanitise(command)}.txt"
-        path = self.output / name
+        base = f"{stamp(moment)}_{self.slug}_{sanitise(command)}"
+        name = f"{base}.txt"
         counter = 1
-        while path.exists() or path.is_symlink():
-            path = self.output / f"{stamp(moment)}_{self.slug}_{sanitise(command)}_{counter}.txt"
-            counter += 1
-        write_text_atomic(path, body)
-        return path
+        while True:
+            try:
+                write_text_atomic(name, body, dir_fd=output, noclobber=True)
+                return self.root / self.output / name
+            except FileExistsError:
+                name = f"{base}_{counter}.txt"
+                counter += 1
 
     def receipt(self, verdict: Verdict) -> str:
         """The block every result ends with: where in the one world this result was decided.
@@ -1474,6 +1587,7 @@ class Window:
         probe's `check_state_is_a_mirror` meaningful. The generated files are rewritten from the
         cached text for the same reason: a hand-edit lasts until the next cycle.
         """
+        root = self._handles().root
         written = [
             self.write_result(verdict.command, verdict.body + self.receipt(verdict))
             for verdict in sorted(verdicts, key=lambda v: v.receipt)
@@ -1481,9 +1595,9 @@ class Window:
         # The frame first, so the mirror's ring accounting describes the directory as it is: the old
         # console wrote the mirror before the frame and its `newest_seq` ran one behind the ring.
         self.write_frame()
-        write_json_atomic(self.state, self.mirror())
-        write_text_atomic(self.help_file, self.executive.help_text)
-        write_text_atomic(self.readme, self.executive.readme_text)
+        write_json_atomic(self.state, self.mirror(), dir_fd=root)
+        write_text_atomic(self.help_file, self.executive.help_text, dir_fd=root)
+        write_text_atomic(self.readme, self.executive.readme_text, dir_fd=root)
         write_json_atomic(
             self.pending,
             {
@@ -1503,6 +1617,7 @@ class Window:
                 # The binding (ADR 0001 choice D): which world's physics this window has shown.
                 "world_id": self.executive.world_id,
             },
+            dir_fd=root,
         )
         return written
 
@@ -1556,31 +1671,30 @@ class Window:
             "capability": rows,
         }
 
-    def ring_frames(self) -> list[Path]:
+    def ring_frames(self) -> list[str]:
         """The frames the ring holds, oldest first, by *number* — and only the frames.
 
         `sorted(glob("*.json"))` put `1000.json` before `999.json`, so from the thousandth frame the
         pruner deleted the newest frame every tick and the ring froze. The frames are the regular,
-        non-link files whose stem is all digits, ordered by `int(stem)`; anything else in the
-        directory is neither held, nor pruned, nor counted, so junk dropped there cannot push a real
-        frame out. The `NNN` minimum-three-digit naming stays for readers that already sort it.
+        non-link entries of the `telemetry/` handle whose stem is all digits, ordered by `int(stem)`;
+        anything else in the directory is neither held, nor pruned, nor counted, so junk dropped
+        there cannot push a real frame out. The `NNN` minimum-three-digit naming stays for readers
+        that already sort it.
         """
-        frames: list[tuple[int, Path]] = []
-        try:
-            entries = list(self.telemetry.iterdir())
-        except OSError:
-            return []
-        for path in entries:
-            if path.suffix != ".json" or not path.stem.isdigit():
-                continue
-            try:
-                info = os.lstat(path)
-            except OSError:
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                continue
-            frames.append((int(path.stem), path))
-        return [path for _, path in sorted(frames)]
+        telemetry = self._handles().telemetry
+        frames: list[tuple[int, str]] = []
+        with os.scandir(telemetry) as entries:
+            for entry in entries:
+                stem, dot, suffix = entry.name.rpartition(".")
+                if not dot or suffix != "json" or not stem.isdigit():
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                frames.append((int(stem), entry.name))
+        return [name for _, name in sorted(frames)]
 
     def ring_losses(self) -> int:
         """Frames this window has produced that the ring no longer holds — derived, not counted."""
@@ -1596,9 +1710,10 @@ class Window:
 
         `NNN.json` is the *sequence* number, so a name is never reused and a reader can always tell
         a new frame from a rewritten one. The bound is a deletion rather than a wrap, for the same
-        reason.
+        reason, and the deletion is relative to the `telemetry/` handle.
         """
         executive = self.executive
+        telemetry = self._handles().telemetry
         met_s = executive.tick * executive.tick_us / 1_000_000
         frame = emit_frame(
             executive.world,
@@ -1613,12 +1728,12 @@ class Window:
             vehicle="csm",
             state_revision=executive.tick,
         )
-        write_json_atomic(self.telemetry / f"{self.seq:03d}.json", frame)
+        write_json_atomic(f"{self.seq:03d}.json", frame, dir_fd=telemetry)
         self.seq += 1
         held = self.ring_frames()
         for stale in held[: max(0, len(held) - self.ring_slots)]:
             with contextlib.suppress(FileNotFoundError):
-                stale.unlink()
+                os.unlink(stale, dir_fd=telemetry)
 
 
 # The old name, for readers of the round log: the class that used to own the physics.
@@ -1746,8 +1861,8 @@ def main(argv: list[str] | None = None) -> int:
     # refusal and never "a fresh directory".
     diode_dir = Path(args.diode_dir)
     diode_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = diode_dir / LOCK_FILE
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    diode_fd = open_directory(diode_dir.resolve())
+    lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=diode_fd)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -1756,6 +1871,7 @@ def main(argv: list[str] | None = None) -> int:
         except OSError:
             holder = "unknown holder"
         os.close(lock_fd)
+        os.close(diode_fd)
         sys.stderr.write(
             f"another executive holds {diode_dir} ({holder}). One directory is one world "
             "(ADR 0001); stop it, or point --diode-dir at another directory\n"
@@ -1765,9 +1881,10 @@ def main(argv: list[str] | None = None) -> int:
     def refuse(message: str) -> int:
         sys.stderr.write(message + "\n")
         os.close(lock_fd)
+        os.close(diode_fd)
         return 3
 
-    record, problem = read_root_record(diode_dir / RECORD_FILE)
+    record, problem = read_root_record(RECORD_FILE, dir_fd=diode_fd)
     if problem is not None:
         return refuse(
             f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
@@ -1823,6 +1940,7 @@ def main(argv: list[str] | None = None) -> int:
             return refuse(f"the scenario cannot be planned: {exc}")
         os.close(lock_fd)
         plan.pop("_armed_faults", None)
+        os.close(diode_fd)
         if args.plan_json:
             json.dump(plan, sys.stdout, indent=2)
             sys.stdout.write("\n")
@@ -1865,7 +1983,21 @@ def main(argv: list[str] | None = None) -> int:
         # window whose frames came from a world this executive cannot continue. Where the record
         # names the slug, the record governs, and whatever an agent wrote there is not read.
         if slug not in recorded_slugs:
-            legacy = read_json_bounded(diode_dir / slug / "pending.json") or {}
+            try:
+                window_fd = open_directory(slug, dir_fd=diode_fd)
+            except FileNotFoundError:
+                legacy: dict[str, Any] = {}
+            except OSError as exc:
+                return refuse(
+                    f"the window at {diode_dir / slug} is not a directory this executive can open "
+                    f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}); a "
+                    "window is a directory, never a link"
+                )
+            else:
+                try:
+                    legacy = read_json_bounded("pending.json", dir_fd=window_fd) or {}
+                finally:
+                    os.close(window_fd)
             ticks = legacy.get("ticks")
             named = legacy.get("world_id")
             if (isinstance(ticks, int) and not isinstance(ticks, bool) and ticks > 0) or (
@@ -1919,7 +2051,9 @@ def main(argv: list[str] | None = None) -> int:
         for slug in slugs:
             print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {args.phase!r}")
         # `--init` binds nothing: the lock is released and the records say `world_id: null`.
+        executive.close()
         os.close(lock_fd)
+        os.close(diode_fd)
         return 0
 
     rings = sorted(set(resolved_slots.values()))
@@ -1942,7 +2076,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
     finally:
+        executive.close()
         os.close(lock_fd)
+        os.close(diode_fd)
     return 0
 
 
