@@ -1,0 +1,30 @@
+name: Work package
+description: Plan a bounded capability and its acceptance evidence
+title: "[WP] "
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome and scope
+      description: Link the roadmap gate and state one observable capability.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and decisions
+      description: Link prerequisites, evidence gaps and required operator decisions.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Give independent checks, concrete failure cases, commands and artifacts. Development CI alone cannot close a capability.
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Implementation, review and boundaries
+      description: Name the implementer/reviewer when claimed, affected files/repositories, and excluded scope.

@@ -11163,6 +11163,22 @@ CONFORMANCE_STATUSES = {
     "vacuous",
 }
 
+# **The four citations into `space_chassis`, by their canonical identity.** Each names a file in the
+# other repository — the frozen contract, its probe, the corpus document the graph was generated
+# from, and the design section that fixes its provenance rule — and this linter may not open any of
+# them. Existence is asserted where they live (`space_chassis/tests/test_vehicle_reconciliation.py`);
+# what is asserted here is *identity*: the exact path, and the fragment where the citation is to a
+# section rather than a file. A citation that differs from this table has been renamed, misspelt or
+# re-pointed, and that is refused without any lookup — so no file that happens to sit in an ancestor
+# or the working directory can rescue it. Moving one of these targets on the chassis side is a
+# cross-repository change, and it moves this table in the vehicle commit that adopts it.
+EXTERNAL_CITATIONS: dict[str, str] = {
+    "presentation.yaml:contract": "docs/diode-contract.md",
+    "presentation.yaml:contract_probe": "contract/diode_probe.py",
+    "coupling.yaml:generated_from": "docs/deep_research/apollo_diode.md",
+    "coupling.yaml:provenance_rules": "docs/deep_research/integration/simulator-design.md#31",
+}
+
 
 def check_cabin_volumes(root: Path, vehicle: dict[str, Any], report: Report) -> None:
     """The denominator of every partial pressure the crew read, declared seven times.
@@ -11292,30 +11308,33 @@ def check_presentation_references(
 
     `presentation.yaml` names the frozen contract and the probe that tests it; `coupling.yaml`
     names the corpus document it was generated from and the section of the design that fixes its
-    provenance rule. The paths are written relative to the repository root, so this resolves them
-    by walking up from the vehicle directory — which also means the check survives the move the
-    folder is destined for, when `docs/diode-contract.md` stops being two levels up. A path that
-    resolves nowhere is refused, and so is one that resolves only because a *different* file
-    happens to share its name at a shallower level.
+    provenance rule. **All four targets live in `space_chassis`, outside this repository**, and
+    this linter may not read outside its own root — the rule `CONTRIBUTING.md` states and the
+    referee's own test of these references already follows. It used to resolve them by walking up
+    from the vehicle directory, which passed only while a chassis checkout happened to surround
+    the vehicle: a standalone checkout, which is what this repository's CI is, refused all four
+    correct references and with them every fixture test that expects a clean composition.
+
+    So existence is asserted where the targets are —
+    `space_chassis/tests/test_vehicle_reconciliation.py` holds each name to a file — and what is
+    checkable here is the citation's shape and its identity. An absent or empty reference is
+    refused, and so is one that cannot be repository-relative at all: an absolute path, or one that
+    climbs out with `..`, names something no checkout of the citing repository contains.
+
+    **Shape alone let a renamed citation through, and that was the repair's own mistake.** The
+    first version of this standalone check kept only the shape rules and deleted the test that
+    refused `docs/diode-contract-v2.md`, on the reasoning that a rename can only be caught where
+    the target lives. It can be caught here too, without a lookup: the four citations are to frozen
+    files, so each has one canonical identity (`EXTERNAL_CITATIONS`), and a citation that differs
+    from it — another path, a dropped `#31`, a fragment on a file citation — is refused by
+    comparison. Nothing is resolved against the filesystem, so a decoy file beside or above the
+    vehicle cannot make a wrong citation compose.
 
     The conformance table is the vehicle's claim to satisfy `docs/diode-contract.md` §9, and it is
     twelve rows against the contract's twelve numbered checks. Nothing joined the two, so a row
     dropped in an edit would leave a check nobody claims and a row duplicated would claim one
     twice — neither visible in a table that reads perfectly.
     """
-
-    def resolve(target: str) -> Path | None:
-        # The vehicle directory and its ancestors first, then the process's own working directory
-        # and *its* ancestors. The second half is not a convenience: these paths are
-        # repository-relative, and a test that copies the definition into a temporary directory
-        # takes the vehicle out of the repository without taking the repository away. Resolving
-        # only by walking up refused four correct references on every fixture copy — which is the
-        # check working, on a question about where the vehicle is rather than about what it says.
-        for base in (root, *root.parents, Path.cwd(), *Path.cwd().parents):
-            candidate = base / target
-            if candidate.exists():
-                return candidate
-        return None
 
     for where, value in (
         ("presentation.yaml:contract", presentation.get("contract")),
@@ -11326,15 +11345,39 @@ def check_presentation_references(
         if value is None:
             report.refuse(where, "is absent. The reference is the whole content of the field")
             continue
+        if not isinstance(value, str):
+            report.refuse(
+                where,
+                f"is a {type(value).__name__} ({value!r}), not a citation. A reference is a path, "
+                "and a value of another type would be refused below as a path that differs, which "
+                "names the wrong problem",
+            )
+            continue
         target = str(value).split("#", 1)[0]
         if not target.strip():
             report.refuse(f"{where}.{value}", "names no file")
-        elif resolve(target) is None:
+        elif target.startswith("/") or ".." in target.split("/"):
             report.refuse(
                 where,
-                f"names {value!r} and no such file is reachable from the vehicle directory. A "
-                "reference whose target has been renamed reads exactly like a reference whose "
-                "target is there",
+                f"names {value!r}, which is not relative to the citing repository's root. The "
+                "target is resolved in `space_chassis`, and a path that is absolute or climbs out "
+                "of it names a file no checkout of that repository holds",
+            )
+        elif str(value) != EXTERNAL_CITATIONS[where]:
+            canonical = EXTERNAL_CITATIONS[where]
+            path, _, fragment = canonical.partition("#")
+            if target != path:
+                difference = f"the path differs from the canonical {path!r}"
+            elif fragment:
+                difference = f"the fragment differs from the canonical section `#{fragment}`"
+            else:
+                difference = f"{path!r} is cited as a whole file and carries no fragment"
+            report.refuse(
+                where,
+                f"names {value!r}, and the canonical citation is {canonical!r}: {difference}. A "
+                "renamed or re-pointed reference reads exactly like a correct one, and this "
+                "linter cannot open the target to tell them apart, so the identity is pinned "
+                "(`EXTERNAL_CITATIONS`) and a change to it is a deliberate cross-repository edit",
             )
 
     rows = presentation.get("conformance")

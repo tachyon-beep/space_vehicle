@@ -52,12 +52,19 @@ in `space_chassis`'s canonical vocabulary at
 `docs/deep_research/integration/reconciliation/02-canonical-vocabulary.md`, which is checked on that
 side (a vocabulary this repository cannot read is a vocabulary it cannot check).
 
-## The two gates
+## Delivery and the two gates
+
+[ROADMAP.md](ROADMAP.md) defines the public capability packages and completion gates.
+[CONTRIBUTING.md](CONTRIBUTING.md) defines locked development validation and PR review.
+These complement the derived model worklist; neither planning prose nor green development CI
+replaces the finished-vehicle gate. Read the evidence/decision/release documents linked there.
+
+## Tool gates
 
 ```sh
 python3 tools/check_vehicle.py            # report; exit 0 with declared debts
 python3 tools/check_vehicle.py --strict   # exit 2 while any debt stands — the gate for a *finished*
-                                          # build, not for CI: a debt is a deliverable
+                                          # build; development CI reports incompleteness separately
 python3 tools/check_vehicle.py --order    # the derived tick order, dependencies first
 python3 tools/check_vehicle.py --debts    # the owed list grouped by what each one wants
 python3 tools/plant.py --readiness        # the build order: ready, blocked, and by what
@@ -82,8 +89,8 @@ not read outside its own root.
 
 ## Where to start
 
-There is no authored worklist, and that is deliberate — an authored one drifts the moment anything
-lands. The worklist is derived, and it is the first thing to run:
+The capability roadmap and public GitHub issues carry delivery dependencies and acceptance.
+The detailed model gaps are derived rather than copied into an authored numeric queue. Run:
 
 ```sh
 python3 tools/plant.py --build-order      # the four buckets, with a reason per state
@@ -106,7 +113,8 @@ This is the vehicle's repository. `space_chassis` vendors it as a git submodule 
 `docs/deep_research/vehicle`, and holds the corpus, the contract and the reconciliation rows.
 
 1. **Work here.** In a chassis checkout this directory *is* the submodule, so `git log` here is this
-   history; commit under the vehicle's law and push to `origin` (`main`).
+   history; commit under the vehicle's law on a topic branch and publish a PR to `origin`.
+   Land through the development checks and independent review in CONTRIBUTING.md.
 2. **The chassis records the new pointer in its own commit.** A submodule bump is not a vehicle
    finding and does not belong in a `vehicle:` message.
 3. **The reconciliation row for a vehicle file is edited on the chassis side**
@@ -114,9 +122,10 @@ This is the vehicle's repository. `space_chassis` vendors it as a git submodule 
    root, and the residue suite there is what holds that row to these tools. It also holds the
    sentence that counts this suite's tests, so a round that adds or removes a test moves that
    sentence too, in a chassis commit.
-4. **There is no CI here yet.** The gates above are what CI would run: `pytest -q`, and
-   `check_vehicle.py` exiting 0 — never `--strict`, because a debt is a deliverable and `--strict`
-   is the gate for a build that is finished.
+4. **Development CI runs the full referee, ruff and normal composition.** It records strict
+   lint and build readiness separately. Strict exit 2 reports incomplete work; exits 1/3 or a
+   crash fail. Strict 0 remains necessary for a finished build and does not prove physical or
+   mission acceptance. GitHub policy and actual enforcement are recorded in docs/release.md.
 
 ## The law of debts
 
@@ -136,14 +145,16 @@ cannot drift, and a value with a `relation` that no tool re-derives is next roun
 
 ## A round
 
-Work happens in rounds, one finding each, and the shape is stable:
+Configuration/refusal work happens in rounds, one finding each. Runtime capability work lands
+one coherent, independently tested outcome per PR using CONTRIBUTING.md; process/documentation
+work does not invent a physical-model finding or refusal. For configuration rounds:
 
 1. **Find one defect.** The method is always one of a few shapes, and the commit log is the
    catalogue: *a declaration nothing reads*; *one thing declared twice, in two files that never
    met*; *two halves of a surface joined by nothing*; *a check that cannot run*, which is not a
    check that passed; *a debt that was answered and left standing*. The instrument is always the
    same question — **what reads this, and what does it disagree with?**
-2. **Fix the corpus**, not the prose about it. If the answer is a decision rather than a value,
+2. **Fix the vehicle configuration**, not the prose about it; the parent evidence stays frozen. If the answer is a decision rather than a value,
    it goes in `open_debts` as a sentence, not in a field as a guess.
 3. **Add the refusal** to `check_vehicle.py` so the defect cannot come back. A fix with no check
    is the next round's finding.

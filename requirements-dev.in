@@ -1,0 +1,5 @@
+# Development tooling only. Runtime dependencies remain in pyproject.toml.
+PyYAML==6.0.3
+pytest==9.0.1
+pytest-xdist==3.8.0
+ruff==0.16.8
