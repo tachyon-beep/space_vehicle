@@ -1,8 +1,8 @@
 # 0002 — The mission clock, private checkpoints and restart continuity
 
 - Status: **accepted** — the operator's choices A–F, K and L(b) on 2026-10-09; the maintainer-owned items G, H, I, J, K mechanics, L(a), M and the encoder question accepted under the owner's standing delegation, open to the maintainer's revision; **chassis review of the adapter consequences pending** (H and the cross-repository list). The **operator** owns the clock policy — A (scheduler and the *value* of `m`), C (overload), D (pause), F (downtime) — and confirmed the three fleet-visible mechanics B (publication cadence), E (budget clock) and L(b) (result stamps). The **vehicle maintainer, with the chassis reviewer**, owns the persistence and recovery mechanics — G, H, I, J, K, L(a) and M — per `docs/decisions/README.md` rows one and two. Every section ends with an `Answer:` line recording who decided what.
-- Date: 2026-10-09; revised the same day after independent review ("sound with findings", at `8205e06`); accepted the same day
-- Decision owner: operator for A, C, D, F (and the confirmations B, E, L(b)); vehicle maintainer with chassis reviewer for the rest
+- Date: 2026-10-09; revised the same day after independent review ("sound with findings", on the first draft `bfed799`); accepted the same day
+- Decision owner: operator for A, C, D, F and K's policy (and the confirmations B, E, L(b)); vehicle maintainer with chassis reviewer for the rest, including K's mechanics. "The owner's standing delegation" below is the operator's (`tachyon-beep`) instruction of 2026-10-09 to close open choices with the best-supported answer
 - Related work package / evidence gaps: WP08 (#8) implements it; WP09 (#9) and WP10 (#10) wait on it; WP12 (#12) measures the budgets it names; ADR 0001 choice D, its "restart consequence" and its clarification on the authoritative record are amended by it
 - Reviewers and review evidence: one independent review of the first draft (findings F1–F12 and nits, all addressed in the revision); the operator answered the questions on 2026-10-09 and the answers are on the `Answer:` lines; the maintainer items were accepted by the implementing session's coordinator under the owner's standing delegation (2026-10-09), as ADR 0001's clarifications were; chassis reviewer pending
 - Supersedes / superseded by: amends ADR 0001 (see §Consequences for existing records); supersedes nothing
@@ -90,8 +90,8 @@ Nothing in this list is open. Each row is a constraint the options in part (b) a
 
 `tools/measure_clock.py` is the reader for every figure below (AGENTS.md, "Numbers in this file":
 a figure in a new document needs a reader in the same commit). The two tables are its output on
-2026-10-09, vehicle commit `8205e06` (tools identical to `bdfaf8b`), Python 3.12.3,
-`Linux-6.8.0-146-generic-x86_64-with-glibc2.39`, ext4 on NVMe, `--samples 100`, `--windows 1 2 10`.
+2026-10-09, vehicle commit `bdfaf8b` (the WP01 tools; the first draft `bfed799` changed docs only), Python 3.12.3,
+`Linux-6.8.0-146-generic-x86_64-with-glibc2.39`, ext4 on NVMe, `--samples 100` (cycles are timed over 60 samples), `--windows 1 2 10`.
 They are this machine's figures and are **not pins**: re-run the tool rather than copy the table;
 where the two disagree, the table is what moved.
 
@@ -109,7 +109,7 @@ float and is the steady state of any run longer than one transit.
 | `sha256(json.dumps(sort_keys, compact, default=repr))` | **0.82 ms p50**, 0.87 p95 |
 | `plant.step`, no effects | 1.54 ms p50, 1.64 p95 |
 | checkpoint-shaped payload, 10 windows: bytes / `json.dumps` | 268,549 / 0.76 ms |
-| durable write (`write`, `fsync`, `rename`) / without `fsync` | 1.01 ms p50, 1.52 p95, 4.12 max / 0.25 ms p50 |
+| durable write (`write`, `fsync`, `rename`; a lower bound on §I's sequence) / without `fsync` | 1.01 ms p50, 1.52 p95, 4.12 max / 0.25 ms p50 |
 | `Executive.cycle`, 1 / 2 / 10 windows | 25.9 / 28.3 / 46.7 ms p50 (27.5 / 29.7 / 49.6 p95) |
 
 | Quantity (`python3 tools/measure_clock.py --samples 100 --full-ring`) | ring full (52,100 of 52,100) |
@@ -131,9 +131,11 @@ Four consequences are load-bearing for this record and are stated here rather th
 1. **The per-tick compare-point costs more than the physics, and most of that is the encoder, not
    the coverage.** `plant.state_hash` tags every scalar (`{"float": repr(x)}`, `{"int": n}`, …) and
    that tagging is what costs 20–26 ms; a SHA-256 over the same truth encoded as plain sorted
-   compact JSON with `default=repr` distinguishes every pair the tags exist to separate (`0`/`False`,
+   compact JSON distinguishes every pair the tags exist to separate among JSON values (`0`/`False`,
    `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`), collides list with tuple exactly where the tags
-   do, needs every key to be a string (true of the truth; the tool checks), and costs 0.8 ms on the
+   do, needs every key to be a string (true of the truth; the tool checks) and a `default` that
+   *raises* on a non-JSON value (with `default=repr` such a value would encode as a string and collide
+   with an equal `str`, which the `other`/`str` tags keep apart), and costs 0.8 ms on the
    warmed ring and 8 ms on the full one. The remaining 8 ms is the `repr` of 52,100 floats and is
    the floor for any encoding that writes the whole ring out each tick. **Coverage of §6 is
    unchanged by swapping the encoder**; only the bytes hashed change. So the live deadline
@@ -147,7 +149,7 @@ Four consequences are load-bearing for this record and are stated here rather th
    the slots the tick wrote — hashes *history* rather than *state* and is a change to §6's contract
    that only the operator can make (A recommends against it).
 3. Recovery by replaying `N` ticks from a snapshot costs `N × (step + hash)`: about 1.1 s at
-   `N = 50` today, 0.5 s after the encoder swap on the full ring; `N` is bounded by the restart
+   `N = 50` today on the warmed ring (≈ 1.4 s on the full one), 0.5 s after the encoder swap on the full ring; `N` is bounded by the restart
    time the operator will accept, not by physics (J).
 4. The replay goal of ≈ 8.7 µs/tick is three orders of magnitude from today's 1.5 ms step.
    `plant.md` §10 already says this "is not a Python number"; it is restated so that no option
@@ -203,8 +205,8 @@ multiplier policy").
 be built now (child 5). `m` is a run input recorded beside the seed and **required with no
 default**: the flag defaults to `None` (the rule `check_console_flags` already enforces for
 remembered flags), the checkpoint remembers it, and a first start that names nothing refuses, so the
-deployed stack cannot inherit an accidental `m` again. **The value of `m` is the operator's and is
-asked here**, with the feasibility on record: today `m < 1` is all this engine sustains; after the
+deployed stack cannot inherit an accidental `m` again. **The value of `m` is the operator's** (answered
+below), with the feasibility on record: today `m < 1` is all this engine sustains; after the
 encoder swap (child 6) one window's tick sustains `m ≈ 2` at steady state before publication I/O.
 `m` is **not published** to the windows: it is in the journal and the manifest, and an agent that
 compares `published_at` with `met_s` can infer it, which is the experiment; the frame and mirror
@@ -218,7 +220,19 @@ measurement — operator, 2026-10-09. Answer (A, lag ceiling, C3's trigger): **3
 behind schedule** — operator, 2026-10-09. Answer (A, catch-up burst bound): **`2k` ticks per
 cycle (10 at `k = 5`)**, so the scheduler catches up at no more than twice the scheduled rate and
 publication I/O never more than doubles — coordinator, under the owner's delegation; open to
-revision (the question was not put to the operator).
+revision (the question was not put to the operator). It is an overload number (README row 2), so it
+is listed for the operator's confirmation in the handoff; until confirmed it is the interim value.
+
+**`m = 1` for ten windows needs child 6 first.** At `m = 1, k = 5` a cycle has `5 × 20 ms = 100 ms`
+of wall time. Ten windows' publication costs about 24 ms per cycle (the ten-window cycle less step
+and hash in the full-ring table). Today, with the tagged hash, a cycle is about
+`5 × (1.55 + 25.9) + 24 ≈ 161 ms` on the full ring (≈ 133 ms warmed): every cycle overruns, the lag
+reaches the 30 s ceiling within a minute or two of wall time and C3 holds the run — shedding frames
+cannot rescue it, because the five ticks alone cost more than 100 ms. After the encoder swap it is
+about `5 × (1.55 + 7.98) + 24 + 1.4 ≈ 75 ms` at p50 (≈ 90 ms at p95; a checkpointing cycle adds
+≈ 9 ms), so `m = 1` is sustainable with modest headroom and the ten-window ceiling at `k = 5` is
+about `m ≈ 1.35`. That figure, not the one-window `m ≈ 2`, is the baseline for any later decision to
+raise `m`. **The first integrated run at `m = 1` therefore waits on child 6.**
 
 ### B — Publication and claim cadence `k`, separated from the tick (maintainer; operator confirms)
 
@@ -228,13 +242,20 @@ window, and the identity instrument has no cadence of its own to thin it. WP08's
 the cadence is bounded from above by the registry: 14 channels declare `rate_hz: 10` and 7 declare
 `rate_hz: 5` (`channels.yaml`), and five `transition_evidence` guards declare `max_age_ms` of 100
 or 200 (`mission.yaml`, invariant D). A frame cadence slower than a channel's declared rate strands
-that channel: it can never be published at the rate the registry promises, and a guard whose
-`max_age_ms` is shorter than the cadence can never be satisfied.
+that channel: it can never be published at the rate the registry promises.
+
+**Freshness guards are judged on the vehicle's internal evidence, not on published frames.** The
+`transition_evidence` guards belong to the posture machine — the vehicle's own safety kernel
+(WP05) — which reads the instrument layer's evidence with its sample times every tick (`plant.md`
+§7: each point carries its decision age; stale evidence never satisfies a clear predicate). The
+files are the fleet's view, not the kernel's input, so publication cadence, shedding (C2) and a
+catch-up cycle cannot make a safety guard pass or fail and cannot change the replayed trace. What
+`k` must honour is the registry's declared *publish* rates, which is what B2 does.
 
 | Option | What it is |
 |---|---|
 | B1 — `k = 1`, every tick | Status quo cadence. 50 frames per mission second per window; the ring of 300 slots holds 6 mission seconds; ten windows at `m = 1` is 500 frames per wall second plus the static rewrites. No channel is stranded. |
-| B2 — `k = 5` (`k ≤ tick_hz / max rate_hz`) | 10 frames per mission second; the 10 Hz channels appear in every frame and the 5 Hz ones in every second frame, per `presentation.yaml#ring.cadence_classes`; `max_age_ms: 100` is met with one frame to spare. The ring holds 30 mission seconds. At `m = 1` with ten windows: 100 frames per wall second. |
+| B2 — `k = 5` (`k ≤ tick_hz / max rate_hz`) | 10 frames per mission second; the 10 Hz channels appear in every frame and the 5 Hz ones in every second frame, per `presentation.yaml#ring.cadence_classes`. This honours every declared publish rate exactly (a 10 Hz channel has no frame to spare). The ring holds 30 mission seconds. At `m = 1` with ten windows: 100 frames per wall second. |
 | B3 — `k = 50`, one frame per mission second | Strands the 14 + 7 fast channels and makes the 100/200 ms guards unsatisfiable: the fleet would see a registry promising rates the vehicle never publishes, and the posture machine's freshness half (WP05) could never hold. **Excluded** unless the operator also re-declares those rates. |
 
 **The claim cadence is the publication cadence.** Each cycle the executive claims every console
@@ -243,6 +264,13 @@ once, validates, stamps the accepted effects at `offset_us = 0` of the cycle's f
 remaining `k − 1` carry no effects — and publishes. A command written to a console therefore takes
 effect at most `k` ticks of mission time after it was written, at any `m`; in wall time that is
 `k × dt / m`. This is what "cycle" means for the contract's §2.2 and §2.4 on the vehicle side.
+
+**A catch-up cycle** (A2, after the scheduler fell behind) claims once, steps up to the burst bound
+of `2k` ticks, and publishes one frame per `k` ticks stepped, so frames still describe every `k`-th
+tick and publication I/O at most doubles; a command claimed in a catch-up cycle lands at most `2k`
+ticks after it was written. While shedding (C2), frames are skipped and the skip is visible in
+`seq` and the ring's `losses`. "`k` ticks between frames" holds when the executive is neither
+catching up nor shedding.
 
 Consequences. *Fleet*: B2 gives a telemetry rate and a command latency in mission time that are the
 same at any `m`, which is what makes a finding at `m = 2` comparable to one at `m = 0.5`. *Replay*:
@@ -278,12 +306,14 @@ pause control surface (D) and a status the operator can see (`scripts/status.py`
 the source).
 
 **Recommendation: C2 (static files, then frames; never the mirror), then C1 within the lag ceiling,
-then C3; never C4.** The ceiling and the burst bound are the operator's numbers and sit beside `m`.
+then C3; never C4.** The ceiling and the burst bound are the operator's numbers and sit beside `m`
+(the ceiling answered; the burst bound set in the interim, see A).
 Whether the fleet is *told* about dilation beyond what the two published clocks already reveal: **no
 new signal** — the schemas are declared and the existing pair is sufficient for an agent that looks.
 
 Answer (C): **shed (static `HELP.md`/`README.md`, then frames; never the mirror) → dilate within
-the recorded bound → stop with a recorded hold; never drop ticks** — operator, 2026-10-09.
+the recorded bound → stop with a recorded hold** — operator, 2026-10-09. Never dropping ticks is
+C4's exclusion by `completion.md`, not a choice the answer made.
 
 ### D — Pause and operator hold (operator)
 
@@ -335,7 +365,7 @@ fixture's; the contract's example gives the field names, not the clock.
 **Recommendation: E2.** The counter-argument on record is that the contract's prose reads naturally
 as wall time and the fake diode counts wall time; the reply is that the contract is silent on the
 clock and explicit that receipts are the vehicle's. In the checkpoint the spend is an **opaque,
-versioned subsection** (`spend: {version, …}`) so that child 1 (the format) does not wait on this
+versioned subsection** (`spend: {version, …}`) so that child 1 (the format) did not need to wait on this
 answer.
 
 Answer (E): **E2, the mission hour** — operator, 2026-10-09.
@@ -421,7 +451,10 @@ hold. (ii) The checkpoint is authoritative for identity (`world_id`, slugs, seed
 `<diode-dir>/.executive.json` remains as the windows' side copy, rewritten from the checkpoint at
 every publication — and **when a verified checkpoint exists, a root record that is missing,
 garbled or disagrees is not a refusal**: it is rewritten and the mismatch is journaled, because
-refusing on a file the agents can write would hand them the stop button. The legacy `pending.json`
+refusing on a file the agents can write would hand them the stop button. A *readable* root record
+naming a different world than the checkpoint's is a different matter — two executives with separate
+state directories on one diode directory — and refuses, and the state directory records the diode
+directory it serves so a mismatch is caught from either side. The legacy `pending.json`
 refuse-only checks become advisory for the same reason. Without a checkpoint (a fresh directory)
 the ADR 0001 rules stand unchanged. (iii) The clarification "the directory's record is
 authoritative" is amended to "the checkpoint is authoritative and the record is its copy".
@@ -457,7 +490,8 @@ no engine may be assumed to read an arbitrary saved world. The mechanics follow:
   as `engine`, with the git commit recorded beside it for the manifest. Either way the consequence
   is operator-visible: a deployment that upgrades the vehicle image mid-run will refuse to resume
   and the operator must choose `--new-world`.
-- **Cost**: 1.0–1.4 ms p50 per durable write of a 270–470 KB checkpoint, p95 under 2.1 ms in both
+- **Cost**: 1.0–1.4 ms p50 per durable write of a 270–470 KB checkpoint (a lower bound: the measured
+  write omits the generation rename and the directory `fsync`), p95 under 2.1 ms in both
   tool runs, with a 32 ms tail seen once; J's cadence does not rest on the p50.
 
 Answer (I, mechanics and `engine` as the file hash with the commit recorded beside it): **as
@@ -468,7 +502,7 @@ maintainer's revision.
 
 | Option | Cadence |
 |---|---|
-| J1 — a full checkpoint every tick | 50 durable writes per mission second: 50–70 ms per mission second at the measured p50 and, on the tail seen once, up to 1.6 s. **Excluded** by the measurement. |
+| J1 — a full checkpoint every tick | 50 durable writes per mission second: 50–70 ms per mission second at the measured p50 for the write alone, plus ≈ 8 ms of `json.dumps` per tick on the full ring and, on the tail seen once, up to 1.6 s. **Excluded** by the measurement. |
 | J2 — a full checkpoint every `N` ticks, plus a **durable per-cycle record** whenever a cycle produced any verdict, plus a durable **published-tick mark** at every publication | Recovery = load the snapshot, replay the records by tick (§6 rule 6), then step effect-free ticks to the published tick. Nothing the fleet has seen is lost and no mission time is lost. |
 | J3 — at phase boundaries only | `plant.md` §6's full snapshots. Phases are hours long. Permitted as the *additional* full snapshot §6 asks for, not as the restart cadence. |
 
@@ -490,7 +524,8 @@ Three rules follow from `presentation.yaml#frame` ("`met_s` cannot jump backward
    is made durable (a few bytes, appended to the record). On restart the vehicle replays the record
    onto the snapshot and then steps forward to the greatest `published_tick`, so `met_s` never goes
    backward across a boot and F1 loses no mission time. The cost is bounded by `N × (step + hash)`
-   for the replay (consequence 3) plus `(published − replayed) × step` for the effect-free tail.
+   for the replay (consequence 3) plus `(published − replayed) × (step + hash)` for the effect-free tail (the lineage needs the hash
+   of every tick).
 3. **A result is written only after its cycle's record is durable**, and the record notes that it
    was written. A crash between the two re-publishes from the record on restart. Under L(b) the
    result's name is a deterministic function of the trace (MET stamp, slug, command), so
@@ -507,7 +542,8 @@ apart), one per publication for the mark (1.0–1.4 ms p50 every `k` ticks), one
 `N` ticks; recovery `≤ N × (step + hash)`. *Chassis*: none beyond H.
 
 **Recommendation: J2**, `N` a run input required with no default (recommended `tick_hz`, one
-mission second; recovery ≈ 1.1 s today, ≈ 0.5 s after child 6), `k` per B.
+mission second; recovery ≈ 1.1 s today on the warmed ring and ≈ 1.4 s on the full one, ≈ 0.5 s
+after child 6), `k` per B.
 
 Answer (J): **J2 with the three rules; `N = tick_hz`** — coordinator, under the owner's standing
 delegation (2026-10-09); open to the maintainer's revision.
@@ -606,10 +642,11 @@ answers are on each section's `Answer:` line, with who gave them.
 - Every command that was claimed has exactly one result file, including commands whose cycle was
   recorded but whose result was not yet written when the process died; no window-local receipt
   number is issued twice.
-- A checkpoint with one flipped byte, a truncated body, a wrong `engine`, `python`, `platform` or
-  `format`, a link in its place, or a missing `rng` section refuses with a message naming the check;
-  the previous generation is used when it verifies and the identity matches, and recovers to the same
-  tick; `--new-world` is the only way past both failing, and it writes the discontinuity record.
+- A *corrupt* checkpoint (one flipped byte, a truncated body, a link in its place, a missing `rng`
+  section) is refused with a message naming the check, and the previous generation is used when it
+  verifies and the identity matches, recovering to the same tick. An *incompatible* checkpoint (a
+  wrong `engine`, `python`, `platform` or `format`) is refused and never fallen back from, because
+  the previous generation was written by the same build; `--new-world` is the only way past both failing, and it writes the discontinuity record.
 - A kill at every point of the write sequence leaves one verifiable generation; `SIGTERM` writes
   the checkpoint and exits 0.
 - No file under any `/diode/<slug>/` contains a truth-only key, the lineage, the hash, the state
@@ -657,12 +694,13 @@ Recorded here rather than in a second planning file: the template asks this sect
 packages that implement and verify it", ROADMAP.md makes the GitHub issues the source of delivery
 status, and CONTRIBUTING.md warns against a second editable copy of planning prose. Each child is
 one reviewable PR with its own acceptance; children **1, 2, 4, 5, 6 and 11** are
-**policy-independent** and may start now; 3 waits only on other children; the rest wait on the
-lettered answer named.
+**policy-independent**; 3 waits only on other children. With the operator's answers recorded,
+every child may start once its dependencies have landed; the first integrated run at `m = 1` also
+waits on child 6 (see A).
 
 | # | Child | Acceptance example | Depends on |
 |---|---|---|---|
-| 1 | Checkpoint format v1: writer, reader, header, integrity and compatibility checks, two generations (`G`, `I`); `spend` an opaque versioned subsection | Round trip of an executive's state is byte-identical; each corruption in the acceptance list refuses by name; a wrong `engine`/`python`/`platform` refuses; the previous generation is used when it verifies; a kill at each write step leaves one valid generation | — |
+| 1 | Checkpoint format v1: writer, reader, header, integrity and compatibility checks, two generations (`G`, `I`); `spend` an opaque versioned subsection | Round trip of an executive's state is byte-identical; each corruption in the acceptance list refuses by name; a wrong `engine`/`python`/`platform` refuses with no fallback; a corrupt generation falls back to the previous one when it verifies; a kill at each write step leaves one valid generation | — |
 | 2 | `--state-dir`: lock and journal moved there, inside-`--diode-dir` refusal, root record rewritten from the checkpoint and a mismatch journaled, **hidden-state isolation test** (`H`) | A `--state-dir` inside `--diode-dir` refuses; after a restart `.executive.json` equals the checkpoint's header; a garbled root record beside a verified checkpoint is rewritten, not obeyed; no window file names the state dir or carries a truth-only key | — (the chassis mount is a separate package; local tests use a scratch dir) |
 | 3 | Resume mechanics: an executive constructed *from* a checkpoint plus record, continuing tick, dwell, deferrals, arms, `seq`, `receipts`, spend, lineage, `published_tick` (`G`, `L(a)`) | Kill at tick `T`, restart, truth and lineage at `T + 100` equal the uninterrupted run's; `boot_id` differs, `seq` continues, `met_s` never decreases, every claimed command has exactly one result | 1, 4; G1 for what `arms` means |
 | 4 | The per-cycle durable record, the published-tick mark, journal segments, replay-from-record (`J` rules 1–3) | A run's record replayed onto its snapshot reproduces every compare-point; a record with one missing cycle refuses; a refusal-only cycle is recorded; segments concatenate by tick | — |

@@ -21,7 +21,8 @@ ingress and evidence views (accepted 2026-10-09; chassis review pending).
 [0002](0002-mission-clock-and-continuity.md) — the mission clock, private checkpoints and restart
 continuity (accepted 2026-10-09: the operator's choices A–F, K, L(b) — `m = 1`, `k = 5`, a 30 s
 lag ceiling, shed-dilate-stop, freeze on downtime, MET-as-UTC stamps; the maintainer items G–J,
-L(a), M accepted under the owner's delegation; chassis review pending. WP08's children are named in
+K's mechanics, L(a), M, the encoder swap and the interim burst bound accepted under the owner's
+delegation; chassis review pending. WP08's children are named in
 it and `tools/measure_clock.py` reads its figures).
 
 The table lists design questions, not extra product features. Link each

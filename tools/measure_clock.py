@@ -21,7 +21,9 @@ and a SHA-256 over `json.dumps(truth, sort_keys=True, separators=(",", ":"), def
 second is what ADR 0002 asks the maintainer to consider adopting: it distinguishes every pair the
 first's tags exist to separate (`0` and `False`, `1` and `1.0`, `0.0` and `-0.0`, `"1"` and `1`,
 `None` and `0`), collides a list with a tuple exactly where the first does, and requires every key
-to be a string — which `--keys` checks rather than assumes.
+to be a string — which every run checks (`all_string_keys`) rather than assumes. `default=repr` is
+used here only to price the encoding; an adopted encoder must raise on a non-JSON value instead, or
+such a value would encode as a string and collide with an equal `str`.
 
     python3 tools/measure_clock.py                         # the empty-ring table
     python3 tools/measure_clock.py --full-ring             # the steady-state table
@@ -58,14 +60,14 @@ from plant import (  # noqa: E402
     tick_seconds,
 )
 
-# How the ring is filled under `--full-ring`: a plausible coolant temperature in kelvin, varied so
-# that no two slots are the same float and the encoding cannot collapse them.
+# How the ring is filled under `--full-ring`: a plausible coolant temperature in kelvin, cycling
+# through 97 distinct floats so that the encoding writes every slot out rather than one repeated value.
 FILL_BASE_K = 280.35
 FILL_STEP_K = 0.0137
 
 
 def timed(fn: Any, samples: int) -> dict[str, float]:
-    """p50, p95 and max of `samples` calls, in microseconds."""
+    """p50, p95 and max of `samples` calls, in microseconds (p95 means little below ~20 samples)."""
     xs: list[float] = []
     for _ in range(samples):
         t0 = time.perf_counter()
@@ -94,7 +96,7 @@ def all_string_keys(value: Any) -> bool:
 
 
 def fill_rings(values: dict[str, Any]) -> dict[str, Any]:
-    """Every `<state>__delay` ring with each `None` slot replaced by a distinct float."""
+    """Every `<state>__delay` ring with each `None` slot replaced by one of 97 distinct floats."""
     filled = dict(values)
     for key, ring in values.items():
         if not (key.endswith("__delay") and isinstance(ring, dict) and "slots" in ring):
@@ -144,6 +146,9 @@ def checkpoint_shaped(truth: dict[str, Any], windows: int) -> dict[str, Any]:
 
 
 def durable_writer(directory: Path, blob: bytes, *, fsync: bool) -> Any:
+    """Write, fsync and replace: a *lower bound* on ADR 0002 §I's sequence, which also renames the
+    previous generation aside and fsyncs the directory."""
+
     def write() -> None:
         tmp = directory / "checkpoint.tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -164,7 +169,12 @@ def engine_identity(root: Path) -> str:
             ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, check=False, timeout=5,
         )
-        return out.stdout.strip() or "unknown"
+        head = out.stdout.strip() or "unknown"
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, check=False, timeout=5,
+        )
+        return f"{head}-dirty" if dirty.stdout.strip() else head
     except (OSError, subprocess.TimeoutExpired):
         return "unknown"
 
