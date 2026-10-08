@@ -23,9 +23,10 @@ the stepped truth. Validation and effect therefore read the same truth at the sa
 A window is an agent's directory, and the executive treats it as one. The console is opened without
 following links and refused unless it is a regular file of bounded size; every path of a window is
 checked for type and for links before the window is claimed or published, and a window that fails
-the check is skipped for the tick with no write; the agent's `variables` are kept only where the
-registry publishes a gate of that name, as bools, plus an integer `allowance` the agent may lower
-and never raise; a command's arguments are held to the verb's `argument_schema`; and whatever one
+the check is skipped for the tick with no write; the agent's `variables` are preserved verbatim, as
+the contract requires, and *honoured* only where the registry publishes a gate of that name, as a
+bool, plus an integer `allowance` the agent may lower and never raise; a command's arguments are
+held to the verb's `argument_schema`; and whatever one
 window raises inside its claim or publication is that window's failure, recorded, while the tick
 and the other windows proceed.
 
@@ -721,21 +722,8 @@ class Executive:
 
     def _ingest(self, window: Window) -> list[Verdict]:
         """Claim one window's console and validate what it held, in order."""
-        claimed, dropped = window.claim()
+        claimed = window.claim()
         verdicts: list[Verdict] = []
-        if dropped:
-            verdicts.append(
-                self._verdict(
-                    window,
-                    "variables_ignored",
-                    "refused",
-                    f"refused: {len(dropped)} variable(s) ignored and removed from the console. "
-                    "A window's `variables` may name a published gate (a bool) or `allowance` (an "
-                    "integer the window may lower and never raise, §9 check 8), and nothing else:\n"
-                    + "\n".join(f"  - {reason}" for reason in dropped)
-                    + "\nThe commands in the same batch were run.\n",
-                )
-            )
         if isinstance(claimed, str):
             verdicts.append(
                 self._verdict(
@@ -1361,8 +1349,13 @@ class Window:
         self.readme = "README.md"
         self.pending = "pending.json"
         self.handles: Handles | None = None
+        # **Preserved, verbatim.** The contract: `variables` is "a flat map of gate settings the
+        # vehicle chooses to honour. Persistent — the vehicle never clears it", and the claim rewrites
+        # the console "with commands emptied and variables preserved". So this is exactly the object
+        # the agent last wrote (replace, not merge — bounded by construction, because it came from a
+        # file of at most `MAX_READ_BYTES` and the rewrite is no larger), and what the vehicle
+        # *honours* of it is computed from it each cycle by `honoured()`.
         self.variables: dict[str, Any] = {}
-        self.allowance = DEFAULT_ALLOWANCE
         self.deferred: list[dict[str, Any]] = []
         # Outstanding arm tokens, by event, bound to this window. Never read back from a file.
         self.arms: dict[str, str] = {}
@@ -1488,49 +1481,53 @@ class Window:
         """
         root = self._handles().root
         payload, problem = read_ingress(self.console, dir_fd=root)
-        dropped: list[str] = []
         if payload is None:
             write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
-            return str(problem), dropped
+            return str(problem)
         commands = payload.get("commands")
         variables = payload.get("variables")
+        # Replace, not merge: the object the agent wrote *is* the preserved map. A file with no
+        # `variables` object keeps the previous one, which is what "never clears it" means.
         if isinstance(variables, dict):
-            for name, value in variables.items():
-                key = str(name)
-                if key == "allowance":
-                    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                        dropped.append(
-                            f"`allowance` is {value!r}, not a non-negative integer; the window keeps "
-                            f"{self.allowance}"
-                        )
-                        continue
-                    self.allowance = min(value, DEFAULT_ALLOWANCE)
-                    self.variables["allowance"] = self.allowance
-                    if value > DEFAULT_ALLOWANCE:
-                        dropped.append(
-                            f"`allowance` {value} is above the operator's ceiling of "
-                            f"{DEFAULT_ALLOWANCE}; a window may lower it and never raise it"
-                        )
-                elif key not in self.executive.gate_names:
-                    dropped.append(f"`{key}` is not a gate variable this vehicle publishes")
-                elif not isinstance(value, bool):
-                    dropped.append(f"`{key}` is {value!r}, not a bool; a gate is open or closed")
-                else:
-                    self.variables[key] = value
-        elif variables is not None:
-            dropped.append(f"`variables` is a JSON {type(variables).__name__}, not an object")
+            self.variables = variables
         write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
         if commands is None:
-            return [], dropped
+            return []
         if not isinstance(commands, list):
             return (
                 f"console.json's `commands` is a JSON {type(commands).__name__}, not a list, so "
                 "there is no batch here to run"
-            ), dropped
-        return commands, dropped
+            )
+        return commands
+
+    def honoured(self) -> tuple[dict[str, bool], int]:
+        """What the vehicle honours of the preserved map: the published gates, and the allowance.
+
+        **Preserved is not honoured.** The map is the agent's and is kept verbatim; what the vehicle
+        acts on is computed from it here, every cycle, and nothing in it can raise: a name is a gate
+        only where the registry publishes one by that (instantiated) name and its value is a bool —
+        anything else is treated as absent, so the gate stays at its default; `allowance` is honoured
+        only as a non-negative integer, clamped to the operator's ceiling (§9 check 8: a preference
+        may lower, never raise) — anything else leaves the ceiling in force. `{"allowance": "lots"}`
+        was a `ValueError` in every tick's publication before this split.
+        """
+        gates: dict[str, bool] = {}
+        allowance = DEFAULT_ALLOWANCE
+        for name, value in self.variables.items():
+            key = str(name)
+            if key == "allowance":
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    allowance = min(value, DEFAULT_ALLOWANCE)
+            elif key in self.executive.gate_names and isinstance(value, bool):
+                gates[key] = value
+        return gates, allowance
+
+    @property
+    def allowance(self) -> int:
+        return self.honoured()[1]
 
     def closed_gates(self) -> set[str]:
-        return {str(name) for name, value in self.variables.items() if name != "allowance" and not value}
+        return {name for name, value in self.honoured()[0].items() if not value}
 
     def capability(self, *, closed: bool = True) -> list[dict[str, Any]]:
         """The capability snapshot as this window sees it: its own closed gates, the operator's trips.
@@ -1626,12 +1623,11 @@ class Window:
         executive = self.executive
         rows = self.capability()
         variables = {name: True for row in rows for name in row["gate_variables"]}
-        # The window's own variables win where they name a published gate, because the console is
+        # The window's honoured gates win where they name a published one, because the console is
         # the fleet's hand and the registry is only the default. §9 check 8's direction is that the
         # console may lower and never raise, so a gate the window has closed stays closed.
-        for name, value in self.variables.items():
-            if name in variables:
-                variables[name] = bool(value)
+        honoured, allowance = self.honoured()
+        variables.update(honoured)
         return {
             "published_at": utc_now().isoformat(),
             "available_commands": [row["verb"] for row in rows if row["available"]],
@@ -1640,7 +1636,7 @@ class Window:
             # WP08's with the clock; `oldest_expires_in_seconds` still counts the wall clock here.
             "budget": {
                 "used_this_window": self.accepted,
-                "limit_per_window": self.allowance,
+                "limit_per_window": allowance,
                 "window_seconds": 3600,
                 "oldest_expires_in_seconds": 3600 - int((utc_now() - self.started).total_seconds()),
             },

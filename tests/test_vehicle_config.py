@@ -21683,7 +21683,8 @@ def test_malformed_ingress_is_refused_once_claimed_and_leaves_the_other_window_a
     alpha, bravo = diode / "alpha", diode / "bravo"
 
     # A known variable first, so there is a "last known" set to preserve.
-    submit(alpha, [], {"ack_alarm_enable": True})
+    marker = {"ack_alarm_enable": True, "probe_marker": "kept"}
+    submit(alpha, [], marker)
     executive.cycle()
 
     def one_refusal(raw: str, *needles: str) -> None:
@@ -21699,9 +21700,10 @@ def test_malformed_ingress_is_refused_once_claimed_and_leaves_the_other_window_a
         for needle in needles:
             assert needle in bodies[0], (needle, bodies[0])
         assert receipt_of(bodies[0])["state"] == "refused"
-        # Claimed: emptied, variables kept.
+        # Claimed: emptied, variables preserved — the previous map where the file was not a console,
+        # the file's own map where it was one.
         claimed = json.loads((alpha / "console.json").read_text())
-        assert claimed["commands"] == [] and claimed["variables"]["ack_alarm_enable"] is True, claimed
+        assert claimed["commands"] == [] and claimed["variables"] == marker, claimed
         # The neighbour's command landed in the same tick.
         steady = results_of(bravo)
         assert len(steady) == 1 and "accepted" in steady[0], steady
@@ -21718,14 +21720,14 @@ def test_malformed_ingress_is_refused_once_claimed_and_leaves_the_other_window_a
         "bytes",
         str(console.MAX_READ_BYTES),
     )
-    one_refusal(json.dumps({"commands": ["ack_alarm alert_id=x", 7], "variables": {}}), "non-string")
+    one_refusal(json.dumps({"commands": ["ack_alarm alert_id=x", 7], "variables": marker}), "non-string")
     one_refusal(
-        json.dumps({"commands": ["ack_alarm alert_id=x"] * 33, "variables": {}}),
+        json.dumps({"commands": ["ack_alarm alert_id=x"] * 33, "variables": marker}),
         "33 command(s)",
         "32",
         "max-batch",
     )
-    one_refusal(json.dumps({"commands": "ack_alarm alert_id=x", "variables": {}}), "not a list")
+    one_refusal(json.dumps({"commands": "ack_alarm alert_id=x", "variables": marker}), "not a list")
 
     # The cap is an operator ceiling: a smaller executive refuses sooner, and the cap is at least 1.
     small = console.Executive(world, tmp_path / "small", phase="translunar_coast", max_batch=2)
@@ -22104,17 +22106,26 @@ def test_two_executives_with_the_same_ingress_produce_the_same_lineage_and_resul
 # ---------------------------------------------------------------------------------------------
 # WP01 review remediation: the window is an adversary's directory, and the executive must stay up.
 # ---------------------------------------------------------------------------------------------
-def test_a_window_s_variables_are_bounded_to_published_gates_and_a_bounded_allowance(tmp_path):
-    """An agent-written `variables` map reached the mirror untyped, and one window could crash all.
 
-    `Window.mirror()` did `int(self.variables.get("allowance", 120))`, so `{"allowance": "lots"}`
-    was a `ValueError` in the publication of every tick, and a list or a float past the integer
-    range was a `TypeError` or an `OverflowError` — one agent's console taking the executive down,
-    which is the opposite of the isolation clause. At the claim the window now keeps only the names
-    the registry publishes as gate variables (instantiated), each a bool, plus `allowance`, an int
-    clamped to the operator's ceiling (`console.DEFAULT_ALLOWANCE`, 120) and never above it; what
-    was dropped is named in one result and the console is rewritten without it. §9 check 8: the
-    console may lower an allowance and never raise it.
+def test_variables_survive_the_claim_verbatim_and_only_gates_and_the_allowance_are_honoured(tmp_path):
+    """The contract's `variables` is preserved; what the vehicle *honours* of it is a separate question.
+
+    `docs/diode-contract.md`: `variables` is "a flat map of gate settings the vehicle chooses to
+    honour. Persistent — the vehicle never clears it", and the claim rewrites the console "with
+    commands emptied and variables preserved". The first remediation of B1 got this wrong twice: it
+    kept only the names it could honour — so the probe's `probe_marker` did not survive the claim and
+    the chassis's `diode_probe.py` failed its check — and it wrote a `variables_ignored` result, which
+    is a result that answers no command (one result per command). And before that, `Window.mirror()`
+    did `int(self.variables.get("allowance", 120))` on an untyped agent map, so `{"allowance": "lots"}`
+    was a `ValueError` in every tick's publication: one window taking the executive down.
+
+    So: **preserved** is the object the agent last wrote, verbatim, replace not merge (bounded by
+    construction — it came from a file of at most `MAX_READ_BYTES`); **honoured** is computed from it
+    each cycle — published (instantiated) gate names with bool values, and `allowance` as an int
+    clamped to `[0, console.DEFAULT_ALLOWANCE]`, never raised; anything else is simply not honoured.
+    This mirrors the probe's check: a marker and odd-typed values and a bad allowance, and after the
+    claim the console's `variables` equals exactly what was written, exactly one result per command
+    and no other result file, the honoured gates and allowance as specified, and no exception.
     """
     console, _plant, world = console_tools()
     diode = tmp_path / "diode"
@@ -22127,56 +22138,65 @@ def test_a_window_s_variables_are_bounded_to_published_gates_and_a_bounded_allow
         for row in _plant.capability_snapshot(world, phase="translunar_coast")
         for name in row["gate_variables"]
     }
-    assert "rcs_mode_manual_enable" in gates and "allowance" not in gates
+    assert "rcs_mode_manual_enable" in gates and "allowance" not in gates and "probe_marker" not in gates
 
-    submit(
-        alpha,
-        ["set_rcs_mode mode=manual"],
-        {
-            "allowance": "lots",
-            "rcs_mode_manual_enable": True,
-            "rcs_mode_auto_enable": "yes",
-            "not_a_gate": False,
-            "probe_marker": 1,
-        },
-    )
-    submit(bravo, [], {"allowance": 1e999, "nested": {"a": [1]}})
+    written = {
+        "probe_marker": "survives",
+        "allowance": "lots",
+        "rcs_mode_manual_enable": True,
+        "rcs_mode_auto_enable": "yes",
+        "ack_alarm_enable": False,
+        "not_a_gate": False,
+        "nested": {"a": [1, None, 1e300]},
+        "big": 10**40,
+    }
+    submit(alpha, ["set_rcs_mode mode=manual", "ack_alarm alert_id=closed_by_gate"], written)
+    submit(bravo, [], {"allowance": 1e999})
     executive.cycle()
     assert executive.tick == 1 and executive.failure_count == 0, list(executive.failures)
+    # Preserved: exactly what was written, nothing removed and nothing added.
+    assert json.loads((alpha / "console.json").read_text()) == {"commands": [], "variables": written}
+    assert json.loads((bravo / "console.json").read_text())["variables"] == {"allowance": float("inf")}
+    # One result per command, and no other result file.
+    names = sorted(p.name for p in (alpha / "output").glob("*.txt"))
+    assert len(names) == 2 and all("_alpha_" in n for n in names), names
+    assert any("set_rcs_mode" in n for n in names) and any("ack_alarm" in n for n in names), names
+    assert not any("variables" in n for n in names), names
     bodies = results_of(alpha)
-    assert len(bodies) == 2, bodies
-    note = next(b for b in bodies if "variable" in b and "ignored" in b)
-    for name in ("allowance", "rcs_mode_auto_enable", "not_a_gate", "probe_marker"):
-        assert f"`{name}`" in note, (name, note)
-    assert "rcs_mode_manual_enable" not in note
-    assert any("succeeded" in b for b in bodies), bodies
-    kept = json.loads((alpha / "console.json").read_text())["variables"]
-    assert kept == {"rcs_mode_manual_enable": True}, kept
+    assert any("succeeded" in b and "internal:mode=manual" in b for b in bodies), bodies
+    closed = next(b for b in bodies if "'ack_alarm'" in b)
+    assert "is closed" in closed and "ack_alarm_enable" in closed, closed
+    assert results_of(bravo) == []
+    # Honoured: the bool gates, and the ceiling where the allowance is not an int.
     mirror = json.loads((alpha / "state.json").read_text())
-    assert mirror["budget"]["limit_per_window"] == console.DEFAULT_ALLOWANCE
     assert mirror["variables"]["rcs_mode_manual_enable"] is True
-    assert json.loads((bravo / "console.json").read_text())["variables"] == {}
-
-    # A lowered allowance is kept and reported; a raised one is clamped to the ceiling; a bool is
-    # not an int.
-    submit(alpha, [], {"allowance": 7})
-    submit(bravo, [], {"allowance": 10_000})
-    executive.cycle()
-    assert json.loads((alpha / "state.json").read_text())["budget"]["limit_per_window"] == 7
+    assert mirror["variables"]["ack_alarm_enable"] is False
+    assert mirror["variables"]["rcs_mode_auto_enable"] is True, "a non-bool is not honoured; the gate keeps its default"
+    assert "probe_marker" not in mirror["variables"] and "not_a_gate" not in mirror["variables"]
+    assert mirror["budget"]["limit_per_window"] == console.DEFAULT_ALLOWANCE
     assert json.loads((bravo / "state.json").read_text())["budget"]["limit_per_window"] == console.DEFAULT_ALLOWANCE
-    submit(bravo, [], {"allowance": True})
+
+    # A file with no `variables` object keeps the preserved map — "never clears it" — and a lowered
+    # allowance is honoured, a raised one clamped, a bool one not an int, a negative one not honoured.
+    (alpha / "console.json").write_text(json.dumps({"commands": []}), encoding="utf-8")
     executive.cycle()
-    assert json.loads((bravo / "console.json").read_text())["variables"]["allowance"] == console.DEFAULT_ALLOWANCE
-    # And a closed gate, written as the bool it must be, still refuses by its instantiated name.
-    submit(alpha, ["set_rcs_mode mode=auto", "set_rcs_mode mode=free_drift"], {"rcs_mode_manual_enable": True, "rcs_mode_auto_enable": False})
+    assert json.loads((alpha / "console.json").read_text())["variables"] == written
+    for value, expected in ((7, 7), (10_000, console.DEFAULT_ALLOWANCE), (True, console.DEFAULT_ALLOWANCE), (-1, console.DEFAULT_ALLOWANCE), (0, 0)):
+        submit(bravo, [], {"allowance": value})
+        executive.cycle()
+        assert json.loads((bravo / "console.json").read_text())["variables"] == {"allowance": value}
+        assert json.loads((bravo / "state.json").read_text())["budget"]["limit_per_window"] == expected, (value, expected)
+    # And a closed gate, as the bool it must be, refuses by its instantiated name and closes only the
+    # command that needs it.
+    submit(alpha, ["set_rcs_mode mode=auto", "set_rcs_mode mode=free_drift"], {"rcs_mode_auto_enable": False})
     clear_results(alpha)
     executive.cycle()
     bodies = results_of(alpha)
     closed = next(b for b in bodies if "is closed" in b)
     assert "rcs_mode_auto_enable" in closed, closed
-    # Closing one instantiation closes only the command that needs it.
     other = next(b for b in bodies if "is closed" not in b)
     assert "'set_rcs_mode'" in other and ("accepted" in other or "DWELL" in other), other
+    assert json.loads((alpha / "console.json").read_text())["variables"] == {"rcs_mode_auto_enable": False}
 
 
 def test_a_console_that_is_not_a_regular_file_is_refused_without_blocking(tmp_path):
