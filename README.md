@@ -18591,12 +18591,18 @@ handles close the gap. The chassis's contract probe then caught the first remedi
 variables map stripping it to the names the vehicle could honour and writing a result that answered
 no command; preserved and honoured are separated now, and the probe's marker survives the claim.
 
-**Measured, not fixed here (WP12).** One cycle with one window costs ≈45 ms on this machine, of
-which ≈42 ms is `state_hash` over the 52,100-slot coolant transport ring and ≈3 ms is `plant.step`
-— above the 20 ms a live tick has at a multiplier of one. The lineage is specified over the
-canonical state and the ring is part of it; a cheaper compare-point (a rolling hash the delay
-updates incrementally, or a hash over the ring's cursor and the slots the tick wrote) is a WP12
-decision about what the compare-point must cover, not a change this slice may make quietly.
+**Measured, not fixed here (WP12) — and what WP08 then fixed.** When this slice landed, one cycle
+with one window cost ≈45 ms on this machine, of which ≈42 ms was `state_hash` over the 52,100-slot
+coolant transport ring and ≈3 ms was `plant.step` — above the 20 ms a live tick has at a multiplier
+of one. ADR 0002 measured where the 42 ms went and found it in the *encoder*, not the coverage: the
+tagging walk over every scalar. WP08 child 6 (the round below, "The compare-point paid for its tags,
+not for its coverage") replaced the encoding with plain sorted compact JSON, coverage unchanged, and
+the full-ring hash fell to ≈8.5 ms, the one-window cycle to ≈14 ms. **What remains is the
+float-`repr` floor**: ≈8 ms per tick is the `repr` of 52,100 floats, and no encoding that writes the
+whole ring out can go below it. The lineage is specified over the canonical state and the ring is
+part of it; a cheaper compare-point (a rolling hash the delay updates incrementally, or a hash over
+the ring's cursor and the slots the tick wrote) is a WP12 decision about what the compare-point must
+cover — ADR 0002 §A recommends against it — not a change a slice may make quietly.
 
 Three things the tests got wrong on the way. The first draft of the isolation probe had the flooding
 window and its neighbour both on `crew.alerts`, and the flood correctly superseded the neighbour
@@ -18613,6 +18619,60 @@ the ring; it is written after it now.
 | figure | before | after |
 |---|---:|---:|
 | referee tests | 346 | **369** |
+
+No configuration value, debt or state class moved.
+
+## The compare-point paid for its tags, not for its coverage
+
+`plant.canonical_state` was the half of `plant.md` §6's compare-point that matters — *"a hash over
+canonically-encoded state, every tick"* — and its docstring said what the encoding bought: `repr`-exact
+floats, and *"every other type is tagged with its name so that `0` and `False` cannot collide"*. ADR
+0002 (`docs/decisions/0002-mission-clock-and-continuity.md`, evidence consequence 1) then timed it:
+20–26 ms per tick on the full coolant transport ring, more than ten times `plant.step`, and the live
+deadline `20 ms / m` missed at every tick for every `m ≥ 1`. The two halves that never met are the
+docstring's reason for the tags and the stdlib's own output. `json.dumps` already writes `False` as
+`false`, `1.0` as `1.0`, `-0.0` as `-0.0`, `"1"` in quotes and `None` as `null`: every pair the tags
+existed to separate, plain sorted compact JSON separates on its own, and the Python walk that applied
+the tags — one function call per slot of a 52,100-slot ring — was the cost. The ring was never the
+problem; the ribbon round it was.
+
+This is WP08 child 6 (`tachyon-beep/space_vehicle#24`). What landed, and what it refuses:
+
+| | before | after |
+|---|---|---|
+| the encoding | every scalar wrapped `{"float": repr(x)}`, `{"int": n}`, `{"null": None}`, …; maps `{"map": …}` with keys coerced by `str`; sequences `{"seq": […]}`; anything else `{"other": repr(x)}` | `json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False, default=<raises>)` — byte-identical to the stdlib's C encoder over the values as they are |
+| a non-string key | coerced with `str(key)` | refused (`TypeError`) at any depth, inside a list included — `json.dumps` would write `{1: x}` as `{"1": x}`, and with `sort_keys=True` only a *mixed* key set raises on its own |
+| a value JSON cannot say | hashed as `{"other": repr(x)}` | refused (`TypeError`) — with `default=repr` it would encode as a string and collide with an equal `str` |
+| NaN, ±Infinity | hashed as `repr` | refused (`ValueError`, `allow_nan=False`): a non-finite number in the truth is a defect to surface, not a state to compare |
+| `list` vs `tuple` of equal items | collide (`{"seq": …}` for both) | collide (both are a JSON array) — stated in the referee rather than hidden; nothing in the truth is a tuple |
+| coverage | the whole state, ring included | unchanged: a 1e-12 change to one ring slot, a filled empty slot, the last slot, two swapped slots or the cursor moved by one each change the hash |
+
+The figures are `tools/measure_clock.py`'s, one machine, `--samples 100`, before and after on the
+same session; the tool keeps the retired encoder as a labelled reference row so the two can be read
+off one run, and ADR 0002's evidence section carries the full after-table:
+
+| figure (p50) | before | after |
+|---|---:|---:|
+| `state_hash`, ring as warmed (10 of 52,100 slots) | 19.62 ms | **1.38 ms** |
+| `state_hash`, ring full | 23.99 ms | **8.50 ms** |
+| the floor: `sha256(json.dumps(sort_keys, compact))`, no key check, ring full | 8.15 ms | 8.16 ms |
+| encoded bytes, ring full | 1,094,444 | **467,464** |
+| `Executive.cycle`, 1 window, ring full | 30.57 ms | **13.67 ms** |
+| `Executive.cycle`, 10 windows, ring full | 49.96 ms | **33.83 ms** |
+
+What the round got wrong on the way, or had to concede. The key refusal cannot be free: an all-`int`
+key set sorts and coerces silently, so a Python pass over the containers remains — it recurses into
+maps and scans a scalar-only list once with `set(map(type, …))`, about 0.4–0.5 ms on the ring, and
+that is the whole gap between `state_hash` and the floor row. The floor itself, ≈8 ms on a full
+ring, is the `repr` of 52,100 floats and does not move without a change to §6's coverage, which is
+the operator's (ADR 0002 §A). And of the four referee tests added, two fail on the old encoder (the
+structural-and-cost test, the refusals) and two pass on it (the pairs table, the one-slot ring
+change): the second pair are regression guards for the property this round claims to have kept, and
+a test that only fails before the change could not say that.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 369 | **373** |
 
 No configuration value, debt or state class moved.
 

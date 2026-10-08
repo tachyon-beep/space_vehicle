@@ -16,14 +16,17 @@ encodes in a handful of bytes where a float encodes in two dozen. A measurement 
 therefore a measurement of an empty ring, and `--full-ring` fills every slot with a float so the
 steady state of a mission that has run past one transit is what is timed.
 
-The compare-point is timed under two encoders: `plant.state_hash`, which is the §6 contract today,
-and a SHA-256 over `json.dumps(truth, sort_keys=True, separators=(",", ":"), default=repr)`. The
-second is what ADR 0002 asks the maintainer to consider adopting: it distinguishes every pair the
-first's tags exist to separate (`0` and `False`, `1` and `1.0`, `0.0` and `-0.0`, `"1"` and `1`,
-`None` and `0`), collides a list with a tuple exactly where the first does, and requires every key
-to be a string — which every run checks (`all_string_keys`) rather than assumes. `default=repr` is
-used here only to price the encoding; an adopted encoder must raise on a non-JSON value instead, or
-such a value would encode as a string and collide with an equal `str`.
+The compare-point is timed under three encoders, and the three rows are the record's evidence
+consequence 1 kept side by side. `plant.state_hash` is the §6 contract: since WP08 child 6 it is a
+SHA-256 over `json.dumps(truth, sort_keys=True, separators=(",", ":"), allow_nan=False)` with a
+`default` that raises on a non-JSON value and an explicit refusal of any non-string key. The
+**floor** row is the same `json.dumps` with `default=repr` and no key check — the cost of writing
+the truth out at all, which on a full ring is the `repr` of 52,100 floats; the difference between
+the two rows is the price of the key check. The **tagged** row is the encoder child 6 retired,
+kept here verbatim and nowhere else (`tagged_hash`): it walked the truth in Python and wrapped every
+scalar in a one-key map naming its type, and that walk, not the ring, was the 20–26 ms the record
+measured. Every run still reports `all_string_keys` so that a truth the adopted encoder would refuse
+is visible as a fact about the truth rather than as a crash in the timing loop.
 
     python3 tools/measure_clock.py                         # the empty-ring table
     python3 tools/measure_clock.py --full-ring             # the steady-state table
@@ -82,9 +85,48 @@ def timed(fn: Any, samples: int) -> dict[str, float]:
 
 
 def plain_hash(values: dict[str, Any]) -> str:
-    """The candidate encoder: sorted keys, no whitespace, `repr` for anything JSON cannot say."""
+    """The floor: sorted keys, no whitespace, `repr` for anything JSON cannot say, no key check.
+
+    Not an encoder anything adopts — `default=repr` would collide a non-JSON value with an equal
+    `str` — but the cheapest way to write the same bytes, so `state_hash` minus this row is what the
+    adopted encoder's refusals cost.
+    """
     text = json.dumps(values, sort_keys=True, separators=(",", ":"), default=repr)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def tagged_canonical(value: Any) -> Any:
+    """The encoder WP08 child 6 retired, verbatim, so the record's before and after share a table.
+
+    Every scalar became a one-key map naming its type (`{"float": repr(x)}`, `{"int": n}`,
+    `{"null": None}`, …), every mapping a `{"map": …}` with its keys coerced by `str`, every sequence
+    a `{"seq": […]}`, and anything else `{"other": repr(x)}`. The tags kept `0` and `False` apart —
+    which plain JSON does on its own — and the Python walk that applied them visited each of the
+    coolant transport ring's 52,100 slots as a function call.
+    """
+    if isinstance(value, bool):
+        return {"bool": value}
+    if isinstance(value, int):
+        return {"int": value}
+    if isinstance(value, float):
+        return {"float": repr(value)}
+    if isinstance(value, str):
+        return {"str": value}
+    if isinstance(value, dict):
+        return {"map": {str(key): tagged_canonical(item) for key, item in value.items()}}
+    if isinstance(value, (list, tuple)):
+        return {"seq": [tagged_canonical(item) for item in value]}
+    if value is None:
+        return {"null": None}
+    return {"other": repr(value)}
+
+
+def tagged_state(values: dict[str, Any]) -> str:
+    return json.dumps(tagged_canonical(values), sort_keys=True, separators=(",", ":"))
+
+
+def tagged_hash(values: dict[str, Any]) -> str:
+    return hashlib.sha256(tagged_state(values).encode("utf-8")).hexdigest()[:16]
 
 
 def all_string_keys(value: Any) -> bool:
@@ -208,9 +250,10 @@ def measure(root: Path, *, windows: list[int], samples: int, full_ring: bool, wa
         "delay_rings": {k: {"slots": rings[k], "filled": filled[k]} for k in rings},
         "all_string_keys": all_string_keys(truth),
         "canonical_bytes": len(canonical_state(truth).encode("utf-8")),
-        "plain_bytes": len(json.dumps(truth, sort_keys=True, separators=(",", ":"), default=repr).encode("utf-8")),
+        "tagged_bytes": len(tagged_state(truth).encode("utf-8")),
         "state_hash": timed(lambda: state_hash(truth), samples),
         "plain_hash": timed(lambda: plain_hash(truth), samples),
+        "tagged_hash": timed(lambda: tagged_hash(truth), samples),
         "step": timed(lambda: step(world, truth, dt, None, []), samples),
     }
     ladder = mission_ladder(world)
@@ -263,10 +306,11 @@ def render(result: dict[str, Any]) -> str:
     for key, ring in result["delay_rings"].items():
         lines.append(f"delay ring {key}: {ring['slots']} slots, {ring['filled']} filled")
     lines += [
-        f"canonical_state bytes: {result['canonical_bytes']:,}; plain sorted JSON bytes: {result['plain_bytes']:,}",
-        f"state_hash (canonical, §6 today): {us(result['state_hash'])}",
-        f"sha256(plain sorted JSON):        {us(result['plain_hash'])}",
-        f"plant.step, no effects:           {us(result['step'])}",
+        f"canonical_state bytes: {result['canonical_bytes']:,} (plain sorted JSON); the retired tagged encoding: {result['tagged_bytes']:,}",
+        f"state_hash (§6, sorted compact JSON since WP08.6): {us(result['state_hash'])}",
+        f"sha256(plain sorted JSON, default=repr) — the floor: {us(result['plain_hash'])}",
+        f"state_hash as tagged before WP08.6 (reference):    {us(result['tagged_hash'])}",
+        f"plant.step, no effects:                            {us(result['step'])}",
     ]
     ck = result["checkpoint"]
     lines += [
