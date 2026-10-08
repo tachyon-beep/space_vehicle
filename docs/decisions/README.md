@@ -20,8 +20,8 @@ Records: [0001](0001-shared-executive.md) — one executive owns the physical wo
 ingress and evidence views (accepted 2026-10-09; chassis review pending).
 [0002](0002-mission-clock-and-continuity.md) — the mission clock, private checkpoints and restart
 continuity (accepted 2026-10-09: the operator's choices A–F, K, L(b) — `m = 1`, `k = 5`, a 30 s
-lag ceiling, shed-dilate-stop, freeze on downtime, MET-as-UTC stamps; the maintainer items G–J,
-K's mechanics, L(a), M, the encoder swap and the interim burst bound accepted under the owner's
+lag ceiling, no catch-up burst, shed-dilate-stop, freeze on downtime, MET-as-UTC stamps; the maintainer items G–J,
+K's mechanics, L(a), M, and the encoder swap accepted under the owner's
 delegation; chassis review pending. WP08's children are named in
 it and `tools/measure_clock.py` reads its figures).
 

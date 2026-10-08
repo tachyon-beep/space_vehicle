@@ -217,11 +217,16 @@ for the same mission).
 Answer (A, scheduler): **A2** — operator, 2026-10-09. Answer (A, the value of `m`): **`m = 1`
 for the first integrated run**, raised later only by an explicit manifest decision after child 6's
 measurement — operator, 2026-10-09. Answer (A, lag ceiling, C3's trigger): **30 wall seconds
-behind schedule** — operator, 2026-10-09. Answer (A, catch-up burst bound): **`2k` ticks per
-cycle (10 at `k = 5`)**, so the scheduler catches up at no more than twice the scheduled rate and
-publication I/O never more than doubles — coordinator, under the owner's delegation; open to
-revision (the question was not put to the operator). It is an overload number (README row 2), so it
-is listed for the operator's confirmation in the handoff; until confirmed it is the interim value.
+behind schedule** — operator, 2026-10-09. Answer (A, catch-up burst bound): **`k` — no burst**: a
+scheduler that has fallen behind runs complete cycles back to back without sleeping, each claiming,
+stepping `k` ticks and publishing, until it is on schedule — operator, 2026-10-09, on the
+coordinator's recommendation (an interim `2k` was withdrawn). The reason is measured: publication
+is paid once per `k` ticks however the ticks are batched, so per mission tick a `2k` cycle costs
+what two `k` cycles cost (≈ 14 ms of wall time per 20 ms tick after child 6, ten windows) and
+recovers lag no faster (≈ 0.4 s of lag per wall second either way; a 30 s lag clears in ≈ 75 s);
+a burst would only save the per-cycle claim overhead, and would stretch B's frame spacing and
+command latency to `2k` while catching up. With `k`, both stay exact and shedding (C2) is the only
+pressure valve.
 
 **`m = 1` for ten windows needs child 6 first.** At `m = 1, k = 5` a cycle has `5 × 20 ms = 100 ms`
 of wall time. Ten windows' publication costs about 24 ms per cycle (the ten-window cycle less step
@@ -265,12 +270,11 @@ remaining `k − 1` carry no effects — and publishes. A command written to a c
 effect at most `k` ticks of mission time after it was written, at any `m`; in wall time that is
 `k × dt / m`. This is what "cycle" means for the contract's §2.2 and §2.4 on the vehicle side.
 
-**A catch-up cycle** (A2, after the scheduler fell behind) claims once, steps up to the burst bound
-of `2k` ticks, and publishes one frame per `k` ticks stepped, so frames still describe every `k`-th
-tick and publication I/O at most doubles; a command claimed in a catch-up cycle lands at most `2k`
-ticks after it was written. While shedding (C2), frames are skipped and the skip is visible in
-`seq` and the ring's `losses`. "`k` ticks between frames" holds when the executive is neither
-catching up nor shedding.
+**Catching up** (A2, after the scheduler fell behind) is complete cycles run back to back without
+sleeping — the burst bound is `k` (A) — so every cycle still claims, steps exactly `k` ticks and
+publishes, and frame spacing and command latency stay exactly `k` ticks while catching up. While
+shedding (C2), frames are skipped and the skip is visible in `seq` and the ring's `losses`; "`k`
+ticks between frames" holds whenever the executive is not shedding.
 
 Consequences. *Fleet*: B2 gives a telemetry rate and a command latency in mission time that are the
 same at any `m`, which is what makes a finding at `m = 2` comparable to one at `m = 0.5`. *Replay*:
@@ -307,7 +311,7 @@ the source).
 
 **Recommendation: C2 (static files, then frames; never the mirror), then C1 within the lag ceiling,
 then C3; never C4.** The ceiling and the burst bound are the operator's numbers and sit beside `m`
-(the ceiling answered; the burst bound set in the interim, see A).
+(both answered, see A).
 Whether the fleet is *told* about dilation beyond what the two published clocks already reveal: **no
 new signal** — the schemas are declared and the existing pair is sufficient for an agent that looks.
 
@@ -622,8 +626,8 @@ ceiling 30 wall seconds), C (shed, dilate, stop; never drop ticks), D (D1), F (F
 `--new-world` the only escape) and confirmed B (`k = 5`), E (E2) and L(b) (MET rendered as UTC).
 The maintainer-owned items — G, H, I, J, K's mechanics, L(a), M and the compare-point encoder —
 were accepted as recommended by the implementing session's coordinator under the owner's standing
-delegation, and each stays open to the maintainer's revision; the one number nobody was asked, the
-catch-up burst bound, is `2k` on the same footing. Two things this acceptance does **not** do: it
+delegation, and each stays open to the maintainer's revision; the catch-up burst bound was put to the
+operator afterwards and answered `k` (no burst). Two things this acceptance does **not** do: it
 does not raise `m` above 1 — that is a later manifest decision after child 6's measurement — and it
 does not settle the chassis side, whose reviewer is pending for H and the cross-repository list. The
 answers are on each section's `Answer:` line, with who gave them.
@@ -716,5 +720,5 @@ waits on child 6 (see A).
 Children 1, 2, 4, 5, 6 and 11 fix no policy and could have started before the answers were in; with
 the record accepted, every child is unblocked on policy and waits only on the children before it in
 the table. Child 5 still ships with `m`, `k` and `N` *required* and no default: the accepted values
-(`m = 1`, `k = 5`, `N = tick_hz`, burst `2k`, ceiling 30 s) are what the deployed stack and the
+(`m = 1`, `k = 5`, `N = tick_hz`, burst `k`, ceiling 30 s) are what the deployed stack and the
 manifest name, not what the console assumes.
