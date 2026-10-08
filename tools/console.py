@@ -11,14 +11,23 @@ receipt sequence and one state lineage**, and a **`Window`** is the per-slug ing
 publication view attached to it — its console, its results, its gate preferences, its deferral
 queue, its ring — with no physical state of its own.
 
-Each cycle the executive visits every window in a deterministic order (sorted slugs rotated by the
-tick, ADR choice A), settles that window's due deferrals, claims its console destructively and
-atomically, validates every line in order — empty, unknown verb, phase and gate, interlocks, dwell,
-argument resolution, conflict — and turns the accepted state-staging commands into
-`plant.Effect`s stamped at `offset_us = 0` in arbitration order. Then it steps the plant **exactly
-once**, writes every result (refusals included, one file each, each ending in a receipt block),
-rewrites every window's mirror and record, and appends one frame per window from the stepped truth.
-Validation and effect therefore read the same truth at the same simulated instant.
+Each cycle the executive first settles every window's due deferrals (in a deterministic order:
+sorted slugs rotated by the tick, ADR choice A), then visits every window in that order, claims its
+console destructively and atomically, validates every line in order — empty, unknown verb, phase
+and gate, interlocks, arguments, dwell, argument resolution, conflict — and turns the accepted
+state-staging commands into `plant.Effect`s stamped at `offset_us = 0` in arbitration order. Then it
+steps the plant **exactly once**, writes every result (refusals included, one file each, each ending
+in a receipt block), rewrites every window's mirror and record, and appends one frame per window from
+the stepped truth. Validation and effect therefore read the same truth at the same simulated instant.
+
+A window is an agent's directory, and the executive treats it as one. The console is opened without
+following links and refused unless it is a regular file of bounded size; every path of a window is
+checked for type and for links before the window is claimed or published, and a window that fails
+the check is skipped for the tick with no write; the agent's `variables` are kept only where the
+registry publishes a gate of that name, as bools, plus an integer `allowance` the agent may lower
+and never raise; a command's arguments are held to the verb's `argument_schema`; and whatever one
+window raises inside its claim or publication is that window's failure, recorded, while the tick
+and the other windows proceed.
 
 What this slice substitutes, and says so (ADR 0001 "not established"):
 
@@ -32,9 +41,10 @@ What this slice substitutes, and says so (ADR 0001 "not established"):
     WP08's and are **not** decided here; `--poll` is a wall-clock sleep between cycles and nothing more.
   - **No persistence, no restart.** The old cross-process resume of ticks, arm tokens, dwell and
     deferrals from the agent-writable `pending.json` is withdrawn: it restored authority from a file
-    an agent can write. A window is bound to the first executive that ticks it, and a second
-    executive refuses it (choice D) until WP08 defines continuity. `--init` prepares a window's
-    identity without binding it.
+    an agent can write. The directory's own record, `<diode-dir>/.executive.json`, written by the
+    executive beside its lock and never by an agent, says which world a directory is; a second
+    executive refuses a bound directory (choice D) until WP08 defines continuity. `--init` prepares
+    the directory's identity without binding it.
 
 Lineage and truth are never written into a window file. A truth hash published to agents would be a
 side channel that reveals hidden changes; `--journal PATH` writes them as JSONL for the operator and
@@ -49,14 +59,18 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
+import secrets
+import stat
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,19 +106,20 @@ from plant import (  # noqa: E402
 # is written by something this process does not control.
 MAX_READ_BYTES = 1_000_000
 
-# **The three values a window remembers and a caller may also name, and the defaults are `None`.**
-# `--scenario`, `--seed` and `--ring-slots` are each written into `pending.json` and read back by the
-# next process — which makes each of them two things at once: a thing the window remembers and a
+# **The three values a directory remembers and a caller may also name, and the defaults are `None`.**
+# `--scenario`, `--seed` and `--ring-slots` are each written into the records and read back by the
+# next process — which makes each of them two things at once: a thing the directory remembers and a
 # thing a caller can say. Those two are only distinguishable if *the caller named nothing* has a
 # representation of its own, and a parser whose `--scenario` defaults to `"nominal"` does not have
 # one: `--scenario nominal` and no flag at all are the same `args.scenario`, so the restore cannot
 # know which it is looking at. `check_console_flags` holds the parser to this.
 #
 # So the flag defaults are `None`, `None` means **the caller named nothing**, and the resolution
-# happens once, in `main`, where the window's record and the mission's declared postures are both
+# happens once, in `main`, where the directory's record and the mission's declared postures are both
 # in hand. The declared defaults live here instead, and they are what an unnamed flag resolves to on
-# a window that has no record — a fresh one. Under ADR 0001 the record is read back for exactly two
-# things: this resolution, and the binding check. Never for ticks, arm tokens, dwell or deferrals.
+# a directory that has no record — a fresh one. The record read for this is `<diode-dir>/.executive.json`,
+# which no agent can write; a window's `pending.json` carries the same keys for its reader's benefit
+# and is never read for authority.
 DEFAULT_SCENARIO = "nominal"
 DEFAULT_SEED = 0
 DEFAULT_RING_SLOTS = 300
@@ -113,22 +128,27 @@ DEFAULT_RING_SLOTS = 300
 # a malformed one. It is an operator ceiling — a window cannot raise it — and it must be at least one.
 DEFAULT_MAX_BATCH = 32
 
-# The exclusive lock that makes a directory one world. Held for the life of the process; taken only
-# while initialising under `--init`.
+# The operator's ceiling on a window's command allowance. §9 check 8: the console may lower it and
+# never raise it, so an agent's `allowance` is clamped to this and anything that is not a non-negative
+# integer is ignored. The accounting itself (`budget` in the mirror) is WP08's.
+DEFAULT_ALLOWANCE = 120
+
+# A command argument's value is bounded in bytes when the schema declares no `max_length` of its own.
+ARGUMENT_LENGTH_BYTES = 128
+
+# A slug is one path component the executive joins to `--diode-dir`, so it is held to a shape that
+# cannot name another directory, climb, or carry a separator.
+SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# The exclusive lock that makes a directory one world, and the directory's own record beside it.
+# Both live in the diode root, which the agents' mounts do not reach (`/diode/<slug>/` is theirs);
+# the executive is the only writer of either, and reads the record only under the lock.
 LOCK_FILE = ".executive.lock"
+RECORD_FILE = ".executive.json"
 
-
-def recorded_run(root: Path) -> dict[str, Any]:
-    """The window's own record of itself — `pending.json` — or an empty map where there is none.
-
-    `pending.json` is the one file in the window that is read back as input; `state.json` is
-    published state and the contract is explicit that editing it changes nothing. What a start reads
-    from it is the window's identity (scenario, seed, ring) and its binding (`world_id`, `ticks`), and
-    nothing else: the old console also restored arm tokens, dwell, deferrals and counters from here,
-    which is authority restored from a file an agent can write (ADR 0001).
-    """
-    record = read_json_bounded(root / "pending.json")
-    return record if isinstance(record, dict) else {}
+# What the executive keeps of its own history in memory. The journal holds all of it.
+RECENT_FAILURES = 64
+RECENT_LINEAGE = 1024
 
 
 def resolve_remembered(named: Any, recorded: Any, default: Any) -> Any:
@@ -185,10 +205,23 @@ def write_text_atomic(path: Path, text: str) -> None:
 
     A reader that opens the path sees either the old file or the new one. `os.replace` is atomic
     within a filesystem, which is the reason the temporary lives beside the target rather than in
-    a temporary directory.
+    a temporary directory — and `os.replace` renames *over* a symlink rather than through it, so a
+    link an agent planted at the target's path becomes a regular file and the thing it pointed at is
+    untouched. The temporary itself is created `O_EXCL | O_NOFOLLOW` under a random name: a link
+    planted at a predictable temporary path (`.state.json.<pid>.tmp`) would otherwise have been
+    written through.
     """
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(text, encoding="utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    fd = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
     os.replace(temporary, path)
 
 
@@ -196,24 +229,60 @@ def write_json_atomic(path: Path, payload: Any) -> None:
     write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
 
 
-def read_json_bounded(path: Path) -> dict[str, Any] | None:
-    """The file's contents, or `None` if it is absent, unreadable, oversized or not an object.
+def read_regular_bounded(path: Path) -> tuple[bytes | None, str | None]:
+    """The bytes of a regular file of bounded size, or the sentence that says why not.
 
-    This is the *record's* reader — `pending.json`, which the start resolves identity from — and it
-    is deliberately not the ingress reader: `read_ingress` below tells its six failures apart,
-    because each of them is a refusal result a fleet has to be able to read.
+    **A FIFO or a device at an agent-writable path blocked the read for ever.** `Path.read_text`
+    on a FIFO with no writer never returns, and a symlink to `/dev/zero` returns zeros without end —
+    one window could hang every window's executive. So the file is opened `O_RDONLY | O_NOFOLLOW |
+    O_NONBLOCK`, `fstat`ed, refused unless it is a regular file, and read to at most
+    `MAX_READ_BYTES + 1` so an oversized file is named rather than loaded. Every agent-writable read
+    goes through here; the operator's own record does too, because a rule with an exemption is a rule
+    with a hole.
     """
     try:
-        if not path.exists() or path.stat().st_size > MAX_READ_BYTES:
-            return None
-        raw = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None, f"{path.name} is absent"
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, f"{path.name} is a symlink, and the vehicle follows no link an agent plants"
+        return None, f"{path.name} could not be opened ({type(exc).__name__}: {exc.strerror})"
     try:
-        loaded = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return loaded if isinstance(loaded, dict) else {}
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            kind = (
+                "a FIFO" if stat.S_ISFIFO(info.st_mode)
+                else "a directory" if stat.S_ISDIR(info.st_mode)
+                else "a device" if stat.S_ISCHR(info.st_mode) or stat.S_ISBLK(info.st_mode)
+                else "a socket" if stat.S_ISSOCK(info.st_mode)
+                else "not a file"
+            )
+            return None, f"{path.name} is not a regular file ({kind})"
+        if info.st_size > MAX_READ_BYTES:
+            return None, (
+                f"{path.name} is {info.st_size} bytes, past the {MAX_READ_BYTES} bytes this vehicle "
+                "will read of an agent-writable file"
+            )
+        chunks: list[bytes] = []
+        remaining = MAX_READ_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as exc:
+        return None, f"{path.name} could not be read ({type(exc).__name__}: {exc.strerror})"
+    finally:
+        os.close(fd)
+    raw = b"".join(chunks)
+    if len(raw) > MAX_READ_BYTES:
+        return None, (
+            f"{path.name} grew past the {MAX_READ_BYTES} bytes this vehicle will read of an "
+            "agent-writable file while it was being read"
+        )
+    return raw, None
 
 
 def read_ingress(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -222,51 +291,99 @@ def read_ingress(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     **The old reader returned `{}` for invalid JSON, so a half-written console was silently an empty
     batch.** The contract explicitly permits an agent to produce one ("an agent writing the file in
     place"), and its answer is that refusing is correct and the result file says so. Every shape of
-    not-a-console is named here so the one refusal result can carry the reason: absent, unreadable,
-    oversized, not UTF-8, not JSON, not an object. The caller claims the console in every one of
-    those cases, so a broken writer produces one refusal and not one per cycle (ADR 0001).
+    not-a-console is named here so the one refusal result can carry the reason: absent, a link, not
+    a regular file, oversized, not UTF-8, not JSON, not an object. **And "not JSON" is any exception
+    the decoder raises**: a hundred thousand `[` is a `RecursionError`, which `except JSONDecodeError`
+    let through to the executive. The caller claims the console in every one of these cases, so a
+    broken writer produces one refusal and not one per cycle (ADR 0001).
     """
-    try:
-        if not path.exists():
-            return None, "console.json is absent — the window has no console to claim"
-        size = path.stat().st_size
-        if size > MAX_READ_BYTES:
-            return None, (
-                f"console.json is {size} bytes, past the {MAX_READ_BYTES} bytes this vehicle will "
-                "read of an agent-writable file"
-            )
-        raw = path.read_bytes()
-    except OSError as exc:
-        return None, f"console.json could not be read ({type(exc).__name__}: {exc})"
+    raw, problem = read_regular_bounded(path)
+    if raw is None:
+        return None, problem
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         return None, f"console.json is not UTF-8 ({exc.reason} at byte {exc.start})"
     try:
         loaded = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except Exception as exc:  # noqa: BLE001 - any decoder failure is "not JSON", RecursionError included
+        detail = f"{exc.msg} at character {exc.pos}" if isinstance(exc, json.JSONDecodeError) else type(exc).__name__
         return None, (
-            f"console.json is not valid JSON ({exc.msg} at character {exc.pos}); a half-written "
-            "file lands here too, and the contract's answer is that refusing is correct"
+            f"console.json is not valid JSON ({detail}); a half-written file lands here too, and "
+            "the contract's answer is that refusing is correct"
         )
     if not isinstance(loaded, dict):
         return None, f"console.json is a JSON {type(loaded).__name__}, not an object"
     return loaded, None
 
 
+def read_json_bounded(path: Path) -> dict[str, Any] | None:
+    """A JSON object from a regular, bounded file, or `None` for anything else.
+
+    The refuse-only reader of a window's `pending.json` at startup: the legacy check reads it to
+    *refuse* a window the old console ticked, and reads nothing else from it. `None` and `{}` are
+    both "nothing to refuse on".
+    """
+    raw, _problem = read_regular_bounded(path)
+    if raw is None:
+        return None
+    try:
+        loaded = json.loads(raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001 - a record that does not parse has nothing to refuse on
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def read_root_record(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """`<diode-dir>/.executive.json`, or `(None, None)` for a directory that has none, or a refusal.
+
+    The record is the operator's and the executive's, never an agent's, so a record that cannot be
+    read is a *problem* and not a fresh directory: an unreadable, oversized or malformed record is
+    refused at startup rather than treated as "no world here", because the one thing a start must not
+    do is reset a world it could not see.
+    """
+    if not path.exists() and not path.is_symlink():
+        return None, None
+    raw, problem = read_regular_bounded(path)
+    if raw is None:
+        return None, problem
+    try:
+        loaded = json.loads(raw.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - the refusal names the shape
+        return None, f"{path.name} is not valid JSON ({type(exc).__name__})"
+    if not isinstance(loaded, dict):
+        return None, f"{path.name} is a JSON {type(loaded).__name__}, not an object"
+    world_id = loaded.get("world_id")
+    if world_id is not None and not (isinstance(world_id, str) and world_id):
+        return None, f"{path.name} carries a world_id that is neither null nor a name"
+    slugs = loaded.get("slugs", [])
+    if not isinstance(slugs, list) or not all(isinstance(s, str) and SLUG_PATTERN.match(s) for s in slugs):
+        return None, f"{path.name} carries a slugs list that is not a list of slugs"
+    rings = loaded.get("ring_slots", {})
+    if not isinstance(rings, dict) or not all(
+        isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in rings.values()
+    ):
+        return None, f"{path.name} carries ring_slots that are not positive integers per slug"
+    return loaded, None
+
+
 @dataclass
 class Verdict:
-    """One result in the making: what a window's line became, and the receipt it was given.
+    """One result in the making: what a window's line became, and the receipts it was given.
 
-    A verdict is created at validation, which is when the receipt number is drawn — so a loser can
-    name the winner's receipt in the same tick — and its body is finished after the step for the
-    commands that staged an effect, because what changed in truth is not known until then.
+    A verdict is created at validation, which is when its receipts are drawn — so a loser can name
+    the winner's receipt in the same tick — and its body is finished after the step for the commands
+    that staged an effect, because what changed in truth is not known until then. `receipt` is the
+    executive's global sequence, kept for the journal and the executive's own record; `local` is the
+    window's, and it is the one a result file carries: a window learns how many results it has been
+    given, not how many the world has.
     """
 
     command: str
     state: str  # accepted | refused | settled | duplicate | superseded | deferred
     body: str
     receipt: int
+    local: int
     tick: int
     window: str
     verb: str | None = None
@@ -286,7 +403,8 @@ class Executive:
 
     `world_id` is drawn fresh per instance and is not derived from the truth, so it reveals nothing
     about the state. The lineage is `sha256(lineage_{n-1} + state_hash(truth_n) + digest of the
-    tick's accepted effects)`, kept in-process (and in `--journal`) and never in a window file.
+    tick's accepted effects)`; the latest link is `lineage_head`, the recent window is `lineage`,
+    the whole history is the `--journal`, and none of it is in a window file.
     """
 
     def __init__(
@@ -300,6 +418,7 @@ class Executive:
         seed: int = DEFAULT_SEED,
         max_batch: int = DEFAULT_MAX_BATCH,
         journal: Path | None = None,
+        record_slugs: dict[str, int] | None = None,
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
@@ -319,7 +438,8 @@ class Executive:
         self.tick = 0
         self.world_id = uuid.uuid4().hex
         self.receipt = 0
-        self.lineage: list[str] = [self._lineage_link("", self.truth, [])]
+        self.lineage_head = self._lineage_link("", self.truth, [])
+        self.lineage: deque[str] = deque([self.lineage_head], maxlen=RECENT_LINEAGE)
         # When each commanded state last changed, in simulated microseconds, and what it left. The
         # old console kept this per window on the wall clock; a dwell is a fact about the vehicle's
         # one machine on a clock that cannot jump (`plant.md` §5), so it is the executive's and it is
@@ -331,9 +451,14 @@ class Executive:
         # the whole world, because the old per-window maps meant two windows never conflicted at all.
         self.claimed: dict[str, Verdict] = {}
         self.windows: dict[str, Window] = {}
-        # Isolation failures: a window whose claim or publication raised `OSError`, recorded here
-        # and on stderr, and skipped for that tick while the tick and the other windows proceeded.
-        self.failures: list[dict[str, Any]] = []
+        # Slugs the directory's record already names, with their ring bounds, so a record rewritten
+        # by this executive keeps the windows another start prepared.
+        self.record_slugs: dict[str, int] = dict(record_slugs or {})
+        # Isolation failures: a window whose check, claim or publication raised, recorded here (the
+        # count, and the most recent few) and on stderr, and skipped for that tick while the tick
+        # and the other windows proceeded.
+        self.failure_count = 0
+        self.failures: deque[dict[str, Any]] = deque(maxlen=RECENT_FAILURES)
         self.journal: Path | None = None
         if journal is not None:
             journal = Path(journal)
@@ -346,19 +471,40 @@ class Executive:
         # Generated once, because the configuration does not change while an executive runs.
         self.readme_text = generate_readme(world.root)
         self.help_text = generate_help(world.root)
+        # The names the registry publishes as gate variables, instantiated: the only names an
+        # agent's `variables` may carry besides `allowance`.
+        self.gate_names: set[str] = {
+            name
+            for row in capability_snapshot(world, phase=phase)
+            for name in row["gate_variables"]
+        }
 
     # -- windows ------------------------------------------------------------------------------
     def attach(self, slug: str, *, ring_slots: int = DEFAULT_RING_SLOTS) -> Window:
         """Create the view for one slug and prepare its directory. A slug attaches once.
 
-        The window's record is written unbound (`world_id: null`): the first cycle that ticks it
-        binds it, which is also what `--init` leaves behind.
+        The slug is one safe path component. The window's paths are checked before anything is
+        written — a directory that is a link, or an `output/` that is a file, is a failure recorded
+        against the window rather than a traceback — and the window's record is written unbound
+        (`world_id: null`): the first cycle that ticks it binds the directory.
         """
+        if not isinstance(slug, str) or not SLUG_PATTERN.match(slug):
+            raise ValueError(
+                f"slug {slug!r} is not one safe path component ({SLUG_PATTERN.pattern}); a slug "
+                "is joined to --diode-dir and may not name another directory"
+            )
         if slug in self.windows:
             raise ValueError(f"slug {slug!r} is already attached to world {self.world_id}")
-        window = Window(self, self.diode_dir / slug, slug, ring_slots=ring_slots)
-        window.prepare()
+        root = self.diode_dir / slug
+        if root.is_symlink():
+            raise ValueError(f"the window directory {root} is a symlink, and a window is a directory")
+        window = Window(self, root, slug, ring_slots=ring_slots)
         self.windows[slug] = window
+        try:
+            window.prepare()
+        except Exception as exc:  # noqa: BLE001 - the window's failure, recorded, not the executive's
+            self._record_failure(window, "prepare", exc, self.tick)
+        self._write_root_record()
         return window
 
     def order(self) -> list[Window]:
@@ -375,13 +521,19 @@ class Executive:
 
     # -- the cycle ----------------------------------------------------------------------------
     def cycle(self) -> list[Path]:
-        """One tick: settle, claim and validate every window, step the plant once, publish.
+        """One tick: settle every window's due deferrals, claim and validate every window, step once, publish.
 
         One tick per cycle is inherited from the old loop and is **not** a decision about the clock:
         how many ticks a wall second carries is WP08's. What *is* decided is that every window's
         validation reads the same truth, every accepted effect lands in the same step at
         `offset_us = 0` in arbitration order, and every window's frame for this tick is built from
         the same stepped truth.
+
+        **Deferrals first, for every window, before any ingress.** `apollo_diode.md:578` is "first
+        valid command *received*", and a command due now was received a tick earlier than anything
+        claimed now — so the settlements take their turn at the conflict domains before the fresh
+        commands do, in rotation order, and a settlement is published whether or not the same
+        window's claim then fails.
         """
         tick = self.tick
         self.claimed = {}
@@ -389,15 +541,25 @@ class Executive:
         effects: list[Effect] = []
         applied: list[Verdict] = []
         order = self.order()
+        healthy: list[Window] = []
         for window in order:
-            try:
-                settled = self._settle(window)
-                claimed = self._ingest(window)
-            except OSError as exc:
-                self._record_failure(window, "claim", exc, tick)
+            problem = window.check_paths(creating=False)
+            if problem is not None:
+                self._record_failure(window, "check", RuntimeError(problem), tick)
                 continue
-            verdicts[window.slug] = settled + claimed
-            for verdict in verdicts[window.slug]:
+            healthy.append(window)
+            try:
+                verdicts[window.slug] = self._settle(window)
+            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
+                self._record_failure(window, "settle", exc, tick)
+                verdicts.setdefault(window.slug, [])
+        for window in healthy:
+            try:
+                verdicts[window.slug].extend(self._ingest(window))
+            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
+                self._record_failure(window, "claim", exc, tick)
+        for window in healthy:
+            for verdict in verdicts.get(window.slug, []):
                 if verdict.effect is not None:
                     effects.append(verdict.effect)
                     applied.append(verdict)
@@ -407,31 +569,35 @@ class Executive:
         for verdict in applied:
             verdict.body += self._report_effect(verdict, before, self.truth)
         self.tick += 1
-        self.lineage.append(self._lineage_link(self.lineage[-1], self.truth, effects))
+        self.lineage_head = self._lineage_link(self.lineage_head, self.truth, effects)
+        self.lineage.append(self.lineage_head)
         self._journal(effects, verdicts)
+        self._write_root_record()
 
         written: list[Path] = []
-        for window in order:
-            if window.slug not in verdicts:
+        for window in healthy:
+            problem = window.check_paths(creating=False)
+            if problem is not None:
+                self._record_failure(window, "check", RuntimeError(problem), tick)
                 continue
             try:
-                written.extend(window.publish(verdicts[window.slug]))
-            except OSError as exc:
+                written.extend(window.publish(verdicts.get(window.slug, [])))
+            except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                 self._record_failure(window, "publish", exc, tick)
         return written
 
-    def _record_failure(self, window: Window, stage: str, exc: OSError, tick: int) -> None:
-        """Isolation: the failure is recorded, on stderr and here, and the tick goes on without the window."""
+    def _record_failure(self, window: Window, stage: str, exc: BaseException, tick: int) -> None:
+        """Isolation: the failure is counted and recorded, on stderr and here, and the tick goes on without the window."""
         entry = {
             "tick": tick,
             "window": window.slug,
             "stage": stage,
             "error": f"{type(exc).__name__}: {exc}",
         }
+        self.failure_count += 1
         self.failures.append(entry)
         sys.stderr.write(
-            f"[console] tick {tick}: window {window.slug!r} skipped at {stage}: "
-            f"{entry['error']}\n"
+            f"[console] tick {tick}: window {window.slug!r} skipped at {stage}: {entry['error']}\n"
         )
 
     def _lineage_link(self, previous: str, truth: dict[str, Any], effects: list[Effect]) -> str:
@@ -448,28 +614,69 @@ class Executive:
         line = {
             "tick": self.tick,
             "world_id": self.world_id,
-            "lineage": self.lineage[-1],
+            "lineage": self.lineage_head,
             "state_hash": state_hash(self.truth),
             "effects": [[e.offset_us, e.verb, e.arguments] for e in effects],
             "receipts": [
-                {"seq": v.receipt, "window": v.window, "state": v.state, "command": v.command}
+                {
+                    "seq": v.receipt,
+                    "local": v.local,
+                    "window": v.window,
+                    "state": v.state,
+                    "command": v.command,
+                }
                 for rows in verdicts.values()
                 for v in rows
             ],
+            "failures": self.failure_count,
         }
         with self.journal.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(line, sort_keys=True) + "\n")
 
+    def root_record(self) -> dict[str, Any]:
+        """The directory's record: which world this is, which windows it serves, its identity."""
+        rings = dict(self.record_slugs)
+        rings.update({slug: window.ring_slots for slug, window in self.windows.items()})
+        return {
+            # Bound by the first tick, like the windows' own records (ADR 0001 choice D).
+            "world_id": self.world_id if self.tick > 0 else None,
+            "slugs": sorted(rings),
+            "scenario": self.scenario,
+            "seed": self.seed,
+            "ring_slots": {slug: rings[slug] for slug in sorted(rings)},
+            "tick": self.tick,
+            "updated_at": utc_now().isoformat(),
+        }
+
+    def _write_root_record(self) -> None:
+        self.diode_dir.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.diode_dir / RECORD_FILE, self.root_record())
+
     # -- ingress ------------------------------------------------------------------------------
     def _verdict(self, window: Window, command: str, state: str, body: str, **extra: Any) -> Verdict:
         self.receipt += 1
-        return Verdict(command, state, body, self.receipt, self.tick, window.slug, **extra)
+        window.receipts += 1
+        return Verdict(command, state, body, self.receipt, window.receipts, self.tick, window.slug, **extra)
 
     def _ingest(self, window: Window) -> list[Verdict]:
         """Claim one window's console and validate what it held, in order."""
-        claimed = window.claim()
+        claimed, dropped = window.claim()
+        verdicts: list[Verdict] = []
+        if dropped:
+            verdicts.append(
+                self._verdict(
+                    window,
+                    "variables_ignored",
+                    "refused",
+                    f"refused: {len(dropped)} variable(s) ignored and removed from the console. "
+                    "A window's `variables` may name a published gate (a bool) or `allowance` (an "
+                    "integer the window may lower and never raise, §9 check 8), and nothing else:\n"
+                    + "\n".join(f"  - {reason}" for reason in dropped)
+                    + "\nThe commands in the same batch were run.\n",
+                )
+            )
         if isinstance(claimed, str):
-            return [
+            verdicts.append(
                 self._verdict(
                     window,
                     "console_unreadable",
@@ -478,13 +685,14 @@ class Executive:
                     "variables preserved — so this is one refusal and not one per cycle; rewrite "
                     "the whole file to submit again.\n",
                 )
-            ]
+            )
+            return verdicts
         if claimed and not all(isinstance(item, str) for item in claimed):
             # "One malformed element refuses the whole batch. If any element of `commands` is not a
             # string, none of it runs, and exactly one result file records that. Partial execution
             # of a malformed batch is worse than none."
             kinds = ", ".join(sorted({type(item).__name__ for item in claimed}))
-            return [
+            verdicts.append(
                 self._verdict(
                     window,
                     "malformed_batch",
@@ -494,9 +702,10 @@ class Executive:
                     "records this, which is the contract's requirement and not a convenience: "
                     "partial execution of a malformed batch is worse than none.\n",
                 )
-            ]
+            )
+            return verdicts
         if len(claimed) > self.max_batch:
-            return [
+            verdicts.append(
                 self._verdict(
                     window,
                     "batch_over_cap",
@@ -507,15 +716,18 @@ class Executive:
                     "by the same rule as a malformed batch: one result, and a window that floods "
                     "fills only its own output.\n",
                 )
-            ]
-        return [self.validate(window, command) for command in claimed]
+            )
+            return verdicts
+        verdicts.extend(self.validate(window, command) for command in claimed)
+        return verdicts
 
     def _settle(self, window: Window) -> list[Verdict]:
         """Run every deferral of this window that has come due, and give each its own result.
 
-        A due command is **revalidated** through the whole chain — phase, gate, interlocks, dwell,
-        arguments, conflict — at the moment of effect, which is §9 check 9 and the reason the
-        acceptance-time answer is not reused. It **expires** if it has waited longer than its own
+        A due command is **revalidated** through the whole chain — phase, gate, interlocks,
+        arguments, dwell, conflict — at the moment of effect, which is §9 check 9 and the reason the
+        acceptance-time answer is not reused; its conflict domain is claimed *here*, at settlement,
+        and not at acceptance. It **expires** if it has waited longer than its own
         `maximum_queue_age_s`, in simulated seconds: `(tick - accepted_tick) * dt`, so the poll
         interval no longer decides whether a command's intent has gone stale. And it **reports in a
         file of its own**, because a command that takes longer than one cycle reports when it is done.
@@ -548,8 +760,7 @@ class Executive:
                     )
                 )
                 continue
-            verdict = self.validate(window, command, settling=entry)
-            verdicts.append(verdict)
+            verdicts.append(self.validate(window, command, settling=entry))
         window.deferred = still_waiting
         return verdicts
 
@@ -557,9 +768,8 @@ class Executive:
     def parse_arguments(text: str) -> dict[str, str]:
         """`key=value` pairs from a command line, which is the form the contract's examples use.
 
-        The executive deliberately does not validate arguments — that is the verb's
-        `argument_schema` and the plant's business — so this returns whatever it finds and the
-        callers that need a field say so themselves when it is missing.
+        What the tokens *mean* is `argument_refusal`'s question, asked against the verb's own
+        `argument_schema`; this only splits them.
         """
         arguments: dict[str, str] = {}
         for token in text.split()[1:]:
@@ -567,6 +777,57 @@ class Executive:
                 key, _, value = token.partition("=")
                 arguments[key] = value
         return arguments
+
+    @staticmethod
+    def argument_refusal(verb: str, spec: dict[str, Any], arguments: dict[str, str]) -> str | None:
+        """A command's arguments against its verb's `argument_schema`: three refusals, by name.
+
+        The schema was documentation: the executive handed the whole parsed map to `apply_command`,
+        which reads only the keys it needs, so a name the schema does not declare ran as if it were
+        not there, an enum value off its list fell through to whatever the plant made of it, and a
+        value had no size at all. A name not in the schema, an enum value not in its `values`, and a
+        value past its declared `max_length` (or `ARGUMENT_LENGTH_BYTES` where none is declared) are
+        refused here, before the effect is resolved. Nothing else is checked: a missing argument is
+        the plant's to name (`NOT IMPLEMENTED` carries `Unconfigured`'s sentence), and a number's
+        range is the verb's declaration to make.
+        """
+        schema = spec.get("argument_schema") or {}
+        if not isinstance(schema, dict):
+            schema = {}
+        for name, value in arguments.items():
+            declared = schema.get(name)
+            if not isinstance(declared, dict):
+                return (
+                    f"refused: {name!r} is not an argument of {verb!r}. Its argument_schema declares "
+                    f"{sorted(schema)}, and a name the schema does not declare is a name the plant "
+                    "would silently ignore.\n"
+                )
+            limit = declared.get("max_length")
+            bound = int(limit) if isinstance(limit, int) and not isinstance(limit, bool) else ARGUMENT_LENGTH_BYTES
+            size = len(value.encode("utf-8"))
+            if size > bound:
+                source = "max_length" if isinstance(limit, int) and not isinstance(limit, bool) else "the vehicle's bound"
+                return (
+                    f"refused: {name!r} is {size} bytes, past its {source} of {bound}. A value with "
+                    "no size is a result file and a value map with no size either.\n"
+                )
+            if declared.get("type") == "enum":
+                values = [str(v) for v in declared.get("values") or []]
+                if values and value not in values:
+                    return (
+                        f"refused: {name!r} is {value!r}, which is not one of {verb!r}'s declared "
+                        f"values {values}. The enum is the registry's, and a value off it is a command "
+                        "the plant has no mapping for.\n"
+                    )
+        return None
+
+    @staticmethod
+    def instantiate(template: str, arguments: dict[str, str]) -> str:
+        """A template with every placeholder the command's own arguments can fill, filled."""
+        for name in re.findall(r"<([^>]+)>", template):
+            if name in arguments:
+                template = template.replace(f"<{name}>", str(arguments[name]), 1)
+        return template
 
     def conflict_domains(self, spec: dict[str, Any], arguments: dict[str, str]) -> list[str]:
         """The domain a command collides in: its verb's `conflict_domain`, instantiated.
@@ -581,10 +842,7 @@ class Executive:
         declared = spec.get("conflict_domain")
         if not declared:
             return []
-        template = str(declared)
-        for name in re.findall(r"<([^>]+)>", template):
-            if name in arguments:
-                template = template.replace(f"<{name}>", str(arguments[name]), 1)
+        template = self.instantiate(str(declared), arguments)
         if "<" not in template:
             return [template]
         try:
@@ -594,6 +852,23 @@ class Executive:
             # than a wrong one, so it is claimed under its literal text and the linter's business is
             # to refuse the template rather than this file's to guess.
             return [template]
+
+    def gate_for(self, spec: dict[str, Any], arguments: dict[str, str], row: dict[str, Any]) -> tuple[str, list[str]]:
+        """The command's own gate variable, and the instantiations its gate check reads.
+
+        `set_rcs_mode mode=auto` is gated by `rcs_mode_auto_enable` and by nothing else: closing
+        `rcs_mode_manual_enable` closes the manual command and not the verb. The old chain read the
+        verb's row, which `capability_snapshot` closes when *any* instantiation is closed, and named
+        the first instantiation whatever the command said. Where the command leaves a placeholder
+        unfilled, every instantiation is read, as the conflict domain is.
+        """
+        gate = spec.get("gate") if isinstance(spec.get("gate"), dict) else {}
+        template = str(gate.get("variable") or "")
+        variable = self.instantiate(template, arguments) if template else ""
+        if variable and "<" not in variable:
+            return variable, [variable]
+        instantiations = list(row.get("gate_variables") or [])
+        return (instantiations[0] if instantiations else variable), instantiations
 
     def value_of(self, values: dict[str, Any], state: Any) -> list[str]:
         """The current value(s) of a state, as text, wherever the map keeps them."""
@@ -659,7 +934,9 @@ class Executive:
         value this tick or does not. Threshold evaluation against the comparator is WP05's in every
         case; the sentence says which link is missing *first*, because that is what an implementer
         reads. `tie_dv_limit` → `power.dc_bus_a_v` → `bus_a_v`, an `algebraic` state with no rule, is
-        the case the ADR names.
+        the case the ADR names. **The sentence never carries the value**: a refusal is a result file
+        an agent reads, and a live reading in it is truth published outside the instrument
+        (`plant.md` §7) — the point *has* a reading or has none, and that is all a refusal may say.
         """
         threshold = None
         bare = name.split(".", 1)[1] if "." in name else name
@@ -688,8 +965,7 @@ class Executive:
                 f"`{name}` watches `{point}`, read from `{source}`, which is not a state the plant "
                 "advances"
             )
-        level = state_level(self.truth, state)
-        if level is None:
+        if state_level(self.truth, state) is None:
             if state.method == "algebraic":
                 why = "its algebraic rule is UNCONFIGURED"
             elif state.owed:
@@ -701,24 +977,26 @@ class Executive:
                 f"value this tick: {why}"
             )
         return (
-            f"`{name}` watches `{point}`, read from `{source}`, which holds {level!r}, but comparing "
-            "it against the threshold's band and dwell is not implemented in this slice (WP05)"
+            f"`{name}` watches `{point}`, read from `{source}`, which has a reading this tick, but "
+            "comparing it against the threshold's band and dwell is not implemented in this slice "
+            "(WP05)"
         )
 
     def validate(self, window: Window, command: str, settling: dict[str, Any] | None = None) -> Verdict:
         """The verdict for one line, in the chain's order; the first refusal wins.
 
-        Empty; unknown verb; phase, gate and tripped interlock (the capability snapshot, with this
-        window's closed gates); interlocks the executive cannot evaluate (ADR choice C); dwell;
-        argument resolution; conflict. Everything this refuses, it refuses by naming what refused
-        it, because that is the property §9's checks 4 and 5 test. A verdict carries an `Effect`
-        only when the command stages a state; the plant's `step` is the only thing that applies it.
+        Empty; unknown verb; phase and tripped interlock (the capability snapshot) and this
+        command's own gate; interlocks the executive cannot evaluate (ADR choice C); the arguments
+        against the schema; dwell; argument resolution; conflict. Everything this refuses, it refuses
+        by naming what refused it, because that is the property §9's checks 4 and 5 test. A verdict
+        carries an `Effect` only when the command stages a state; the plant's `step` is the only
+        thing that applies it.
         """
         text = command.strip()
         verb = text.split()[0] if text else ""
 
         def refused(body: str, state: str = "refused", **extra: Any) -> Verdict:
-            if settling is not None and state == "refused":
+            if settling is not None and state in ("refused", "superseded"):
                 body = (
                     f"refused: INHIBITED. {verb!r} was valid when it was accepted at tick "
                     f"{settling.get('accepted_tick')} and is not valid now that it is due at tick "
@@ -738,15 +1016,22 @@ class Executive:
                 f"published in HELP.md and in state.json's `available_commands`; {verb!r} is not "
                 "in it. No effect, no spend, no state change.\n"
             )
-        row = next((r for r in window.capability() if r["verb"] == verb), None)
+        row = next((r for r in window.capability(closed=False) if r["verb"] == verb), None)
         if row is None:
             return refused(f"refused: {verb!r} is registered and could not be resolved.\n")
+        arguments = self.parse_arguments(text)
+        gate_variable, gate_reads = self.gate_for(spec, arguments, row)
         if not row["available"]:
             return refused(
                 f"refused: {verb!r} is closed. {row['availability_reason']}. The gate variable is "
-                f"published in state.json.variables as {row['gate_variables'][0]!r}.\n"
+                f"published in state.json.variables as {gate_variable!r}.\n"
             )
-        arguments = self.parse_arguments(text)
+        shut = [name for name in gate_reads if name in window.closed_gates()]
+        if shut:
+            return refused(
+                f"refused: {verb!r} is closed. gate: {shut[0]} is closed. The gate variable is "
+                f"published in state.json.variables as {shut[0]!r}, and this window closed it.\n"
+            )
 
         # The two-step verbs. `execute_event` checks its token *before* the interlock rule, so a
         # fleet is told "not armed" rather than "unevaluated" when it has no authority at all — and
@@ -787,6 +1072,10 @@ class Executive:
                 + ".\n"
             )
 
+        bad_argument = self.argument_refusal(verb, spec, arguments)
+        if bad_argument is not None:
+            return refused(bad_argument)
+
         # The effect is resolved on a copy of the truth *before* anything is stamped, so `step`
         # never raises for an argument the corpus has not answered, and the dwell's return-to-value
         # half can see what the command would make the state.
@@ -811,7 +1100,8 @@ class Executive:
 
         # The conflict policy, checked *after* everything that could refuse the command on its own:
         # `:578` says "first **valid** command", and a refusal that claimed the domain would let a
-        # closed gate block a working command behind it.
+        # closed gate block a working command behind it. A deferral does not claim here either — it
+        # claims when it settles, at the moment of effect.
         domains = self.conflict_domains(spec, arguments)
         for domain in domains:
             winner = self.claimed.get(domain)
@@ -819,7 +1109,7 @@ class Executive:
                 continue
             if winner.command.strip() == text:
                 return refused(
-                    f"accepted: DUPLICATE. {verb!r} is the same text as receipt #{winner.receipt} "
+                    f"accepted: DUPLICATE. {verb!r} is the same text as receipt #{winner.local} "
                     f"from window {winner.window!r}, the first valid command in conflict domain "
                     f"{domain!r} this tick, so it is accepted as a duplicate of it and stages "
                     "nothing further: a command takes effect at most once per tick, and a repeated "
@@ -829,7 +1119,7 @@ class Executive:
                 )
             return refused(
                 f"refused: CONFLICT_SUPERSEDED. {verb!r} is valid but {winner.verb!r} from window "
-                f"{winner.window!r} (receipt #{winner.receipt}) was the first valid command in "
+                f"{winner.window!r} (receipt #{winner.local}) was the first valid command in "
                 f"conflict domain {domain!r} this tick, and first valid wins (apollo_diode.md:578). "
                 "Nothing is silently discarded — apollo:579 is explicit that the loser must be told, "
                 "which is why this is a result file and not a dropped line. Re-issue next tick if "
@@ -845,37 +1135,30 @@ class Executive:
             event = str(arguments.get("event", ""))
             if not event:
                 return refused(f"refused: {verb!r} names no event, so there is nothing to arm.\n")
-            self.receipt += 1
+            verdict = self._verdict(window, command, "accepted", "", verb=verb, arguments=arguments)
             token = hashlib.sha256(
-                f"{window.boot_id}:{window.slug}:{event}:{self.tick}:{self.receipt}".encode()
+                f"{window.boot_id}:{window.slug}:{event}:{self.tick}:{verdict.receipt}".encode()
             ).hexdigest()[:16]
             window.arms[event] = token
             window.accepted += 1
-            return Verdict(
-                command,
-                "accepted",
+            verdict.body = (
                 f"accepted: {verb!r} armed {event!r} for window {window.slug!r}. Token: {token}\n"
                 "This is the only result on the vehicle that carries a token, and it is bound to "
                 "this window and this event: `execute_event` will refuse a token minted for a "
                 "different one, from a different window, or already consumed. Arming does nothing "
-                "physical — every guard is evaluated at the moment of effect, not now.\n",
-                self.receipt,
-                self.tick,
-                window.slug,
-                verb=verb,
-                arguments=arguments,
+                "physical — every guard is evaluated at the moment of effect, not now.\n"
             )
+            return verdict
 
         verdict = self._verdict(window, command, "accepted", "", verb=verb, arguments=arguments)
-        for domain in domains:
-            self.claimed.setdefault(domain, verdict)
-        window.accepted += 1
 
         if row["deferrable"] and settling is None:
             # §9 check 9's whole content is *when* the re-check happens — "a deferred command is
             # re-checked when it is due, not when it was scheduled" — and the contract is equally
             # clear that the result arrives later. So the deferral is a live queue entry in ticks,
-            # and `_settle` runs the whole chain again when it is due.
+            # and `_settle` runs the whole chain again when it is due. It is counted as accepted
+            # once, here; its settlement is the same command reporting.
+            window.accepted += 1
             due = self.tick + 1
             window.deferred.append(
                 {
@@ -884,7 +1167,7 @@ class Executive:
                     "accepted_tick": self.tick,
                     "due_tick": due,
                     "maximum_queue_age_s": spec.get("maximum_queue_age_s"),
-                    "receipt": verdict.receipt,
+                    "receipt": verdict.local,
                 }
             )
             verdict.state = "deferred"
@@ -899,6 +1182,8 @@ class Executive:
             )
             return verdict
 
+        for domain in domains:
+            self.claimed.setdefault(domain, verdict)
         if settling is not None:
             verdict.state = "settled"
             verdict.settled = True
@@ -910,9 +1195,10 @@ class Executive:
                 "at the moment it was scheduled. "
             )
         else:
+            window.accepted += 1
             verdict.body = (
                 f"accepted: {verb!r}. Authority {spec.get('authority')}, phase {self.phase}, gate "
-                f"{row['gate_variables'][0]!r} open, no interlocks declared. "
+                f"{gate_variable!r} open, no interlocks declared. "
             )
         if staged is None:
             verdict.body += (
@@ -930,7 +1216,10 @@ class Executive:
         values in the stepped truth — the command's own declared effect, not hidden truth beyond
         it. The wording stays the old console's ("Changed: bus_tie=closed") so readers can follow.
         The dwell's clock is written only where a value actually moved: a command that set what was
-        already set has changed nothing and must not restart the floor.
+        already set has changed nothing and must not restart the floor. **And the value left is the
+        value the state held before the change**, from the first change on: the first version read
+        it from the previous *record*, which was empty at the first change, so the first return to
+        the configuration's initial value was never guarded.
         """
         verb = str(verdict.verb)
         changed: list[str] = []
@@ -947,11 +1236,11 @@ class Executive:
         if changed:
             now_us = verdict.tick * self.tick_us + verdict.effect.offset_us
             for state, _, _ in command_dwell(self.world, verb):
-                previous = self.dwell.get(state.id, {}).get("value")
+                left = self.value_of(before, state)
                 self.dwell[state.id] = {
                     "changed_at_us": now_us,
                     "value": self.value_of(after, state),
-                    "was": {"value": previous, "left_at_us": now_us} if previous is not None else None,
+                    "was": {"value": left, "left_at_us": now_us} if left else None,
                 }
             return (
                 f"succeeded: {verb!r} applied at tick {verdict.tick}, offset 0 µs. "
@@ -970,7 +1259,8 @@ class Window:
     A window is created by `Executive.attach` and never on its own, and everything it knows about
     the vehicle it reads from the executive at publication time. What it owns is the fleet-facing
     half of the contract for one principal: the claim, the result files, the variables the agent
-    may lower, the deferral queue, the arm tokens bound to it, and the ring's slot count.
+    may lower, the deferral queue, the arm tokens bound to it, and the ring's slot count. It is an
+    agent's directory, so every path in it is checked before it is touched.
     """
 
     def __init__(self, executive: Executive, root: Path, slug: str, *, ring_slots: int) -> None:
@@ -991,13 +1281,53 @@ class Window:
         self.readme = root / "README.md"
         self.pending = root / "pending.json"
         self.variables: dict[str, Any] = {}
+        self.allowance = DEFAULT_ALLOWANCE
         self.deferred: list[dict[str, Any]] = []
         # Outstanding arm tokens, by event, bound to this window. Never read back from a file.
         self.arms: dict[str, str] = {}
         self.seq = 0
+        self.receipts = 0
         self.boot_id = uuid.uuid4().hex
         self.started = utc_now()
         self.accepted = 0
+
+    # -- the directory ----------------------------------------------------------------------
+    def check_paths(self, *, creating: bool) -> str | None:
+        """Every path of the window is a non-link of the expected type, or the window is not touched.
+
+        `alpha/telemetry -> ../bravo/telemetry` let alpha's ring prune bravo's frames; `alpha/output
+        -> <anywhere>` wrote result files outside the diode directory. So before a claim and before a
+        publication each path is `lstat`ed: the directory and the two subdirectories must be
+        directories, the five files must be regular where they exist, and nothing may be a link.
+        With `creating`, a missing directory or file is allowed because `prepare` is about to make
+        it; otherwise a missing directory is a problem too.
+        """
+        checks: list[tuple[Path, str, bool]] = [
+            (self.root, "directory", True),
+            (self.output, "directory", False),
+            (self.telemetry, "directory", False),
+            (self.console, "file", False),
+            (self.state, "file", False),
+            (self.help_file, "file", False),
+            (self.readme, "file", False),
+            (self.pending, "file", False),
+        ]
+        for path, kind, required in checks:
+            try:
+                info = os.lstat(path)
+            except FileNotFoundError:
+                if required or (kind == "directory" and not creating):
+                    return f"{path.relative_to(self.root.parent)} is missing"
+                continue
+            except OSError as exc:
+                return f"{path.relative_to(self.root.parent)} cannot be examined ({exc.strerror})"
+            if stat.S_ISLNK(info.st_mode):
+                return f"{path.relative_to(self.root.parent)} is a symlink, and the vehicle follows none"
+            if kind == "directory" and not stat.S_ISDIR(info.st_mode):
+                return f"{path.relative_to(self.root.parent)} is not a directory"
+            if kind == "file" and not stat.S_ISREG(info.st_mode):
+                return f"{path.relative_to(self.root.parent)} is not a regular file"
+        return None
 
     # -- setup ------------------------------------------------------------------------------
     def prepare(self) -> None:
@@ -1008,7 +1338,11 @@ class Window:
         nothing. The record says `world_id: null` and `ticks: 0` — the first cycle to tick this
         window binds it — and that is also exactly what `--init` leaves behind.
         """
-        self.root.mkdir(parents=True, exist_ok=True)
+        if not self.root.exists():
+            self.root.mkdir(parents=True)
+        problem = self.check_paths(creating=True)
+        if problem is not None:
+            raise RuntimeError(problem)
         self.output.mkdir(exist_ok=True)
         self.telemetry.mkdir(exist_ok=True)
         write_text_atomic(self.readme, self.executive.readme_text)
@@ -1027,45 +1361,78 @@ class Window:
             write_json_atomic(self.console, {"commands": [], "variables": {}})
 
     # -- the claim --------------------------------------------------------------------------
-    def claim(self) -> list[Any] | str:
+    def claim(self) -> tuple[list[Any] | str, list[str]]:
         """Read the console and clear it, *before* acting on anything.
 
         The contract is unambiguous about the order: "**Intake is destructive and atomic.** Each
         cycle the vehicle reads the file, then rewrites it with `commands` emptied and `variables`
         preserved... **Clear before you act.**" So the rewrite happens here and the commands are
-        returned for the executive to validate afterwards. A console that is not one — absent,
-        oversized, invalid, not an object — is *also* claimed, with the last known variables, and
-        the reason is returned for the one refusal result (ADR 0001).
+        returned for the executive to validate afterwards. A console that is not one — absent, a
+        link, not a regular file, oversized, invalid, not an object — is *also* claimed, with the
+        last known variables, and the reason is returned for the one refusal result (ADR 0001).
+
+        **What is preserved is what the vehicle can hold.** The agent's `variables` reached the
+        mirror untyped, so `{"allowance": "lots"}` was a `ValueError` in every tick's publication —
+        one window taking the executive down. A name is kept only where the registry publishes a
+        gate of that name, as a bool, plus `allowance`, an integer clamped to the operator's ceiling
+        (§9 check 8: lower, never raise). Everything else is dropped, named in the second return
+        value for one result, and absent from the rewritten console.
         """
         payload, problem = read_ingress(self.console)
+        dropped: list[str] = []
         if payload is None:
             write_json_atomic(self.console, {"commands": [], "variables": self.variables})
-            return str(problem)
+            return str(problem), dropped
         commands = payload.get("commands")
         variables = payload.get("variables")
-        # `variables` is persistent and the vehicle "never clears it". It is also the probe's
-        # marker channel: the probe submits `probe_marker` and then checks it survived the claim.
         if isinstance(variables, dict):
-            self.variables.update(variables)
+            for name, value in variables.items():
+                key = str(name)
+                if key == "allowance":
+                    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                        dropped.append(
+                            f"`allowance` is {value!r}, not a non-negative integer; the window keeps "
+                            f"{self.allowance}"
+                        )
+                        continue
+                    self.allowance = min(value, DEFAULT_ALLOWANCE)
+                    self.variables["allowance"] = self.allowance
+                    if value > DEFAULT_ALLOWANCE:
+                        dropped.append(
+                            f"`allowance` {value} is above the operator's ceiling of "
+                            f"{DEFAULT_ALLOWANCE}; a window may lower it and never raise it"
+                        )
+                elif key not in self.executive.gate_names:
+                    dropped.append(f"`{key}` is not a gate variable this vehicle publishes")
+                elif not isinstance(value, bool):
+                    dropped.append(f"`{key}` is {value!r}, not a bool; a gate is open or closed")
+                else:
+                    self.variables[key] = value
+        elif variables is not None:
+            dropped.append(f"`variables` is a JSON {type(variables).__name__}, not an object")
         write_json_atomic(self.console, {"commands": [], "variables": self.variables})
         if commands is None:
-            return []
+            return [], dropped
         if not isinstance(commands, list):
             return (
                 f"console.json's `commands` is a JSON {type(commands).__name__}, not a list, so "
                 "there is no batch here to run"
-            )
-        return commands
+            ), dropped
+        return commands, dropped
 
     def closed_gates(self) -> set[str]:
-        return {str(name) for name, value in self.variables.items() if not value}
+        return {str(name) for name, value in self.variables.items() if name != "allowance" and not value}
 
-    def capability(self) -> list[dict[str, Any]]:
-        """The capability snapshot as this window sees it: its own closed gates, the operator's trips."""
+    def capability(self, *, closed: bool = True) -> list[dict[str, Any]]:
+        """The capability snapshot as this window sees it: its own closed gates, the operator's trips.
+
+        With `closed=False` the window's gates are left out, for the per-command gate check: the
+        snapshot closes a *verb* when any instantiation is closed, and a command is gated by its own.
+        """
         return capability_snapshot(
             self.executive.world,
             phase=self.executive.phase,
-            closed_gates=self.closed_gates(),
+            closed_gates=self.closed_gates() if closed else set(),
             tripped_interlocks=self.executive.tripped,
         )
 
@@ -1081,23 +1448,27 @@ class Window:
         name = f"{stamp(moment)}_{self.slug}_{sanitise(command)}.txt"
         path = self.output / name
         counter = 1
-        while path.exists():
+        while path.exists() or path.is_symlink():
             path = self.output / f"{stamp(moment)}_{self.slug}_{sanitise(command)}_{counter}.txt"
             counter += 1
         write_text_atomic(path, body)
         return path
 
     def receipt(self, verdict: Verdict) -> str:
-        """The block every result ends with: where in the one world this result was decided."""
+        """The block every result ends with: where in the one world this result was decided.
+
+        `seq` is this window's own count of results, so a window learns how many results it has
+        been given and not how many the world has; the world and the tick are shared facts.
+        """
         offset_us = verdict.effect.offset_us if verdict.effect is not None else 0
         return (
-            f"receipt: world={self.executive.world_id} seq={verdict.receipt} window={self.slug} "
+            f"receipt: world={self.executive.world_id} seq={verdict.local} window={self.slug} "
             f"tick={verdict.tick} offset_us={offset_us} state={verdict.state}\n"
         )
 
     # -- publication ------------------------------------------------------------------------
     def publish(self, verdicts: list[Verdict]) -> list[Path]:
-        """Results, `state.json`, `HELP.md`, `README.md`, `pending.json` and one frame. Every cycle.
+        """Results, one frame, `state.json`, `HELP.md`, `README.md` and `pending.json`. Every cycle.
 
         `state.json` is rewritten "whether or not anything was submitted", which is what makes the
         probe's `check_state_is_a_mirror` meaningful. The generated files are rewritten from the
@@ -1122,14 +1493,14 @@ class Window:
                 "boot_id": self.boot_id,
                 # The window's identity lives in its own record rather than in the mirror, for the
                 # reason `ticks` does: `state.json` is published state and the contract says it is
-                # never read back as input.
+                # never read back as input. Nor is this: the directory's `.executive.json` is the
+                # record the executive reads back, and this copy is for the window's reader.
                 "scenario": self.executive.scenario,
                 "seed": self.executive.seed,
                 # The ring's own accounting: what it is bounded to, and what it has lost.
                 "ring_slots": self.ring_slots,
                 "ring_losses": self.ring_losses(),
-                # The binding (ADR 0001 choice D): which world's physics this window has shown. A
-                # later executive refuses a window that names another.
+                # The binding (ADR 0001 choice D): which world's physics this window has shown.
                 "world_id": self.executive.world_id,
             },
         )
@@ -1150,9 +1521,11 @@ class Window:
             "published_at": utc_now().isoformat(),
             "available_commands": [row["verb"] for row in rows if row["available"]],
             "variables": variables,
+            # The budget's *semantics* — what a window-hour is, when the oldest spend expires — are
+            # WP08's with the clock; `oldest_expires_in_seconds` still counts the wall clock here.
             "budget": {
                 "used_this_window": self.accepted,
-                "limit_per_window": int(self.variables.get("allowance", 120)),
+                "limit_per_window": self.allowance,
                 "window_seconds": 3600,
                 "oldest_expires_in_seconds": 3600 - int((utc_now() - self.started).total_seconds()),
             },
@@ -1174,18 +1547,40 @@ class Window:
                 "scenario": executive.scenario,
                 "abort_latched": False,
             },
-            # Which world this window is a view of, and how far it has ticked. No truth, no lineage.
+            # Which world this window is a view of, and how far it has ticked. No truth, no lineage,
+            # and no roster: which other windows exist is the executive's to know, not a window's.
             "executive": {
-                "world_id": executive.world_id if self.executive.tick > 0 else None,
+                "world_id": executive.world_id if executive.tick > 0 else None,
                 "tick": executive.tick,
-                "windows": sorted({*executive.windows, self.slug}),
             },
             "capability": rows,
         }
 
     def ring_frames(self) -> list[Path]:
-        """The frames the ring holds, oldest first. One scan, used by both the pruner and a reader."""
-        return sorted(self.telemetry.glob("*.json"), key=lambda path: path.name)
+        """The frames the ring holds, oldest first, by *number* — and only the frames.
+
+        `sorted(glob("*.json"))` put `1000.json` before `999.json`, so from the thousandth frame the
+        pruner deleted the newest frame every tick and the ring froze. The frames are the regular,
+        non-link files whose stem is all digits, ordered by `int(stem)`; anything else in the
+        directory is neither held, nor pruned, nor counted, so junk dropped there cannot push a real
+        frame out. The `NNN` minimum-three-digit naming stays for readers that already sort it.
+        """
+        frames: list[tuple[int, Path]] = []
+        try:
+            entries = list(self.telemetry.iterdir())
+        except OSError:
+            return []
+        for path in entries:
+            if path.suffix != ".json" or not path.stem.isdigit():
+                continue
+            try:
+                info = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            frames.append((int(path.stem), path))
+        return [path for _, path in sorted(frames)]
 
     def ring_losses(self) -> int:
         """Frames this window has produced that the ring no longer holds — derived, not counted."""
@@ -1298,19 +1693,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="POSTURE",
         help="the run's difficulty identity: a `mission.yaml#scenario_postures` id "
-        "(nominal, degraded, crisis). Recorded in the mirror and in each window's own record, and "
-        "a prepared window keeps the one it recorded unless this names another",
+        "(nominal, degraded, crisis). Recorded in the directory's own record and in the mirror, and "
+        "a prepared directory keeps the one it recorded unless this names another",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=None,
         help="the run's master seed, for the fault streams `tools/faults.py` draws from. "
-        "A scenario and a seed together are what make a run reproducible, and a prepared window "
+        "A scenario and a seed together are what make a run reproducible, and a prepared directory "
         "keeps the pair it recorded unless this names another",
     )
     args = parser.parse_args(argv)
     slugs = list(args.slug or ["vehicle"])
+    for slug in slugs:
+        if not SLUG_PATTERN.match(slug):
+            sys.stderr.write(
+                f"--slug {slug!r} is not one safe path component ({SLUG_PATTERN.pattern}); a slug is "
+                "joined to --diode-dir and may not name another directory\n"
+            )
+            return 3
     repeated = sorted({s for s in slugs if slugs.count(s) > 1})
     if repeated:
         sys.stderr.write(
@@ -1333,77 +1735,80 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"the scenario postures cannot be loaded: {exc}\n")
         return 3
 
-    # ---- the run's identity, resolved once per window and required to agree ------------------
+    # ---- one world per directory, and everything the start reads is read under the lock -------
     #
-    # A caller who names a value gets it. A caller who names nothing inherits whatever the window's
-    # own record holds. A window with no record gets the declared default. Under one executive the
-    # windows must then agree about scenario and seed, because they are one world (ADR 0001).
+    # The lock says *a* world is here; the directory's record says *which*, and what identity it
+    # has. Both live in the diode root, which no agent's mount reaches, and the record is read only
+    # while the lock is held so that nothing can change between the reading and the acting. A second
+    # executive on the directory refuses to start; an executive on a directory whose record names a
+    # world refuses too, live or not — starting a fresh world on it would silently reset its physics,
+    # and restart continuity is WP08's (ADR 0001 choice D). A record that cannot be read is a
+    # refusal and never "a fresh directory".
     diode_dir = Path(args.diode_dir)
-    records = {slug: recorded_run(diode_dir / slug) for slug in slugs}
-    resolved_scenario: dict[str, str] = {}
-    resolved_seed: dict[str, int] = {}
-    resolved_slots: dict[str, int] = {}
-    for slug, recorded in records.items():
-        window = diode_dir / slug
-        recorded_scenario = recorded.get("scenario")
-        if not isinstance(recorded_scenario, str) or not recorded_scenario:
-            recorded_scenario = None
-        scenario = resolve_remembered(args.scenario, recorded_scenario, DEFAULT_SCENARIO)
-        if scenario not in postures:
-            if args.scenario is not None:
-                sys.stderr.write(
-                    f"scenario {scenario!r} is not one of the vehicle's "
-                    f"{len(postures)}: {sorted(postures)}\n"
-                )
-            else:
-                sys.stderr.write(
-                    f"the window at {window} records scenario {scenario!r}, which is not one of "
-                    f"the vehicle's {len(postures)}: {sorted(postures)}. Name one that is, or "
-                    f"point `--diode-dir` and `--slug` at another window\n"
-                )
-            return 3
-        resolved_scenario[slug] = scenario
-        recorded_seed = recorded.get("seed")
-        if not isinstance(recorded_seed, int) or recorded_seed < 0:
-            recorded_seed = None
-        resolved_seed[slug] = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
-        # **The ring is the one remembered value a restart may not re-bound.** Whatever bound the
-        # frames on disk were written under is the bound the window keeps; a caller who names a
-        # *different* one is told, instead of being handed the old one with no remark.
-        recorded_slots = recorded.get("ring_slots")
-        if not isinstance(recorded_slots, int) or recorded_slots <= 0:
-            recorded_slots = None
-        if args.ring_slots is not None and recorded_slots is not None and args.ring_slots != recorded_slots:
-            sys.stderr.write(
-                f"--ring-slots {args.ring_slots} names a bound the window at {window} does not have: "
-                f"its record holds {recorded_slots}, and the frames on disk were written under it. A "
-                f"restart keeps the bound the ring already has — re-bounding it would make the frames "
-                f"held, the losses accounted and the declared slot count three answers to one question. "
-                f"Point `--slug` at a new window to run a differently bounded ring\n"
-            )
-            return 3
-        resolved_slots[slug] = resolve_remembered(args.ring_slots, recorded_slots, DEFAULT_RING_SLOTS)
-    if len(set(resolved_scenario.values())) > 1 or len(set(resolved_seed.values())) > 1:
+    diode_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = diode_dir / LOCK_FILE
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        try:
+            holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
+        except OSError:
+            holder = "unknown holder"
+        os.close(lock_fd)
         sys.stderr.write(
-            "the windows disagree about the run's identity and one executive is one world: "
-            + ", ".join(
-                f"{slug} records scenario={resolved_scenario[slug]!r} seed={resolved_seed[slug]}"
-                for slug in slugs
-            )
-            + ". Name --scenario and --seed, or serve the disagreeing windows from different "
-            "directories\n"
+            f"another executive holds {diode_dir} ({holder}). One directory is one world "
+            "(ADR 0001); stop it, or point --diode-dir at another directory\n"
         )
         return 3
-    scenario = resolved_scenario[slugs[0]]
-    seed = resolved_seed[slugs[0]]
 
+    def refuse(message: str) -> int:
+        sys.stderr.write(message + "\n")
+        os.close(lock_fd)
+        return 3
+
+    record, problem = read_root_record(diode_dir / RECORD_FILE)
+    if problem is not None:
+        return refuse(
+            f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
+            "that cannot be read is not a fresh directory; repair or clear it"
+        )
+    record = record or {}
+    recorded_slugs: dict[str, int] = {
+        str(slug): int((record.get("ring_slots") or {}).get(slug, DEFAULT_RING_SLOTS))
+        for slug in record.get("slugs") or []
+    }
+
+    # ---- the run's identity, resolved once against the directory's record --------------------
+    #
+    # A caller who names a value gets it. A caller who names nothing inherits whatever the
+    # directory's own record holds. A directory with no record gets the declared default. One
+    # directory is one world, so the identity is the directory's and not a window's.
+    recorded_scenario = record.get("scenario")
+    if not isinstance(recorded_scenario, str) or not recorded_scenario:
+        recorded_scenario = None
+    scenario = resolve_remembered(args.scenario, recorded_scenario, DEFAULT_SCENARIO)
+    if scenario not in postures:
+        if args.scenario is not None:
+            return refuse(
+                f"scenario {scenario!r} is not one of the vehicle's {len(postures)}: {sorted(postures)}"
+            )
+        return refuse(
+            f"the directory {diode_dir} records scenario {scenario!r}, which is not one of the "
+            f"vehicle's {len(postures)}: {sorted(postures)}. Name one that is, or point `--diode-dir` "
+            "at another directory"
+        )
+    recorded_seed = record.get("seed")
+    if isinstance(recorded_seed, bool) or not isinstance(recorded_seed, int) or recorded_seed < 0:
+        recorded_seed = None
+    seed = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
     # **`--plan` answers "what will this run be" before it is run**, and it takes the *resolved*
-    # pair, so `--plan` on a window recorded as `crisis` describes the crisis that window is in.
+    # pair, so `--plan` on a directory recorded as `crisis` describes the crisis it is in. It binds
+    # nothing and writes nothing, so a bound directory may be asked — under the lock, like every read.
     if args.plan or args.plan_json:
         faults = load_faults(Path(args.dir))
         if not faults:
-            sys.stderr.write(f"no faults under {Path(args.dir) / 'domains'}\n")
-            return 3
+            return refuse(f"no faults under {Path(args.dir) / 'domains'}")
         phases = [
             float(row.get("duration_h", 0))
             for row in (yaml.safe_load((Path(args.dir) / "mission.yaml").read_text()) or {}).get(
@@ -1415,8 +1820,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
         except Exception as exc:  # noqa: BLE001 - the refusal is the answer
-            sys.stderr.write(f"the scenario cannot be planned: {exc}\n")
-            return 3
+            return refuse(f"the scenario cannot be planned: {exc}")
+        os.close(lock_fd)
         plan.pop("_armed_faults", None)
         if args.plan_json:
             json.dump(plan, sys.stdout, indent=2)
@@ -1439,49 +1844,48 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    … and {len(plan['events']) - 10} more")
         return 0
 
-    # ---- one world per directory ------------------------------------------------------------
-    #
-    # The lock says *a* world is here; the binding in each window's record says *which*. A second
-    # executive on the directory refuses to start, and so does an executive on a window that names
-    # another world, live or not — starting a fresh world on an old window would silently reset its
-    # physics, and restart continuity is WP08's (ADR 0001 choice D). A legacy window — the old
-    # console's record, ticks and no world — is refused the same way.
-    diode_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = diode_dir / LOCK_FILE
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        try:
-            holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
-        except OSError:
-            holder = "unknown holder"
-        os.close(lock_fd)
-        sys.stderr.write(
-            f"another executive holds {diode_dir} ({holder}). One directory is one world "
-            "(ADR 0001); stop it, or point --diode-dir at another directory\n"
+    resolved_slots: dict[str, int] = {}
+    for slug in slugs:
+        # **The ring is the one remembered value a restart may not re-bound.** Whatever bound the
+        # frames on disk were written under is the bound the window keeps; a caller who names a
+        # *different* one is told, instead of being handed the old one with no remark.
+        recorded_slots = recorded_slugs.get(slug)
+        if args.ring_slots is not None and recorded_slots is not None and args.ring_slots != recorded_slots:
+            return refuse(
+                f"--ring-slots {args.ring_slots} names a bound the window at {diode_dir / slug} does "
+                f"not have: its record holds {recorded_slots}, and the frames on disk were written "
+                "under it. A restart keeps the bound the ring already has — re-bounding it would make "
+                "the frames held, the losses accounted and the declared slot count three answers to "
+                "one question. Point `--slug` at a new window to run a differently bounded ring"
+            )
+        resolved_slots[slug] = resolve_remembered(args.ring_slots, recorded_slots, DEFAULT_RING_SLOTS)
+        # **The legacy check, and it is the only read of a window's `pending.json`: refuse-only.** A
+        # window the old console ticked records `ticks` and no `world_id`; a window another executive
+        # ticked records a `world_id`. Either, on a slug the directory's record does not name, is a
+        # window whose frames came from a world this executive cannot continue. Where the record
+        # names the slug, the record governs, and whatever an agent wrote there is not read.
+        if slug not in recorded_slugs:
+            legacy = read_json_bounded(diode_dir / slug / "pending.json") or {}
+            ticks = legacy.get("ticks")
+            named = legacy.get("world_id")
+            if (isinstance(ticks, int) and not isinstance(ticks, bool) and ticks > 0) or (
+                isinstance(named, str) and named
+            ):
+                return refuse(
+                    f"the window at {diode_dir / slug} is a legacy window: its pending.json records "
+                    f"{ticks if isinstance(ticks, int) else 0} tick(s) and world_id {named!r} while "
+                    "the directory's record does not name it, so its frames came from a world this "
+                    "executive cannot continue. Clear or rename it (ADR 0001 choice D)"
+                )
+
+    bound = record.get("world_id")
+    if isinstance(bound, str) and bound:
+        return refuse(
+            f"the directory {diode_dir} is bound to world {bound} (tick {record.get('tick')}), which "
+            "is not this executive's. Starting a fresh world on it would silently reset its physics, "
+            "and restart continuity is WP08's to define — clear or rename the directory (ADR 0001 "
+            "choice D)"
         )
-        return 3
-    for slug, recorded in records.items():
-        bound = recorded.get("world_id")
-        ticks = recorded.get("ticks")
-        if isinstance(bound, str) and bound:
-            sys.stderr.write(
-                f"the window at {diode_dir / slug} is bound to world {bound}, which is not this "
-                "executive's. Starting a fresh world on it would silently reset its physics, and "
-                "restart continuity is WP08's to define — clear or rename the window (ADR 0001 "
-                "choice D)\n"
-            )
-            os.close(lock_fd)
-            return 3
-        if isinstance(ticks, int) and ticks > 0:
-            sys.stderr.write(
-                f"the window at {diode_dir / slug} is a legacy console window: it records "
-                f"{ticks} tick(s) and no world_id, so its frames came from a world this executive "
-                "cannot continue. Clear or rename it (ADR 0001 choice D)\n"
-            )
-            os.close(lock_fd)
-            return 3
 
     journal = Path(args.journal) if args.journal else None
     try:
@@ -1494,15 +1898,23 @@ def main(argv: list[str] | None = None) -> int:
             seed=seed,
             max_batch=args.max_batch,
             journal=journal,
+            record_slugs=recorded_slugs,
         )
     except ValueError as exc:
-        sys.stderr.write(f"{exc}\n")
-        os.close(lock_fd)
-        return 3
+        return refuse(str(exc))
     os.ftruncate(lock_fd, 0)
     os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
     for slug in slugs:
-        executive.attach(slug, ring_slots=resolved_slots[slug])
+        try:
+            executive.attach(slug, ring_slots=resolved_slots[slug])
+        except ValueError as exc:
+            return refuse(str(exc))
+    if executive.failure_count:
+        return refuse(
+            "a window could not be prepared: "
+            + "; ".join(f"{f['window']}: {f['error']}" for f in executive.failures)
+            + ". Repair or clear it; a window is a directory of regular files and nothing else"
+        )
     if args.init:
         for slug in slugs:
             print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {args.phase!r}")
