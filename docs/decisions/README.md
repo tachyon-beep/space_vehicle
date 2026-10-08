@@ -19,8 +19,9 @@ review; a vehicle record cannot unilaterally alter the frozen diode contract.
 Records: [0001](0001-shared-executive.md) — one executive owns the physical world; windows are
 ingress and evidence views (accepted 2026-10-09; chassis review pending).
 [0002](0002-mission-clock-and-continuity.md) — the mission clock, private checkpoints and restart
-continuity (proposed 2026-10-09; choices A–H and J–L are the operator's, I and M the maintainer's,
-all open; WP08's policy-independent children are named in it).
+continuity (proposed 2026-10-09; the operator decides A, C, D, F and confirms B, E, L(b); the
+maintainer with the chassis reviewer decides G–K, L(a), M; all open, with an `Answer:` line each;
+WP08's policy-independent children are named in it and `tools/measure_clock.py` reads its figures).
 
 The table lists design questions, not extra product features. Link each
 record from its public work package. The roadmap can proceed through research
