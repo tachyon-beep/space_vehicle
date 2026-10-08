@@ -9676,6 +9676,26 @@ def test_a_hysteresis_band_says_what_it_makes_the_state(tmp_path):
     )
 
 
+def _delay_ring_advanced_once(plant, world, state, before, after, quiet):
+    """A transport delay's ring after one tick, held to its structure and to its own driver.
+
+    The ring's *shape* — depth, cursor, how many slots have been written — must match a quiet
+    tick's, because a delay advances once per tick however the queue cut it. The value written is
+    the driver's end-of-tick level in *this* run, not the quiet run's: comparing slot values with a
+    quiet tick holds only while the driver is constant across the tick, which today it is only
+    because `E-PUMP-COOL`'s sensitivity is owed — an oracle that would fail the day an unrelated
+    thermal debt is paid (independent review of the round that introduced it).
+    """
+    ring = f"{state.id}__delay"
+    got, calm = after[ring], quiet[ring]
+    assert len(got["slots"]) == len(calm["slots"]), (len(got["slots"]), len(calm["slots"]))
+    assert got["next"] == calm["next"], (got["next"], calm["next"])
+    assert sum(s is not None for s in got["slots"]) == sum(s is not None for s in calm["slots"])
+    written = int((before.get(ring) or {}).get("next") or 0)
+    edge = plant.canonical_contributors([e for e in world.edges if e.target == state.node])[0]
+    assert got["slots"][written] == float(plant.edge_driver(world, edge, after)), written
+
+
 def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
     """§9's step 3 was one line, `horizon = min(dt, events.time_to_next())`, and the queue was absent.
 
@@ -9764,7 +9784,9 @@ def test_a_sub_tick_effect_lands_where_a_short_tick_would_have_put_it(tmp_path):
         if split.get(key) != manual.get(key)
     ][:6]
     quiet = plant.step(world, values, dt)
-    assert {k: split.get(k) for k in delayed} == {k: quiet.get(k) for k in delayed}
+    for state in world.states:
+        if state.method == "delay":
+            _delay_ring_advanced_once(plant, world, state, values, split, quiet)
 
     # §5's two refusals, and both are refused rather than corrected: a stamp outside the tick would
     # otherwise be clamped into a merge, and a verb that stages nothing would look like an effect
@@ -9837,8 +9859,7 @@ def test_a_command_inside_a_tick_is_walked_as_one_tick_not_as_several():
         gaps: list = []
         stepped = plant.step(world, values, dt, gaps, effects=effects)
         for state in delays:
-            ring = f"{state.id}__delay"
-            assert stepped[ring] == quiet[ring], (effects, len(stepped[ring]["slots"]))
+            _delay_ring_advanced_once(plant, world, state, values, stepped, quiet)
         assert [(g.state.id, g.where) for g in gaps] == [
             (g.state.id, g.where) for g in quiet_gaps
         ], (effects, len(gaps), len(quiet_gaps))

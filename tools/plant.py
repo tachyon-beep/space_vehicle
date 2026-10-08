@@ -2399,7 +2399,7 @@ def _walk(
     horizon: float,
     gaps: list[Gap] | None,
     *,
-    tick_dt: float | None = None,
+    tick_dt: float,
     closes_tick: bool = True,
 ) -> dict[str, Any]:
     """§9's step 4 over one horizon: every node in the frozen order, then the sentinel.
@@ -2422,7 +2422,7 @@ def _walk(
         if state.method != "delay":
             _advance_into(world, state, values, staged, horizon, gaps)
         elif closes_tick:
-            _advance_into(world, state, values, staged, tick_dt or horizon, gaps)
+            _advance_into(world, state, values, staged, tick_dt, gaps)
 
     for node in world.schedule:
         for state in world.states_on(node):
