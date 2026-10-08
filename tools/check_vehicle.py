@@ -11292,30 +11292,24 @@ def check_presentation_references(
 
     `presentation.yaml` names the frozen contract and the probe that tests it; `coupling.yaml`
     names the corpus document it was generated from and the section of the design that fixes its
-    provenance rule. The paths are written relative to the repository root, so this resolves them
-    by walking up from the vehicle directory — which also means the check survives the move the
-    folder is destined for, when `docs/diode-contract.md` stops being two levels up. A path that
-    resolves nowhere is refused, and so is one that resolves only because a *different* file
-    happens to share its name at a shallower level.
+    provenance rule. **All four targets live in `space_chassis`, outside this repository**, and
+    this linter may not read outside its own root — the rule `CONTRIBUTING.md` states and the
+    referee's own test of these references already follows. It used to resolve them by walking up
+    from the vehicle directory, which passed only while a chassis checkout happened to surround
+    the vehicle: a standalone checkout, which is what this repository's CI is, refused all four
+    correct references and with them every fixture test that expects a clean composition.
+
+    So existence is asserted where the targets are —
+    `space_chassis/tests/test_vehicle_reconciliation.py` holds each name to a file — and what is
+    checkable here is the citation's shape. An absent or empty reference is refused, and so is one
+    that cannot be repository-relative at all: an absolute path, or one that climbs out with `..`,
+    names something no checkout of the citing repository contains.
 
     The conformance table is the vehicle's claim to satisfy `docs/diode-contract.md` §9, and it is
     twelve rows against the contract's twelve numbered checks. Nothing joined the two, so a row
     dropped in an edit would leave a check nobody claims and a row duplicated would claim one
     twice — neither visible in a table that reads perfectly.
     """
-
-    def resolve(target: str) -> Path | None:
-        # The vehicle directory and its ancestors first, then the process's own working directory
-        # and *its* ancestors. The second half is not a convenience: these paths are
-        # repository-relative, and a test that copies the definition into a temporary directory
-        # takes the vehicle out of the repository without taking the repository away. Resolving
-        # only by walking up refused four correct references on every fixture copy — which is the
-        # check working, on a question about where the vehicle is rather than about what it says.
-        for base in (root, *root.parents, Path.cwd(), *Path.cwd().parents):
-            candidate = base / target
-            if candidate.exists():
-                return candidate
-        return None
 
     for where, value in (
         ("presentation.yaml:contract", presentation.get("contract")),
@@ -11329,12 +11323,12 @@ def check_presentation_references(
         target = str(value).split("#", 1)[0]
         if not target.strip():
             report.refuse(f"{where}.{value}", "names no file")
-        elif resolve(target) is None:
+        elif target.startswith("/") or ".." in target.split("/"):
             report.refuse(
                 where,
-                f"names {value!r} and no such file is reachable from the vehicle directory. A "
-                "reference whose target has been renamed reads exactly like a reference whose "
-                "target is there",
+                f"names {value!r}, which is not relative to the citing repository's root. The "
+                "target is resolved in `space_chassis`, and a path that is absolute or climbs out "
+                "of it names a file no checkout of that repository holds",
             )
 
     rows = presentation.get("conformance")

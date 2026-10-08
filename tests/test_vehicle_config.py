@@ -13443,18 +13443,21 @@ def test_the_presentation_references_resolve_and_the_table_is_whole(tmp_path):
         "vacuous",
     }
 
-    # A renamed reference is refused, and so is a table with a hole in it.
-    definition = copy_definition(tmp_path / "refs")
-    path = definition / "presentation.yaml"
-    text = path.read_text()
-    broken = text.replace(
-        "contract: docs/diode-contract.md", "contract: docs/diode-contract-v2.md", 1
-    )
-    assert broken != text, "the fixture no longer matches presentation.yaml"
-    path.write_text(broken)
-    result = run_linter(definition)
-    assert result.returncode == 1, result.stdout[-900:]
-    assert "presentation.yaml:contract" in result.stdout, result.stdout[-900:]
+    # A renamed reference can only be caught where its target lives, so the linter does not try:
+    # what it refuses is a citation that could not be repository-relative at all, and a table with
+    # a hole in it. The linter used to stat these by walking up from the vehicle, which refused
+    # all four correct references in a standalone checkout and failed this repository's own CI.
+    for escaped in ("../docs/diode-contract.md", "/docs/diode-contract.md"):
+        definition = copy_definition(tmp_path / f"refs{len(escaped)}")
+        path = definition / "presentation.yaml"
+        text = path.read_text()
+        broken = text.replace("contract: docs/diode-contract.md", f"contract: {escaped}", 1)
+        assert broken != text, "the fixture no longer matches presentation.yaml"
+        path.write_text(broken)
+        result = run_linter(definition)
+        assert result.returncode == 1, result.stdout[-900:]
+        assert "presentation.yaml:contract" in result.stdout, result.stdout[-900:]
+        assert "not relative to the citing repository" in result.stdout, result.stdout[-900:]
 
     definition = copy_definition(tmp_path / "holes")
     path = definition / "presentation.yaml"
