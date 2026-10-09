@@ -24344,6 +24344,7 @@ def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start
     assert record_path.read_text() == "{not json", "--plan writes nothing, a garbled record included"
     # The lock the refused starts took was the state directory's, and the root never grew one.
     assert (state / ".executive.lock").exists() and not (diode / ".executive.lock").exists()
+    executive.close()
 
 
 def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_restart(tmp_path):
@@ -24420,6 +24421,51 @@ def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_
     record = json.loads((diode / ".executive.json").read_text())
     assert record["world_id"] == executive.world_id and record["tick"] == 4 and record["slugs"] == ["alpha", "bravo"]
     assert hidden_state_hits(diode, forbidden) == []
+    executive.close()
+
+
+def test_a_refused_construction_leaks_no_descriptor_and_a_vanished_link_is_refused_by_name(
+    tmp_path, monkeypatch
+):
+    """Fourth review of child 2 (Codex gpt-6-astra high and Claude Opus, both approve with findings).
+
+    Two leftovers of the startup-race round. **An in-process `Executive` that refused after taking
+    its state directory kept the descriptors**: it duplicates the state handle and then opens its
+    journal's directory, and a journal refusal raised out of `__init__` with the state duplicate
+    still open, while `close()` assumed a diode handle existed. Repeated refused constructions
+    exhaust descriptors in a long-lived caller. And **`canonicalise` read a link outside its
+    refusal handler**: a link removed or replaced between its `lstat` and its `readlink` escaped as
+    a traceback. Only the operator's directories can change there — a hop inside `--diode-dir` is
+    refused before it is read — so it is a refusal by name, not an agent's exploit. The fd count is
+    read from `/proc/self/fd`, the supported Linux lanes' own accounting.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    diode.mkdir()
+    state.mkdir()
+
+    def open_fds() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    before = open_fds()
+    for _ in range(5):
+        with pytest.raises(ValueError, match="inside --diode-dir"):
+            console.Executive(
+                world, diode, phase="translunar_coast", state_dir=state,
+                journal=diode / "alpha" / "j.jsonl",
+            )
+    assert open_fds() == before, (before, open_fds())
+
+    link = tmp_path / "ops-link"
+    link.symlink_to(state)
+
+    def vanished(path, *args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(console.os, "readlink", vanished)
+    canonical, problem = console.canonicalise("--state-dir", link, "the state directory")
+    assert canonical is None and problem is not None, (canonical, problem)
+    assert "changed between its check and its open" in problem and "ENOENT" in problem, problem
 
 
 # ---- ADR 0002 child 2, review: every failure of the rewrite is a refusal by name -----------------

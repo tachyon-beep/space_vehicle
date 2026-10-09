@@ -18918,9 +18918,19 @@ sentence. The chassis
 side — the private volume, `serve_vehicle.sh` passing `--state-dir`, the one-process change — is the
 separate package ADR 0002 lists, and nothing here depends on it: the tests use a scratch directory.
 
+**A fourth review** (Codex gpt-6-astra high and Claude Opus, both approve with findings; Opus re-ran
+the startup race 100 times and every start was refused) left two leftovers, fixed here: an
+in-process `Executive` that refused after duplicating its state handle kept the descriptors (five
+refused constructions leaked five), and `close()` assumed a diode handle existed; and
+`canonicalise` read a link outside its refusal handler, so a link the *operator's* directory lost
+between its `lstat` and its `readlink` escaped as a traceback. Both are now handled, and `main`
+closes the executive on its attach refusals. One consequence of following a `--journal` link once at
+start is stated rather than changed: a link to a journal file that does not exist yet is refused as
+dangling, where the old code created its target.
+
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 385 | **405** |
+| referee tests | 385 | **406** |
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 

@@ -685,7 +685,16 @@ def canonicalise(
             hops += 1
             if hops > MAX_LINK_HOPS:
                 return refusal(f"cannot be resolved: more than {MAX_LINK_HOPS} symbolic links (a loop, at {candidate})")
-            target = os.readlink(candidate)
+            try:
+                target = os.readlink(candidate)
+            except OSError as exc:
+                # The link was removed or replaced between its `lstat` and here: only someone who can
+                # write the operator's directories can do that (a hop inside --diode-dir is refused
+                # above, before it is read), and it is a refusal by name, not a traceback.
+                return refusal(
+                    f"changed between its check and its open ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)} "
+                    f"at {candidate})"
+                )
             if target.startswith("/"):
                 done, stats = [], []
             pending = [(piece, True) for piece in target.split("/")] + pending
@@ -1089,6 +1098,7 @@ class Executive:
             else:
                 opened, canonical, problem = open_journal_dir(journal, self.diode_dir)
                 if problem is not None or opened is None or canonical is None:
+                    self.close()
                     raise ValueError(problem)
                 self.journal, self.journal_dir_fd = canonical, opened
         # Generated once, because the configuration does not change while an executive runs.
@@ -1097,8 +1107,12 @@ class Executive:
         # The diode directory, as a handle that follows no link: every window is opened relative to
         # it, and the directory's own record is written through it. The operator's path is resolved
         # first because it is the operator's to alias; nothing below it is.
-        self.diode_dir.mkdir(parents=True, exist_ok=True)
-        self.diode_fd = open_directory(self.diode_dir.resolve())
+        try:
+            self.diode_dir.mkdir(parents=True, exist_ok=True)
+            self.diode_fd = open_directory(self.diode_dir.resolve())
+        except BaseException:
+            self.close()
+            raise
         # The names the registry publishes as gate variables, instantiated: the only names an
         # agent's `variables` may carry besides `allowance`.
         self.gate_names: set[str] = {
@@ -1138,16 +1152,15 @@ class Executive:
         return window
 
     def close(self) -> None:
-        """Release the directory handle. The windows' handles live for one cycle and are closed by it."""
-        if self.diode_fd is not None:
-            os.close(self.diode_fd)
-            self.diode_fd = None
-        if self.journal_dir_fd is not None:
-            os.close(self.journal_dir_fd)
-            self.journal_dir_fd = None
-        if self.state_fd is not None:
-            os.close(self.state_fd)
-            self.state_fd = None
+        """Release the held directory handles. The windows' handles live for one cycle and are closed by it.
+
+        Safe on a partly constructed executive — `__init__` calls it when a later step refuses, so a
+        refused in-process construction leaks no descriptor — and safe to call twice."""
+        for name in ("diode_fd", "journal_dir_fd", "state_fd"):
+            fd = getattr(self, name, None)
+            if fd is not None:
+                os.close(fd)
+                setattr(self, name, None)
 
     def order(self) -> list[Window]:
         """This tick's visiting order: sorted slugs rotated left by `tick % n` (ADR choice A).
@@ -2884,8 +2897,10 @@ def main(argv: list[str] | None = None) -> int:
         try:
             executive.attach(slug, ring_slots=resolved_slots[slug])
         except ValueError as exc:
+            executive.close()
             return refuse(str(exc))
     if executive.failure_count:
+        executive.close()
         return refuse(
             "a window or the directory's record could not be prepared: "
             + "; ".join(f"{f['window']}: {f['error']}" for f in executive.failures)
