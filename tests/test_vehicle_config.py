@@ -13,6 +13,7 @@ this must not become a reason the suite cannot run.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import errno
 import hashlib
@@ -25,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -23156,7 +23158,10 @@ def test_a_console_with_a_non_finite_number_is_not_json_and_the_vehicle_writes_n
     executive = console.Executive(world, diode, phase="translunar_coast")
     executive.attach("alpha")
     root = diode / "alpha"
-    for literal in ("NaN", "Infinity", "-Infinity"):
+    # `1e400` is not one of the three literals but becomes one: the float parser overflows it to `inf`
+    # without asking `parse_constant`, so `loads_json` refuses a non-finite result too (WP08 child 2,
+    # second review, Opus 3), and the console says so exactly as it does for the literals.
+    for literal in ("NaN", "Infinity", "-Infinity", "1e400", "-1e400"):
         clear_results(root)
         (root / "console.json").write_text(
             '{"commands": ["ack_alarm alert_id=x"], "variables": {"allowance": ' + literal + "}}", encoding="utf-8"
@@ -24811,3 +24816,181 @@ def test_a_number_that_overflows_a_double_is_not_json_this_vehicle_reads(tmp_pat
     assert "1e400" not in record_path.read_text()
     (event,) = startup_events(state, executive)
     assert event["previous"] is None and "not valid JSON" in event["problem"], event
+
+
+# ---- ADR 0002 child 2, third review: one canonicalisation, one open, one handle -------------------
+
+
+def forged_window(tmp_path: Path, diode: Path):
+    """An agent's directory in `diode/alpha` holding a real checkpoint of a world that is not this one.
+
+    The checkpoint is copied from a world run elsewhere, so it verifies: what a start must never do
+    is read it, lock beside it or record that it serves it. Returns the directory, its listing and
+    bytes as planted, and the forged world's id.
+    """
+    _console, forger, _diode, forger_state, _expected = checkpointed_pair(tmp_path / "forger")
+    forged = diode / "alpha" / "forged"
+    forged.mkdir(parents=True)
+    shutil.copy2(forger_state / "checkpoint.json", forged / "checkpoint.json")
+    planted = {p.name: p.read_bytes() for p in forged.iterdir()}
+    return forged, planted, forger.world_id
+
+
+def flip(link: Path, target: Path) -> None:
+    """Point `link` at `target` atomically: a new link beside it, renamed over it."""
+    beside = link.with_name(f".{link.name}.{os.getpid()}.flip")
+    with contextlib.suppress(FileNotFoundError):
+        beside.unlink()
+    beside.symlink_to(target)
+    os.replace(beside, link)
+
+
+def test_a_state_dir_reached_through_a_link_in_an_agents_window_is_refused_whichever_way_the_link_points(tmp_path):
+    """Third review (both reviewers): a link the agents hold, anywhere on the way, refuses the start.
+
+    The second follow-up held the *spelling* to the diode directory by resolving each prefix of it.
+    That cannot see a link the operator made *outside* the diode directory whose target is a link an
+    agent holds inside it: `outside/state -> diode/alpha/x -> /private`. Every prefix of the spelling
+    resolves outside, the check passed, and the start then resolved the spelling again to open it —
+    so an agent flipping `x` between the two won the directory: Opus's probe won 10 starts in 80, 8
+    reading an agent-written checkpoint and 2 putting the lock and `serves.json` in the agent's
+    directory. The canonicalisation is now done by hand, one link at a time, and every hop — a link's
+    own location, each directory walked, the final target — is held to the diode directory, so the
+    link in the window refuses the start wherever it points at the moment of the check.
+    """
+    diode = tmp_path / "diode"
+    forged, planted, forged_world = forged_window(tmp_path, diode)
+    private = tmp_path / "private"
+    private.mkdir()
+    x = diode / "alpha" / "x"
+    x.symlink_to(private)
+    outside = tmp_path / "outside-state"
+    outside.symlink_to(x)
+    for target in (private, forged):
+        flip(x, target)
+        refused = start(diode, outside)
+        assert refused.returncode == 3, (target, refused.returncode, refused.stderr[-600:])
+        # The first hop in the agents' reach is named — here the diode directory, which the link's
+        # target walks before it reaches `x`.
+        assert "--state-dir" in refused.stderr and "inside" in refused.stderr and f"(at {diode})" in refused.stderr, refused.stderr
+        assert forged_world not in refused.stderr and "Traceback" not in refused.stderr, refused.stderr
+    assert list(private.iterdir()) == []
+    assert {p.name: p.read_bytes() for p in forged.iterdir()} == planted
+    assert not (diode / ".executive.json").exists()
+    # The same hop rule for `--journal`, and `diode/../private` is refused too — conservative, by design:
+    # a spelling that walks the agents' directory at all is not a spelling of a private path.
+    refused = start(diode, None, extra=["--journal", str(outside / "j.jsonl"), "--cycles", "1", "--poll", "0"])
+    assert refused.returncode == 3 and "--journal" in refused.stderr and "inside" in refused.stderr, refused.stderr
+    refused = start(diode, diode / ".." / "private")
+    assert refused.returncode == 3 and "inside" in refused.stderr, refused.stderr
+    assert list(private.iterdir()) == []
+
+
+def test_a_link_flipped_in_a_tight_loop_during_starts_never_hands_an_agent_the_state_dir(tmp_path):
+    """Third review: the interval itself, attacked the way the probe attacked it, for a bounded run.
+
+    A thread flips `diode/alpha/x` between a private directory and an agent's directory holding a
+    forged checkpoint as fast as it can while twelve starts are made through `outside -> x`. Before
+    the fix the check and the open resolved the spelling separately, and a start that lost the race
+    locked, recorded and read in the agent's directory. Now the link's location is inside the diode
+    directory at every instant, so every start is refused, and across all twelve the agent's directory
+    is exactly as planted, the private directory is empty, and no start names the forged world.
+    """
+    diode = tmp_path / "diode"
+    forged, planted, forged_world = forged_window(tmp_path, diode)
+    private = tmp_path / "private"
+    private.mkdir()
+    x = diode / "alpha" / "x"
+    x.symlink_to(private)
+    outside = tmp_path / "outside-state"
+    outside.symlink_to(x)
+    stop = threading.Event()
+    flips = [0]
+
+    def flipper() -> None:
+        while not stop.is_set():
+            flip(x, forged)
+            flip(x, private)
+            flips[0] += 2
+
+    thread = threading.Thread(target=flipper, daemon=True)
+    thread.start()
+    try:
+        results = [start(diode, outside, extra=["--cycles", "1", "--poll", "0"]) for _ in range(12)]
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+    assert flips[0] > 0 and not thread.is_alive(), "the flipper ran, and stopped"
+    assert [r.returncode for r in results] == [3] * 12, [(r.returncode, r.stderr[-300:]) for r in results]
+    assert not any(forged_world in r.stderr for r in results)
+    assert {p.name: p.read_bytes() for p in forged.iterdir()} == planted
+    assert list(private.iterdir()) == [] and not (diode / ".executive.json").exists()
+
+
+def test_a_component_swapped_between_the_canonicalisation_and_the_open_is_refused_by_name(tmp_path, monkeypatch, capsys):
+    """Third review: the open is a walk from `/` that follows nothing and checks what it walked.
+
+    The canonical path has no link in it and no component in the agents' reach, so only the operator
+    can change it — but the open is held to it anyway. Each component is opened `O_DIRECTORY |
+    O_NOFOLLOW` relative to its parent's handle, and each one that existed at the canonicalisation
+    must be the same inode when opened. The interval is reached deterministically: `walk_open_dir` is
+    wrapped so that the state directory is swapped just before the real walk runs — once for a link
+    to an agent's directory holding a forged checkpoint (`ELOOP`), once for a different directory at
+    the same name (a changed inode) — and each start refuses by name, touching neither.
+    """
+    console, _plant, _world = console_tools()
+    diode = tmp_path / "diode"
+    forged, planted, forged_world = forged_window(tmp_path, diode)
+    real_walk = console.walk_open_dir
+    for swap in ("link", "directory"):
+        holder = tmp_path / f"op-{swap}"
+        state = holder / "state"
+        state.mkdir(parents=True)
+
+        def swapped(*args, _state=state, _swap=swap, **kwargs):
+            _state.rename(_state.with_name("state-was"))
+            if _swap == "link":
+                _state.symlink_to(forged)
+            else:
+                _state.mkdir()
+            return real_walk(*args, **kwargs)
+
+        monkeypatch.setattr(console, "walk_open_dir", swapped)
+        assert console.main(["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 3, swap
+        err = capsys.readouterr().err
+        assert "--state-dir" in err and "changed" in err and forged_world not in err, (swap, err)
+        assert {p.name: p.read_bytes() for p in forged.iterdir()} == planted
+        if swap == "directory":
+            assert list(state.iterdir()) == [], "the directory swapped in was not used"
+        monkeypatch.undo()
+    assert not (diode / ".executive.json").exists()
+
+
+def test_a_start_opens_its_state_dir_and_its_journal_directory_once_each(tmp_path, monkeypatch):
+    """Third review: "nothing re-resolves" counted, not asserted in prose.
+
+    The fix for the startup race rests on one open per private directory: `main` walks the state
+    directory once and the explicit journal's directory once, and hands the handles on. The first
+    version of that fix passed `Executive` the default journal segment as a path with no handle, so
+    `Executive` canonicalised and walked the state directory a second time — the canonical path,
+    checked by inode, so no agent's lever, but a second resolution the docstring said did not
+    happen. `walk_open_dir` is counted: one walk with `--state-dir` alone, two with an explicit
+    `--journal` beside it, and none at all after the start.
+    """
+    console, _plant, _world = console_tools()
+    calls: list[str] = []
+    real_walk = console.walk_open_dir
+
+    def counted(canonical, flag, **kwargs):
+        calls.append(flag)
+        return real_walk(canonical, flag, **kwargs)
+
+    monkeypatch.setattr(console, "walk_open_dir", counted)
+    base = ["--slug", "alpha", "--cycles", "2", "--poll", "0"]
+    assert console.main(["--diode-dir", str(tmp_path / "d1"), "--state-dir", str(tmp_path / "s1"), *base]) == 0
+    assert calls == ["--state-dir"], calls
+    calls.clear()
+    journal = tmp_path / "j.jsonl"
+    assert console.main(["--diode-dir", str(tmp_path / "d2"), "--state-dir", str(tmp_path / "s2"), "--journal", str(journal), *base]) == 0
+    assert sorted(calls) == ["--journal", "--state-dir"], calls
+    assert len(journal.read_text().splitlines()) == 2

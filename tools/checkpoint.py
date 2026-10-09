@@ -635,7 +635,18 @@ _ON_DISK_AFTER = {
 }
 
 
-def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
+def _held_or_opened(state_dir: Path, dir_fd: int | None, *, create: bool) -> int:
+    """A handle this call owns: a duplicate of the caller's held one, or the directory opened by path.
+
+    The console opens the state directory once, by a walk that follows no link, and holds the handle
+    (ADR 0002 H, child 2, third review); every read and write it makes goes through a duplicate of it,
+    so nothing re-resolves the path between the check and the use. The path stays for the messages
+    and for callers that hold no handle.
+    """
+    return os.dup(dir_fd) if dir_fd is not None else open_state_dir(state_dir, create=create)
+
+
+def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | None = None) -> Path:
     """ADR 0002 I's durable write: temp → fsync → rename previous → rename current → fsync dir.
 
     Refuses before touching the directory what the reader would refuse after (`CheckpointInvalid`);
@@ -651,7 +662,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
         raise CheckpointInvalid(problem[0], target, f"the body would be refused on reading, so it is not written: {problem[1]}")
     body_bytes = encode(body)
     header_line = encode(make_header(body, body_bytes))
-    dir_fd = open_state_dir(state_dir, create=True)
+    dir_fd = _held_or_opened(state_dir, dir_fd, create=True)
     step = "write"
     temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
     try:
@@ -701,10 +712,10 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
     return target
 
 
-def _read_bytes(state_dir: Path, name: str) -> bytes:
+def _read_bytes(state_dir: Path, name: str, dir_fd: int | None = None) -> bytes:
     """The file's bytes through a handle that follows no link, or the refusal that says why not."""
     path = state_dir / name
-    dir_fd = open_state_dir(state_dir, create=False)
+    dir_fd = _held_or_opened(state_dir, dir_fd, create=False)
     try:
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
@@ -835,10 +846,10 @@ def verify(raw: bytes, path: Path, expected: Compatibility) -> Loaded:
     return Loaded(path, header, body)
 
 
-def read_generation(state_dir: Path, name: str, expected: Compatibility) -> Loaded:
+def read_generation(state_dir: Path, name: str, expected: Compatibility, *, dir_fd: int | None = None) -> Loaded:
     """One generation by name, verified, or the refusal that names the check and the file."""
     state_dir = Path(state_dir)
-    return verify(_read_bytes(state_dir, name), state_dir / name, expected)
+    return verify(_read_bytes(state_dir, name, dir_fd), state_dir / name, expected)
 
 
 def _of_this_world(loaded: Loaded, world_id: str | None) -> Loaded:
@@ -853,16 +864,21 @@ def _of_this_world(loaded: Loaded, world_id: str | None) -> Loaded:
     return loaded
 
 
-def choose_generation(state_dir: Path, expected: Compatibility, *, world_id: str | None = None) -> Loaded | None:
-    """ADR 0002 K2: the current generation, else the previous if it verifies; `None` for neither."""
+def choose_generation(
+    state_dir: Path, expected: Compatibility, *, world_id: str | None = None, dir_fd: int | None = None
+) -> Loaded | None:
+    """ADR 0002 K2: the current generation, else the previous if it verifies; `None` for neither.
+
+    With `dir_fd`, both generations are read through that held handle and the path is only named.
+    """
     state_dir = Path(state_dir)
     try:
-        current = read_generation(state_dir, CURRENT, expected)
+        current = read_generation(state_dir, CURRENT, expected, dir_fd=dir_fd)
     except CheckpointIncompatible:
         raise
     except (CheckpointCorrupt, CheckpointAbsent) as refusal:
         try:
-            previous = read_generation(state_dir, PREVIOUS, expected)
+            previous = read_generation(state_dir, PREVIOUS, expected, dir_fd=dir_fd)
         except CheckpointAbsent as none:
             if isinstance(refusal, CheckpointAbsent):
                 return None

@@ -18793,7 +18793,7 @@ chassis mounts for the vehicle service alone — and this round is child 2 of th
 
 | | ADR 0002 says | `tools/console.py` does |
 |---|---|---|
-| `--state-dir` | H1: the checkpoint, its previous generation, the lock and the journal live there; refused inside `--diode-dir` by the journal's `is_relative_to` rule | `check_state_dir`: both paths `resolve()`d, so `diode/alpha/../.private`, a link planted outside the diode directory that points into it, and the diode directory itself are one spelling; the symmetric overlap (`--diode-dir` inside `--state-dir`) is refused too; a file or a dangling link is `checkpoint.CheckpointStateDirUnusable`, named as the operator's path through the one public opener `open_state_dir`; a link to a real directory outside is the operator's alias, as `--diode-dir` already is. All exit 3 before a window or a lock exists |
+| `--state-dir` | H1: the checkpoint, its previous generation, the lock and the journal live there; refused inside `--diode-dir` by the journal's `is_relative_to` rule | `check_state_dir` (canonicalised by hand and opened once since the third review, below): both paths `resolve()`d, so `diode/alpha/../.private`, a link planted outside the diode directory that points into it, and the diode directory itself are one spelling; the symmetric overlap (`--diode-dir` inside `--state-dir`) is refused too; a file or a dangling link is `checkpoint.CheckpointStateDirUnusable`, named as the operator's path through the one public opener `open_state_dir`; a link to a real directory outside is the operator's alias, as `--diode-dir` already is. All exit 3 before a window or a lock exists |
 | the lock | H(i): "`.executive.lock` moves to `--state-dir`: an exclusive lock on a volume the adversary can write is a lock the adversary can hold" | taken relative to the state directory's handle; the root lock is **not opened at all**; a second executive on the same state directory is refused naming the directory and the holder's pid |
 | one diode directory, one state directory | H(ii): "the state directory records the diode directory it serves so a mismatch is caught from either side" | `serves.json` in the state directory, the resolved diode path, written on every start that binds, on a start that finds a checkpoint and refuses for resume, and on `--init`; a start pointing the same state directory at another diode directory refuses from that side; a readable root record naming another world refuses from the other |
 | the journal | J: "`--journal` is retired as a separate flag and lives in `--state-dir`, one segment file per boot (`journal.<segment>.jsonl`)" | `journal.<boot_id>.jsonl` in the state directory when no `--journal` is named; an explicit `--journal PATH` still wins (retiring the flag is child 4's, with the record's content) and is checked against `--diode-dir` before anything at all is written; every row now carries the boot it belongs to, and a row with an `event` key is a startup event |
@@ -18885,6 +18885,31 @@ the state directory by one small file per attempt — segment growth under a res
 paths, so one volume bind-mounted at both `/diode` and `/state` would pass it; one private volume,
 not shared with the diode volume, is a chassis configuration constraint, now said in the docstring.
 
+A third pair of independent reviews read that commit — Codex (`gpt-6-astra`, high effort), which
+requested changes, and Claude Opus, which approved with findings — and both found the same thing:
+the second follow-up's own "residual gap" was not residual. `main` resolved the `--state-dir`
+spelling three times between its check and its open (the check, `open_state_dir`'s walk of the
+spelling, `realpath`), the journal twice, `Executive` again, and `checkpoint`'s opener again. With
+an operator's link outside the diode directory whose target was a link an agent held inside it —
+`outside/state -> diode/alpha/x -> /private` — every prefix of the spelling resolved outside, and an
+agent flipping `x` in a tight loop won the interval in 10 starts of 80 in Opus's probe: 8 read the
+agent's own checkpoint (the root record was rewritten to the forged world, which once #21 lands is
+a resume from an agent's file) and 2 put the lock and `serves.json` in the agent's directory, one of
+them running a tick. Four more tests hold the answer, and the console's non-finite test gained the
+`1e400` and `-1e400` rows (which pass at the second follow-up too: that fix was its Opus 3).
+
+| finding | what the second follow-up did | what it does now | the test failed before with |
+|---|---|---|---|
+| the startup race (Codex P1, Opus P1) | held each spelled prefix to the diode directory, then resolved the path again to open it, and again in `Executive` and `checkpoint` | `canonicalise` follows every link by hand (at most 40, else a named loop) and refuses any hop — a link's location, a directory walked, the final target — in the diode directory, by canonical path or by its inode; `walk_open_dir` opens the result once from `/`, `O_NOFOLLOW` per component, and refuses a component that became a link or another inode; the handle is passed to `Executive` (`state_fd=`, `journal_dir_fd=`) and to the checkpoint reader (`choose_generation(..., dir_fd=)`, with `write_checkpoint(..., dir_fd=)` beside it), and nothing re-resolves | exit 0 for `outside -> x -> private` (the start ran); the twelve-start flip loop's first start ran; `walk_open_dir` absent (trivially) |
+| the default segment's second walk (found checking the fix) | the first version of this fix passed `Executive` the default journal segment as a path with no handle, so it canonicalised and walked the state directory again | `main` passes the held state-directory handle as the segment's `journal_dir_fd`; a counted `walk_open_dir` sees one walk with `--state-dir`, two with an explicit `--journal` | two walks with `--state-dir` alone |
+
+`--state-dir diode/../private` is refused under this rule, though it names a directory outside the
+diode directory: the spelling walks the agents' directory, and the rule is conservative by design.
+The deterministic test of the interval wraps `walk_open_dir` so the state directory is swapped just
+before the real walk — once for a link to the agent's forged directory (`ELOOP`), once for another
+directory at the same name (a changed inode) — and each start refuses by name; the flip loop runs
+twelve real starts against a thread flipping the link and is the probe's own shape, bounded.
+
 ADR 0001's "One world per directory" paragraph, its "restart consequence of choice D" bullet and
 its clarification "the directory's record is authoritative" each carry a dated amendment sentence
 (WP08 child 2, per ADR 0002 H), and that clarification's "currently unmet" assumption a fourth,
@@ -18895,7 +18920,7 @@ separate package ADR 0002 lists, and nothing here depends on it: the tests use a
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 385 | **401** |
+| referee tests | 385 | **405** |
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
