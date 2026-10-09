@@ -132,7 +132,6 @@ def generate(root: Path) -> str:
 
     surface = list(presentation.get("surface") or [])
     mirror = presentation.get("mirror") or {}
-    single_cabin = presentation.get("single_cabin") or {}
     steps = [
         ("claim", "the console is read and emptied **before** anything runs"),
         ("validate", "schema, authority, phase, gate, interlock and freshness, in that order"),
@@ -261,12 +260,14 @@ def generate(root: Path) -> str:
         f"be computed this tick — never a value the vehicle declined to guess."
     )
     write("")
-    if single_cabin:
-        write("Two asymmetries are worth knowing about, because they change what a diagnosis can rest on:")
-        write("")
-        for channel, why in single_cabin.items():
-            write(f"- **`{channel}`** — {why}")
-        write("")
+    # **No diagnostic commentary.** This section used to publish `presentation.yaml#single_cabin`
+    # under "two asymmetries are worth knowing about, because they change what a diagnosis can rest
+    # on": why an LM leak is harder to diagnose than the CSM's, which supply has no instrument, and
+    # a fault id from the fault catalogue. That is the designers' analysis of the vehicle, and
+    # handing it to the fleet does part of the information management the experiment asks of it
+    # (owner's direction, 2026-10-09). The declaration stays for the linter's pairing check
+    # (`check_vehicle.py`, single-cabin channels); the window's protocol says what a reading means
+    # and leaves what it implies to the fleet.
     if mirror:
         bound = mirror.get("bound") or mirror.get("max_bytes")
         if bound:

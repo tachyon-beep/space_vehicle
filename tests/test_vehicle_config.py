@@ -11278,6 +11278,16 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
         assert f"| `{code}` |" in text, code
     # And it says what the vehicle withholds, which is part of the protocol rather than a leak.
     assert "not published" in text and "named channels" in text
+    # The protocol, not the designers' analysis: nothing from `single_cabin`, no fault-catalogue id,
+    # no failure-chain id, no "diagnosis". Removed on the owner's direction that the fleet manages
+    # its own information (2026-10-09); `single_cabin` is still declared, for the linter.
+    single = presentation.get("single_cabin") or {}
+    assert single, "the fixture no longer declares single_cabin"
+    for channel, why in single.items():
+        assert str(why)[:60] not in text, channel
+    assert "diagnos" not in text.lower(), "the window README explains a diagnosis"
+    assert not re.search(r"\b[A-Z]{3}-\d{2}-[a-z]", text), "a fault-catalogue id reached the window README"
+    assert not re.search(r"\bF-\d{2}\b", text), "a failure-chain id reached the window README"
 
     # No verb list and no thresholds: `HELP.md` owns the vocabulary and design.md §8's boundary is
     # that the vehicle publishes what it concluded and never what it suspects about itself.

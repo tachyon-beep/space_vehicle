@@ -18964,6 +18964,29 @@ the directory's record.
 
 No configuration value or debt moved.
 
+## The window's protocol explained a diagnosis
+
+The README the vehicle writes into every window is its protocol: what the files are, what a reading
+and a refusal mean, how often each class of channel is published. Its last section added
+`presentation.yaml#single_cabin` under "two asymmetries are worth knowing about, because they change
+what a diagnosis can rest on" — why an LM leak never appears in `eclss.leak_rate_g_s` and is
+therefore *harder to diagnose*, which oxygen supply has no instrument, and a fault-catalogue id
+(`ECL-07-suit-loop-fan-failure`). That is the designers' analysis of the vehicle, and the experiment
+asks the fleet to do that analysis itself (the owner's direction, 2026-10-09: information and
+action management are the agents' to manage).
+
+The section is gone; `single_cabin` stays declared, because `check_vehicle.py` reads it for the ECLSS
+pairing check. The sixth-file test now holds the generated README to carry nothing from
+`single_cabin`, no fault-catalogue or failure-chain id, and no "diagnosis". `HELP.md`'s verb texts
+carry the same kind of commentary (failure-chain ids, advice on which mode answers a leak) and are a
+larger editorial sweep, tracked separately.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 406 | 406 |
+
+No configuration value or debt moved.
+
 ## The invariants, and which of them are enforced
 
 
