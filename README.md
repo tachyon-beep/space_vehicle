@@ -18670,9 +18670,20 @@ structural-and-cost test, the refusals) and two pass on it (the pairs table, the
 change): the second pair are regression guards for the property this round claims to have kept, and
 a test that only fails before the change could not say that.
 
+**The refusal then had to stop the run cleanly, and at first it did not.** Independent review found
+that a non-finite number reaching the compare-point raised *after* the executive had committed the
+stepped truth and the tick, so the executive was left half-advanced (truth at T+1, lineage at T),
+every later cycle raised again, the C encoder's message named no key, and `console.py` died with a
+traceback and exit 1. The three refusals are now one `plant.UncomparableState` (a `TypeError` and a
+`ValueError`), the non-finite refusal names the value's path, the executive computes the lineage
+link before committing the tick, and the entrypoint stops with exit 3 naming the tick. A fifth test
+injects a NaN through `step` and holds all three. Nothing in today's truth can be non-finite and no
+window can put one there; when overload handling (WP08 child 8) lands, this stop becomes C3's
+recorded hold with the mirror kept.
+
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 369 | **373** |
+| referee tests | 369 | **374** |
 
 No configuration value, debt or state class moved.
 

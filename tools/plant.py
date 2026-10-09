@@ -1171,9 +1171,38 @@ def canonical_state(values: dict[str, Any]) -> str:
     implementation, which is this folder's oldest finding arriving in the one place it cannot lint.
     """
     _require_string_keys(values)
-    return json.dumps(
-        values, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_refuse_non_json
-    )
+    try:
+        return json.dumps(
+            values, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_refuse_non_json
+        )
+    except ValueError as exc:
+        # `allow_nan=False` raises from the C encoder with no key in the message, and a refusal the
+        # operator cannot locate is not one they can act on — so, on the failure path only, the
+        # truth is walked once to name every non-finite value's path.
+        raise UncomparableState(
+            f"the compare-point refuses a non-finite number at {_non_finite_paths(values)[:8]}: a "
+            "NaN or an infinity in the truth is a defect to surface, not a state to compare"
+        ) from exc
+
+
+class UncomparableState(TypeError, ValueError):
+    """A state the compare-point refuses to encode: a non-`str` key, a non-JSON value, or a
+    non-finite number. A `TypeError` and a `ValueError` both, so a caller that asked for either
+    still catches it, and one type a runner can catch without catching every other bug.
+
+    A state that cannot be hashed cannot be compared, so the lineage cannot honestly continue past
+    it: the executive refuses the tick *before* committing it and the entrypoint stops with exit 3
+    and the tick named (plant.md §4: never clamp silently — raise, and leave the evidence)."""
+
+
+def _non_finite_paths(value: Any, path: str = "") -> list[str]:
+    if isinstance(value, float) and not math.isfinite(value):
+        return [path or "<root>"]
+    if isinstance(value, dict):
+        return [p for key, item in value.items() for p in _non_finite_paths(item, f"{path}.{key}" if path else str(key))]
+    if isinstance(value, (list, tuple)):
+        return [p for i, item in enumerate(value) for p in _non_finite_paths(item, f"{path}[{i}]")]
+    return []
 
 
 # What `json.dumps` writes without calling back into Python: the types a list may hold without
@@ -1192,7 +1221,7 @@ def _require_string_keys(value: Any) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
             if not isinstance(key, str):
-                raise TypeError(
+                raise UncomparableState(
                     f"the compare-point refuses a {type(key).__name__} key ({key!r}): json.dumps "
                     "would coerce it to a string and two different states could hash the same"
                 )
@@ -1207,7 +1236,7 @@ def _require_string_keys(value: Any) -> None:
 
 def _refuse_non_json(value: Any) -> Any:
     """`json.dumps`'s `default`: a value JSON cannot say is a refusal, never a `repr`."""
-    raise TypeError(
+    raise UncomparableState(
         f"the compare-point refuses a {type(value).__name__} ({value!r}): it is not a JSON value, "
         "and encoding its repr as a string would collide with an equal str"
     )

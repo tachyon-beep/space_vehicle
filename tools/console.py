@@ -85,6 +85,7 @@ from generate_help import generate as generate_help  # noqa: E402
 from generate_readme import generate as generate_readme  # noqa: E402
 from plant import (  # noqa: E402
     Effect,
+    UncomparableState,
     Unconfigured,
     World,
     _stages_a_state,
@@ -672,11 +673,16 @@ class Executive:
                         applied.append(verdict)
 
             before = self.truth
-            self.truth = step(self.world, before, self.dt, None, effects)
+            after = step(self.world, before, self.dt, None, effects)
+            # The link is computed on the stepped truth *before* the tick is committed: a state the
+            # compare-point refuses (plant.UncomparableState) leaves the executive at its last
+            # consistent tick — truth, tick and lineage together — rather than half-advanced.
+            link = self._lineage_link(self.lineage_head, after, effects)
+            self.truth = after
             for verdict in applied:
                 verdict.body += self._report_effect(verdict, before, self.truth)
             self.tick += 1
-            self.lineage_head = self._lineage_link(self.lineage_head, self.truth, effects)
+            self.lineage_head = link
             self.lineage.append(self.lineage_head)
             self._journal(effects, verdicts)
             self._write_root_record()
@@ -2137,6 +2143,12 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(args.poll)
     except KeyboardInterrupt:
         print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
+    except UncomparableState as exc:
+        sys.stderr.write(
+            f"[console] stopped at tick {executive.tick}: the next tick's state cannot be compared "
+            f"({exc}). The executive did not commit it; the lineage ends at tick {executive.tick}\n"
+        )
+        return 3
     finally:
         executive.close()
         os.close(lock_fd)

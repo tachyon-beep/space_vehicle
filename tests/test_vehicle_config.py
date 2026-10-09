@@ -21255,6 +21255,59 @@ def test_a_one_slot_change_in_the_delay_ring_changes_the_compare_point():
     assert with_ring(next=(ring["next"] + 1) % len(slots)) != base, "the cursor is part of the state"
     assert with_ring(slots=list(slots)) == base, "an equal ring is an equal hash"
 
+
+def test_a_state_the_compare_point_refuses_stops_the_run_at_its_last_consistent_tick(
+    tmp_path, monkeypatch, capsys
+):
+    """A NaN in the truth stops the run where it is, named, rather than half-advancing it.
+
+    The plain-JSON compare-point refuses a non-finite number (`allow_nan=False`) where the tagged
+    encoder hashed `repr(nan)` and carried on — rightly, since a NaN in the truth is a plant defect
+    and plant.md §4 says never to carry one silently. Independent review of the encoder round found
+    what the refusal then did: the executive committed the stepped truth and the tick *before*
+    hashing, so the raise left truth at tick T+1 and the lineage at T, every later cycle raised
+    again, the C encoder's message named no key, and the entrypoint died with a traceback and exit 1
+    under a supervisor that would restart it into the same wall. Now the link is computed before the
+    commit, the refusal names the path of the non-finite value, and `console.py` stops with exit 3
+    naming the tick. Nothing in today's truth can be non-finite and no window can put one there, so
+    the NaN is injected by wrapping `step`.
+    """
+    console, plant, world = console_tools()
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast")
+    executive.attach("alpha")
+    executive.cycle()
+    executive.cycle()
+    tick, truth, head, links = (
+        executive.tick, executive.truth, executive.lineage_head, len(executive.lineage)
+    )
+
+    real_step = console.step
+
+    def poisoned(*args, **kwargs):
+        stepped = dict(real_step(*args, **kwargs))
+        stepped["probe_nan"] = float("nan")
+        return stepped
+
+    monkeypatch.setattr(console, "step", poisoned)
+    with pytest.raises(plant.UncomparableState, match="probe_nan") as refused:
+        executive.cycle()
+    assert isinstance(refused.value, ValueError) and isinstance(refused.value, TypeError)
+    assert (executive.tick, executive.lineage_head, len(executive.lineage)) == (tick, head, links)
+    assert executive.truth is truth, "the refused tick must not be committed"
+    executive.close()
+
+    capsys.readouterr()
+    code = console.main(
+        [
+            "--dir", str(VEHICLE), "--diode-dir", str(tmp_path / "entry"), "--slug", "alpha",
+            "--phase", "translunar_coast", "--cycles", "3", "--poll", "0",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert code == 3, err[-600:]
+    assert "stopped at tick 0" in err and "probe_nan" in err, err[-600:]
+
+
 def test_the_determinism_view_runs_two_runs_and_says_so(tmp_path):
     """The CLI is a contract: it prints the compare-points and exits non-zero if two runs differ."""
     result = subprocess.run(
