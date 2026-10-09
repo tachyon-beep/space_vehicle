@@ -143,6 +143,59 @@ The same-session "before" rows from that run (`state_hash` tagged, 19.62 ms warm
 `Executive.cycle` 26.4 / 29.5 / 45.2 ms warmed and 30.6 / 34.0 / 50.0 ms full) agree with the two
 tables above to within their own spread, so the before and after are one machine's figures.
 
+**After child 4** (the durable record; measured on that commit's working tree, which the tool reported
+as `770159e-dirty`, same machine and Python, ext4 on NVMe, `--samples 100`, `--windows 1 2 10`, each
+ring shape a run of its own with nothing else running). `tools/measure_clock.py` now times one tick row
+appended and `fsync`ed alone, and `Executive.cycle` with a state directory: a *quiet* cycle (no command
+anywhere: one `fsync`, the row carrying every window's published-tick mark) and a *verdict* cycle (one
+refused command in every window, so every window writes a result and the `results_written` note is a
+second `fsync`), beside the same verdict cycle with no record. The `fsync` counts are the tool's
+count of `os.fsync` calls in one such cycle, not an assumption.
+
+| Quantity (`tools/measure_clock.py --samples 100`, after child 4) | ring as warmed (10 of 52,100) | ring full (52,100 of 52,100) |
+|---|---|---|
+| one tick row (690 B, ten windows' marks) appended + `fsync` / appended alone | 0.59 ms p50, 1.15 p95, 3.36 max / < 0.01 ms | 0.58 ms p50, 1.15 p95, 2.40 max / < 0.01 ms |
+| `Executive.cycle`, no record (no `--journal`, no `--state-dir`), 1 / 2 / 10 windows | 5.6 / 7.8 / 26.3 ms p50 | 12.5 / 15.1 / 32.0 ms p50 |
+| quiet cycle with the record (**1 `fsync`**; row 306 / 333 / 549 B), 1 / 2 / 10 windows | 6.4 / 9.6 / 28.5 ms p50 (7.8 / 12.9 / 43.3 p95) | 13.5 / 16.2 / 33.7 ms p50 (14.8 / 18.4 / 36.4 p95) |
+| verdict cycle with the record (**2 `fsync`**; row 663 / 1,050 / 4,138 B), 1 / 2 / 10 windows | 7.6 / 10.3 / 31.4 ms p50 (9.9 / 14.4 / 37.4 p95) | 14.4 / 18.3 / 36.9 ms p50 (17.9 / 21.8 / 40.7 p95) |
+| the same verdict cycle with no record, 1 / 2 / 10 windows | 5.6 / 8.0 / 26.1 ms p50 | 13.0 / 15.2 / 34.3 ms p50 |
+
+So the record costs what J priced: about one `fsync` (≈ 0.6 ms p50, ≈ 1.2 ms p95 on this disk) per
+quiet cycle and two per cycle that wrote results, plus the row's encoding, which is a few hundred bytes
+to a few kilobytes; at ten windows the difference sits inside the cycle's own spread (2–5 ms p50).
+Before child 4 a journaling executive also hashed the stepped truth twice per tick (the lineage link
+and the row each called `state_hash`); the row now takes the link's hash, which saves one
+`state_hash` per tick (≈ 1.4 ms warmed, ≈ 8.3 ms full, the rows above) for any run that keeps a
+record — derived from those rows, not timed against the old journal, it about pays for the quiet
+cycle's `fsync` on the warmed ring and several times over on the full one. A first full-ring run overlapping a short test saw a 442 ms max on the ten-window
+quiet cycle that the clean run did not reproduce; like the checkpoint write's 32 ms, it is the
+filesystem's tail and J's budget does not rest on the p50 alone.
+
+**After child 4's review** (format v2: the row chain, the per-window budget, the durability of the
+claim and the results; same machine, Python and disk, `--samples 100`, `--windows 1 2 10`, each ring
+shape a run of its own). The `fsync` counts are counted by the tool.
+
+| Quantity (`tools/measure_clock.py --samples 100`, after child 4's review) | ring as warmed | ring full |
+|---|---|---|
+| `Executive.cycle`, no record, 1 / 2 / 10 windows | 5.3 / 7.9 / 23.4 ms p50 | 13.5 / 16.6 / 35.0 ms p50 |
+| quiet cycle with the record (**1 `fsync`**; row 393 / 420 / 637 B) | 6.6 / 10.2 / 24.8 ms p50 (7.9 / 13.9 / 30.6 p95) | 13.8 / 16.7 / 33.9 ms p50 (16.7 / 20.1 / 36.9 p95) |
+| verdict in every window with the record (**6 / 11 / 51 `fsync`**; row 765 / 1,167 / 4,367 B) | 10.5 / 17.3 / 64.0 ms p50 (15.3 / 21.4 / 77.9 p95) | 19.4 / 25.3 / 71.2 ms p50 (24.3 / 32.0 / 82.7 p95) |
+| the same verdict cycle with no record | 5.5 / 8.0 / 26.6 ms p50 | 14.1 / 16.3 / 34.3 ms p50 |
+
+A quiet cycle costs what it did. A cycle in which a window wrote results costs `4 + r` `fsync`s for
+that window (the claim's file and directory, `output/`, the note, one per result) beside the row's one.
+*[The sentence that called ten single-result windows "the worst case" is withdrawn: an agent controls
+`r` up to `--max-batch`; see J (xix) and the next table.]*
+
+**After child 4's confirmation review** (same machine, `--samples 100`, `--windows 1 2 10`):
+
+| Quantity (`tools/measure_clock.py`) | ring as warmed | ring full |
+|---|---|---|
+| verdict in every window with the record, 1 / 10 windows (6 / 51 `fsync`; row 771 / 4,427 B) | 10.2 / 65.4 ms p50 | 17.9 / 79.3 ms p50 |
+| the same verdict cycle with no record, 1 / 10 windows | 5.8 / 27.3 ms p50 | 13.4 / 35.6 ms p50 |
+| **a full batch of 32 refused commands in each of 10 windows, with the record (361 `fsync`)** | 311.8 ms p50, 328.9 p95 | 319.3 ms p50, 364.0 p95 |
+| record read, 20,000 quiet rows (ten windows' marks, eight-digit ticks: 765 B each), per row: check / stream | 25.1 / 26.6 µs | 24.7 / 23.9 µs |
+
 Mission ladder: 8 phases over `[0, 34,560,000)`; shortest phase `entry`, 180,000 ticks. An earlier
 scratch measurement of the durable write on this machine saw a 32 ms p95 that neither tool run
 reproduced; the tail is the filesystem's and is noted so that J does not rest on the p50 alone.
@@ -602,6 +655,112 @@ after child 6), `k` per B.
 
 Answer (J): **J2 with the three rules; `N = tick_hz`** — coordinator, under the owner's standing
 delegation (2026-10-09); open to the maintainer's revision.
+
+*Amended by WP08 child 4 (`#22`, 2026-10-09), where the three rules were silent; the record's format is
+`vehicle.record.v1`, stated in `tools/console.py` above `RecordRefused`.* (i) **Every cycle writes a tick
+row, quiet or not.** Rule 2's mark is written at every publication and a cycle always publishes (the
+mirror, C2), so a row is `fsync`ed every cycle anyway; the compare-point and lineage link ride in it
+for bytes, not for an `fsync`. That answers "how does replay know the tick range": a record's ticks are
+contiguous by construction, a hole is a missing cycle wherever it falls (refused by name), and replay
+holds every tick to the run's own compare-point. Under child 5's `k` the `k` rows of a cycle can share
+its one `fsync`. (ii) **One `fsync` carries rule 1 and rule 2**: the tick row holds every publishing
+window's `published` mark (the tick, and the frame number it will write, so a restart can continue `seq`
+past any frame that may be on disk); a mark overstated by a publication that then failed is safe, an
+understated one would not be. (iii) **The `results_written` note is its own `fsync`**, after the
+results and before the next cycle, naming each result by window and window-local receipt — never by
+file name, so L(b) changes nothing in it. The residual window — a crash after a result file and before
+its note — is the one this record already names as "one more reason for L(b)". (iv) **The record
+carries each verdict's body**, which rule 1's list omits: a re-publication (rule 3) needs the text, and
+validation cannot be re-run to make it (its inputs include the agents' `variables`, which the vehicle
+preserves for them and does not keep). (v) *[Superseded by (x) and (xiii) below.]* **Agent text is bounded in the record**: any agent-derived
+string (a command, a body, a deferral's command) past 4 KiB is kept by its prefix with the SHA-256 and
+length of the whole, as child 2 bounded the superseded root record; a resume (child 3) must treat a
+deferral whose command was cut — possible only with tokens the argument parser ignores — as one it
+cannot settle from the record alone. (vi) **A segment's header is written with its boot's first row**,
+not at construction, so a resumed executive's `first_tick` and predecessor are the restored ones; the
+boot's entry joins `segments` once the header is durable. (vii) **An explicit `--journal` without
+`--state-dir` is the same record with the same durability**; every boot appends its own header to the
+one file. (viii) **A record that cannot be made durable stops the run** by name (exit 3) before the cycle
+is published; the commands that cycle claimed are lost with it. (ix) The checkpoint cadence `N` is not
+written by child 4: its tests write checkpoints as child 2's did, and the cadence lands with the resume.
+
+*Amended after child 4's two independent reviews (Codex `gpt-6-astra` high and Claude Opus, both
+"request changes"; decided by the coordinator under the owner's delegation, 2026-10-09). The record's
+format is now `vehicle.record.v2`, and a v1 segment is refused by name.* (x) **Every bound counts the
+encoded bytes**, because rows are ASCII-escaped JSON (an `é` is six bytes, a lone surrogate twelve): a
+receipt's command keeps 256 B and its body 4 KiB, each with the whole's SHA-256 and length; one
+window's receipts in one cycle share 16 KiB, past which a receipt is fingerprint-only (at most 512 B:
+numbers, state, verb prefix, the SHA-256 and length of command and body), its result file written in
+full. A row is therefore at most `windows × (16 KiB + 2 × max_batch × 512 B)` plus deltas the command
+schemas bound. "A refused command's echoed text beyond a small prefix" is read as the command field
+(256 B): a refusal's body keeps 4 KiB because its reason (up to ≈ 1.5 KB for an interlock refusal) is
+what a re-publication must carry, and the per-window budget is what bounds the volume. (xi) **No
+pruning in child 4**: the record is §6's replay trace and release.md's evidence. Its size: a quiet tick
+row is ≈ `365 + 27 × windows` bytes (393 B at one window, 637 B at ten), so ≈ 14–22 GB per mission at
+`k = 1` and ≈ 13–15 GB at `k = 5` if every tick keeps its row, plus a few kilobytes per commanded
+cycle. *[Figures corrected by (xx).]* The reader is two sequential streams (check, then replay) whose
+memory does not grow with the record; recovery stays `≤ N × (step + hash)` plus that scan. (xii) **Every line carries a chain value**,
+`sha256(previous chain + "\n" + the line's canonical bytes)`, seeded by the segment header from the
+chain its predecessor ended on, so any edit, insertion or deletion of any field refuses by name. This
+detects corruption and truncation *[mid-file truncation only: see (xx)]*, not a forger: there is no secret, and whoever can write the `0600`
+state directory can re-chain — against which every field is typed and bounded, a published mark is
+its row's own tick, a results note is its row's (world, boot, tick, and only that row's receipts,
+once), and the physics is re-run. A line that is not JSON is accepted only as the last line of its
+segment, and the next segment's header must then name the chain of its predecessor's last intact line;
+anywhere else it refuses. (The review asked for "the last line of the last segment" only; a boot that
+dies mid-append leaves such a line before the next boot's segment, and the successor's chain anchor is
+what makes accepting it checkable.) (xiii) **A deferral is its parse**: queued, checkpointed and
+recorded as its verb, its schema-checked arguments and the canonical command they spell, and settled
+from that — because `parse_arguments` keeps the last value of a repeated key, a prefix of the raw line
+could be another valid command, which (v) wrongly said it could not. (xiv) **The record must continue
+the checkpoint's own segment history**: its first segment is one the checkpoint lists (and the
+checkpoint's last segment is then in the record), or continues the checkpoint's last segment from the
+snapshot's tick and chain; a checkpoint's segment entries carry the chain reached when it was taken,
+and on that segment the chain at the snapshot's tick must match. (xv) **With a record, every promise
+is a disk fact**: a cycle that claimed a batch `fsync`s the rewritten console and its window directory
+before the tick row; each window's result files and then its `output/` directory are `fsync`ed before
+its note, and the note is written right after that window's results, before its frame and mirror. A
+quiet cycle is still one `fsync`; a cycle in which every one of ten windows wrote a result is 51
+(measured below). Without a record nothing new is `fsync`ed. *[The cost sentence is replaced by (xix).]* (xvi) **Receipt numbers are recorded as
+issued**: every tick row carries the global receipt counter and each window's, and verdicts made before
+an internal fault are kept and published, so no boot reissues a number. (xvii) An existing explicit
+journal this process owns is made `0600`, one another user owns is refused by name; a startup event
+`fsync`s its directory; a note that cannot be made durable says the window's results are on disk.
+
+*Amended after child 4's confirmation reviews (Codex `gpt-6-astra` high, "request changes"; Claude
+Opus, "approve with findings"; both judged (xii)'s torn-line rule correct and accepted (x) and (xv);
+decided by the coordinator under the owner's delegation, 2026-10-09).* (xviii) **Replay correctness.** A
+deferral's canonical command is spelled from its arguments in *sorted* key order — live, in the
+checkpoint and in the record — because every encoding of `arguments` sorts them: in the agent's order,
+a deferral written `target=… source=…` was accepted live and failed its own schema on read-back, and
+the first pass checks every row, so it poisoned the record for good. A map state's value is taken in
+key order (`value_of`), live and after a restore, so a dwell's return guard does not depend on whether
+the map came from the live history or from a key-sorted checkpoint. A segment the replay reaches stays
+in the body's history with the chain it ended on, a header-only one too (a boot whose first cycle was
+torn): otherwise the next boot names its predecessor's predecessor and the record forks. The reader
+keeps each segment's byte offset, so a shared `--journal` of many boots is read twice in all, not once
+per boot; and both writers of the record — the executive's and `main`'s startup events — make an owned
+file `0600` and refuse another user's by name. (xix) **(xv)'s cost, restated without the cooperative
+assumption (x) rejected.** A cycle `fsync`s once for its row and, for each window that wrote results,
+`4 + r` times (the claim's file and directory, `output/`, the note, and one per result `r`), and an
+agent controls `r` up to `--max-batch` — up to `2 × --max-batch` when a full batch of deferrals settles
+beside a full new batch. So the worst case is `1 + windows × (4 + 2 × max_batch)` `fsync`s; a full refused
+batch of 32 in every one of ten windows is 361, measured at ≈ 312 ms p50 on the warmed ring and ≈ 319 ms
+on the full one, three cycles' budget at `m = 1, k = 5`. **`--max-batch` is the operator's throttle on
+it.** Such a cycle is overload, which the operator's C answers by degrading — shedding the static files
+and frames, then dilating within the lag ceiling — and only an overload sustained past the ceiling
+reaches C3's recorded hold; it does not stop the vehicle by itself. The per-result `fsync` is there
+because result names are wall-stamped; child 12's L(b) makes re-publication idempotent by name, after
+which it can be retired. (xx) **(xi) and (xii), with their numbers.** At mission-end tick numbers
+(eight digits) a quiet row is 414 B at one window and 765 B at ten, so a mission at `k = 1` is ≈ 14–26 GB.
+Reading costs ≈ 25 µs per row per pass on this machine (`tools/measure_clock.py`; the reviewer measured
+≈ 41 µs on another run): ≈ 4.5 s per mission hour per pass at 50 Hz (≈ 9–15 s for the check and the
+replay together), and at mission end ≈ 29–47 min to read and replay the whole record, ≈ 43–70 min with
+`unwritten_results`' pass — a cost of time, not memory, and the reason the checkpoint cadence and
+retention (child 3) matter. (xii)'s "detects corruption and truncation" is **corruption and mid-file
+truncation**: deleting complete rows at the *end* of the last segment is accepted, because there is no
+end anchor — a correct filesystem cannot lose an `fsync`ed row, so a missing tail is what a crash
+before the `fsync` leaves, and nothing was published from it.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
