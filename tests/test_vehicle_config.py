@@ -23341,7 +23341,7 @@ def test_a_checkpoint_round_trips_an_executive_byte_for_byte(tmp_path):
     assert not list(state_dir.glob(".*.tmp")), "no temporary survives a clean write"
     raw = written.read_bytes()
     header, body_bytes = split_checkpoint(raw)
-    assert header["format"] == "vehicle.checkpoint.v1"
+    assert header["format"] == "vehicle.checkpoint.v2", "format v2 (child 3): segment entries carry the record anchor"
     assert header["body_sha256"] == hashlib.sha256(body_bytes).hexdigest()
     assert header["body_bytes"] == len(body_bytes)
     assert header["python"] == platform.python_version()
@@ -23788,7 +23788,7 @@ def test_a_damaged_format_field_is_corrupt_while_another_format_is_incompatible(
         return caught.value
 
     damaged = (
-        {**header, "format": "vehicle.checkpoint.v2"},  # value flipped
+        {**header, "format": "vehicle.checkpoint.v3"},  # value flipped (v2 is the format now)
         {**header, "format": 1},  # not even a string
         {("formaT" if key == "format" else key): value for key, value in header.items()},  # key flipped
         {key: value for key, value in header.items() if key != "format"},  # key missing
@@ -23810,7 +23810,7 @@ def test_a_damaged_format_field_is_corrupt_while_another_format_is_incompatible(
     v0_header = {**header, "format": "vehicle.checkpoint.v0", "body_sha256": hashlib.sha256(v0_bytes).hexdigest(), "body_bytes": len(v0_bytes)}
     refusal = refusal_for(json.dumps(v0_header).encode() + b"\n" + v0_bytes)
     assert isinstance(refusal, checkpoint.CheckpointIncompatible) and refusal.check == "format"
-    assert "vehicle.checkpoint.v0" in str(refusal) and "vehicle.checkpoint.v1" in str(refusal)
+    assert "vehicle.checkpoint.v0" in str(refusal) and checkpoint.FORMAT in str(refusal)
     with pytest.raises(checkpoint.CheckpointIncompatible):
         checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
     # A header naming another format over a body that does *not* verify says nothing trustworthy
@@ -26748,3 +26748,199 @@ def test_startup_events_after_a_torn_tail_in_a_shared_journal_begin_their_own_li
     record = console.read_record(journal)
     assert [(s.boot_id, s.last_tick, s.rows, s.chain) for s in record.segments] == [(executive.boot_id, 2, 2, chain)]
     record.close()
+
+
+def counting_lines(console, monkeypatch) -> list[int]:
+    """Count every line `_file_lines` yields — every line of the record any pass reads — into the returned cell."""
+    read = [0]
+    real = console._file_lines
+
+    def counted(*args, **kwargs):
+        for line in real(*args, **kwargs):
+            read[0] += 1
+            yield line
+
+    monkeypatch.setattr(console, "_file_lines", counted)
+    return read
+
+
+def test_a_checkpoints_segment_entry_carries_the_byte_offset_just_after_the_last_line_it_covers(tmp_path):
+    """Addendum B5: a checkpoint names the exact point of the record it was taken at — chain *and* offset.
+
+    The segment entry already carried the chain value reached (child 4's (xiv)); a resume that is to
+    read only what the checkpoint does not cover also needs where in the file that chain was reached.
+    Taken at the end of a cycle in which both windows wrote results, the offset is the file's size —
+    after the tick row *and* both `results_written` notes — and the byte before it ends a line. The
+    oracle is the file on disk, not anything the executive says about it.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    executive.cycle()
+    submit(diode / "alpha", ["zzz_one"])
+    submit(diode / "bravo", ["zzz_two"])
+    executive.cycle()
+    body = checkpoint.capture_state(executive, checkpoint.Compatibility.current(world))
+    (entry,) = body["segments"]
+    raw = executive.journal.read_bytes()
+    assert entry["offset"] == len(raw) and raw[entry["offset"] - 1 : entry["offset"]] == b"\n", entry
+    assert [r.get("event") for r in record_lines(executive.journal)][-2:] == ["results_written", "results_written"]
+    assert entry["chain"] == record_lines(executive.journal)[-1]["chain"]
+    assert set(entry) == {"segment", "boot_id", "first_tick", "previous", "wall_epoch", "chain", "offset"}
+    executive.close()
+
+
+def test_a_checkpoint_whose_segment_entry_lacks_its_anchor_is_refused_as_corrupt_and_never_defaulted(tmp_path):
+    """Format v2 (addendum A1/B5): the anchor is a field the engine needs, so its absence is a refusal.
+
+    `vehicle.checkpoint.v1` carried segment entries with no offset; no deployed vehicle ever wrote one,
+    so the format moved to v2 rather than reading an absent offset as "read the whole record". A body
+    whose entry lacks `offset`, or carries one that is not an integer, is refused by the writer
+    (`CheckpointInvalid`) and — written behind its back with a correct hash — by the reader
+    (`CheckpointCorrupt`), each naming the entry.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    for broken in ({k: v for k, v in body["segments"][0].items() if k != "offset"}, {**body["segments"][0], "offset": "12"}):
+        bad = json.loads(json.dumps(body))
+        bad["segments"][0] = broken
+        with pytest.raises(checkpoint.CheckpointInvalid) as refused:
+            checkpoint.write_checkpoint(tmp_path / "w", bad)
+        assert "segments[0]" in refused.value.check, refused.value
+        body_bytes = checkpoint.encode(bad)
+        where = tmp_path / f"r{len(str(broken))}"
+        where.mkdir()
+        (where / "checkpoint.json").write_bytes(checkpoint.encode(checkpoint.make_header(bad, body_bytes)) + body_bytes)
+        with pytest.raises(checkpoint.CheckpointCorrupt) as read:
+            checkpoint.read_generation(where, "checkpoint.json", compat)
+        assert "segments[0]" in read.value.check, read.value
+    executive.close()
+
+
+def test_a_resume_reads_the_record_from_the_checkpoints_anchor_in_lines_proportional_to_what_the_checkpoint_does_not_cover(tmp_path, monkeypatch):
+    """Addendum A1/B5: restart cost is bounded by the ticks since the checkpoint, not by the boot's length.
+
+    One boot is one segment, so a boot that runs for days is a record of millions of rows, and the
+    whole-record read (`read_record` without an anchor) checks every one of them twice before a single
+    tick is replayed — ADR 0002 (xx)'s ≈ 30–45 minutes at mission end. Read from the checkpoint's
+    anchor, the check, the replay and `unwritten_results` together read the lines after the anchor (and
+    nothing before it): here 300 cycles, a checkpoint at tick 290, and a kill at 297. The count is of
+    lines read (`_file_lines`), not of wall time. The oracle is the uninterrupted run's own per-tick
+    compare-points and lineage (`recorded_run`), and the anchored replay reaches the same body as the
+    whole-record replay.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    script = {293: {"alpha": ["zzz_after_the_anchor"]}, 295: {"bravo": ["set_rcs_mode mode=manual"]}}
+    points, _counters, snapshot = recorded_run(executive, diode, script, 297, snapshot_at=290)
+    executive.close()
+    total = len(executive.journal.read_bytes().splitlines())
+    assert total >= 297
+    read = counting_lines(console, monkeypatch)
+    record = console.read_record(state, anchor=console.record_anchor(snapshot))
+    replayed = console.replay_record(world, snapshot, record)
+    unwritten = console.unwritten_results(record)
+    lines_after = 7 + 2  # seven tick rows, and one note each for alpha and bravo
+    assert read[0] == 3 * lines_after, (read[0], total)  # check, replay, unwritten: each reads only what follows the anchor
+    assert [(t, h, lk) for t, h, lk in replayed.points] == [(t, *points[t]) for t in range(291, 298)]
+    assert unwritten == []
+    record.close()
+    monkeypatch.undo()
+    whole = console.replay_record(world, snapshot, console.read_record(state))
+    assert whole.body == replayed.body
+
+
+def test_an_anchor_the_record_cannot_honour_is_refused_by_name(tmp_path):
+    """Addendum B5's seek-point checks: a resume never reads from a place the checkpoint did not name.
+
+    The anchor is a byte offset into a file an operator's disk holds: it must name a regular file
+    opened through the held handle without following a link, lie within it, and fall just after the end
+    of a line. A truncated segment (the offset past its end), an offset moved by one byte, a missing
+    segment file and a link in its place are each refused with the check `anchor` — never a read from
+    the wrong place and never a silent fall-back to the whole record, which would resume short.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _points, _counters, snapshot = recorded_run(executive, diode, {}, 4, snapshot_at=3)
+    executive.close()
+    anchor = console.record_anchor(snapshot)
+    segment = executive.journal
+
+    def refused(change) -> console.RecordRefused:
+        moved = json.loads(json.dumps(anchor))
+        change(moved)
+        with pytest.raises(console.RecordRefused) as caught:
+            console.read_record(state, anchor=moved)
+        assert caught.value.check == "anchor", caught.value
+        return caught.value
+
+    assert "end of a line" in refused(lambda a: a["entry"].update(offset=a["entry"]["offset"] - 1)).why
+    assert "lost what the checkpoint covers" in refused(lambda a: a["entry"].update(offset=a["entry"]["offset"] + 10**6)).why
+    refused(lambda a: a["entry"].update(offset="0"))
+    refused(lambda a: a["entry"].update(segment="f" * 32, boot_id="f" * 32))
+    raw = segment.read_bytes()
+    segment.unlink()
+    (tmp_path / "elsewhere.jsonl").write_bytes(raw)
+    segment.symlink_to(tmp_path / "elsewhere.jsonl")
+    refused(lambda a: None)
+    segment.unlink()
+    segment.write_bytes(raw[: anchor["entry"]["offset"] - 40])
+    assert "lost what the checkpoint covers" in str(refused(lambda a: None))
+
+
+def test_an_anchored_read_follows_the_boots_that_continue_the_anchor_and_refuses_a_segment_that_neither_continues_nor_is_covered(tmp_path):
+    """Addendum B5: successors are found by their headers alone, and only a continuation is taken.
+
+    A state directory holds one file per boot. From the anchor, the read takes every boot that
+    continues it — by predecessor, transitively — and reads only the first header line of every other
+    file, so a boot the checkpoint already covers costs one line. Here a world runs, is checkpointed at
+    tick 3, and a twin restored from the replayed body (the resume's own shape) runs on into a second
+    segment; the anchored read returns both, and replay to the end matches the uninterrupted oracle.
+    Then a segment file from another world is planted beside them: it neither continues the anchor nor
+    is listed by the checkpoint, so the anchored read refuses it by name (`segment`) rather than skip
+    it — skipping is how a damaged successor header would make a resume start short of ticks it had
+    published.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    script = {1: {"alpha": ["set_rcs_mode mode=manual"]}, 6: {"alpha": ["set_rcs_mode mode=auto"]}}
+    expected, _c, _s = recorded_run(oracle, oracle_dir, script, 9)
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    first.attach("alpha")
+    _p, _c, snapshot = recorded_run(first, diode, script, 5, snapshot_at=3)
+    first.close()
+    replayed = console.replay_record(world, snapshot, console.read_record(state, anchor=console.record_anchor(snapshot)))
+    second = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    second.attach("alpha")
+    checkpoint.restore_state(second, replayed.body)
+    recorded_run(second, diode, script, 4, start=5)
+    second.close()
+    record = console.read_record(state, anchor=console.record_anchor(snapshot))
+    assert [s.boot_id for s in record.segments] == [first.boot_id, second.boot_id]
+    to_end = console.replay_record(world, snapshot, record)
+    assert [(t, h, lk) for t, h, lk in to_end.points] == [(t, *expected[t]) for t in range(4, 10)]
+    record.close()
+
+    stranger = console.Executive(world, tmp_path / "other", phase="translunar_coast", state_dir=tmp_path / "other-state")
+    stranger.attach("alpha")
+    stranger.cycle()
+    stranger.close()
+    shutil.copy(stranger.journal, state / stranger.journal.name)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(state, anchor=console.record_anchor(snapshot))
+    assert refused.value.check == "segment" and stranger.boot_id in str(refused.value), refused.value

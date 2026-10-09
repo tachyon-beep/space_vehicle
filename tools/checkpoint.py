@@ -114,7 +114,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plant import corpus_files, load_world  # noqa: E402
 
-FORMAT = "vehicle.checkpoint.v1"
+FORMAT = "vehicle.checkpoint.v2"
 CURRENT = "checkpoint.json"
 PREVIOUS = "checkpoint.prev.json"
 # The tools whose bytes are part of the engine identity, beside the corpus (ADR 0002 I).
@@ -407,6 +407,18 @@ _KEYS: dict[str, dict[str, Any]] = {
     "executive": {"tick": int, "truth": dict, "dwell": dict, "lineage_head": str, "receipt": int},
     "rng": {"version": int},
 }
+# One boot's entry in `segments` (ADR 0002 G; the record's segment header, child 4), with the chain
+# value and the byte offset just after the last line of the record this checkpoint covers in that
+# segment's file — the anchor a resume reads on from (format v2, child 3's addendum B5).
+_SEGMENT_KEYS: dict[str, Any] = {
+    "segment": str,
+    "boot_id": str,
+    "first_tick": int,
+    "previous": (str, _NULL),
+    "wall_epoch": str,
+    "chain": str,
+    "offset": int,
+}
 _WINDOW_KEYS: dict[str, Any] = {
     "ring_slots": int,
     "seq": int,
@@ -449,6 +461,17 @@ def _structure_problem(body: Any) -> tuple[str, str] | None:
                 return f"{section}.{key}", f"`{section}.{key}` is a JSON {type(body[section][key]).__name__}, not {_kind_name(kind)}"
     if body["identity"]["tick"] != body["executive"]["tick"]:
         return "executive.tick", "the identity and the executive disagree about the tick"
+    for index, entry in enumerate(body["segments"]):
+        where = f"segments[{index}]"
+        if not isinstance(entry, dict):
+            return where, f"the segment entry is a JSON {type(entry).__name__}, not an object"
+        if set(entry) != set(_SEGMENT_KEYS):
+            return where, f"the segment entry's keys are not a segment's ({sorted(set(entry) ^ set(_SEGMENT_KEYS))}); a field the engine needs is never defaulted"
+        for key, kind in _SEGMENT_KEYS.items():
+            if not _is(entry[key], kind):
+                return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
+    if body["identity"]["segments"] != [entry["segment"] for entry in body["segments"]]:
+        return "identity.segments", "the identity's segment list is not the body's"
     for slug, row in body["windows"].items():
         if not isinstance(row, dict):
             return f"windows.{slug}", f"the window's row is a JSON {type(row).__name__}, not an object"

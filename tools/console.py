@@ -1434,10 +1434,22 @@ class SegmentInfo:
     torn: bool = False
     offset: int = 0
     line: int = 1
+    # The byte offset just after the segment's last intact line (its header, a row or a note), in its
+    # file: what a checkpoint's segment entry records as `offset` (addendum B5).
+    end: int = 0
+    # A segment read from a checkpoint's anchor: its header is built from the checkpoint's entry rather
+    # than read, and its lines are verified from `offset` on, seeded with the anchor's chain and tick.
+    anchor_tick: int | None = None
+    # The byte offset just after the header line (the anchor's offset for an anchored segment).
+    header_end: int = 0
 
     @property
     def first_tick(self) -> int:
         return int(self.header["first_tick"])
+
+    @property
+    def anchored(self) -> bool:
+        return self.anchor_tick is not None
 
     @property
     def previous(self) -> str | None:
@@ -1446,8 +1458,8 @@ class SegmentInfo:
 
 def _file_lines(
     dir_fd: int, name: str, offset: int = 0, first: int = 1
-) -> Iterator[tuple[int, int, dict[str, Any] | None]]:
-    """`(line number, byte offset, object or None)` for each line of one journal file from `offset`, bounded.
+) -> Iterator[tuple[int, int, int, dict[str, Any] | None]]:
+    """`(line number, byte offset, end offset, object or None)` for each line of one journal file from `offset`, bounded.
 
     `offset` and `first` start the read at a line the first pass found (a segment's header), so a
     second pass over one segment of a shared `--journal` does not re-read the boots before it
@@ -1482,13 +1494,22 @@ def _file_lines(
                     row = loads_json(raw[:-1].decode("utf-8"))
                 except Exception:  # noqa: BLE001 - any decoder failure is "not an object"
                     row = None
-            yield number, at, row if isinstance(row, dict) else None
+            yield number, at, handle.tell(), row if isinstance(row, dict) else None
 
 
 def _verified_lines(
-    dir_fd: int, name: str, offset: int = 0, first: int = 1
-) -> Iterator[tuple[str, int, int, dict[str, Any]]]:
-    """Every line of one journal file from `offset` that belongs to the trace, verified: `(kind, line, offset, row)`.
+    dir_fd: int,
+    name: str,
+    offset: int = 0,
+    first: int = 1,
+    seed: tuple[dict[str, Any], str, int] | None = None,
+) -> Iterator[tuple[str, int, int, int, dict[str, Any]]]:
+    """Every line of one journal file from `offset` that belongs to the trace, verified: `(kind, line, offset, end, row)`.
+
+    With `seed` — `(header, chain, tick)` from a checkpoint's anchor (addendum B5) — the read starts
+    inside a segment, as if its header had been read and its lines up to the anchor verified: the rows
+    that follow are held to that header's world and boot, to the anchor's chain, and to the tick after
+    the anchor's. Line numbers then count from the anchor.
 
     `kind` is `header`, `row`, `note`, or `torn` (the row is then `{}`, and closes its segment). Each
     header starts a segment and is held to its schema and its format; each tick row to the tick after
@@ -1501,18 +1522,20 @@ def _verified_lines(
     question (`concatenated`): the next segment names the chain its predecessor ended on. A startup
     event (child 2) is the operator's, unchained, and not part of the trace.
     """
-    pending: tuple[int, int] | None = None
+    pending: tuple[int, int, int] | None = None
     header: dict[str, Any] | None = None
     chain = ""
     last_tick: int | None = None
+    if seed is not None:
+        header, chain, last_tick = seed
     receipts: set[tuple[str, int]] = set()
     noted: set[tuple[str, int]] = set()
-    for number, at, row in _file_lines(dir_fd, name, offset, first):
+    for number, at, end, row in _file_lines(dir_fd, name, offset, first):
         if pending is not None:
             if row is None or row.get("event") == "segment":
                 # A torn line followed by another torn line or by the next boot's header: what a kill at a
                 # boot's first append, repeated, leaves in a journal every boot shares (addendum B8).
-                yield "torn", pending[0], pending[1], {}
+                yield "torn", *pending, {}
                 pending = None
             elif _startup_event(row):
                 continue  # startup events a later boot journaled before its own header: the torn line stays pending
@@ -1521,7 +1544,7 @@ def _verified_lines(
                     "corrupt", f"line {pending[0]} of {name} is not a JSON object, and it is neither the last line of its segment nor a torn append"
                 )
         if row is None:
-            pending = (number, at)
+            pending = (number, at, end)
             continue
         event = row.get("event")
         segment = header["boot_id"] if header is not None else None
@@ -1537,7 +1560,7 @@ def _verified_lines(
             if row.get("chain") != record_chain(row["previous_chain"], row):
                 raise RecordRefused("chain", f"line {number} of {name}: the header's chain value is not its own", segment=row["boot_id"])
             header, chain, last_tick, receipts, noted = row, row["chain"], int(row["first_tick"]), set(), set()
-            yield "header", number, at, row
+            yield "header", number, at, end, row
             continue
         if _startup_event(row):
             continue  # a startup event (child 2): the operator's, and not part of the trace
@@ -1572,7 +1595,7 @@ def _verified_lines(
                 raise RecordRefused("note", f"line {number} of {name}: {problem}", tick=row.get("tick") if _count(row.get("tick")) else None, segment=segment)
             noted |= named
             chain = row["chain"]
-            yield "note", number, at, row
+            yield "note", number, at, end, row
             continue
         found = _row_problem(row)
         if found is not None:
@@ -1581,13 +1604,13 @@ def _verified_lines(
             raise RecordRefused("row", f"line {number} of {name} is of world {row['world_id']}, boot {row['boot_id']}, not its header's", tick=tick, segment=segment)
         chain, last_tick = row["chain"], tick
         receipts, noted = {(r["window"], r["local"]) for r in row["receipts"]}, set()
-        yield "row", number, at, row
+        yield "row", number, at, end, row
     if pending is not None:
         # The file's last line, torn. With no header before it in this file it is a boot torn before its
         # header — its first append, header and first row in one `write`, cut by a kill — and nothing of
         # that boot was published, because the append is `fsync`ed before the root record, a result, a
         # frame or a mirror. Refusing it refused every restart after it (design note F2).
-        yield "torn", pending[0], pending[1], {}
+        yield "torn", *pending, {}
 
 
 def _startup_event(row: dict[str, Any]) -> bool:
@@ -1626,13 +1649,19 @@ class Record:
         with contextlib.suppress(Exception):
             self.close()
 
-    def lines(self, segment: SegmentInfo) -> Iterator[tuple[str, dict[str, Any]]]:
-        """`(kind, row)` for the segment's rows and notes, in order, verified again; its summary must still hold."""
+    def lines(self, segment: SegmentInfo) -> Iterator[tuple[str, dict[str, Any], int]]:
+        """`(kind, row, end)` for the segment's rows and notes, in order, verified again; its summary must still hold.
+
+        `end` is the byte offset just after the line, in the segment's file. An anchored segment is
+        streamed from its anchor, seeded as the first pass was (addendum B5).
+        """
         if self._fd is None:
             raise RecordRefused("file", "the record has been closed")
-        inside = False
-        last_tick, chain, rows = segment.first_tick, segment.header["chain"], 0
-        for kind, _number, _at, row in _verified_lines(self._fd, segment.name, segment.offset, segment.line):
+        seed = (segment.header, segment.header["chain"], segment.anchor_tick) if segment.anchor_tick is not None else None
+        inside = seed is not None
+        last_tick = segment.anchor_tick if segment.anchor_tick is not None else segment.first_tick
+        chain, rows = segment.header["chain"], 0
+        for kind, _number, _at, end, row in _verified_lines(self._fd, segment.name, segment.offset, segment.line, seed):
             if kind == "header":
                 if inside:
                     break
@@ -1645,7 +1674,7 @@ class Record:
             chain = row["chain"]
             if kind == "row":
                 last_tick, rows = row["tick"], rows + 1
-            yield kind, row
+            yield kind, row, end
         if (last_tick, chain, rows) != (segment.last_tick, segment.chain, segment.rows):
             raise RecordRefused("changed", f"{segment.name} changed between its check and its replay", segment=segment.boot_id)
 
@@ -1681,21 +1710,146 @@ def _chain(segments: list[SegmentInfo]) -> tuple[list[SegmentInfo], RecordRefuse
     return order, None
 
 
-def read_record(where: str | os.PathLike[str], *, dir_fd: int | None = None) -> Record:
-    """The record of a state directory's `journal.*.jsonl`, or of one `--journal` file, checked end to end.
+# How many startup events (child 2's, unchained) may precede a segment's header in its file before the
+# file is refused by name: a boot journals a handful (a root-record rewrite, `resumed`, a republication
+# note) before its first cycle, and a file that holds more is not one this vehicle wrote.
+STARTUP_LINES_BEFORE_HEADER = 64
+
+
+def record_anchor(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Where a resume from this checkpoint body starts reading the record (addendum B5), or `None` for the whole record.
+
+    The body's last segment entry names the segment, the byte offset just after the last line the
+    checkpoint covers and the chain value there; with the world, the snapshot's tick and every segment
+    the checkpoint lists, that is all the from-anchor read needs. A checkpoint that lists no segment
+    (a world's genesis, taken before its first cycle) has no anchor: its record is read from the start.
+    """
+    history = [entry for entry in body.get("segments") or [] if isinstance(entry, dict)]
+    if not history:
+        return None
+    return {
+        "entry": dict(history[-1]),
+        "world_id": body["identity"]["world_id"],
+        "tick": int(body["identity"]["tick"]),
+        "known": [entry.get("segment") for entry in history],
+    }
+
+
+def _first_header(dir_fd: int, name: str) -> dict[str, Any] | None:
+    """The first segment header in one journal file, past at most `STARTUP_LINES_BEFORE_HEADER` startup events.
+
+    `None` for a file that holds no header: only startup events (a refused start), or a boot torn before
+    its header. Anything else before the first header — a tick row, a note — is not a file this vehicle
+    wrote, and refuses; so do more startup events than the bound. Only those lines are read.
+    """
+    for number, _at, _end, row in _file_lines(dir_fd, name):
+        if row is None:
+            return None
+        if row.get("event") == "segment":
+            problem = _header_problem(row)
+            if problem is not None:
+                raise RecordRefused("header", f"line {number} of {name}: {problem}")
+            return row
+        if not _startup_event(row):
+            raise RecordRefused("header", f"line {number} of {name} comes before any segment header")
+        if number > STARTUP_LINES_BEFORE_HEADER:  # every line so far was a startup event
+            raise RecordRefused(
+                "startup", f"{name} holds more than {STARTUP_LINES_BEFORE_HEADER} startup events before any segment header; no boot journals that many"
+            )
+    return None
+
+
+def _summarise(held: int, name: str, segments: list[SegmentInfo], *, offset: int = 0, current: SegmentInfo | None = None) -> None:
+    """The first pass over one file from `offset`: every line verified, one `SegmentInfo` per segment kept."""
+    seed = (current.header, current.chain, current.last_tick) if current is not None else None
+    for kind, number, at, end, row in _verified_lines(held, name, offset, 1, seed):
+        if kind == "header":
+            current = SegmentInfo(row["boot_id"], name, row, int(row["first_tick"]), row["chain"], offset=at, line=number, end=end, header_end=end)
+            segments.append(current)
+        elif current is not None and kind == "torn":
+            current.torn = True
+        elif current is not None:
+            current.chain, current.end = row["chain"], end
+            if kind == "row":
+                current.last_tick, current.rows = row["tick"], current.rows + 1
+
+
+def _anchored_segment(held: int, name: str, anchor: dict[str, Any]) -> SegmentInfo:
+    """The anchor's segment, its offset held to the file (addendum B5), seeded as if read to there."""
+    entry = anchor["entry"]
+    offset, chain = entry.get("offset"), entry.get("chain")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 1 or not _hex(chain):
+        raise RecordRefused("anchor", f"the checkpoint's anchor in {name} is not a byte offset and a chain value", segment=entry.get("segment"))
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=held)
+    except OSError as exc:
+        why = "is a symlink" if exc.errno == errno.ELOOP else f"cannot be opened ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})"
+        raise RecordRefused("anchor", f"{name}, which holds the checkpoint's anchor, {why}", segment=entry.get("segment")) from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RecordRefused("anchor", f"{name}, which holds the checkpoint's anchor, is not a regular file", segment=entry.get("segment"))
+        if offset > info.st_size:
+            raise RecordRefused(
+                "anchor", f"the checkpoint's anchor is byte {offset} of {name}, which is {info.st_size} bytes: the record lost what the checkpoint covers",
+                tick=anchor["tick"], segment=entry.get("segment"),
+            )
+        if os.pread(fd, 1, offset - 1) != b"\n":
+            raise RecordRefused(
+                "anchor", f"byte {offset} of {name} does not follow the end of a line, so it is not where the checkpoint's last line ended",
+                tick=anchor["tick"], segment=entry.get("segment"),
+            )
+    finally:
+        os.close(fd)
+    header = {
+        "event": "segment", "format": RECORD_FORMAT, "world_id": anchor["world_id"], "segment": entry.get("segment"),
+        "boot_id": entry.get("boot_id"), "first_tick": entry.get("first_tick"), "previous": entry.get("previous"),
+        "previous_chain": None, "wall_epoch": entry.get("wall_epoch"), "chain": chain,
+    }
+    if not (_ident(header["boot_id"]) and header["segment"] == header["boot_id"] and _count(header["first_tick"])):
+        raise RecordRefused("anchor", f"the checkpoint's anchor names no boot this record could hold ({bounded_repr(entry)})")
+    tick = anchor["tick"]
+    return SegmentInfo(header["boot_id"], name, header, tick, chain, offset=offset, line=1, end=offset, anchor_tick=tick, header_end=offset)
+
+
+def read_record(
+    where: str | os.PathLike[str],
+    *,
+    dir_fd: int | None = None,
+    names: list[str] | None = None,
+    anchor: dict[str, Any] | None = None,
+) -> Record:
+    """The record of a state directory's `journal.*.jsonl`, or of one `--journal` file, checked end to end — or from an anchor.
 
     With `dir_fd`, `where` is the state directory and is only named: the segments are listed and opened
-    through a duplicate of the held handle (child 2), never by path — the form a resume uses. Without
-    it, a directory is opened following no link, or, for a file, its parent is; a link there is a named
-    refusal (`directory`). Every file is read a bounded line at a time and every line verified
-    (`_verified_lines`); the record keeps one summary per segment, not the rows. The segments are in
-    predecessor order when they form one chain and by first tick otherwise — `concatenated` refuses a
-    broken chain, so that the refusal is replay's, by name.
+    through a duplicate of the held handle (child 2), never by path — the form a resume uses. With
+    `names` too, those files are read through it instead of the listing (an explicit `--journal`,
+    through its held directory). Without `dir_fd`, a directory is opened following no link, or, for a
+    file, its parent is; a link there is a named refusal (`directory`). Every file is read a bounded
+    line at a time and every line verified (`_verified_lines`); the record keeps one summary per
+    segment, not the rows. The segments are in predecessor order when they form one chain and by first
+    tick otherwise — `concatenated` refuses a broken chain, so that the refusal is replay's, by name.
+
+    **With `anchor` (`record_anchor` of a checkpoint body) only what the checkpoint does not cover is
+    read** (addendum B5). The anchor's file is opened through the handle, held to be a regular file at
+    least `offset` bytes long whose byte before `offset` ends a line, and verified from there seeded with
+    the anchor's chain and tick, so a resume reads `O(L − T)` rows however long the boot before it ran.
+    In a state directory every other segment file is read only to its first header: one that continues
+    the anchor (by predecessor, transitively) is read whole; one the checkpoint already lists is not
+    read; any other refuses (`segment`), because a segment that is neither covered by the checkpoint nor
+    continues it is a fork, another world, or a predecessor whose header was damaged — and skipping it
+    would resume short of ticks it published. **What this trusts**: the prefix of the record before the
+    anchor is attested by the checkpoint, which is itself verified (ADR 0002 I) and lives in the same
+    private directory, and is not re-verified; an edit below the anchor that keeps the anchor's line
+    boundary and everything after it is not detected by a resume, by design. The whole-record form,
+    without `anchor`, still verifies everything end to end, and is the one an offline replay uses.
     """
     where = Path(where)
+    explicit = names is not None
     if dir_fd is not None:
         held = os.dup(dir_fd)
-        names = sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+        if names is None:
+            names = sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
     else:
         if where.is_symlink():
             raise RecordRefused(
@@ -1709,21 +1863,52 @@ def read_record(where: str | os.PathLike[str], *, dir_fd: int | None = None) -> 
                 "directory", f"{where} cannot be opened as the record's directory following no link "
                 f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}); read it through the held handle (`dir_fd=`)"
             ) from None
-        names = [where.name] if directory != where else sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+        if names is None:
+            explicit = directory != where
+            names = [where.name] if explicit else sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
     try:
         segments: list[SegmentInfo] = []
-        for name in names:
-            current: SegmentInfo | None = None
-            for kind, number, at, row in _verified_lines(held, name):
-                if kind == "header":
-                    current = SegmentInfo(row["boot_id"], name, row, int(row["first_tick"]), row["chain"], offset=at, line=number)
-                    segments.append(current)
-                elif current is not None and kind == "torn":
-                    current.torn = True
-                elif current is not None:
-                    current.chain = row["chain"]
-                    if kind == "row":
-                        current.last_tick, current.rows = row["tick"], current.rows + 1
+        if anchor is None:
+            for name in names:
+                _summarise(held, name, segments)
+        else:
+            entry = anchor["entry"]
+            if explicit:
+                if len(names) != 1:
+                    raise RecordRefused("anchor", "an anchored read of an explicit journal reads one file")
+                anchor_name = names[0]
+            else:
+                anchor_name = JOURNAL_SEGMENT.format(boot_id=entry.get("segment"))
+            first = _anchored_segment(held, anchor_name, anchor)
+            segments.append(first)
+            _summarise(held, anchor_name, segments, offset=first.offset, current=first)
+            if not explicit:
+                known = set(anchor["known"])
+                follows: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+                for name in names:
+                    if name == anchor_name:
+                        continue
+                    header = _first_header(held, name)
+                    if header is None:
+                        continue
+                    follows.setdefault(header["previous"], []).append((name, header))
+                frontier, reached = [first.boot_id], {first.boot_id}
+                while frontier:
+                    for name, header in follows.pop(frontier.pop(), []):
+                        if header["boot_id"] in reached:
+                            raise RecordRefused("chain", f"two segments name boot {header['boot_id']}", segment=header["boot_id"])
+                        reached.add(header["boot_id"])
+                        frontier.append(header["boot_id"])
+                        _summarise(held, name, segments)
+                for previous, files in follows.items():
+                    for name, header in files:
+                        if header["boot_id"] not in known:
+                            raise RecordRefused(
+                                "segment",
+                                f"{name} holds segment {header['boot_id']} (after {previous}), which the checkpoint neither lists nor "
+                                f"is continued from its anchor in {first.boot_id}: a fork, another world, or a predecessor whose header was damaged",
+                                segment=header["boot_id"],
+                            )
     except BaseException:
         os.close(held)
         raise
@@ -1869,6 +2054,8 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
             "join", f"the record's first segment, {first.boot_id}, is neither in the checkpoint's history {known} nor continues its last",
             segment=first.boot_id,
         )
+    if first.anchored and (anchor is None or first.boot_id != anchor["segment"] or first.anchor_tick != start or first.header["chain"] != anchor.get("chain")):
+        raise RecordRefused("join", f"the record was read from an anchor in {first.boot_id} at tick {first.anchor_tick}, which is not this checkpoint's", segment=first.boot_id)
     last = segments[-1].last_tick
     if through is not None and (through < start or through > max(last, start)):
         raise RecordRefused("through", f"tick {through} is not between the snapshot's tick {start} and the record's last tick {last}")
@@ -1877,15 +2064,17 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
     tick_us = int(round(dt * 1_000_000))
     truth, head, dwell, receipt = state["truth"], state["lineage_head"], state["dwell"], int(state["receipt"])
     points: list[tuple[int, str, str]] = []
-    reached: dict[str, str] = {}
+    reached: dict[str, tuple[str, int]] = {}
     chain: str | None = None
     for segment in segments:
         if segment.first_tick > stop:
             break
         anchored = anchor is not None and segment.boot_id == anchor["segment"] and "chain" in anchor
         running = segment.header["chain"]
+        # The byte offset just after the last line taken: where a checkpoint of the result anchors (B5).
+        running_end = segment.offset if segment.anchored else segment.header_end
         checked = not anchored or segment.first_tick > start
-        for kind, row in record.lines(segment):
+        for kind, row, end in record.lines(segment):
             tick = row["tick"]
             if not checked and tick > start:
                 if running != anchor["chain"]:
@@ -1893,7 +2082,7 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
                 checked = True
             if tick > stop:
                 break
-            running = row["chain"]
+            running, running_end = row["chain"], end
             if kind == "note" or tick < start:
                 continue
             if tick == start:
@@ -1940,20 +2129,21 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
         # Every segment the replay reaches stays in the history, a header-only one too — a boot whose
         # first cycle was torn — or the next boot names its predecessor's predecessor and the record
         # forks (confirmation review P1).
-        reached[segment.boot_id] = running
+        reached[segment.boot_id] = (running, running_end)
         chain = running
     if points:
         state.update(tick=points[-1][0], truth=truth, dwell=dwell, lineage_head=head, receipt=receipt)
         body["identity"]["tick"] = points[-1][0]
     for entry in history:
         if entry.get("segment") in reached:
-            entry["chain"] = reached[entry["segment"]]
+            entry["chain"], entry["offset"] = reached[entry["segment"]]
     for segment in segments:
         if segment.boot_id in reached and segment.boot_id not in known:
             header = segment.header
             body["segments"].append({
                 "segment": header["segment"], "boot_id": header["boot_id"], "first_tick": header["first_tick"],
-                "previous": header["previous"], "wall_epoch": header["wall_epoch"], "chain": reached[segment.boot_id],
+                "previous": header["previous"], "wall_epoch": header["wall_epoch"],
+                "chain": reached[segment.boot_id][0], "offset": reached[segment.boot_id][1],
             })
     body["identity"]["segments"] = [entry.get("segment") if isinstance(entry, dict) else entry for entry in body["segments"]]
     return Replayed(body=decode(encode(body)), points=points, chain=chain)
@@ -1970,12 +2160,13 @@ def unwritten_results(record: Record) -> list[dict[str, Any]]:
     `boot_id`. Notes follow their row within the cycle, so the record is streamed with one row's
     receipts pending at a time. Under wall-stamped result names a crash *after* the files and before
     the note leaves results listed that are on disk; under child 12's L(b) names re-publication finds
-    the exact name and skips it.
+    the exact name and skips it. A record read from a checkpoint's anchor (`read_record(anchor=)`) lists
+    only the verdicts after it, in `O(L − T)` lines (addendum B5).
     """
     unwritten: list[dict[str, Any]] = []
     for segment in concatenated(record.segments):
         pending: dict[tuple[str, int], dict[str, Any]] = {}
-        for kind, row in record.lines(segment):
+        for kind, row, _end in record.lines(segment):
             if kind == "note":
                 for slug, locals_ in row["results"].items():
                     for local in locals_:
@@ -2580,6 +2771,9 @@ class Executive:
             fd = self._record_handle()
             _write_all(fd, b"".join(lines))
             os.fsync(fd)
+            # One writer appends to the segment (`O_APPEND`, under the lock), so the file's size is the
+            # byte offset just after this append's last line: the anchor a checkpoint records (B5).
+            reached = os.fstat(fd).st_size
         except OSError as exc:
             raise RecordUnwritable(
                 f"the record at {self.journal} cannot be written or made durable "
@@ -2591,6 +2785,7 @@ class Executive:
             self.segments.append(entry)
         if self._segment is not None:
             self._segment["chain"] = chain
+            self._segment["offset"] = reached
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
