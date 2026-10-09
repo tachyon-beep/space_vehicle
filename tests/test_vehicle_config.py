@@ -22395,7 +22395,7 @@ def test_two_executives_with_the_same_ingress_produce_the_same_lineage_and_resul
             executive.cycle()
         # The journal is the operator's copy of what no window file may carry: one line per tick,
         # with the lineage the executive holds in memory.
-        lines = [json.loads(line) for line in journal.read_text().splitlines()]
+        lines = tick_rows(journal)
         assert [row["lineage"] for row in lines] == list(executive.lineage)[1:], "the journal is the lineage"
         assert executive.lineage_head == lines[-1]["lineage"]
         assert [row["tick"] for row in lines] == list(range(1, 7))
@@ -24182,7 +24182,7 @@ def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refus
 
     bound = json.loads((diode / ".executive.json").read_text())
     assert isinstance(bound["world_id"], str) and bound["tick"] >= 1, bound
-    lines = [json.loads(line) for line in segments[0].read_text().splitlines()]
+    lines = tick_rows(segments[0])
     assert lines and all("lineage" in row and row["world_id"] == bound["world_id"] for row in lines), lines[:2]
     assert segments[0].name == f"journal.{lines[0]['boot_id']}.jsonl", "the segment is the boot's"
     # The same state directory on another diode directory: refused by what it recorded it serves.
@@ -24198,16 +24198,19 @@ def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refus
     explicit = tmp_path / "explicit.jsonl"
     ran = start(tmp_path / "fresh-diode", tmp_path / "fresh-state", "alpha", extra=["--journal", str(explicit), "--cycles", "2", "--poll", "0"])
     assert ran.returncode == 0, ran.stderr[-800:]
-    assert len(explicit.read_text().splitlines()) == 2
+    assert len(tick_rows(explicit)) == 2
     assert not list((tmp_path / "fresh-state").glob("journal.*.jsonl"))
     assert (tmp_path / "fresh-state" / ".executive.lock").exists() and not (tmp_path / "fresh-diode" / ".executive.lock").exists()
     assert "state-dir=" in ran.stdout, ran.stdout
 
 
 # A journal tick row's keys, every one of them: the lineage and the hash are the operator's, `boot_id`
-# names the segment (ADR 0002 J, child 2), and nothing else is in a row. A startup event is the row
-# that has an `event` key instead.
-TICK_ROW_KEYS = frozenset({"tick", "world_id", "boot_id", "lineage", "state_hash", "effects", "receipts", "failures"})
+# names the segment (ADR 0002 J, child 2), `windows` carries each window's deltas and `published` its
+# published-tick mark (child 4: the journal is the record), and nothing else is in a row. A segment
+# header, a results-written note and a startup event are the rows that have an `event` key instead.
+TICK_ROW_KEYS = frozenset(
+    {"tick", "world_id", "boot_id", "lineage", "state_hash", "effects", "receipts", "windows", "published", "failures"}
+)
 
 
 def test_without_a_state_dir_the_lock_and_the_journal_are_where_they_were(tmp_path):
@@ -24224,13 +24227,17 @@ def test_without_a_state_dir_the_lock_and_the_journal_are_where_they_were(tmp_pa
     segment a row belongs to is the boot that wrote it, ADR 0002 J), with or without `--state-dir`.
     So the row's keys are compared against `TICK_ROW_KEYS`, the explicit set: a key added or lost is
     a change to the operator's record and must be made here, on purpose, with the README saying so.
+    Child 4 made two such changes: the tick row gained `windows` and `published`, and the file gained
+    a segment header row before the first tick row (an `event` row, so the tick rows are counted
+    without it).
     """
     diode = tmp_path / "diode"
     journal = tmp_path / "j.jsonl"
     ran = start(diode, None, "alpha", extra=["--journal", str(journal), "--cycles", "2", "--poll", "0"])
     assert ran.returncode == 0, ran.stderr[-800:]
-    assert (diode / ".executive.lock").exists() and len(journal.read_text().splitlines()) == 2
-    rows = [json.loads(line) for line in journal.read_text().splitlines()]
+    assert (diode / ".executive.lock").exists() and len(tick_rows(journal)) == 2
+    rows = tick_rows(journal)
+    assert record_lines(journal)[0]["event"] == "segment" and len(record_lines(journal)) == 3
     assert [sorted(row) for row in rows] == [sorted(TICK_ROW_KEYS)] * 2, rows
     assert len({row["boot_id"] for row in rows}) == 1 and [row["tick"] for row in rows] == [1, 2], rows
     assert not list(tmp_path.rglob("journal.*.jsonl")) and not list(tmp_path.rglob("serves.json"))
@@ -24759,7 +24766,7 @@ def test_a_root_record_that_cannot_be_written_mid_run_is_a_recorded_failure_and_
     assert json.loads(record_path.read_text())["tick"] == 3
     # The record is written after the tick's journal row, so a tick's record failure is counted in
     # the next tick's row — the row says how many failures the executive had when it was written.
-    rows = [json.loads(line) for line in executive.journal.read_text().splitlines()]
+    rows = tick_rows(executive.journal)
     assert [row["failures"] for row in rows] == [0, 0, 1] and all(set(row) == TICK_ROW_KEYS for row in rows)
     executive.close()
 
@@ -24829,7 +24836,7 @@ def test_a_state_dir_or_journal_spelled_through_the_diode_dir_is_refused_and_a_r
     executive.close()
     assert list(stash.iterdir()) == [], "nothing followed the retargeted link into the window"
     (segment,) = target.glob("journal.*.jsonl")
-    rows = [json.loads(line) for line in segment.read_text().splitlines()]
+    rows = tick_rows(segment)
     assert [row["tick"] for row in rows] == [1, 2, 3], rows
     assert hidden_state_hits(diode, {f"lineage[{i}]": row["lineage"] for i, row in enumerate(rows)}) == []
 
@@ -25101,4 +25108,732 @@ def test_a_start_opens_its_state_dir_and_its_journal_directory_once_each(tmp_pat
     journal = tmp_path / "j.jsonl"
     assert console.main(["--diode-dir", str(tmp_path / "d2"), "--state-dir", str(tmp_path / "s2"), "--journal", str(journal), *base]) == 0
     assert sorted(calls) == ["--journal", "--state-dir"], calls
-    assert len(journal.read_text().splitlines()) == 2
+    assert len(tick_rows(journal)) == 2
+
+
+# ---- ADR 0002 child 4: the per-cycle durable record, the published-tick mark, replay ------------
+#
+# `--journal` becomes the record (J rule 1): one segment per boot, a header row naming the boot, its
+# first tick and the segment before it, then one tick row per cycle — the stamped effects, every
+# verdict's receipts, the per-window deltas, the compare-point and the lineage link, and the
+# published-tick mark of every window about to publish (rule 2) — appended and `fsync`ed before any
+# result, frame or mirror of the cycle is written (rule 3), and a `results_written` note `fsync`ed
+# after the results. The oracles below are the live executive's own state, read after each cycle,
+# never the record or the replay under test.
+
+
+def record_lines(path: Path) -> list[dict]:
+    """Every row of one journal file, in the order it was written."""
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def tick_rows(path: Path) -> list[dict]:
+    """A journal's tick rows: the rows without an `event` key.
+
+    A segment header (`event: segment`), a results-written note and a startup event each carry one;
+    a tick row never does, which is the convention child 2 set for the startup events.
+    """
+    return [row for row in record_lines(path) if "event" not in row]
+
+
+# A script that, after tick 1, produces every verdict state a receipt can carry: accepted, refused,
+# superseded (two windows acknowledging in one conflict domain), deferred, settled and duplicate.
+RECORD_SCRIPT = {
+    0: {"alpha": ["set_rcs_mode mode=manual"], "bravo": ["set_rcs_quad group=sm_primary state=enable"]},
+    1: {"alpha": ["ack_alarm alert_id=a", "set_bus_tie tie=csm_tie_ab state=closed"], "bravo": ["ack_alarm alert_id=b", "zzz_not_a_verb"]},
+    2: {"bravo": ["request_imu_alignment source=star target=LVLH"]},
+    3: {},
+    4: {"alpha": ["set_rcs_mode mode=auto"], "bravo": ["set_rcs_quad group=sm_primary state=inhibit"]},
+    5: {"alpha": ["stop_burn engine=sps", "stop_burn engine=sps"]},
+    6: {"bravo": ["set_rcs_quad group=sm_secondary state=enable"]},
+    7: {},
+}
+
+
+def window_counters(executive) -> dict:
+    """What a window's half of the state is after a cycle, read from the live objects."""
+    return {
+        "receipt": executive.receipt,
+        **{
+            slug: {
+                "receipts": window.receipts,
+                "accepted": window.accepted,
+                "deferred": json.loads(json.dumps(window.deferred)),
+                "arms": dict(window.arms),
+                "seq": window.seq,
+            }
+            for slug, window in executive.windows.items()
+        },
+    }
+
+
+def recorded_run(executive, diode: Path, script: dict, cycles: int, *, start: int = 0, snapshot_at=None):
+    """Run `cycles` cycles of `script` on a live executive, and keep the oracle beside it.
+
+    After each cycle the tick, `plant.state_hash` of the truth the executive now holds and its
+    `lineage_head` are read from the executive itself — §6's compare-point and the lineage link as
+    the uninterrupted run computed them — together with every window counter. With `snapshot_at`, the
+    checkpoint body (child 1's `capture_state`) is taken when the executive reaches that tick and
+    written into its state directory, as a periodic checkpoint would be.
+    """
+    checkpoint, _console, plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    points: dict[int, tuple[str, str]] = {}
+    counters: dict[int, dict] = {}
+    snapshot = None
+    if snapshot_at == executive.tick:
+        snapshot = checkpoint.capture_state(executive, compat)
+    for index in range(start, start + cycles):
+        for slug, commands in script.get(index, {}).items():
+            submit(diode / slug, commands)
+        executive.cycle()
+        points[executive.tick] = (plant.state_hash(executive.truth), executive.lineage_head)
+        counters[executive.tick] = window_counters(executive)
+        if snapshot_at == executive.tick:
+            snapshot = checkpoint.capture_state(executive, compat)
+            if executive.state_dir is not None:
+                checkpoint.write_checkpoint(executive.state_dir, snapshot)
+    return points, counters, snapshot
+
+
+def test_a_record_replayed_onto_its_snapshot_reproduces_every_compare_point_and_lineage_link(tmp_path):
+    """ADR 0002 J and `plant.md` §6, the first acceptance bullet: the record *is* the replay trace.
+
+    An executive with a state directory runs eight cycles of a script that produces every verdict
+    state; the checkpoint is written at tick 1. `read_record` reads the state directory's segment and
+    `replay_record` re-executes ticks 2–8 onto the checkpoint through the same functions the live
+    cycle uses (`plant.step`, the compare-point, the lineage link, the dwell clock), applying the
+    recorded effects in their recorded order and the recorded window deltas. **The oracle is the
+    uninterrupted run**: the state hash and lineage head the executive itself held after each cycle,
+    and its own capture at tick 8 — the executive's whole section (truth, dwell, lineage head, receipt
+    counter, tick) and every window's (`seq`, receipts, spend, deferrals, arms, published tick) —
+    never the record and never the replay's output.
+
+    A replay that cannot disagree is not a replay, so two tampered copies of the record are replayed
+    too: a row whose compare-point was altered, and a row whose recorded *effect* was altered (the
+    one that inhibits bravo's primary quad is made to enable it, which the plant then applies). Each
+    refuses at the tick it was altered at, naming the check — the second proves the replay drives the
+    recorded effects through the plant rather than copying the recorded hashes forward.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    points, _counters, snapshot = recorded_run(executive, diode, RECORD_SCRIPT, 8, snapshot_at=1)
+    compat = checkpoint.Compatibility.current(world)
+    live = checkpoint.capture_state(executive, compat)
+    segment = executive.journal
+    executive.close()
+    assert snapshot["executive"]["tick"] == 1 and live["executive"]["tick"] == 8
+
+    rows = tick_rows(segment)
+    assert [row["tick"] for row in rows] == list(range(1, 9)), "one tick row per cycle, quiet cycles included"
+    states = {r["state"] for row in rows if row["tick"] > 1 for r in row["receipts"]}
+    assert states == {"accepted", "refused", "superseded", "deferred", "settled", "duplicate"}, states
+    assert [(row["state_hash"], row["lineage"]) for row in rows] == [points[t] for t in range(1, 9)]
+
+    loaded = checkpoint.choose_generation(state, compat)
+    assert loaded is not None and loaded.body == snapshot
+    replayed = console.replay_record(world, loaded.body, console.read_record(state))
+    assert replayed.points == [(t, *points[t]) for t in range(2, 9)], replayed.points
+    assert replayed.body["executive"] == live["executive"]
+    assert replayed.body["windows"] == live["windows"]
+    assert replayed.body["identity"]["tick"] == 8 and replayed.body["identity"]["world_id"] == live["identity"]["world_id"]
+    # The replayed body is a checkpoint body: child 1's writer and reader accept it as one.
+    again = tmp_path / "again"
+    checkpoint.write_checkpoint(again, replayed.body)
+    assert checkpoint.choose_generation(again, compat).body == replayed.body
+
+    lines = segment.read_text().splitlines()
+
+    def tampered(tick: int, change) -> list:
+        where = tmp_path / f"tampered-{tick}"
+        where.mkdir()
+        altered = []
+        for line in lines:
+            row = json.loads(line)
+            if "event" not in row and row["tick"] == tick:
+                change(row)
+                line = json.dumps(row, sort_keys=True)
+            altered.append(line)
+        (where / segment.name).write_text("\n".join(altered) + "\n")
+        return console.read_record(where)
+
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, loaded.body, tampered(4, lambda row: row.update(state_hash="0" * 64)))
+    assert refused.value.check == "state_hash" and refused.value.tick == 4, refused.value
+    assert "tick 4" in str(refused.value), refused.value
+    inhibit = next(
+        row["tick"] for row in rows if row["tick"] > 1 and ["set_rcs_quad", {"group": "sm_primary", "state": "inhibit"}] in [e[1:] for e in row["effects"]]
+    )
+
+    def flip(row: dict) -> None:
+        for effect in row["effects"]:
+            if effect[1:] == ["set_rcs_quad", {"group": "sm_primary", "state": "inhibit"}]:
+                effect[2] = {"group": "sm_primary", "state": "enable"}
+
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, loaded.body, tampered(inhibit, flip))
+    assert refused.value.check in ("state_hash", "lineage") and refused.value.tick == inhibit, refused.value
+
+
+def test_a_record_with_one_missing_cycle_refuses_replay_by_name(tmp_path):
+    """ADR 0002 J, the second acceptance bullet: a hole in the trace is a refusal, never a skip.
+
+    Every cycle writes a tick row — the published-tick mark is written at every publication, and the
+    row that carries it carries the compare-point at no extra `fsync` — so the record's tick range is
+    contiguous by construction, and a hole is a missing cycle wherever it is. The row for tick 4 is
+    removed from the segment, and replay onto the tick-1 checkpoint refuses with the check
+    `missing`, the tick, and the segment it is missing from, before it has replayed anything past it;
+    so does a record missing the first cycle after the snapshot. The unaltered record replays.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    _points, _counters, snapshot = recorded_run(executive, diode, RECORD_SCRIPT, 6, snapshot_at=1)
+    segment, boot_id = executive.journal, executive.boot_id
+    executive.close()
+    assert console.replay_record(world, snapshot, console.read_record(state)).body["executive"]["tick"] == 6
+
+    lines = segment.read_text().splitlines()
+    for missing in (4, 2):
+        where = tmp_path / f"without-{missing}"
+        where.mkdir()
+        kept = [line for line in lines if json.loads(line).get("tick") != missing or "event" in json.loads(line)]
+        assert len(kept) == len(lines) - 1
+        (where / segment.name).write_text("\n".join(kept) + "\n")
+        with pytest.raises(console.RecordRefused) as refused:
+            console.replay_record(world, snapshot, console.read_record(where))
+        assert refused.value.check == "missing" and refused.value.tick == missing, refused.value
+        message = str(refused.value)
+        assert f"tick {missing}" in message and boot_id in message, message
+
+
+def test_a_refusal_only_cycle_is_recorded_and_its_receipts_and_spend_delta_replay(tmp_path):
+    """ADR 0002 J rule 1: the record is written whenever any verdict exists, not only when an effect does.
+
+    A refusal moves the window's receipt counter, and an accepted deferral moves the queue and the
+    spend with no effect this tick; a record of effects alone would repeat window-local receipt numbers
+    after a restart and forget the deferral. Tick 2's cycle here holds refusals only — an unknown
+    verb, a bus tie refused `INTERLOCK UNEVALUATED`, a burn refused the same way — and tick 3's holds
+    only bravo's accepted deferral. Both rows carry no effect and carry every receipt (global and
+    window-local) and each window's spend delta, explicitly zero for the refusals; the deferral's row
+    carries the queue entry it added and the settlement's row the one it removed.
+
+    The oracle is the live run's counters after each cycle. `replay_record(..., through=t)` onto the
+    tick-1 checkpoint is compared at every tick: the global receipt counter, each window's receipt
+    counter and accepted count, its deferral queue and its arms.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    script = {
+        0: {"alpha": ["set_rcs_mode mode=manual"]},
+        1: {"alpha": ["zzz_not_a_verb", "set_bus_tie tie=csm_tie_ab state=closed"], "bravo": ["start_burn engine=sps"]},
+        2: {"bravo": ["request_imu_alignment source=star target=LVLH"]},
+        3: {},
+    }
+    _points, counters, snapshot = recorded_run(executive, diode, script, 4, snapshot_at=1)
+    rows = {row["tick"]: row for row in tick_rows(executive.journal)}
+    executive.close()
+
+    refusals = rows[2]
+    assert refusals["effects"] == [] and [r["state"] for r in refusals["receipts"]] == ["refused"] * 3, refusals["receipts"]
+    assert sorted((r["window"], r["local"]) for r in refusals["receipts"]) == [("alpha", 2), ("alpha", 3), ("bravo", 1)]
+    assert sorted(r["seq"] for r in refusals["receipts"]) == [2, 3, 4]
+    assert refusals["windows"]["alpha"]["spend"] == {"version": 0, "accepted": 0}
+    assert refusals["windows"]["bravo"]["spend"] == {"version": 0, "accepted": 0}
+    deferral = rows[3]
+    assert deferral["effects"] == [] and [r["state"] for r in deferral["receipts"]] == ["deferred"]
+    assert deferral["windows"]["bravo"]["spend"] == {"version": 0, "accepted": 1}
+    (added,) = deferral["windows"]["bravo"]["deferred_added"]
+    assert added["command"] == "request_imu_alignment source=star target=LVLH" and added["due_tick"] == 3
+    assert rows[4]["windows"]["bravo"]["deferred_removed"] == [added["receipt"]]
+
+    record = console.read_record(state)
+    for tick in (2, 3, 4):
+        replayed = console.replay_record(world, snapshot, record, through=tick)
+        assert replayed.body["executive"]["tick"] == tick and replayed.body["executive"]["receipt"] == counters[tick]["receipt"]
+        for slug in ("alpha", "bravo"):
+            row, live = replayed.body["windows"][slug], counters[tick][slug]
+            assert row["receipts"] == live["receipts"] and row["spend"] == {"version": 0, "accepted": live["accepted"]}, (tick, slug, row)
+            assert row["deferred"] == live["deferred"] and row["arms"] == live["arms"] and row["seq"] == live["seq"], (tick, slug, row)
+
+
+def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_tick_across_a_reboot(tmp_path):
+    """ADR 0002 J rule 1 and G: one segment per boot, and two segments are one trace.
+
+    Boot A runs five cycles and checkpoints at tick 2 and at tick 5 (as a graceful stop would); it is
+    then gone, and boot B is constructed on the same two directories, restored from the tick-5 body
+    (child 1's `restore_state` — the resume itself is child 3's), and runs three cycles more. A third
+    executive, C, runs the same eight cycles of the same script uninterrupted in directories of its
+    own: it is the oracle.
+
+    Each segment's first row is its header: the format, the boot, the first tick (the tick the boot's
+    first cycle started at) and the boot before it — A's names none, B's names A. The boot ids are
+    chosen so that B's file sorts *before* A's: the order of the trace is the predecessor chain's,
+    never the file names'. B's own checkpoint lists both segments, so the next boot names B. Replay
+    of the tick-2 checkpoint across both segments reproduces C's compare-point and lineage at every
+    tick from 3 to 8, and C's executive and window sections at tick 8.
+
+    The seam is checked, not assumed: with A's last row gone, B begins at tick 5 after a predecessor
+    that ends at 4, and replay refuses tick 5 as missing; with A's segment gone altogether, B is the
+    first segment there is, it begins after the snapshot, and replay refuses tick 3.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    a_boot, b_boot = "f" * 32, "0" * 32
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state, boot_id=a_boot)
+    first.attach("alpha")
+    first.attach("bravo")
+    _points, _counters, early = recorded_run(first, diode, RECORD_SCRIPT, 2, snapshot_at=2)
+    recorded_run(first, diode, RECORD_SCRIPT, 3, start=2)
+    stopped = checkpoint.capture_state(first, compat)
+    a_segment = first.journal
+    first.close()
+    assert stopped["executive"]["tick"] == 5 and [s["segment"] for s in stopped["segments"]] == [a_boot]
+
+    second = console.Executive(world, diode, phase="translunar_coast", state_dir=state, boot_id=b_boot)
+    second.attach("alpha")
+    second.attach("bravo")
+    checkpoint.restore_state(second, stopped)
+    recorded_run(second, diode, RECORD_SCRIPT, 3, start=5)
+    b_segment = second.journal
+    later = checkpoint.capture_state(second, compat)
+    second.close()
+    assert sorted(p.name for p in state.glob("journal.*.jsonl")) == [b_segment.name, a_segment.name]
+
+    a_header, b_header = record_lines(a_segment)[0], record_lines(b_segment)[0]
+    assert a_header["event"] == "segment" and a_header["format"] == "vehicle.record.v1"
+    assert (a_header["boot_id"], a_header["first_tick"], a_header["previous"]) == (a_boot, 0, None), a_header
+    assert (b_header["boot_id"], b_header["first_tick"], b_header["previous"]) == (b_boot, 5, a_boot), b_header
+    assert a_header["world_id"] == b_header["world_id"] == stopped["identity"]["world_id"]
+    assert [row["tick"] for row in tick_rows(a_segment)] == [1, 2, 3, 4, 5]
+    assert [row["tick"] for row in tick_rows(b_segment)] == [6, 7, 8]
+    assert [(s["segment"], s["first_tick"], s["previous"]) for s in later["segments"]] == [(a_boot, 0, None), (b_boot, 5, a_boot)]
+    assert later["identity"]["segments"] == [a_boot, b_boot]
+
+    uninterrupted = console.Executive(world, tmp_path / "c-diode", phase="translunar_coast", state_dir=tmp_path / "c-state")
+    uninterrupted.attach("alpha")
+    uninterrupted.attach("bravo")
+    oracle, _counters, _none = recorded_run(uninterrupted, tmp_path / "c-diode", RECORD_SCRIPT, 8)
+    oracle_body = checkpoint.capture_state(uninterrupted, compat)
+    uninterrupted.close()
+
+    record = console.read_record(state)
+    assert [segment.boot_id for segment in record] == [a_boot, b_boot]
+    replayed = console.replay_record(world, early, record)
+    assert replayed.points == [(t, *oracle[t]) for t in range(3, 9)], replayed.points
+    assert replayed.body["executive"] == oracle_body["executive"]
+    assert replayed.body["windows"] == oracle_body["windows"]
+    assert [s["segment"] for s in replayed.body["segments"]] == [a_boot, b_boot]
+
+    cut = tmp_path / "cut"
+    cut.mkdir()
+    a_lines = [line for line in a_segment.read_text().splitlines() if json.loads(line).get("tick") != 5 or "event" in json.loads(line)]
+    (cut / a_segment.name).write_text("\n".join(a_lines) + "\n")
+    (cut / b_segment.name).write_text(b_segment.read_text())
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, early, console.read_record(cut))
+    assert refused.value.check == "missing" and refused.value.tick == 5 and b_boot in str(refused.value), refused.value
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    (alone / b_segment.name).write_text(b_segment.read_text())
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, early, console.read_record(alone))
+    assert refused.value.check == "missing" and refused.value.tick == 3, refused.value
+
+
+def test_a_result_is_written_only_after_its_cycles_record_is_durable_and_the_record_notes_it(tmp_path, monkeypatch):
+    """ADR 0002 J rule 3, and the cost J prices: one `fsync` before the results, one after.
+
+    `os.fsync` and `Window.write_result` are watched. At the moment each result is written, the
+    segment on disk must already hold this cycle's tick row with this result's receipt in it, and an
+    `fsync` of the segment must already have happened in this cycle; after the last result, a second
+    `fsync` of the segment makes the `results_written` note durable. The note names each result by
+    window and window-local receipt — never by file name, which is wall-stamped until child 12's
+    L(b) — and the names match the receipts of the files on disk. A quiet cycle costs exactly one
+    `fsync` of the segment (its tick row carries the published-tick mark); a cycle with results costs
+    exactly two.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    segment = os.path.realpath(executive.journal)
+    events: list[tuple] = []
+    real_fsync, real_write = os.fsync, console.Window.write_result
+
+    def watched_fsync(fd):
+        events.append(("fsync", os.path.realpath(f"/proc/self/fd/{fd}")))
+        return real_fsync(fd)
+
+    def watched_write(self, command, body):
+        last = tick_rows(Path(segment))[-1]
+        events.append(("result", self.slug, command, last["tick"], [r["local"] for r in last["receipts"] if r["window"] == self.slug]))
+        return real_write(self, command, body)
+
+    monkeypatch.setattr(os, "fsync", watched_fsync)
+    monkeypatch.setattr(console.Window, "write_result", watched_write)
+
+    executive.cycle()
+    assert [e for e in events if e[0] == "fsync" and e[1] == segment] == [("fsync", segment)], "a quiet cycle is one fsync"
+    assert not [e for e in events if e[0] == "result"]
+    events.clear()
+
+    submit(diode / "alpha", ["set_rcs_mode mode=manual", "zzz_not_a_verb"])
+    executive.cycle()
+    tick = executive.tick
+    kinds = [e[0] if e[0] == "result" else ("record" if e[1] == segment else "other") for e in events]
+    assert kinds.count("record") == 2, events
+    results = [i for i, kind in enumerate(kinds) if kind == "result"]
+    records = [i for i, kind in enumerate(kinds) if kind == "record"]
+    assert len(results) == 2 and records[0] < results[0] and records[1] > results[-1], kinds
+    for event in (events[i] for i in results):
+        assert event[3] == tick and event[4] == [1, 2], event
+
+    notes = [row for row in record_lines(Path(segment)) if row.get("event") == "results_written"]
+    assert notes == [{"event": "results_written", "boot_id": executive.boot_id, "world_id": executive.world_id, "tick": tick, "results": {"alpha": [1, 2]}}], notes
+    on_disk = sorted(int(receipt_of(body)["seq"]) for body in results_of(diode / "alpha"))
+    assert on_disk == [1, 2]
+    executive.close()
+
+
+def test_a_kill_between_the_record_and_the_result_leaves_the_record_naming_exactly_the_unwritten_results(tmp_path, monkeypatch):
+    """ADR 0002 J rule 3: a crash between the two re-publishes from the record — so the record says what.
+
+    The kill is simulated at `Window.write_result`, after the cycle's record is durable: the hook
+    first checks that the segment holds the tick row, then raises a `BaseException` the cycle does not
+    catch, as a `SIGKILL` would end it. Nothing is in either window's `output/`; the tick row holds
+    both windows' receipts and both windows' published-tick marks; there is no `results_written`
+    note for the tick; and `unwritten_results` — the function child 3's resume calls — names exactly
+    those two results, once each, with everything a re-publication needs: the window, the
+    window-local receipt, the command, the body, and the receipt block's fields. The body plus the
+    receipt block rebuilt from those fields is byte-identical to what the killed call was handed.
+
+    Then the residual window the ADR already records: a kill *after* the results and before the note
+    leaves files on disk that the record still lists as unwritten. Under wall-stamped names a resume
+    cannot tell them from new ones; under child 12's L(b) names re-publication finds the exact name
+    and skips it ("one more reason for L(b)"). A normal cycle afterwards notes its own results, and
+    a run with no kill lists nothing.
+    """
+    console, _plant, world = console_tools()
+
+    class SimulatedKill(BaseException):
+        pass
+
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    executive.cycle()
+    assert console.unwritten_results(console.read_record(state)) == []
+    handed: list[tuple[str, str]] = []
+
+    def killed(self, command, body):
+        assert tick_rows(executive.journal)[-1]["tick"] == executive.tick, "the record first"
+        handed.append((command, body))
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed)
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    submit(diode / "bravo", ["zzz_not_a_verb"])
+    with pytest.raises(SimulatedKill):
+        executive.cycle()
+    tick = executive.tick
+    assert not results_of(diode / "alpha") and not results_of(diode / "bravo")
+    row = tick_rows(executive.journal)[-1]
+    assert row["tick"] == tick and sorted((r["window"], r["local"]) for r in row["receipts"]) == [("alpha", 1), ("bravo", 1)]
+    assert row["published"] == {"alpha": {"tick": tick, "seq": 1}, "bravo": {"tick": tick, "seq": 1}}, row["published"]
+    assert not [r for r in record_lines(executive.journal) if r.get("event") == "results_written" and r["tick"] == tick]
+
+    unwritten = console.unwritten_results(console.read_record(state))
+    assert sorted((u["window"], u["local"]) for u in unwritten) == [("alpha", 1), ("bravo", 1)], unwritten
+    first = next(u for u in unwritten if u["window"] == handed[0][1].split("window=")[1].split()[0])
+    rebuilt = first["body"] + (
+        f"receipt: world={first['world_id']} seq={first['local']} window={first['window']} "
+        f"tick={first['tick']} offset_us={first['offset_us']} state={first['state']}\n"
+    )
+    assert (first["command"], rebuilt) == handed[0], (first, handed[0])
+
+    monkeypatch.undo()
+    real_note = console.Executive._note_results
+
+    def killed_after(self, *args, **kwargs):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_note_results", killed_after)
+    submit(diode / "alpha", ["zzz_again"])
+    with pytest.raises(SimulatedKill):
+        executive.cycle()
+    assert len(results_of(diode / "alpha")) == 1, "the result is on disk"
+    listed = [(u["window"], u["local"], u["tick"]) for u in console.unwritten_results(console.read_record(state))]
+    assert ("alpha", 2, executive.tick - 1) in listed, listed
+
+    monkeypatch.setattr(console.Executive, "_note_results", real_note)
+    submit(diode / "alpha", ["zzz_third"])
+    executive.cycle()
+    still = [(u["window"], u["local"]) for u in console.unwritten_results(console.read_record(state))]
+    assert ("alpha", 3) not in still and sorted(still) == [("alpha", 1), ("alpha", 2), ("bravo", 1)], still
+    executive.close()
+
+    clean = tmp_path / "clean-state"
+    other = console.Executive(world, tmp_path / "clean", phase="translunar_coast", state_dir=clean)
+    other.attach("alpha")
+    submit(tmp_path / "clean" / "alpha", ["set_rcs_mode mode=manual", "zzz"])
+    other.cycle()
+    other.cycle()
+    other.close()
+    assert console.unwritten_results(console.read_record(clean)) == []
+
+
+def test_every_publishing_window_has_its_published_tick_marked_durably_before_its_frame_or_mirror(tmp_path, monkeypatch):
+    """ADR 0002 J rule 2: a frame or mirror may describe a tick only once the window's mark is durable.
+
+    `Window.write_frame` is watched: when it runs (and the mirror is written after it), the segment
+    on disk already holds this cycle's tick row whose `published` entry for the window is this tick
+    and the frame number about to be written, and the window's `published_tick` is this tick. A
+    window that is dark this cycle — its `telemetry/` replaced by a file, so its handles refuse and it
+    publishes nothing — gets no mark, and its `published_tick` stays at the last tick it published;
+    the healthy window's moves on. The checkpoint carries both (child 1's `published_tick` field,
+    which child 1 left `null` for this child to fill).
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    assert executive.windows["alpha"].published_tick is None
+    seen: list[tuple] = []
+    real_frame = console.Window.write_frame
+
+    def watched(self):
+        row = tick_rows(executive.journal)[-1]
+        seen.append((self.slug, row["tick"], row["published"].get(self.slug), self.published_tick, executive.tick, self.seq))
+        return real_frame(self)
+
+    monkeypatch.setattr(console.Window, "write_frame", watched)
+    executive.cycle()
+    executive.cycle()
+    for slug, row_tick, mark, published, tick, seq in seen:
+        assert row_tick == tick and mark == {"tick": tick, "seq": seq} and published == tick, (slug, row_tick, mark, published, tick, seq)
+    assert len(seen) == 4
+    seen.clear()
+
+    telemetry = diode / "bravo" / "telemetry"
+    shutil.rmtree(telemetry)
+    telemetry.write_text("not a directory")
+    executive.cycle()
+    assert [entry[0] for entry in seen] == ["alpha"]
+    row = tick_rows(executive.journal)[-1]
+    assert set(row["published"]) == {"alpha"} and row["tick"] == 3, row
+    assert executive.windows["alpha"].published_tick == 3 and executive.windows["bravo"].published_tick == 2
+    body = checkpoint.capture_state(executive, checkpoint.Compatibility.current(world))
+    assert body["windows"]["alpha"]["published_tick"] == 3 and body["windows"]["bravo"]["published_tick"] == 2
+    executive.close()
+
+
+def test_a_record_line_is_bounded_however_large_the_agents_command(tmp_path, monkeypatch):
+    """The record keeps agent text by prefix and fingerprint, never by bulk (child 2's F5, one file over).
+
+    A command is the agent's: a single 900 kB token is an unknown verb whose refusal quotes it, and
+    tokens without `=` are ignored by the argument parser, so an *accepted* deferral can carry
+    kilobytes of them in its queue entry. Window files are unchanged — the result file still holds the
+    whole refusal — but in the record every agent-derived string (a receipt's command and body, a
+    deferral entry's command) longer than `RECORD_TEXT_BYTES` is cut, UTF-8-safely, and carries the
+    SHA-256 and the byte length of the whole, so the row stays within a few times that bound.
+
+    The reader holds its own bound: a line longer than `MAX_RECORD_LINE_BYTES` is refused by name
+    (the bound is lowered here so the test does not write 64 MiB); a torn *last* line — an append the
+    crash interrupted, whose `fsync` never returned and from which nothing was published — is dropped
+    and said to be; a line that does not parse in the *middle* of a segment is corruption and refuses.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    executive.cycle()
+    huge = "zzz" + "q" * 900_000
+    padded = "request_imu_alignment source=star target=LVLH " + "x " * 5000
+    submit(diode / "alpha", [huge])
+    submit(diode / "bravo", [padded])
+    executive.cycle()
+    (result,) = (diode / "alpha" / "output").glob("*.txt")
+    text = result.read_text()
+    assert len(text) > 900_000, "the window's result is unchanged"
+    body = text[: text.rindex("receipt: ")]
+
+    limit = console.RECORD_TEXT_BYTES
+    line = [raw for raw in executive.journal.read_bytes().splitlines() if json.loads(raw).get("tick") == 2 and "event" not in json.loads(raw)]
+    assert len(line) == 1 and len(line[0]) < 4 * limit + 4096, len(line[0]) if line else line
+    row = json.loads(line[0])
+    (alpha,) = [r for r in row["receipts"] if r["window"] == "alpha"]
+    assert len(alpha["command"].encode()) <= limit and huge.startswith(alpha["command"])
+    assert alpha["command_sha256"] == hashlib.sha256(huge.encode()).hexdigest() and alpha["command_bytes"] == len(huge.encode())
+    assert len(alpha["body"].encode()) <= limit and body.startswith(alpha["body"])
+    assert alpha["body_sha256"] == hashlib.sha256(body.encode()).hexdigest() and alpha["body_bytes"] == len(body.encode())
+    (entry,) = row["windows"]["bravo"]["deferred_added"]
+    assert entry["command_sha256"] == hashlib.sha256(padded.strip().encode()).hexdigest() and len(entry["command"].encode()) <= limit
+    assert executive.windows["bravo"].deferred[0]["command"] == padded.strip(), "the live queue keeps the whole command"
+    segment = executive.journal
+    executive.close()
+
+    monkeypatch.setattr(console, "MAX_RECORD_LINE_BYTES", 2048)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(state)
+    assert refused.value.check == "line" and segment.name in str(refused.value), refused.value
+    monkeypatch.undo()
+
+    lines = segment.read_text().splitlines()
+    torn = tmp_path / "torn"
+    torn.mkdir()
+    (torn / segment.name).write_text("\n".join(lines) + '\n{"tick": 3, "lin')
+    (read,) = console.read_record(torn)
+    assert read.torn and [r["tick"] for r in read.rows] == [1, 2]
+    broken = tmp_path / "broken"
+    broken.mkdir()
+    (broken / segment.name).write_text("\n".join([lines[0], lines[1], "{not json", *lines[2:]]) + "\n")
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(broken)
+    assert refused.value.check == "corrupt" and segment.name in str(refused.value), refused.value
+
+
+def test_nothing_the_record_keeps_reaches_any_window_file(tmp_path):
+    """The record is private: the state directory's, mode 0600, and named in no window file.
+
+    The forbidden set is read from the record itself after a commanded run and a checkpoint: every
+    tick row's lineage link and compare-point, the executive's boot id (which names the segment), the
+    segment's file name, the record's format id, the note's event name, the state directory's path and
+    its distinctive basename. Every regular file under the diode directory — results, frames, the five
+    window files and the root record — is scanned with child 2's scanner, which is first shown to find
+    a planted lineage link. The record's files are the state directory's alone, created `0600`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "private-rq4-state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, RECORD_SCRIPT, 6, snapshot_at=3)
+    rows = tick_rows(executive.journal)
+    forbidden = {
+        **{f"lineage@{row['tick']}": row["lineage"] for row in rows},
+        **{f"state_hash@{row['tick']}": row["state_hash"] for row in rows},
+        "boot_id": executive.boot_id,
+        "segment": executive.journal.name,
+        "format": "vehicle.record.v1",
+        "note": "results_written",
+        "state_dir": str(state.resolve()),
+        "state_dir.name": state.name,
+    }
+    planted = diode / "bravo" / "output" / "planted.txt"
+    planted.write_text(rows[-1]["lineage"])
+    assert ("bravo/output/planted.txt", f"lineage@{rows[-1]['tick']}") in hidden_state_hits(diode, forbidden)
+    planted.unlink()
+    assert hidden_state_hits(diode, forbidden) == []
+    assert not list(diode.rglob("*.jsonl"))
+    for segment in state.glob("journal.*.jsonl"):
+        assert stat_mode(segment) == 0o600, (segment, oct(stat_mode(segment)))
+    executive.close()
+
+
+def stat_mode(path: Path) -> int:
+    return path.stat().st_mode & 0o777
+
+
+def test_an_explicit_journal_is_the_same_record_with_the_same_durability_and_holds_every_boot(tmp_path, monkeypatch):
+    """Without `--state-dir`, an explicit `--journal` is the record too: one format, one durability.
+
+    ADR 0002 J retires `--journal` as a separate flag inside `--state-dir`; without a state directory
+    the flag is the only place a record can go, and a record that is durable in one layout and not
+    in the other is two formats. So the explicit file gets the same rows and the same `fsync` per
+    cycle — counted here on the file's own descriptor — and since every boot appends to the one
+    file, each boot's segment starts with its own header row inside it: two boots, two headers, one
+    file, and replay treats the headers as the segment boundaries they are. The oracle is the live
+    second boot's own compare-points.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    diode = tmp_path / "diode"
+    (tmp_path / "ops").mkdir()
+    journal = tmp_path / "ops" / "record.jsonl"
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def counted(fd):
+        synced.append(os.path.realpath(f"/proc/self/fd/{fd}"))
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", counted)
+    first = console.Executive(world, diode, phase="translunar_coast", journal=journal, boot_id="a" * 32)
+    first.attach("alpha")
+    first.attach("bravo")
+    _points, _counters, early = recorded_run(first, diode, RECORD_SCRIPT, 3, snapshot_at=1)
+    assert synced.count(str(journal.resolve())) >= 3, synced
+    stopped = checkpoint.capture_state(first, compat)
+    first.close()
+    second = console.Executive(world, diode, phase="translunar_coast", journal=journal, boot_id="b" * 32)
+    second.attach("alpha")
+    second.attach("bravo")
+    checkpoint.restore_state(second, stopped)
+    points, _counters, _none = recorded_run(second, diode, RECORD_SCRIPT, 3, start=3)
+    second.close()
+
+    headers = [row for row in record_lines(journal) if row.get("event") == "segment"]
+    assert [(h["boot_id"], h["first_tick"], h["previous"]) for h in headers] == [("a" * 32, 0, None), ("b" * 32, 3, "a" * 32)], headers
+    record = console.read_record(journal)
+    assert [segment.boot_id for segment in record] == ["a" * 32, "b" * 32]
+    replayed = console.replay_record(world, early, record)
+    assert [p for p in replayed.points if p[0] > 3] == [(t, *points[t]) for t in range(4, 7)]
+    assert len(replayed.points) == 5
+
+
+def test_a_record_that_cannot_be_made_durable_stops_the_run_before_the_cycle_is_published(tmp_path, monkeypatch, capsys):
+    """ADR 0002 J rule 3, from the other side: no durable record, no publication — and no traceback.
+
+    The record's `fsync` is made to fail (`EIO`, as a dying disk would) for the segment alone. The
+    cycle raises `RecordUnwritable` naming the file and the errno, and nothing of the cycle reaches
+    the window: no result for the command it claimed, no new frame, the mirror still at the previous
+    tick. Through the entrypoint the same failure is exit 3 with the sentence on stderr, not exit 1
+    and a traceback. The claimed command is lost with the cycle — the disk could not hold it, and a
+    result the vehicle cannot recover is not one it publishes — which the module docstring says.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    segment = os.path.realpath(executive.journal)
+    real_fsync = os.fsync
+
+    def dying(fd):
+        if os.path.realpath(f"/proc/self/fd/{fd}") == segment:
+            raise OSError(errno.EIO, "Input/output error")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", dying)
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    with pytest.raises(console.RecordUnwritable) as stopped:
+        executive.cycle()
+    assert "EIO" in str(stopped.value) and segment in str(stopped.value), stopped.value
+    assert not results_of(diode / "alpha")
+    assert newest_frame(diode / "alpha")["sim_step"] == 1
+    assert json.loads((diode / "alpha" / "state.json").read_text())["executive"]["tick"] == 1
+    executive.close()
+
+    def dying_everywhere(fd):
+        if os.path.basename(os.path.realpath(f"/proc/self/fd/{fd}")).startswith("journal."):
+            raise OSError(errno.EIO, "Input/output error")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", dying_everywhere)
+    code = console.main(["--diode-dir", str(tmp_path / "d2"), "--state-dir", str(tmp_path / "s2"), "--slug", "alpha", "--cycles", "2", "--poll", "0"])
+    err = capsys.readouterr().err
+    assert code == 3 and "stopped at tick 1" in err and "EIO" in err and "cannot be written or made durable" in err, (code, err)

@@ -28,6 +28,14 @@ scalar in a one-key map naming its type, and that walk, not the ring, was the 20
 measured. Every run still reports `all_string_keys` so that a truth the adopted encoder would refuse
 is visible as a fact about the truth rather than as a crash in the timing loop.
 
+The durable record (ADR 0002 J, WP08 child 4) is priced the same way. One appended tick row and
+its `fsync` are timed alone, and `Executive.cycle` is timed again with a state directory, so that
+every cycle appends its row and `fsync`s it before publishing: a *quiet* cycle (no command anywhere,
+one `fsync`: the row carries the published-tick marks) and a *verdict* cycle (one refused command per
+window, so every window writes a result and the `results_written` note costs a second `fsync`). The
+`fsync`s of one quiet and one verdict cycle are counted rather than assumed, and the two rows' sizes
+are reported. The difference between these rows and `Executive.cycle` without a record is J's cost.
+
     python3 tools/measure_clock.py                         # the empty-ring table
     python3 tools/measure_clock.py --full-ring             # the steady-state table
     python3 tools/measure_clock.py --windows 1 2 10 --json # as data, for a record's appendix
@@ -205,6 +213,121 @@ def durable_writer(directory: Path, blob: bytes, *, fsync: bool) -> Any:
     return write
 
 
+def submit_refusal(diode: Path, slugs: list[str]) -> None:
+    """One command no vehicle knows, in every window: a verdict, and a result, everywhere."""
+    for slug in slugs:
+        (diode / slug / "console.json").write_text(json.dumps({"commands": ["zzz_measure"], "variables": {}}))
+
+
+def counted_fsyncs(fn: Any) -> int:
+    """How many `os.fsync` calls one call of `fn` makes."""
+    real = os.fsync
+    calls = [0]
+
+    def counting(fd: int) -> None:
+        calls[0] += 1
+        real(fd)
+
+    os.fsync = counting
+    try:
+        fn()
+    finally:
+        os.fsync = real
+    return calls[0]
+
+
+def verdict_cycles(executive: Any, diode: Path, slugs: list[str], samples: int) -> dict[str, float]:
+    """`Executive.cycle` with one refused command in every window, the console's write not timed."""
+    xs: list[float] = []
+    for _ in range(samples):
+        submit_refusal(diode, slugs)
+        t0 = time.perf_counter()
+        executive.cycle()
+        xs.append((time.perf_counter() - t0) * 1e6)
+    xs.sort()
+    return {
+        "p50_us": round(statistics.median(xs), 1),
+        "p95_us": round(xs[max(0, int(len(xs) * 0.95) - 1)], 1),
+        "max_us": round(xs[-1], 1),
+    }
+
+
+def record_costs(world: Any, tmpdir: Path, windows: list[int], samples: int, full_ring: bool) -> dict[str, Any]:
+    """The durable record's price: one row appended and `fsync`ed, and a cycle with and without verdicts."""
+    result: dict[str, Any] = {}
+    row = {
+        "tick": 12_345,
+        "world_id": "0" * 32,
+        "boot_id": "b" * 32,
+        "lineage": "1" * 64,
+        "state_hash": "2" * 64,
+        "effects": [],
+        "receipts": [],
+        "windows": {},
+        "published": {f"slug{i:02d}": {"tick": 12_345, "seq": 12_000} for i in range(max(windows) if windows else 10)},
+        "failures": 0,
+    }
+    line = (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    fd = os.open(tmpdir / "record.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+
+        def append_fsync() -> None:
+            os.write(fd, line)
+            os.fsync(fd)
+
+        result["row_bytes"] = len(line)
+        result["append_fsync"] = timed(append_fsync, min(samples, 100))
+        result["append"] = timed(lambda: os.write(fd, line), min(samples, 100))
+    finally:
+        os.close(fd)
+    cycles: dict[str, Any] = {}
+    for n in windows:
+        slugs = [f"w{i:02d}" for i in range(n)]
+        # The same verdict cycle with no record, so the record's share can be read off one run.
+        bare_diode = tmpdir / f"bare-diode{n}"
+        bare = Executive(world, bare_diode, phase="translunar_coast", scenario="nominal", seed=0)
+        try:
+            for slug in slugs:
+                bare.attach(slug)
+            for _ in range(2):
+                bare.cycle()
+            if full_ring:
+                bare.truth = fill_rings(bare.truth)
+            bare_verdict = verdict_cycles(bare, bare_diode, slugs, min(samples, 60))
+        finally:
+            bare.close()
+        diode, state = tmpdir / f"record-diode{n}", tmpdir / f"record-state{n}"
+        executive = Executive(world, diode, phase="translunar_coast", scenario="nominal", seed=0, state_dir=state)
+        try:
+            for slug in slugs:
+                executive.attach(slug)
+            for _ in range(2):
+                executive.cycle()
+            if full_ring:
+                executive.truth = fill_rings(executive.truth)
+            quiet_fsyncs = counted_fsyncs(executive.cycle)
+            submit_refusal(diode, slugs)
+            verdict_fsyncs = counted_fsyncs(executive.cycle)
+            quiet = timed(executive.cycle, min(samples, 60))
+            verdict = verdict_cycles(executive, diode, slugs, min(samples, 60))
+            rows = [json.loads(raw) for raw in executive.journal.read_bytes().splitlines()]
+            ticks = [r for r in rows if "event" not in r]
+            sizes = {bool(r["receipts"]): len(json.dumps(r, sort_keys=True, separators=(",", ":"))) + 1 for r in ticks}
+            cycles[str(n)] = {
+                "quiet": quiet,
+                "verdict": verdict,
+                "verdict_without_record": bare_verdict,
+                "quiet_fsyncs": quiet_fsyncs,
+                "verdict_fsyncs": verdict_fsyncs,
+                "quiet_row_bytes": sizes.get(False),
+                "verdict_row_bytes": sizes.get(True),
+            }
+        finally:
+            executive.close()
+    result["cycle_by_windows"] = cycles
+    return result
+
+
 def engine_identity(root: Path) -> str:
     try:
         out = subprocess.run(
@@ -291,6 +414,7 @@ def measure(root: Path, *, windows: list[int], samples: int, full_ring: bool, wa
             finally:
                 executive.close()
         result["cycle_by_windows"] = cycles
+        result["record"] = record_costs(world, tmpdir, windows, samples, full_ring)
     return result
 
 
@@ -320,6 +444,19 @@ def render(result: dict[str, Any]) -> str:
     ]
     for n, row in result["cycle_by_windows"].items():
         lines.append(f"Executive.cycle, {n} window(s): {us(row)}")
+    record = result["record"]
+    lines += [
+        f"record: one tick row ({record['row_bytes']:,} bytes) appended + fsync: {us(record['append_fsync'])}",
+        f"  appended alone:                         {us(record['append'])}",
+    ]
+    for n, row in record["cycle_by_windows"].items():
+        lines += [
+            f"Executive.cycle with the record, {n} window(s): quiet {us(row['quiet'])} ({row['quiet_fsyncs']} fsync, "
+            f"row {row['quiet_row_bytes']:,} B)",
+            f"  verdict in every window:              {us(row['verdict'])} ({row['verdict_fsyncs']} fsync, "
+            f"row {row['verdict_row_bytes']:,} B)",
+            f"  the same verdict cycle, no record:    {us(row['verdict_without_record'])}",
+        ]
     m = result["mission"]
     lines.append(f"mission: {m['phases']} phases, {m['ticks']:,} ticks; shortest phase {m['shortest_phase_ticks']:,} ticks")
     return "\n".join(lines)

@@ -18996,6 +18996,138 @@ signature-form chain ids (`F-PWR-01`) and corpus citations as well.
 
 No configuration value or debt moved.
 
+## The journal was a log, and a restart needs a record
+
+ADR 0002 J decides that the journal becomes the vehicle's durable per-cycle record — the recovery log
+a restart replays and `plant.md` §6's replay trace, one file — and states three rules: a record is
+written whenever a cycle produced any verdict; a window's `published_tick` is made durable before a
+frame or mirror describes that tick; and a result is written only after its cycle's record is durable,
+the record noting that it was. The two halves that never met are those rules and `Executive._journal`
+as child 2 left it: one line per tick opened, appended and closed with no `fsync`, written after the
+tick and before publication but promising nothing about the disk; carrying the effects, the lineage,
+the compare-point and the global receipt numbers, but none of a window's half of the state — not its
+spend, not the deferral it accepted, not the arm token it was given, not what it was shown — so a
+restart from it would have reissued window-local receipt numbers and forgotten every accepted
+deferral; with no segment boundaries and nothing that read it back. This round is WP08 child 4
+(`tachyon-beep/space_vehicle#22`); the resume that will call it is child 3 (#21).
+
+| | ADR 0002 J says | `tools/console.py` does |
+|---|---|---|
+| rule 1, what a cycle's record carries | the effects (stamped), every verdict's receipt/local/window/state/command, the spend delta, the deferral and arm changes, whether each result was written | a tick row: `tick`, `world_id`, `boot_id`, `state_hash`, `lineage`, `effects` in arbitration order with their stamps, `receipts` (global `seq`, window-local `local`, window, state, offset, command, **body**), `windows` (each window's spend delta — version 0, the accepted count, until child 7 — deferral entries added whole and removed by receipt, arm tokens set and cleared; explicitly zero for a refusal-only window), `published`, `failures` |
+| rule 1, when | "whenever any verdict exists, not only when an effect does" | **every cycle**: see the first choice below |
+| rule 2, the mark | a window's `published_tick` made durable before a frame or mirror describes the tick | the tick row's `published` entry for every window about to publish — the tick and the frame number it will write — in the same append and `fsync` as the row; `Window.published_tick` is set once that is durable, and child 1's checkpoint field carries it; a window dark this cycle is not marked |
+| rule 3 | results only after the record is durable; the record notes that each was written | the row is `fsync`ed before the root record, any result, frame or mirror; after the results a `results_written` note (`event`, boot, world, tick, `results: {window: [local, …]}`) is appended and `fsync`ed; `unwritten_results` lists every recorded verdict no note covers, with what a re-publication needs |
+| segments | one per boot (`journal.<segment>.jsonl`), each naming its `boot_id`, first tick and the segment before it; replay concatenates by tick | each segment opens with a header row (`event: segment`, `format: vehicle.record.v1`, boot, world, `first_tick`, `previous`, `wall_epoch`), written with the boot's first row; the boot's entry is appended to `Executive.segments`, which child 1's checkpoint saves and `restore_state` sets back, so the next boot names this one; `read_record` orders segments by the predecessor chain, never by file name |
+| replay | the record replayed onto the snapshot by tick (§6 rule 6) | `replay_record(world, body, segments, through=None)` re-executes every recorded tick onto a checkpoint body through `advance` (`plant.step`, the compare-point, the lineage link) and `dwell_after_effect` — the functions `cycle()` now calls — holds each tick to the recorded `state_hash` and `lineage`, applies the receipts and window deltas, and returns the body advanced (a checkpoint body child 1's writer accepts) with every `(tick, state_hash, lineage)` |
+| refusals | "a record with one missing cycle refuses" | `RecordRefused` with `check`, `tick`, `segment`: `missing` (a hole inside a segment, at a seam, or after the snapshot), `state_hash`, `lineage`, `join` (a row at the snapshot's tick of another history), `overlap`, `chain`, `world`, `spend`, `window`, `line`, `corrupt`, `header`, `format` |
+| privacy | the record is the executive's and never a window's | the state directory's (or the operator's `--journal` path, refused inside `--diode-dir` as before), created `0600`, appended through the held directory handle with `O_NOFOLLOW`, RFC 8259 JSON with `allow_nan=False`, sorted and compact; no window file names any of it |
+
+Where the record was silent, the round chose, and each choice is a dated amendment under ADR 0002 J
+and a paragraph in the module.
+
+- **Every cycle writes its row, quiet or not.** Rule 1 asks only for verdict cycles, and the issue
+  allowed quiet ones to be skipped if replay could still tell the tick range. But rule 2's mark is
+  written at every publication and a cycle always publishes (the mirror is rewritten every cycle), so
+  a row is appended and `fsync`ed every cycle anyway; the compare-point and the link cost bytes in it,
+  not an `fsync`. The answer to "how does replay know the range" is then that a record's ticks are
+  contiguous by construction, a hole anywhere is a missing cycle, and every replayed tick is checked
+  against the run's own compare-point — at the price of about two to five hundred bytes per quiet tick.
+  Skipping quiet rows would have needed a second mechanism (a per-segment sequence) to tell a deleted
+  verdict row from a quiet tick.
+- **One `fsync` carries rules 1 and 2; the note has its own.** A quiet cycle is one `fsync`, a cycle
+  that wrote results is two: exactly J's "one per verdict cycle, one per publication mark", measured
+  below by counting the calls. The mark is written before the publication it permits, so a
+  publication that then fails leaves it overstated — safe: a restart steps further, never back.
+- **The note names results by window and window-local receipt, never by file name**, so child 12's
+  L(b) changes nothing in it. Under today's wall-stamped names the crash after a result file and
+  before its note leaves a result on disk that the record lists as unwritten; that is the window the
+  ADR already calls "one more reason for L(b)", and the kill test asserts it rather than hiding it.
+- **The record carries each verdict's body**, which rule 1's list omits: rule 3's re-publication
+  needs the text, and validation cannot be re-run to make it, because its inputs include the agents'
+  `variables`, which the vehicle preserves for them and does not keep. For the same reason replay
+  does not re-validate: it applies the recorded effects and deltas.
+- **Agent text is bounded in the record.** An unknown verb's refusal quotes the verb, and the
+  argument parser ignores tokens without `=`, so a command — and an *accepted* deferral's queue entry —
+  can carry most of a megabyte. Every agent-derived string past `RECORD_TEXT_BYTES` (4 KiB) is kept by
+  its prefix, cut on a character boundary, with the SHA-256 and length of the whole: the bound child 2
+  put on the superseded root record, one file over. The result file is unchanged. A deferral recorded
+  cut comes back cut from a replay, fingerprinted; child 3 must not settle it from the record alone.
+- **The segment header is written with the boot's first row**, not at construction: a resumed
+  executive (child 3) has its tick and its predecessors set by `restore_state` after it is built.
+- **An explicit `--journal` without `--state-dir` is the same record with the same durability**; every
+  boot appends its own header to the one file, which ends a torn line from a previous boot with a
+  newline first.
+- **A record that cannot be made durable stops the run by name** (`RecordUnwritable`, exit 3) before
+  anything of the cycle is published; the commands that cycle claimed are lost with it, because a
+  result the vehicle cannot recover is not one it publishes.
+- **The reader is bounded and tolerant only of a crash.** A line past `MAX_RECORD_LINE_BYTES` refuses;
+  a torn last line (its `fsync` never returned, so nothing was published from it) is dropped and the
+  segment says so; any other line that does not parse is corruption.
+- **Startup events are `fsync`ed and created `0600` too** (`append_journal_line`): "no rewrite goes
+  unjournaled" now means on the disk.
+- **The checkpoint cadence `N` is not written here.** The tests take checkpoints with child 1's
+  functions as child 2's did; the cadence lands with the resume that needs it.
+- **Retention is not decided here, and child 2 handed it on by name** ("segment growth under a restart
+  loop is child 4's"). A refused start still opens one small segment per attempt when it has a
+  startup event to journal, and a run's record grows by one tick row per cycle — about 300–550 bytes
+  quiet and a few kilobytes with verdicts at ten windows, so gigabytes over a whole mission at `k = 1`.
+  Pruning segments that end wholly before the previous checkpoint generation's tick, and folding a
+  refused start's events into its successor, belong with the resume (child 3, #21) or the downtime
+  policy (child 10), which own the generations a prune must respect.
+
+The eleven referee tests are the issue's acceptance bullets and the brief's: replay onto the snapshot
+reproduces every compare-point and lineage link (and two tampered copies — a compare-point, and an
+effect the plant then applies — refuse at the tick they were altered); one missing cycle refuses by
+name; a refusal-only cycle and a deferral-only cycle are recorded and replay their receipts and spend
+tick by tick; two boots' segments name each other and concatenate by tick into the uninterrupted
+run's trace, with the seam checked; a result is written only after its row is `fsync`ed and noted
+after; a simulated kill between the record and the results leaves exactly those results listed by
+`unwritten_results`, with text that rebuilds the killed write byte for byte; every publishing window
+is marked before its frame and a dark one is not; a 900 kB command makes a row of a few kilobytes and
+the reader's bounds hold; nothing of the record reaches a window file; an explicit `--journal` is the
+same record across two boots; and a record whose `fsync` fails stops the run before anything is
+published. **The oracle in each is the live executive** — its state hash, lineage head and counters
+read after every cycle, its own capture, or an uninterrupted twin — never the record or the replay's
+output. All eleven fail on the parent commit for the reason they should (`AttributeError` on
+`replay_record`, `unwritten_results`, `RECORD_TEXT_BYTES`, `published_tick`, `RecordUnwritable`;
+no `windows` key; no `fsync`; mode `0644`): ten were run there before any code was written, and the
+eleventh, written after, was run against the parent's `console.py` to see it fail.
+
+Six existing tests read the journal by counting lines, and every one of them would have read a header
+or a note as a tick; each now filters the rows without an `event` key (`tick_rows`), and
+`TICK_ROW_KEYS` gained `windows` and `published` on purpose, as its docstring asks of a change to the
+operator's record.
+
+What the round got wrong on the way. The first tamper target was the tick that commands
+`mode=auto` — which the dwell refuses, so there was no such effect to alter; the test now alters the
+inhibit of bravo's primary quad. The seam test first removed boot A's last *line*, which is a
+`results_written` note, not its last tick row, and so removed nothing replay reads. The second boot on
+an explicit `--journal` read the file's last byte with `pread` on a descriptor opened write-only
+(`EBADF`): it opens read-write now. And handing `Window.publish` a `noted=` keyword broke an existing
+test that replaces `publish` with a one-argument function; the window keeps the receipts that landed
+in `landed` instead, and the signature is unchanged.
+
+The figures are `tools/measure_clock.py`'s, extended this round to time one row appended and
+`fsync`ed, and a quiet and a verdict cycle with a state directory beside the same verdict cycle with
+none; ADR 0002's evidence section carries the full table.
+
+| figure (p50, one machine, ext4 on NVMe) | ring as warmed | ring full |
+|---|---:|---:|
+| one tick row appended + `fsync` | 0.59 ms | 0.58 ms |
+| `Executive.cycle`, 1 window: no record / quiet with the record (1 `fsync`) | 5.6 / 6.4 ms | 12.5 / 13.5 ms |
+| `Executive.cycle`, 1 window: verdict, no record / with the record (2 `fsync`) | 5.6 / 7.6 ms | 13.0 / 14.4 ms |
+| `Executive.cycle`, 10 windows: verdict, no record / with the record | 26.1 / 31.4 ms | 34.3 / 36.9 ms |
+| a tick row, quiet / verdict in every window, 10 windows | 549 B / 4,138 B | 549 B / 4,138 B |
+
+The live cycle also stopped hashing the stepped truth twice when it keeps a record: the row takes the
+link's `state_hash` rather than computing its own (`advance`), one hash per tick saved.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 406 | **417** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 
