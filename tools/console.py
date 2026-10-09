@@ -940,11 +940,15 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
         opened = dir_fd = open_directory(Path(path).parent)
     try:
         fd = os.open(
-            Path(path).name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd
+            Path(path).name, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd
         )
         try:
             private_record_file(fd, str(path))
-            _write_all(fd, (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
+            # A previous boot's append torn by a kill, in a journal every boot shares, is ended first, so
+            # this event is a line of its own and not the tail of a fragment (addendum B8).
+            size = os.fstat(fd).st_size
+            ending = b"\n" if size > 0 and os.pread(fd, 1, size - 1) != b"\n" else b""
+            _write_all(fd, ending + (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -1491,8 +1495,9 @@ def _verified_lines(
     the last (`missing` or `order`), to the chain (`chain`), then to its schema (`row`, `published`);
     each note to the chain, its schema, and its row (`note`: the same world, boot and tick, naming only
     that row's receipts, each once). A line that is not an object is a torn append when it is the last
-    line of its segment — the file's last, or followed by the next boot's header — and refuses
-    (`corrupt`) anywhere else; whether a torn segment was really the end of its boot is the seam's
+    line of its segment — the file's last, or followed (after any startup events a later boot journaled
+    first) by the next boot's header or by another torn line — and refuses (`corrupt`) anywhere else; a
+    torn line with no header before it in its file is a boot torn before its header, and is dropped; whether a torn segment was really the end of its boot is the seam's
     question (`concatenated`): the next segment names the chain its predecessor ended on. A startup
     event (child 2) is the operator's, unchained, and not part of the trace.
     """
@@ -1504,9 +1509,13 @@ def _verified_lines(
     noted: set[tuple[str, int]] = set()
     for number, at, row in _file_lines(dir_fd, name, offset, first):
         if pending is not None:
-            if row is not None and row.get("event") == "segment":
+            if row is None or row.get("event") == "segment":
+                # A torn line followed by another torn line or by the next boot's header: what a kill at a
+                # boot's first append, repeated, leaves in a journal every boot shares (addendum B8).
                 yield "torn", pending[0], pending[1], {}
                 pending = None
+            elif _startup_event(row):
+                continue  # startup events a later boot journaled before its own header: the torn line stays pending
             else:
                 raise RecordRefused(
                     "corrupt", f"line {pending[0]} of {name} is not a JSON object, and it is neither the last line of its segment nor a torn append"
@@ -1530,7 +1539,7 @@ def _verified_lines(
             header, chain, last_tick, receipts, noted = row, row["chain"], int(row["first_tick"]), set(), set()
             yield "header", number, at, row
             continue
-        if event is not None and event != "results_written":
+        if _startup_event(row):
             continue  # a startup event (child 2): the operator's, and not part of the trace
         if header is None:
             raise RecordRefused("header", f"line {number} of {name} comes before any segment header", tick=row.get("tick") if _count(row.get("tick")) else None)
@@ -1574,9 +1583,17 @@ def _verified_lines(
         receipts, noted = {(r["window"], r["local"]) for r in row["receipts"]}, set()
         yield "row", number, at, row
     if pending is not None:
-        if header is None:
-            raise RecordRefused("corrupt", f"line {pending[0]} of {name} is not a JSON object and no segment precedes it")
+        # The file's last line, torn. With no header before it in this file it is a boot torn before its
+        # header — its first append, header and first row in one `write`, cut by a kill — and nothing of
+        # that boot was published, because the append is `fsync`ed before the root record, a result, a
+        # frame or a mirror. Refusing it refused every restart after it (design note F2).
         yield "torn", pending[0], pending[1], {}
+
+
+def _startup_event(row: dict[str, Any]) -> bool:
+    """A startup event (child 2's): the operator's, unchained, and not part of the trace."""
+    event = row.get("event")
+    return event is not None and event not in ("segment", "results_written")
 
 
 class Record:

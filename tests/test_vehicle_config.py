@@ -26655,3 +26655,96 @@ def test_a_node_held_map_state_reads_the_same_whatever_the_order_of_its_inner_ke
     reverse = {state.node: {"group": {"sm_secondary": False, "sm_primary": True}}}
     assert console.value_of(forward, state) == console.value_of(reverse, state)
     assert console.value_of({state.node: {"a": 1, "b": 2}}, state) == ["1", "2"], "scalars keep their str"
+
+
+# ---- ADR 0002 child 3 (#21): resume ------------------------------------------------------------
+
+
+def torn_header_bytes(console, world_id: str, boot_id: str) -> bytes:
+    """The first half of a boot's first append — its header line — as a kill mid-`write` leaves it."""
+    header = {
+        "event": "segment", "format": console.RECORD_FORMAT, "world_id": world_id, "segment": boot_id,
+        "boot_id": boot_id, "first_tick": 3, "previous": None, "previous_chain": "", "wall_epoch": "x",
+    }
+    line = json.dumps(header, sort_keys=True, separators=(",", ":"))
+    return line[: len(line) // 2].encode("ascii")
+
+
+def test_a_boot_torn_before_its_segment_header_is_a_torn_append_and_not_a_corrupt_record(tmp_path):
+    """Design note F2 and addendum A7: a kill tearing a boot's first append must not refuse every later start.
+
+    `_append_record` writes a boot's header and its first row in one `write`, so a kill part-way leaves
+    a segment file whose last line is a fragment of the header, with no complete header anywhere in the
+    file — alone, or after the unchained startup events the boot journaled first (a root-record rewrite
+    at child 2, the `resumed` event once child 3 lands). Before the fix `_verified_lines` refused it as
+    `corrupt … no segment precedes it`, and since the file never changes, so did every restart after it:
+    a crash loop from one ill-timed kill. Nothing of that boot was published — the header and row are
+    `fsync`ed before the root record, a result, a frame or a mirror — so it is a torn append and is
+    dropped. Both shapes are checked: the fragment as the file's only line, and after two startup events.
+    The record of the boot before it reads whole, and a line that is not JSON *followed by a tick row*
+    still refuses: only a tail, or what a crash can leave between boots, is torn.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    for _ in range(3):
+        executive.cycle()
+    executive.close()
+    lonely, after_events = "a" * 32, "b" * 32
+    (state / f"journal.{lonely}.jsonl").write_bytes(torn_header_bytes(console, executive.world_id, lonely))
+    events = "".join(json.dumps({"event": name, "boot_id": after_events, "wall": "w"}) + "\n" for name in ("root_record_rewritten", "resumed"))
+    (state / f"journal.{after_events}.jsonl").write_bytes(events.encode() + torn_header_bytes(console, executive.world_id, after_events))
+    record = console.read_record(state)
+    assert [(s.boot_id, s.first_tick, s.last_tick, s.rows) for s in record.segments] == [(executive.boot_id, 0, 3, 3)]
+    assert console.unwritten_results(record) == []
+    record.close()
+
+    # A fragment followed by a tick row is not a tail: corruption, by name, as before.
+    rows = (state / f"journal.{executive.boot_id}.jsonl").read_bytes().splitlines(keepends=True)
+    damaged = tmp_path / "damaged"
+    damaged.mkdir()
+    (damaged / f"journal.{executive.boot_id}.jsonl").write_bytes(b"".join([*rows[:2], b'{"tick":2,"wor\n', *rows[3:]]))
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(damaged)
+    assert refused.value.check == "corrupt", refused.value
+
+
+def test_startup_events_after_a_torn_tail_in_a_shared_journal_begin_their_own_line_and_the_record_still_reads(tmp_path):
+    """Addendum B8: an explicit `--journal` every boot shares, killed at its startup appends again and again.
+
+    One file carries every boot. A boot killed mid-append leaves an unterminated tail; the next boot's
+    first write is a startup event (`append_journal_line`), which appended straight onto that tail, so
+    the event and the fragment became one line that is neither — the event was lost and the line was
+    corruption. The startup writer now ends an unterminated tail with a newline first, as the
+    executive's own record writer always did (`_record_handle`). The verifier's rule for a torn line is
+    defined narrowly: it may be followed by startup events and then a segment header, another torn
+    line, or the end of the file — what repeated kills at a start can leave — and by nothing else. Here
+    three starts die: the second after a torn header, the third after its event and its own torn
+    header. Every event is a whole JSON line, the first boot's segment reads whole, and its chain is the
+    one a successor would continue.
+    """
+    console, _plant, world = console_tools()
+    journal = tmp_path / "journal.jsonl"
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast", journal=journal)
+    executive.attach("alpha")
+    executive.cycle()
+    executive.cycle()
+    executive.close()
+    chain = executive._chain
+    with journal.open("ab") as handle:
+        handle.write(torn_header_bytes(console, executive.world_id, "c" * 32))
+    console.append_journal_line(journal, {"event": "root_record_rewritten", "boot_id": "d" * 32, "wall": "w"})
+    with journal.open("ab") as handle:
+        handle.write(torn_header_bytes(console, executive.world_id, "d" * 32))
+    console.append_journal_line(journal, {"event": "resumed", "boot_id": "e" * 32, "wall": "w"})
+    lines = journal.read_bytes().split(b"\n")
+    parsed = []
+    for line in lines:
+        with contextlib.suppress(ValueError):
+            parsed.append(json.loads(line))
+    events = [row for row in parsed if row.get("event") in ("root_record_rewritten", "resumed")]
+    assert [e["event"] for e in events] == ["root_record_rewritten", "resumed"], lines[-4:]
+    record = console.read_record(journal)
+    assert [(s.boot_id, s.last_tick, s.rows, s.chain) for s in record.segments] == [(executive.boot_id, 2, 2, chain)]
+    record.close()
