@@ -155,6 +155,10 @@ the owner's revision. Two items filled gaps the decision text left silent; they 
   agent can forge or garble `.executive.json`, hold `.executive.lock`, and write another window's
   `console.json`. The record is authoritative only once the chassis mounts each agent on its own
   slug or makes the root unwritable: a chassis follow-up required before completion gate I.
+  *Amended by WP08 child 2 (2026-10-09):* the assumption is met by the chassis's per-slug mounts —
+  chassis commit `adf38d6`, on the chassis branch `aurora-port` and not yet on chassis `main`, binds
+  each agent to its own `/diode/<slug>` and mounts the diode root on the vehicle service alone. Until
+  the chassis adopts it, treat the root as agent-writable.
 - **The directory's record is authoritative for identity, and a window's files may lag it.** A
   second `--init` rewrites `.executive.json` at once; a window's `pending.json` and `state.json`
   repeat the identity for their reader and are rewritten at the next tick that serves the window,

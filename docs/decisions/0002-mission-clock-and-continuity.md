@@ -190,6 +190,10 @@ both chassis-side facts this record depends on:
   path in the deployed vehicle container today** — not for a checkpoint and not for `--journal`,
   which refuses any path inside `--diode-dir`. Every agent also mounts `./volumes/diode:/diode`
   read-write (ADR 0001's recorded unmet assumption), so the diode root is agent-writable.
+  *Amended by WP08 child 2 (2026-10-09):* met by the chassis's per-slug mounts — chassis commit
+  `adf38d6`, on the chassis branch `aurora-port` and not yet on chassis `main`, binds each agent to
+  its own `/diode/<slug>` and mounts the diode root on the vehicle service alone; until the chassis
+  adopts it, treat the root as agent-writable.
 - `containers/serve_vehicle.sh` still forks one `console.py` per slug, each with `--cycles 0`, and
   on `TERM` kills the children; `console.py` catches only `KeyboardInterrupt`, so `docker stop` is
   an abrupt end today (F). ADR 0001 names the one-process change as a chassis follow-up; until it
@@ -471,7 +475,10 @@ owner's standing delegation (2026-10-09); open to the maintainer's revision.
 ### H — Where the checkpoint lives (maintainer with chassis reviewer)
 
 Fixed: not in any agent-writable path (completion.md). Today's deployed container has none that is
-not agent-writable (evidence section).
+not agent-writable (evidence section). *Amended by WP08 child 2 (2026-10-09):* the per-slug mounts
+(chassis `adf38d6`, branch `aurora-port`, not yet on chassis `main`) take the diode root out of the
+agents' reach; H1's private mount is the separate chassis item 1 below, and H2 stays excluded on its
+own reasoning. Until the per-slug mounts are adopted, treat the root as agent-writable.
 
 | Option | Where |
 |---|---|
@@ -490,7 +497,11 @@ naming a different world than the checkpoint's is a different matter — two exe
 state directories on one diode directory — and refuses, and the state directory records the diode
 directory it serves so a mismatch is caught from either side. The legacy `pending.json`
 refuse-only checks become advisory for the same reason. Without a checkpoint (a fresh directory)
-the ADR 0001 rules stand unchanged. (iii) The clarification "the directory's record is
+the ADR 0001 rules stand unchanged. *Amended by WP08 child 2 (2026-10-09):* the refusal on a
+readable record naming a different world relies on the per-slug mounts (chassis `adf38d6`): with
+them the root is written only by the vehicle or the operator, so a foreign world there is two
+executives or an operator's error; while the root is agent-writable it is a stop button an agent can
+press at a restart, and the refusal is kept knowing that. (iii) The clarification "the directory's record is
 authoritative" is amended to "the checkpoint is authoritative and the record is its copy".
 *Chassis*: one new volume and one new mount on one service (not the ten-edit fleet mount list);
 `serve_vehicle.sh` passes `--state-dir`; `scripts/status.py` may read the checkpoint's header (never
