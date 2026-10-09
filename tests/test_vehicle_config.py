@@ -10911,13 +10911,23 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     window = root / "vehicle"
     published = json.loads((window / "state.json").read_text())
     check = json.loads((root / ".executive.json").read_text())
-    # The mirror says which scenario the vehicle is in, beside the phase.
-    assert published["vehicle"]["scenario"] == "crisis", published["vehicle"]
+    # **The fleet is not told which scenario it is in, nor the seed.** The mirror carried
+    # `vehicle.scenario` and every window's `pending.json` the pair until the per-slug mounts made the
+    # directory's record the operator's alone: the seed keys the fault plan and the scenario says how
+    # hard the run is, and publishing either does part of the agents' diagnosis for them.
+    assert "scenario" not in published["vehicle"], published["vehicle"]
     # And the directory's own record carries the pair, because `state.json` is never read back.
     assert check["scenario"] == "crisis" and check["seed"] == 42, (check.get("scenario"), check.get("seed"))
-    # The window's record repeats it for its reader, and is read for nothing.
+    # And no window file that carries run state names either: the record, the mirror and every frame.
+    # (HELP.md and README.md are generated from the configuration alone and are the same for every
+    # run, so a posture name in their vocabulary is not this run's.)
     mirror_record = json.loads((window / "pending.json").read_text())
-    assert mirror_record["scenario"] == "crisis" and mirror_record["seed"] == 42
+    assert "scenario" not in mirror_record and "seed" not in mirror_record, mirror_record
+    run_files = sorted(window.rglob("*.json")) + sorted((window / "output").glob("*.txt"))
+    for leaked in run_files:
+        body = leaked.read_text(errors="replace")
+        assert '"seed"' not in body and '"scenario"' not in body and "master_seed" not in body, leaked
+        assert "crisis" not in body and "degraded" not in body, leaked
 
     # A directory prepared with the pair and run without the flags keeps it: the record describes the
     # run, and a run that reset itself to `nominal` would make a crisis run report itself as nominal.
@@ -10965,9 +10975,9 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert "scenario=crisis seed=7" in ran.stdout, ran.stdout[-400:]
     record = json.loads((renamed / ".executive.json").read_text())
     assert record["scenario"] == "crisis" and record["seed"] == 7, record
-    # The mirror moves with the record, because the mirror is what the fleet reads.
+    # The record moves; the mirror says nothing of it either way.
     mirror = json.loads((renamed / "renamed" / "state.json").read_text())
-    assert mirror["vehicle"]["scenario"] == "crisis", mirror["vehicle"]
+    assert "scenario" not in mirror["vehicle"], mirror["vehicle"]
     # And the plan is asked about the *resolved* pair rather than the flag, so `--plan` on this
     # directory with no `--scenario` describes the crisis it is in and not the default it never had.
     planned = run_console("--diode-dir", str(renamed), "--plan-json")
@@ -10981,7 +10991,7 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert run_console("--diode-dir", str(shared), "--slug", "right", "--init").returncode == 0
     record = json.loads((shared / ".executive.json").read_text())
     assert record["slugs"] == ["left", "right"] and record["scenario"] == "crisis" and record["seed"] == 42, record
-    assert json.loads((shared / "right" / "pending.json").read_text())["scenario"] == "crisis"
+    assert "scenario" not in json.loads((shared / "right" / "pending.json").read_text())
     both = run_console("--diode-dir", str(shared), "--slug", "left", "--slug", "right", "--cycles", "1", "--poll", "0")
     assert both.returncode == 0, both.stderr[-400:]
     assert "scenario=crisis seed=42" in both.stdout, both.stdout
@@ -17384,8 +17394,9 @@ def test_a_commanded_mode_holds_its_value_through_a_tick_and_a_code_moved_one_do
 def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(tmp_path):
     """The run's identity is three flags, and a flag that *is* its own default cannot be obeyed.
 
-    `tools/console.py` writes `scenario`, `seed` and `ring_slots` into `pending.json` — the window's
-    only input file — and all three are also command-line options. That makes each of them two
+    `tools/console.py` remembers `scenario`, `seed` and `ring_slots` (in `pending.json` when this was
+    written, in the directory's record `Executive.root_record` since) — and all three are also
+    command-line options. That makes each of them two
     things at once, a thing the vehicle remembers and a thing a caller can say, and the two are
     tellable apart only if *the caller named nothing* has a representation of its own. It did not:
     `--scenario` defaulted to `"nominal"`, `--seed` to `0`, `--ring-slots` to `300`, so `args.scenario`
@@ -17417,7 +17428,7 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     assert result.returncode == 1, result.stdout[-900:]
     assert "tools/console.py:--scenario" in result.stdout, result.stdout[-900:]
     assert "defaults to 'nominal'" in result.stdout, result.stdout[-900:]
-    assert "written to `pending.json` as `scenario`" in result.stdout, result.stdout[-900:]
+    assert "remembered (written to `pending.json` or the directory's record) as `scenario`" in result.stdout, result.stdout[-900:]
 
     # The numeric one, on a flag whose value is an int: the message has to read the same way, and
     # the point is that `0` is as un-nameable-a-default as `"nominal"` is.
@@ -17436,15 +17447,47 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     # **A check that cannot run is not a check that passed.** Renaming the record the durable set is
     # derived from must refuse rather than pass: a silent pass here would leave every flag in the
     # file unchecked while the report said the vehicle composed.
+    # The record a restart reads is the directory's (`Executive.root_record`, ADR 0001's
+    # clarifications), so that is the one renamed; a window's `pending.json` is a published copy and
+    # no longer a required source.
     unwritten = copy_definition(fixture_dir(tmp_path, "console-unreadable"))
     path = unwritten / "tools" / "console.py"
     text = path.read_text()
-    assert text.count("write_json_atomic(self.pending,") == 1
-    assert text.count("self.pending,") >= 2
-    path.write_text(text.replace("self.pending", "self.record_file"))
+    assert text.count("def root_record(") == 1
+    path.write_text(text.replace("def root_record(", "def directory_record(", 1))
     result = run_linter(unwritten)
     assert result.returncode == 1, result.stdout[-900:]
-    assert "no longer writes `pending.json` in a form this check can read" in result.stdout, result.stdout[-900:]
+    assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
+
+    # **The record must carry the identity console.py declares.** Independent review (Claude Opus)
+    # dropped `scenario` from `root_record` and defaulted `--scenario` to "nominal": the key left the
+    # remembered set, its flag left the check, and the linter passed while the restart still read it.
+    dropped = copy_definition(fixture_dir(tmp_path, "console-dropped"))
+    path = dropped / "tools" / "console.py"
+    text = path.read_text()
+    assert text.count('            "scenario": self.scenario,\n') == 1, "the fixture no longer matches root_record"
+    text = text.replace('            "scenario": self.scenario,\n', "", 1)
+    text = text.replace('"--scenario",\n        default=None,', '"--scenario",\n        default="nominal",', 1)
+    path.write_text(text)
+    result = run_linter(dropped)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "tools/console.py:root_record" in result.stdout and "'scenario'" in result.stdout, result.stdout[-900:]
+
+    # **A partial set must not pass.** Independent review (Codex gpt-6-astra high) moved `scenario` and
+    # `seed` into a `**{...}` unpacking inside `root_record` and defaulted `--scenario` to "nominal":
+    # the extraction skipped the unpacked keys, `ring_slots` alone kept the set non-empty, and the
+    # check passed. An unreadable key now makes the whole record unreadable.
+    unpacked = copy_definition(fixture_dir(tmp_path, "console-unpacked"))
+    path = unpacked / "tools" / "console.py"
+    text = path.read_text()
+    old_pair = '            "scenario": self.scenario,\n            "seed": self.seed,\n'
+    assert text.count(old_pair) == 1, "the fixture no longer matches root_record"
+    text = text.replace(old_pair, '            **{"scenario": self.scenario, "seed": self.seed},\n', 1)
+    text = text.replace('"--scenario",\n        default=None,', '"--scenario",\n        default="nominal",', 1)
+    path.write_text(text)
+    result = run_linter(unpacked)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
 
 
 def test_the_linter_refuses_a_shared_node_or_sentinel_count_that_has_drifted(tmp_path):

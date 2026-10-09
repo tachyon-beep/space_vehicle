@@ -18934,6 +18934,36 @@ dangling, where the old code created its target.
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+## The fleet was told which run it was in
+
+Every window's `state.json` carried `vehicle.scenario` beside the phase, and every window's
+`pending.json` carried `scenario` and `seed`. The scenario says how hard the run is — a `crisis`
+posture places one guaranteed major primary fault — and the seed keys `tools/faults.py`'s schedule,
+so a fleet that read its own window was told part of what its instruments are there to reveal. Both
+were added when a window's `pending.json` was the record a restart read back; since ADR 0001's
+clarifications the record is the directory's `.executive.json`, which the per-slug mounts put out of
+every agent's reach, and the window's copy is read for nothing. `presentation.yaml#mirror` had never
+declared `scenario`.
+
+| file | before | after |
+|---|---|---|
+| `state.json` `vehicle` | `phase`, `posture`, `scenario`, `abort_latched` | `phase`, `posture`, `abort_latched` |
+| `pending.json` | queue, ticks, seq, boot, `scenario`, `seed`, ring, world | queue, ticks, seq, boot, ring, world |
+| `.executive.json` (operator's) | unchanged | unchanged |
+
+`check_console_flags` derived the run's remembered values from the window writer, so moving the
+identity out of the window would have quietly taken the check with it. It now reads the remembered
+set off `Executive.root_record` (required) and any `pending.json` writer (optional), and its
+unreadable-source case renames `root_record`. The scenario test now asserts that no JSON file in a
+window names the scenario or the seed. The operator still sees the pair on the startup banner and in
+the directory's record.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 406 | 406 |
+
+No configuration value or debt moved.
+
 ## The invariants, and which of them are enforced
 
 
