@@ -23878,7 +23878,9 @@ def test_an_unusable_state_directory_is_its_own_refusal(tmp_path):
             locked.chmod(0o700)
 
 
-def test_a_failing_write_step_is_a_typed_refusal_and_a_live_writers_temporary_is_left_alone(tmp_path):
+def test_a_failing_write_step_is_a_typed_refusal_and_a_live_writers_temporary_is_left_alone(
+    tmp_path, monkeypatch
+):
     """Review finding M1: no raw `OSError` leaves `write_checkpoint`, and the sweep is this writer's only.
 
     The sweep of stale temporaries unlinked *every* `.checkpoint.*.tmp`, another live writer's
@@ -23927,3 +23929,25 @@ def test_a_failing_write_step_is_a_typed_refusal_and_a_live_writers_temporary_is
     assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).body["executive"]["tick"] == 4
     assert not list(state_dir.glob(".checkpoint.*.tmp")), "the writer was alive to remove its temporary"
     assert (previous / "occupant").read_text() == "x"
+    assert "the generations on disk are unchanged" in str(caught.value), str(caught.value)
+
+    # The sentence the operator reads must be true per step: once `rename_previous` has run, the old
+    # current is the previous generation and there is no current until `rename_current` lands. A
+    # directory planted at `checkpoint.json` between the two renames makes `rename_current` fail.
+    (previous / "occupant").unlink()
+    previous.rmdir()
+    real_after_step = checkpoint._after_step
+
+    def plant_between(step):
+        real_after_step(step)
+        if step == "rename_previous":
+            (state_dir / "checkpoint.json").mkdir()
+            (state_dir / "checkpoint.json" / "occupant").write_text("y")
+
+    monkeypatch.setattr(checkpoint, "_after_step", plant_between)
+    with pytest.raises(checkpoint.CheckpointWriteFailed) as caught:
+        checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    assert caught.value.check == "rename_current", caught.value.check
+    assert "there is no checkpoint.json" in str(caught.value), str(caught.value)
+    assert "unchanged" not in str(caught.value), str(caught.value)
+    assert checkpoint.read_generation(state_dir, "checkpoint.prev.json", compat).body["executive"]["tick"] == 4

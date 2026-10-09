@@ -613,6 +613,23 @@ def _open_state_dir(state_dir: Path, *, create: bool) -> int:
         ) from exc
 
 
+# What the directory holds when a write fails at each step — the operator reads this sentence
+# (ADR 0002 K), so it must be true per step: only before `rename_previous` succeeds is the disk
+# untouched. Independent review found the single sentence "unchanged" false for the last two.
+_ON_DISK_AFTER = {
+    "write": "the generations on disk are unchanged",
+    "fsync": "the generations on disk are unchanged",
+    "rename_previous": "the generations on disk are unchanged",
+    "rename_current": (
+        f"the old current is now {PREVIOUS} and there is no {CURRENT}; the chooser falls back to it"
+    ),
+    "fsync_directory": (
+        f"both renames completed, so the new generation is {CURRENT}, but the directory was not "
+        "made durable and a crash now could lose the rename"
+    ),
+}
+
+
 def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
     """ADR 0002 I's durable write: temp → fsync → rename previous → rename current → fsync dir.
 
@@ -672,7 +689,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
                 step,
                 target,
                 f"the write failed at step {step!r} ({_errno_name(exc)}: {exc.strerror}; {CURRENT} → {PREVIOUS} → {temporary}); "
-                f"the generation on disk is unchanged",
+                + _ON_DISK_AFTER.get(step, "what is on disk is unknown; read it before trusting it"),
             ) from exc
     finally:
         os.close(dir_fd)
