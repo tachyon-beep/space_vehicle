@@ -18168,7 +18168,19 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
     fault plan) and take the check with it, so the record's keys are unioned in. **The record is the
     required source and the window writer an optional one**: a `root_record` that is absent or does
     not return a dictionary literal is a writer this check cannot read, and is `None`.
+
+    **Every key must be readable, or none is trusted.** A `**` unpacking or a computed key carries
+    values this check cannot name; skipping it would leave a partial set that still passes — the
+    independent review moved `scenario` and `seed` into `**{...}`, set `--scenario`'s default to
+    `"nominal"`, and the check stayed silent because `ring_slots` alone kept the set non-empty. So an
+    unreadable key makes the whole writer unreadable, and the caller refuses.
     """
+
+    def literal_keys(payload: ast.Dict) -> set[str] | None:
+        if not all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in payload.keys):
+            return None  # `None` is a `**` unpacking; anything else is a computed key
+        return {k.value for k in payload.keys}  # type: ignore[union-attr]
+
     found = False
     keys: set[str] = set()
     for node in ast.walk(tree):
@@ -18177,11 +18189,10 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
             if len(returns) != 1 or not isinstance(returns[0].value, ast.Dict):
                 return None
             found = True
-            keys |= {
-                key.value
-                for key in returns[0].value.keys
-                if isinstance(key, ast.Constant) and isinstance(key.value, str)
-            }
+            record_keys = literal_keys(returns[0].value)
+            if record_keys is None:
+                return None
+            keys |= record_keys
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or len(node.args) < 2:
             continue
@@ -18199,11 +18210,10 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
         payload = node.args[1]
         if not isinstance(payload, ast.Dict):
             return None
-        keys |= {
-            key.value
-            for key in payload.keys
-            if isinstance(key, ast.Constant) and isinstance(key.value, str)
-        }
+        window_keys = literal_keys(payload)
+        if window_keys is None:
+            return None
+        keys |= window_keys
     return keys if found else None
 
 

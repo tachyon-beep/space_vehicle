@@ -17456,6 +17456,22 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     assert result.returncode == 1, result.stdout[-900:]
     assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
 
+    # **A partial set must not pass.** Independent review (Codex gpt-6-astra high) moved `scenario` and
+    # `seed` into a `**{...}` unpacking inside `root_record` and defaulted `--scenario` to "nominal":
+    # the extraction skipped the unpacked keys, `ring_slots` alone kept the set non-empty, and the
+    # check passed. An unreadable key now makes the whole record unreadable.
+    unpacked = copy_definition(fixture_dir(tmp_path, "console-unpacked"))
+    path = unpacked / "tools" / "console.py"
+    text = path.read_text()
+    old_pair = '            "scenario": self.scenario,\n            "seed": self.seed,\n'
+    assert text.count(old_pair) == 1, "the fixture no longer matches root_record"
+    text = text.replace(old_pair, '            **{"scenario": self.scenario, "seed": self.seed},\n', 1)
+    text = text.replace('"--scenario",\n        default=None,', '"--scenario",\n        default="nominal",', 1)
+    path.write_text(text)
+    result = run_linter(unpacked)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
+
 
 def test_the_linter_refuses_a_shared_node_or_sentinel_count_that_has_drifted(tmp_path):
     """Two more figures in prose, and both had drifted while the sentences explained real rules.
