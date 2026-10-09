@@ -185,14 +185,18 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from checkpoint import (  # noqa: E402
+    CURRENT,
     SPEND_PLACEHOLDER_VERSION,
     CheckpointRefused,
     Compatibility,
     _structure_problem,
+    capture_state,
     choose_generation,
     decode,
     encode,
+    git_commit,
     restore_state,
+    write_checkpoint,
 )
 from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
@@ -2437,6 +2441,7 @@ class Executive:
         boot_id: str | None = None,
         state_fd: int | None = None,
         journal_dir_fd: int | None = None,
+        checkpoint_every: int | None = None,
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
@@ -2477,6 +2482,17 @@ class Executive:
         self.scenario = scenario
         self.seed = int(seed)
         self.max_batch = int(max_batch)
+        # The checkpoint cadence `N` (ADR 0002 J: `N = tick_hz`, one mission second). It is not a flag
+        # until child 5 makes it a required run input; it is recorded in the checkpoint's clock inputs,
+        # and a resume takes it from there. `checkpoint_every` is for in-process callers (the tests).
+        tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
+        self.checkpoint_every = int(checkpoint_every if checkpoint_every is not None else tick_hz)
+        if self.checkpoint_every < 1:
+            raise ValueError(f"the checkpoint cadence must be at least one tick, not {self.checkpoint_every!r}")
+        self.clock: dict[str, Any] = {"N": self.checkpoint_every}
+        self.in_cycle = False
+        self.checkpoint_failures = 0
+        self._compat: Compatibility | None = None
         self.dt = tick_seconds(world)
         self.tick_us = int(round(self.dt * 1_000_000))
         self.truth: dict[str, Any] = initial_values(world)
@@ -2632,6 +2648,9 @@ class Executive:
         window's claim then fails.
         """
         tick = self.tick
+        # Until the cycle completes, its window counters may be ahead of its truth (a verdict draws its
+        # receipt before the step): a checkpoint is never taken while this is set (`main`'s clean end).
+        self.in_cycle = True
         self.claimed = {}
         verdicts: dict[str, list[Verdict]] = {}
         effects: list[Effect] = []
@@ -2722,10 +2741,60 @@ class Executive:
                     # checkpoint and a replayed one agree on the next frame number (design note S16).
                     if window.marked_seq is not None and window.seq == window.marked_seq:
                         window.seq += 1
+            self.in_cycle = False
+            # The cadence (ADR 0002 J, `N`): at the end of the cycle, once every window has published, so
+            # the checkpoint's anchor is after the cycle's notes and its obligations are what is owed.
+            if self.state_fd is not None and self.tick % self.checkpoint_every == 0:
+                self._cadence_checkpoint()
             return written
         finally:
             for window in order:
                 window.close_handles()
+
+    def checkpoint(self) -> Path:
+        """Capture this executive and write it, ADR 0002 I's sequence, through the held state-directory handle.
+
+        The engine identity and the commit are computed once per executive, not once per checkpoint
+        (`Compatibility.current` hashes the corpus). Raises what `capture_state` and `write_checkpoint`
+        raise; the callers decide what a failure means — a refused start for a world's genesis and for
+        the checkpoint a resume takes before it serves (addenda B1, B3), a recorded failure for the
+        cadence and for a clean end.
+        """
+        if self.state_dir is None or self.state_fd is None:
+            raise RuntimeError("an executive without a state directory has nowhere to write a checkpoint")
+        if self._compat is None:
+            self._compat = Compatibility.current(self.world)
+            self._git_commit = git_commit(self.world.root)
+        body = capture_state(self, self._compat, git_commit=self._git_commit)
+        return write_checkpoint(self.state_dir, body, dir_fd=self.state_fd)
+
+    def _cadence_checkpoint(self) -> None:
+        """The cadence's checkpoint: a failure is recorded, journaled and on stderr, and the run goes on (B11).
+
+        The record is what makes the run durable; a checkpoint only bounds how much of it a resume
+        reads, and `write_checkpoint` leaves a verifying generation at every step — so a failure costs
+        recovery time, not the world. The consecutive count says how long that has been so.
+        """
+        try:
+            self.checkpoint()
+        except Exception as exc:  # noqa: BLE001 - recorded, and the run goes on
+            self.checkpoint_failures += 1
+            self._record_failure_named(
+                CURRENT, "checkpoint", RuntimeError(f"{exc} ({self.checkpoint_failures} consecutive)"), self.tick
+            )
+            if self.journal is not None and self.journal_dir_fd is not None:
+                with contextlib.suppress(Exception):
+                    append_journal_line(
+                        self.journal,
+                        {
+                            "event": "checkpoint_failed", "wall": utc_now().isoformat(), "boot_id": self.boot_id,
+                            "world_id": self.world_id, "tick": self.tick, "consecutive": self.checkpoint_failures,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                        dir_fd=self.journal_dir_fd,
+                    )
+        else:
+            self.checkpoint_failures = 0
 
     def _owe(self, window: Window, verdicts: list[Verdict]) -> None:
         """Owe a window the results of verdicts whose publication failed (addendum B4), as the record holds them."""
@@ -2795,7 +2864,11 @@ class Executive:
         }
         self.failure_count += 1
         self.failures.append(entry)
-        what = f"window {name!r} skipped" if stage != "root_record" else f"the directory's record {name} not written"
+        what = (
+            f"the directory's record {name} not written" if stage == "root_record"
+            else f"the checkpoint {name} not written" if stage == "checkpoint"
+            else f"window {name!r} skipped"
+        )
         sys.stderr.write(f"[console] tick {tick}: {what} at {stage}: {entry['error']}\n")
 
     def _lineage_link(self, previous: str, truth: dict[str, Any], effects: list[Effect]) -> str:
@@ -4190,6 +4263,7 @@ def resume_executive(
     journal_dir_fd: int | None = None,
     max_batch: int | None = None,
     closed_interlocks: set[str] | None = None,
+    checkpoint_every: int | None = None,
 ) -> tuple[Executive, Resumption]:
     """An executive resumed from a verified checkpoint (`checkpoint.choose_generation`) and the record after it.
 
@@ -4235,6 +4309,7 @@ def resume_executive(
             boot_id=boot_id,
             state_fd=state_fd,
             journal_dir_fd=journal_dir_fd,
+            checkpoint_every=checkpoint_every if checkpoint_every is not None else (body.get("clock") or {}).get("N"),
         )
     except ValueError as exc:
         raise ResumeRefused(str(exc)) from exc
@@ -4275,6 +4350,25 @@ def _resume(
     except ValueError as exc:
         raise ResumeRefused(f"{where} cannot be restored: {exc}") from exc
     executive.resumed = True
+    # `restore_state` set the clock inputs the checkpoint remembered; `N` is the one this child reads.
+    executive.clock = {**executive.clock, "N": executive.checkpoint_every}
+
+    # Addendum B2: a fall-back never lets the next write rotate the unverified current generation over
+    # the good previous one. The current is moved aside — to a name no generation has — before anything
+    # writes a checkpoint, so `write_checkpoint`'s rename of current to previous finds nothing to rotate.
+    rejected = None
+    if getattr(loaded, "fell_back", None) is not None and executive.state_fd is not None:
+        with contextlib.suppress(FileNotFoundError):
+            os.lstat(CURRENT, dir_fd=executive.state_fd)
+            rejected = f"checkpoint.rejected.{executive.boot_id}.json"
+            try:
+                os.rename(CURRENT, rejected, src_dir_fd=executive.state_fd, dst_dir_fd=executive.state_fd)
+                os.fsync(executive.state_fd)
+            except OSError as exc:
+                raise ResumeRefused(
+                    f"{where} was chosen because {CURRENT} was refused ({loaded.fell_back}), and {CURRENT} cannot be moved aside to "
+                    f"{rejected} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}): the next checkpoint would rotate it over the good one"
+                ) from exc
     # What the windows are owed (addendum B4): the checkpoint's obligations, and every verdict after its
     # tick the record holds with no note — a crash between the record and the results, or a publication
     # that failed after the checkpoint. Rows at or before the snapshot were published, or are owed in
@@ -4333,6 +4427,7 @@ def _resume(
             "file": Path(loaded.path).name,
             "tick": snapshot_tick,
             "fell_back": str(loaded.fell_back) if getattr(loaded, "fell_back", None) is not None else None,
+            "rejected": rejected,
         },
         "replayed": tick - snapshot_tick,
         "root_record": f"{action}: {why}",

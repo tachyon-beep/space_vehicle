@@ -27902,3 +27902,231 @@ def test_a_result_recorded_cut_or_fingerprint_only_is_republished_once_saying_wh
     command, text = console.republication(fingerprint)
     assert command == "zzz" and "cannot be reproduced" in text and "c" * 64 in text and "d" * 64 in text
     assert text.endswith(console.receipt_line(fingerprint))
+
+
+def generation_tick(state: Path, name: str = "checkpoint.json") -> int | None:
+    path = state / name
+    return json.loads(path.read_bytes().split(b"\n", 1)[0])["tick"] if path.exists() else None
+
+
+def test_the_executive_checkpoints_every_n_ticks_at_the_end_of_a_cycle_and_records_n_in_its_clock_inputs(tmp_path):
+    """Commitment 5 and ADR 0002 J: the executive writes its own checkpoints, every `N = tick_hz` ticks.
+
+    Before this child nothing wrote a checkpoint during a run (`main` wrote none). `N` is
+    `mission.yaml#tick_hz` — 50, one mission second — until child 5 makes it a run input, and it is
+    recorded in the checkpoint's clock inputs (`clock.N`). After 49 cycles there is no checkpoint; after
+    50 there is one at tick 50 and none earlier. With a cadence of 5 (the in-process seam the tests
+    use), the generations are at 10 and 5 after ten cycles; the checkpoint is taken at the end of the
+    cycle, after both windows published, so its anchor is the segment's size, past the cycle's notes,
+    and it owes nothing.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 49)
+    assert generation_tick(state) is None
+    recorded_run(executive, diode, {}, 1, start=49)
+    assert generation_tick(state) == 50 and generation_tick(state, "checkpoint.prev.json") is None
+    body = checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    assert body["clock"]["N"] == 50 == yaml.safe_load((VEHICLE / "mission.yaml").read_text())["tick_hz"]
+    executive.close()
+
+    diode, state = tmp_path / "d5", tmp_path / "s5"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, {9: {"alpha": ["zzz_a"], "bravo": ["zzz_b"]}}, 10)
+    assert (generation_tick(state), generation_tick(state, "checkpoint.prev.json")) == (10, 5)
+    body = checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    assert body["clock"]["N"] == 5 and body["obligations"] == []
+    assert body["segments"][-1]["offset"] == executive.journal.stat().st_size
+    assert [r.get("event") for r in record_lines(executive.journal)][-2:] == ["results_written", "results_written"]
+    executive.close()
+
+
+def test_a_kill_at_every_step_of_a_cadence_checkpoint_resumes_to_the_same_tick_and_state_as_the_uninterrupted_run(tmp_path, monkeypatch):
+    """ADR 0002 I and the acceptance list: a kill at every point of the write sequence leaves one verifiable generation.
+
+    The cadence's write at tick 10 is killed after each of its five steps in turn (`checkpoint._after_step`,
+    child 1's seam). Whichever generation the chooser then returns — the new one, or the one at tick 5
+    when the kill left none current — the resume recovers tick 10 from it and the record, and the next
+    three ticks are the uninterrupted run's compare-points and lineage links.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    script = {7: {"alpha": ["set_rcs_mode mode=manual"]}, 11: {"alpha": ["zzz"]}}
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    expected, _c, _s = recorded_run(oracle, oracle_dir, script, 13)
+    oracle.close()
+    for step in checkpoint.STEPS:
+        diode, state = tmp_path / step / "diode", tmp_path / step / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+        executive.attach("alpha")
+        recorded_run(executive, diode, script, 9)
+
+        def killed(name, step=step):
+            if name == step:
+                raise SimulatedKill
+
+        monkeypatch.setattr(checkpoint, "_after_step", killed)
+        with pytest.raises(SimulatedKill):
+            recorded_run(executive, diode, script, 1, start=9)
+        monkeypatch.undo()
+        executive.close()
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.tick == 10 and resumption.snapshot_tick in (5, 10), (step, resumption)
+        points, _c, _s = recorded_run(resumed, diode, script, 3, start=10)
+        assert points == {t: expected[t] for t in (11, 12, 13)}, step
+        resumed.close()
+
+
+def test_a_kill_between_a_checkpoint_and_the_next_row_resumes_at_the_checkpoints_tick_reading_nothing_after_it(tmp_path, monkeypatch):
+    """A kill point the design names: the checkpoint at tick 10 is written, and the next cycle dies before its row.
+
+    The resume chooses the tick-10 generation, finds nothing after its anchor, and resumes at exactly
+    tick 10 with nothing replayed; the cost is the anchor's seek and the end of the file, not the
+    segment. The next ticks are the uninterrupted run's.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    expected, _c, _s = recorded_run(oracle, oracle_dir, {}, 12)
+    oracle.close()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 10)
+
+    def killed(self):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "open_handles", killed)
+    with pytest.raises(SimulatedKill):
+        executive.cycle()
+    monkeypatch.undo()
+    executive.close()
+    read = counting_lines(console, monkeypatch)
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert (resumption.snapshot_tick, resumption.tick, resumption.replayed) == (10, 10, 0)
+    assert read[0] <= 2, read[0]
+    monkeypatch.undo()
+    points, _c, _s = recorded_run(resumed, diode, {}, 2, start=10)
+    assert points == {t: expected[t] for t in (11, 12)}
+    resumed.close()
+
+
+def test_a_corrupt_current_generation_falls_back_to_the_verified_previous_and_resumes_to_the_uninterrupted_runs_tick_state_and_lineage(tmp_path):
+    """Addendum A3 (ADR 0002 K2): the record covers the gap, so a fall-back loses nothing.
+
+    The current generation (tick 10) has one byte of its body flipped; the previous (tick 5) verifies.
+    `choose_generation` falls back to it, and the resume replays ticks 6–12 from the record — the same
+    tick 12, compare-point and lineage head the uninterrupted run reached — and says it fell back, and
+    from what, in the `resumed` event. When both generations are damaged the chooser refuses, naming
+    the file and the check — `main`'s exit 3.
+    """
+    checkpoint, console, plant, world = checkpoint_tools()
+    script = {3: {"alpha": ["set_rcs_mode mode=manual"]}, 8: {"alpha": ["zzz"]}}
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    expected, _c, _s = recorded_run(oracle, oracle_dir, script, 12)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+    executive.attach("alpha")
+    recorded_run(executive, diode, script, 12)
+    executive.close()
+    raw = bytearray((state / "checkpoint.json").read_bytes())
+    raw[-20] ^= 0x01
+    (state / "checkpoint.json").write_bytes(bytes(raw))
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert (resumption.snapshot_tick, resumption.tick) == (5, 12) and resumption.fell_back and "body_sha256" in resumption.fell_back
+    assert (plant.state_hash(resumed.truth), resumed.lineage_head) == expected[12] == (plant.state_hash(oracle.truth), oracle.lineage_head)
+    (event,) = journal_events(state, "resumed")
+    assert event["checkpoint"]["tick"] == 5 and "body_sha256" in event["checkpoint"]["fell_back"]
+    resumed.close()
+    oracle.close()
+    previous = bytearray((state / "checkpoint.prev.json").read_bytes())
+    previous[-20] ^= 0x01
+    (state / "checkpoint.prev.json").write_bytes(bytes(previous))
+    rejected = next(state.glob("checkpoint.rejected.*.json"))
+    rejected.rename(state / "checkpoint.json")
+    with pytest.raises(checkpoint.CheckpointCorrupt) as refused:
+        checkpoint.choose_generation(state, checkpoint.Compatibility.current(world))
+    assert refused.value.check == "body_sha256" and "checkpoint.json" in str(refused.value) and "checkpoint.prev.json" in str(refused.value)
+
+
+def test_after_a_fall_back_no_kill_during_the_next_checkpoint_can_rotate_the_corrupt_generation_over_the_good_one(tmp_path, monkeypatch):
+    """Addendum B2: the resume moves the unverified current generation aside before anything writes a checkpoint.
+
+    After a fall-back the corrupt `checkpoint.json` was still current, so the next write renamed it to
+    `checkpoint.prev.json` — over the good generation the resume came from — and a kill before the new
+    current landed left two unusable files: a crash loop. The resume renames the refused current to
+    `checkpoint.rejected.<boot>.json` (a name no generation has) and records it. Then the next cadence
+    write is killed after each of its steps in turn, and every restart resumes, at the tick the record
+    reached.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    for step in checkpoint.STEPS:
+        diode, state = tmp_path / step / "diode", tmp_path / step / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 12)
+        executive.close()
+        raw = bytearray((state / "checkpoint.json").read_bytes())
+        raw[-20] ^= 0x01
+        (state / "checkpoint.json").write_bytes(bytes(raw))
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+        (event,) = [e for e in journal_events(state, "resumed") if e["boot_id"] == resumed.boot_id]
+        rejected = event["checkpoint"]["rejected"]
+        assert rejected and (state / rejected).exists() and not (state / "checkpoint.json").exists(), step
+        assert generation_tick(state, "checkpoint.prev.json") == 5
+
+        def killed(name, step=step):
+            if name == step:
+                raise SimulatedKill
+
+        monkeypatch.setattr(checkpoint, "_after_step", killed)
+        with pytest.raises(SimulatedKill):
+            recorded_run(resumed, diode, {}, 3, start=12)
+        monkeypatch.undo()
+        resumed.close()
+        again, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.tick == 15, (step, resumption)
+        again.close()
+
+
+def test_a_cadence_checkpoint_that_cannot_be_written_is_a_recorded_journaled_failure_and_the_ticks_go_on(tmp_path, monkeypatch, capsys):
+    """Addendum B11 (S4): a checkpoint bounds recovery; the record is what makes the run durable.
+
+    The cadence's write fails twice running: each is a recorded failure (`failures`, stage
+    `checkpoint`), a line on stderr with the consecutive count — what `docker compose logs vehicle`
+    shows — and a `checkpoint_failed` event in the journal; the ticks go on. A resume from the last
+    good generation still reaches the last tick, and the next write that succeeds resets the count.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=2)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 2)
+    real = console.write_checkpoint
+
+    def full(*args, **kwargs):
+        raise checkpoint.CheckpointWriteFailed("write", state / "checkpoint.json", "ENOSPC")
+
+    monkeypatch.setattr(console, "write_checkpoint", full)
+    recorded_run(executive, diode, {}, 4, start=2)
+    assert executive.tick == 6 and executive.checkpoint_failures == 2
+    assert [f["stage"] for f in executive.failures] == ["checkpoint", "checkpoint"]
+    assert "2 consecutive" in capsys.readouterr().err
+    assert [e["consecutive"] for e in journal_events(state, "checkpoint_failed")] == [1, 2]
+    monkeypatch.setattr(console, "write_checkpoint", real)
+    assert generation_tick(state) == 2
+    executive.close()
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state, checkpoint_every=2)
+    assert (resumption.snapshot_tick, resumption.tick) == (2, 6)
+    recorded_run(resumed, diode, {}, 2, start=6)
+    assert resumed.checkpoint_failures == 0 and generation_tick(state) == 8
+    resumed.close()
