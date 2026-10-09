@@ -26944,3 +26944,673 @@ def test_an_anchored_read_follows_the_boots_that_continue_the_anchor_and_refuses
     with pytest.raises(console.RecordRefused) as refused:
         console.read_record(state, anchor=console.record_anchor(snapshot))
     assert refused.value.check == "segment" and stranger.boot_id in str(refused.value), refused.value
+
+
+class SimulatedKill(BaseException):
+    """What `SIGKILL` does to a cycle, in-process: an exception nothing in the executive catches."""
+
+
+def resume_from(console, checkpoint, world, diode: Path, state: Path, **kwargs):
+    """The resume `main` performs, in-process: the generation K2 chooses, then `resume_executive`."""
+    loaded = checkpoint.choose_generation(state, checkpoint.Compatibility.current(world))
+    assert loaded is not None, "no checkpoint to resume from"
+    return console.resume_executive(world, diode, loaded, state_dir=state, **kwargs)
+
+
+def result_ledger(diode: Path) -> dict[tuple[str, int], list[tuple[str, int, str]]]:
+    """Every result file under every window, by `(window, window-local receipt)`: `(state, tick, body)` each.
+
+    The body is without its receipt line, whose `world=` differs between two independent executives;
+    a list per key, so a result published twice is two entries.
+    """
+    ledger: dict[tuple[str, int], list[tuple[str, int, str]]] = {}
+    for path in sorted(diode.glob("*/output/*.txt")):
+        text = path.read_text()
+        receipt = receipt_of(text)
+        body = "".join(line for line in text.splitlines(keepends=True) if not line.startswith("receipt: "))
+        ledger.setdefault((receipt["window"], int(receipt["seq"])), []).append((receipt["state"], int(receipt["tick"]), body))
+    return ledger
+
+
+def journal_events(where: Path, name: str) -> list[dict]:
+    """Every unchained event called `name` in a state directory's journal files, or in one journal file."""
+    files = [where] if where.is_file() else sorted(where.glob("journal.*.jsonl"))
+    rows = []
+    for path in files:
+        for line in path.read_text().splitlines():
+            with contextlib.suppress(ValueError):
+                row = json.loads(line)
+                if isinstance(row, dict) and row.get("event") == name:
+                    rows.append(row)
+    return rows
+
+
+def frames_of(window: Path) -> list[dict]:
+    return sorted((json.loads(p.read_text()) for p in (window / "telemetry").glob("*.json")), key=lambda f: f["seq"])
+
+
+# Around a kill at tick 60, with the checkpoint at 50: an accepted command that starts a 100-tick dwell
+# (`set_rcs_mode`, `min_on_s: 2`), a refusal by that dwell, a deferral due on the first resumed cycle, a
+# conflict across the two windows, an unknown verb, and the dwell's release far after the resume.
+RESUME_SCRIPT = {
+    55: {"alpha": ["set_rcs_mode mode=manual"], "bravo": ["zzz_not_a_verb"]},
+    57: {"alpha": ["set_rcs_mode mode=auto"], "bravo": ["ack_alarm alert_id=b"]},
+    59: {"bravo": ["request_imu_alignment source=star target=LVLH"]},
+    61: {"alpha": ["ack_alarm alert_id=a"], "bravo": ["ack_alarm alert_id=b"]},
+    156: {"alpha": ["set_rcs_mode mode=auto"]},
+}
+
+
+def test_a_world_killed_between_cycles_resumes_from_its_checkpoint_and_record_and_equals_the_uninterrupted_run_at_every_tick_to_t_plus_100(tmp_path):
+    """Issue #21's acceptance: kill at `T`, restart, and truth and lineage at `T + 100` are the uninterrupted run's.
+
+    The oracle is an uninterrupted executive fed the same script, its per-tick compare-point and
+    lineage head read from itself after every cycle (`recorded_run`) — never the resumed run's record or
+    the replay's output. The killed run checkpoints at tick 50 and dies between cycles at tick 60; the
+    resume replays ticks 51–60 from the record and runs on to 160. At every tick from 61 to 160 the
+    compare-point and the lineage link are the oracle's, and at 160 so are the truth, the dwell, the
+    global and every window's receipt counters, spend, deferral queue and frame number. What must
+    change does: the executive's and every window's `boot_id`. What must not, does not: the world, and
+    `met_s` across every frame on disk never goes backward. Every result the two runs published is the
+    same `(state, tick, body)` under the same window-local receipt, each exactly once — so no receipt
+    number is issued twice — and the resume journaled the downtime gap `(wall_down, wall_up, tick)`.
+    The script crosses a dwell (refused at 57, released at 156), a deferral due on the first resumed
+    cycle, and a conflict between the windows.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    oracle.attach("bravo")
+    expected, expected_counters, _ = recorded_run(oracle, oracle_dir, RESUME_SCRIPT, 160)
+
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    killed = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    killed.attach("alpha")
+    killed.attach("bravo")
+    recorded_run(killed, diode, RESUME_SCRIPT, 60, snapshot_at=50)
+    old_boots = {killed.boot_id, *(w.boot_id for w in killed.windows.values())}
+    killed.close()
+
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert (resumption.snapshot_tick, resumption.tick, resumption.replayed) == (50, 60, 10)
+    assert resumed.world_id == killed.world_id and resumed.tick == 60
+    assert not old_boots & {resumed.boot_id, *(w.boot_id for w in resumed.windows.values())}
+    points, counters, _ = recorded_run(resumed, diode, RESUME_SCRIPT, 100, start=60)
+    assert points == {t: expected[t] for t in range(61, 161)}
+    assert counters[160] == expected_counters[160]
+    assert resumed.truth == oracle.truth and resumed.dwell == oracle.dwell and resumed.lineage_head == oracle.lineage_head
+    assert {slug: w.published_tick for slug, w in resumed.windows.items()} == {"alpha": 160, "bravo": 160}
+
+    ledger, oracle_ledger = result_ledger(diode), result_ledger(oracle_dir)
+    assert ledger == oracle_ledger and all(len(entries) == 1 for entries in ledger.values()), set(ledger) ^ set(oracle_ledger)
+    assert {state for entries in ledger.values() for state, _t, _b in entries} >= {"accepted", "refused", "deferred", "settled", "superseded"}
+    for slug in ("alpha", "bravo"):
+        frames = frames_of(diode / slug)
+        assert [f["seq"] for f in frames] == list(range(160)) and len({f["boot_id"] for f in frames}) == 2
+        assert all(a["met_s"] <= b["met_s"] for a, b in itertools.pairwise(frames)), slug
+    (event,) = journal_events(state, "resumed")
+    assert event["tick"] == 60 and event["wall_down"] and event["wall_up"] >= event["wall_down"], event
+    # Killed between cycles, the root record was written at tick 60, the recovered tick: it agrees.
+    assert event["previous_boot"] == killed.boot_id and event["root_record"].startswith("agree"), event
+    assert not journal_events(state, "root_record_rewritten")
+    resumed.close()
+    oracle.close()
+
+
+def test_resuming_rewrites_no_window_file_and_shows_no_window_an_earlier_tick_than_it_had_shown(tmp_path):
+    """Design note F1: attaching a window to an executive at tick 0 rewrote the window before the restore.
+
+    `attach` prepared every window — the mirror and `pending.json` written at tick 0, unbound — and
+    wrote the root record unbound at tick 0, all before `restore_state` could give the executive its
+    tick; for a moment every window showed an earlier tick than it had shown. The resume attaches
+    without preparing, so before its first cycle no window file changes at all: every file under every
+    window is byte-identical to what the killed run left. The root record is rewritten from the
+    recovered state — this world, at the recovered tick — and the first resumed cycle's mirror and
+    `pending.json` describe the tick after.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    killed = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    killed.attach("alpha")
+    killed.attach("bravo")
+    recorded_run(killed, diode, {2: {"alpha": ["set_rcs_mode mode=manual"]}}, 6, snapshot_at=4)
+    killed.close()
+
+    def window_files() -> dict[str, bytes]:
+        return {p.relative_to(diode).as_posix(): p.read_bytes() for p in sorted(diode.glob("*/**/*")) if p.is_file()}
+
+    before = window_files()
+    resumed, _resumption = resume_from(console, checkpoint, world, diode, state)
+    assert window_files() == before
+    root = json.loads((diode / ".executive.json").read_text())
+    assert root["world_id"] == killed.world_id and root["tick"] == 6, root
+    resumed.cycle()
+    for slug in ("alpha", "bravo"):
+        assert json.loads((diode / slug / "state.json").read_text())["executive"] == {"world_id": killed.world_id, "tick": 7}
+        pending = json.loads((diode / slug / "pending.json").read_text())
+        assert pending["ticks"] == 7 and pending["world_id"] == killed.world_id and pending["seq"] == 7, pending
+    resumed.close()
+
+
+def test_the_first_resumed_frame_continues_the_ring_without_rewriting_its_first_frame_and_the_mirror_counts_what_is_on_disk(tmp_path):
+    """ADR 0002 L1 and the reviewer's B12: `seq` continues, so `000.json` is never written again.
+
+    Under L2 (a reset per boot) `write_frame` would have rewritten `000.json`, and `ring_frames`, which
+    counts only frames below the window's own `seq`, would have miscounted the previous boot's. The
+    first frame's inode is the same before and after the resume and its first resumed cycle, and the
+    first resumed mirror's `ring.held` and `ring.losses` are the `telemetry/` listing's: every numbered
+    frame below `seq` is held, and `held + losses == seq`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    killed = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    killed.attach("alpha", ring_slots=8)
+    killed.attach("bravo")
+    recorded_run(killed, diode, {}, 6, snapshot_at=6)
+    killed.close()
+    first = (diode / "bravo" / "telemetry" / "000.json")
+    inode = first.stat().st_ino
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    resumed.cycle()
+    assert first.stat().st_ino == inode and json.loads(first.read_text())["seq"] == 0
+    for slug, seq in (("alpha", 7), ("bravo", 7)):
+        on_disk = sorted(int(p.stem) for p in (diode / slug / "telemetry").glob("*.json"))
+        ring = json.loads((diode / slug / "state.json").read_text())["ring"]
+        assert ring["held"] == len(on_disk) and ring["held"] + ring["losses"] == seq and ring["newest_seq"] == seq - 1, (slug, ring, on_disk)
+    assert len(list((diode / "alpha" / "telemetry").glob("*.json"))) == 7, "alpha's ring of 8 still holds all seven"
+    resumed.close()
+
+
+def test_a_kill_after_a_cycles_results_and_before_its_frame_continues_seq_past_the_marked_frame_and_met_s_never_decreases(tmp_path, monkeypatch):
+    """ADR 0002 J (ii): a mark overstated by a publication that then failed is safe; an understated one would not be.
+
+    The kill lands in `Window.write_frame` of the cycle that reaches tick 5, after the row (whose mark
+    names frame 4) and after the results and their note. The resume restores `seq` to the mark's frame
+    plus one, so frame 4 is never written — the gap is one loss, which `seq` and the ring's `losses`
+    say — and no frame number is used twice. The first resumed frame describes tick 6, and `met_s` over
+    every frame on disk never goes backward across the boot. The physics is the uninterrupted run's.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle_dir = tmp_path / "oracle"
+    oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+    oracle.attach("alpha")
+    script = {4: {"alpha": ["zzz_on_the_killed_cycle"]}}
+    expected, _c, _s = recorded_run(oracle, oracle_dir, script, 8)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    killed = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    killed.attach("alpha")
+    recorded_run(killed, diode, script, 4, snapshot_at=2)
+
+    def frame_killed(self):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_frame", frame_killed)
+    submit(diode / "alpha", script[4]["alpha"])
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    assert len(results_of(diode / "alpha")) == 1, "the result was written before the kill"
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert resumption.tick == 5 and resumed.windows["alpha"].seq == 5
+    points, _c, _s = recorded_run(resumed, diode, script, 3, start=5)
+    assert points == {t: expected[t] for t in (6, 7, 8)}
+    frames = frames_of(diode / "alpha")
+    assert [f["seq"] for f in frames] == [0, 1, 2, 3, 5, 6, 7] and frames[4]["met_s"] == 6 * 0.02
+    assert all(a["met_s"] < b["met_s"] for a, b in itertools.pairwise(frames))
+    ring = json.loads((diode / "alpha" / "state.json").read_text())["ring"]
+    assert ring["losses"] == 1 and ring["held"] == 7, ring
+    assert len(results_of(diode / "alpha")) == 1, "the noted result is not published again"
+    resumed.close()
+
+
+def test_a_batch_claimed_in_a_cycle_whose_row_never_became_durable_is_lost_and_never_replayed_while_its_settling_deferrals_are_kept(tmp_path, monkeypatch):
+    """Addendum A2, as the contract allows: a claimed batch whose row never became durable is lost, with no result.
+
+    `docs/diode-contract.md` §2.2: "A crash mid-batch loses the rest of that batch; it never replays
+    it", and ADR 0002 J (viii). So the property is exactly this — every command whose cycle's row
+    became durable has exactly one result; a batch claimed in a cycle that died before its row is lost
+    with no result and is never run on a resume. Two kill points: after every window's claim and before
+    the row (`_record_cycle`), and between window A's claim and window B's (B12), where B's batch is
+    still in its console and is claimed by the first resumed cycle. A deferral that cycle settled in
+    memory was never recorded as settled, so the replayed queue still holds it and it settles on the
+    first resumed cycle. The oracle is the uninterrupted run fed the same script *without the lost
+    batches* — which is what the contract says happened.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    for kill_at in ("row", "between_claims"):
+        root = tmp_path / kill_at
+        script = {3: {"bravo": ["request_imu_alignment source=star target=LVLH"]}, 4: {"alpha": ["set_rcs_mode mode=manual"], "bravo": ["ack_alarm alert_id=b"]}}
+        lost = {"alpha"} if kill_at == "between_claims" else {"alpha", "bravo"}
+        oracle_script = {3: script[3], 4: {slug: cmds for slug, cmds in script[4].items() if slug not in lost}}
+        oracle_dir = root / "oracle"
+        oracle = console.Executive(world, oracle_dir, phase="translunar_coast")
+        oracle.attach("alpha")
+        oracle.attach("bravo")
+        expected, expected_counters, _ = recorded_run(oracle, oracle_dir, oracle_script, 7)
+        diode, state = root / "diode", root / "state"
+        killed = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+        killed.attach("alpha")
+        killed.attach("bravo")
+        recorded_run(killed, diode, script, 4, snapshot_at=2)
+        assert killed.windows["bravo"].deferred, "the deferral is queued, due on the killed cycle"
+        for slug, commands in script[4].items():
+            submit(diode / slug, commands)
+        if kill_at == "row":
+            def killed_row(self, *args, **kwargs):
+                raise SimulatedKill
+            monkeypatch.setattr(console.Executive, "_record_cycle", killed_row)
+        else:
+            real_claim = console.Window.claim
+
+            def killed_claim(self, real_claim=real_claim):
+                if self.slug == "bravo":
+                    raise SimulatedKill
+                return real_claim(self)
+            # Tick 4 visits the windows in order [alpha, bravo] (sorted slugs rotated by 4 % 2 = 0).
+            monkeypatch.setattr(console.Window, "claim", killed_claim)
+        with pytest.raises(SimulatedKill):
+            killed.cycle()
+        killed.close()
+        monkeypatch.undo()
+        assert json.loads((diode / "alpha" / "console.json").read_text())["commands"] == [], "alpha's batch was claimed"
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.tick == 4
+        points, counters, _ = recorded_run(resumed, diode, {}, 3, start=4)
+        assert points == {t: expected[t] for t in (5, 6, 7)}, kill_at
+        assert counters[7] == expected_counters[7], kill_at
+        assert result_ledger(diode) == result_ledger(oracle_dir), kill_at
+        resumed.close()
+        oracle.close()
+
+
+def planted_deferral(console, verb: str, arguments: dict, accepted_tick: int, due_tick: int, receipt: int, age: float) -> dict:
+    """A queue entry of the parsed shape the executive itself queues (child 4's finding 4)."""
+    return {
+        "verb": verb, "command": console.canonical_command(verb, arguments), "arguments": dict(arguments),
+        "accepted_tick": accepted_tick, "due_tick": due_tick, "maximum_queue_age_s": age, "receipt": receipt,
+    }
+
+
+def test_a_deferral_expires_or_settles_on_the_first_resumed_cycle_by_simulated_age_and_never_by_the_wall_gap(tmp_path):
+    """ADR 0002 F1 and G2 (B12): a deferral's age is simulated time, and the vehicle was frozen while it was down.
+
+    Two deferrals are queued in both the uninterrupted oracle and the killed run, due on the first
+    cycle after the kill: one accepted ten ticks earlier with a one-second limit (0.2 s old when due, so
+    it settles), one accepted sixty ticks earlier (1.2 s old, so it expires `EXPIRED`). The killed run is
+    resumed after a real wall pause longer than either limit. Each settles or expires exactly as in the
+    oracle — same states, same receipts, same bodies — because no mission time passed while the vehicle
+    was down, and an age measured on the wall clock would have expired both.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    entries = [
+        planted_deferral(console, "request_imu_alignment", {"source": "star", "target": "LVLH"}, 50, 61, 1, 1.0),
+        planted_deferral(console, "request_imu_alignment", {"source": "sun", "target": "LVLH"}, 0, 61, 2, 1.0),
+    ]
+
+    def run(root: Path, *, kill: bool):
+        diode, state = root / "diode", root / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 59)
+        executive.windows["alpha"].deferred = json.loads(json.dumps(entries))
+        executive.windows["alpha"].receipts = 2
+        recorded_run(executive, diode, {}, 1, start=59, snapshot_at=60)
+        if kill:
+            executive.close()
+            time.sleep(1.3)
+            executive, _ = resume_from(console, checkpoint, world, diode, state)
+        points, _c, _s = recorded_run(executive, diode, {}, 2, start=60)
+        executive.close()
+        return points, result_ledger(diode)
+
+    oracle_points, oracle_ledger = run(tmp_path / "oracle", kill=False)
+    points, ledger = run(tmp_path / "killed", kill=True)
+    assert points == oracle_points and ledger == oracle_ledger
+    # Settlements are results of their own, with the window's next receipts (3 and 4).
+    states = {key: entries_[0][0] for key, entries_ in ledger.items()}
+    assert states == {("alpha", 3): "settled", ("alpha", 4): "refused"}, states
+    assert "EXPIRED" in ledger[("alpha", 4)][0][2] and "0.2 s after acceptance at tick 50" in ledger[("alpha", 3)][0][2]
+
+
+def test_an_arm_token_minted_before_a_kill_is_still_the_outstanding_token_after_the_resume(tmp_path):
+    """ADR 0002 G1 (survive) and B12: an arm was executed, and nothing executed is forgotten.
+
+    `arm_event` is refused `INTERLOCK UNEVALUATED` until WP05, so the token is placed in the window's
+    `arms` directly — as child 1's fixture does — before the checkpoint, in `lunar_orbit`, a phase in
+    which `execute_event` is open. After the kill and the resume,
+    `execute_event` offering that token passes the token check and is refused at the interlock rule
+    that follows it (`INTERLOCK UNEVALUATED`), where a forgotten token would have been refused "not
+    armed"; a wrong token is still refused as not the outstanding one. The token is the string the
+    window held; nothing salted with the new `boot_id` is compared.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="lunar_orbit", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 1)
+    executive.windows["alpha"].arms["lm_jettison"] = "deadbeefcafef00d"
+    recorded_run(executive, diode, {}, 2, start=1, snapshot_at=2)
+    executive.close()
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    assert resumed.windows["alpha"].arms == {"lm_jettison": "deadbeefcafef00d"}
+    submit(diode / "alpha", ["execute_event event=lm_jettison arm_token=deadbeefcafef00d", "execute_event event=lm_jettison arm_token=0000000000000000"])
+    resumed.cycle()
+    good, wrong = sorted(results_of(diode / "alpha"), key=lambda text: int(receipt_of(text)["seq"]))
+    assert "INTERLOCK UNEVALUATED" in good and "not armed" not in good, good
+    assert "not the outstanding token" in wrong, wrong
+    resumed.close()
+
+
+def test_a_resumed_window_settles_its_first_deferral_against_the_gate_variables_its_console_preserved(tmp_path):
+    """Design note §1.9a: the agents' `variables` are not in the checkpoint, so a resume reads them back.
+
+    ADR 0002 G keeps `variables` out of the checkpoint — they are the agent's, preserved verbatim in
+    its own console by every claim. Each cycle settles due deferrals *before* it claims, so on the first
+    resumed cycle a deferral is judged against the map the window held; without reading it back the
+    gates are at their defaults and the deferral is judged against a window that never closed anything.
+    Here alpha closes `imu_align_star_enable` in a claim, a star alignment is queued due on the first
+    cycle after the kill, and the oracle refuses it at settlement for the closed gate; so does the
+    resumed run, which read the map back from the console without claiming it.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    entry = planted_deferral(console, "request_imu_alignment", {"source": "star", "target": "LVLH"}, 5, 7, 1, 60.0)
+
+    def run(root: Path, *, kill: bool):
+        diode, state = root / "diode", root / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 5)
+        executive.windows["alpha"].deferred = [dict(entry)]
+        executive.windows["alpha"].receipts = 1
+        submit(diode / "alpha", [], {"imu_align_star_enable": False})
+        recorded_run(executive, diode, {}, 2, start=5, snapshot_at=7)
+        if kill:
+            executive.close()
+            executive, _ = resume_from(console, checkpoint, world, diode, state)
+            assert executive.windows["alpha"].variables == {"imu_align_star_enable": False}
+        recorded_run(executive, diode, {}, 1, start=7)
+        executive.close()
+        return result_ledger(diode)
+
+    oracle, resumed = run(tmp_path / "oracle", kill=False), run(tmp_path / "killed", kill=True)
+    assert resumed == oracle
+    (((state_, _tick, body),),) = oracle.values()
+    assert state_ == "refused" and "imu_align_star_enable" in body, body
+
+
+def test_an_unreadable_console_is_claimed_the_same_way_after_a_resume_as_mid_run_but_no_variables_map_is_invented(tmp_path):
+    """The coordinator's condition on B11: one claim path for a garbled console, mid-run and after a resume.
+
+    Mid-run, a console that is not JSON is claimed — one refusal result, the console rewritten with its
+    commands emptied and the window's remembered `variables` — so a broken writer is refused once and
+    not every cycle (ADR 0001). After a resume the window has no remembered map (ADR 0002 G keeps it
+    out of the checkpoint) when the console it would read it from is the garbled one; the same claim
+    then rewrites the console with its commands emptied and **no `variables` key** — never `{}`, which
+    an agent would read as "the vehicle cleared it", and never a map the vehicle invented. Both produce
+    exactly one refusal with the same body, and neither refuses again on the next cycle.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    remembered = {"ack_alarm_enable": False}
+
+    def run(root: Path, *, kill: bool):
+        diode, state = root / "diode", root / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+        executive.attach("alpha")
+        submit(diode / "alpha", [], remembered)
+        recorded_run(executive, diode, {}, 3, snapshot_at=3)
+        (diode / "alpha" / "console.json").write_text('{"commands": ["ack_alarm alert_id=x"], "variables": {"ack')
+        if kill:
+            executive.close()
+            executive, _ = resume_from(console, checkpoint, world, diode, state)
+        executive.cycle()
+        executive.cycle()
+        rewritten = json.loads((diode / "alpha" / "console.json").read_text())
+        bodies = [body for entries in result_ledger(diode).values() for _s, _t, body in entries]
+        executive.close()
+        return rewritten, bodies
+
+    (mid_console, mid_bodies), (resumed_console, resumed_bodies) = run(tmp_path / "mid", kill=False), run(tmp_path / "resumed", kill=True)
+    assert mid_console == {"commands": [], "variables": remembered}
+    assert resumed_console == {"commands": []}, resumed_console
+    assert len(mid_bodies) == len(resumed_bodies) == 1 and mid_bodies == resumed_bodies and "not valid JSON" in mid_bodies[0]
+
+
+def test_a_window_that_cannot_be_opened_at_a_resume_is_a_recorded_skip_and_the_world_resumes(tmp_path):
+    """Design note S9: a link an agent planted in its own window never holds the vehicle dark at a restart.
+
+    A start that refused on a window it could not prepare is an agent's stop button once that start is
+    every restart. Here alpha's `telemetry/` is a symlink when the vehicle comes back: the resume
+    records alpha's failure, resumes the world, and serves bravo; alpha is skipped each cycle, as it
+    would be mid-run, until the link is cleared — then it is served again, its `seq` continuing.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, {}, 3, snapshot_at=3)
+    executive.close()
+    shutil.rmtree(diode / "alpha" / "telemetry")
+    (diode / "alpha" / "telemetry").symlink_to(diode / "bravo" / "telemetry")
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    assert resumed.failure_count == 1 and resumed.failures[-1]["window"] == "alpha", list(resumed.failures)
+    submit(diode / "bravo", ["ack_alarm alert_id=b"])
+    resumed.cycle()
+    assert len(results_of(diode / "bravo")) == 1 and resumed.windows["alpha"].published_tick == 3
+    (diode / "alpha" / "telemetry").unlink()
+    (diode / "alpha" / "telemetry").mkdir()
+    resumed.cycle()
+    assert resumed.windows["alpha"].published_tick == 5 and resumed.windows["alpha"].seq == 4
+    resumed.close()
+
+
+def test_a_lost_window_directory_is_repaired_without_regressing_its_pending_file_its_mirror_or_the_root_record(tmp_path):
+    """Addendum B7: directory repair is not initialisation, at a resume or mid-run.
+
+    The live path for a window whose directory went missing re-ran `prepare`, which wrote
+    `pending.json` at tick 0 and unbound — a window shown an earlier tick than it had already shown.
+    Mid-run, alpha's `output/` and `telemetry/` are removed: the dark tick re-makes them and writes
+    nothing else, so `pending.json` still says the tick it last published. At a resume, bravo's whole
+    directory is gone: it is re-made (with an empty console), nothing in it claims a tick, and the root
+    record names the recovered tick; the first resumed cycle publishes bravo at the tick after.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, {}, 3)
+    shutil.rmtree(diode / "alpha" / "output")
+    shutil.rmtree(diode / "alpha" / "telemetry")
+    executive.cycle()
+    assert (diode / "alpha" / "output").is_dir() and (diode / "alpha" / "telemetry").is_dir()
+    assert json.loads((diode / "alpha" / "pending.json").read_text())["ticks"] == 3, "repair writes no pending.json"
+    recorded_run(executive, diode, {}, 1, start=4, snapshot_at=5)
+    executive.close()
+    shutil.rmtree(diode / "bravo")
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    assert sorted(p.name for p in (diode / "bravo").iterdir()) == ["console.json", "output", "telemetry"]
+    assert json.loads((diode / ".executive.json").read_text())["tick"] == 5
+    resumed.cycle()
+    assert json.loads((diode / "bravo" / "pending.json").read_text())["ticks"] == 6
+    resumed.close()
+
+
+def test_a_world_saved_at_tick_zero_resumes_bound_and_an_unbound_root_record_is_routine_only_there(tmp_path):
+    """Addendum B9: which root record a resume at `L = 0` writes, and when an unbound one is routine.
+
+    A checkpoint taken before a world's first cycle (its genesis, child 3) is a world that exists:
+    the resume writes the root record bound to it at tick 0 — `root_record_from_checkpoint`'s shape —
+    where the live executive would have written `world_id: null` until its first tick. The unbound
+    record `attach` left beside it is routine (`T = L = 0`) and is journaled inside the `resumed` event
+    with no mismatch event. The same unbound record beside a world recovered past tick 0 is a
+    disagreement: rewritten, with its `root_record_rewritten` event.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    checkpoint.write_checkpoint(state, checkpoint.capture_state(executive, compat))
+    executive.close()
+    assert json.loads((diode / ".executive.json").read_text())["world_id"] is None
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert resumption.tick == 0 and resumption.root_record.startswith("routine"), resumption.root_record
+    root = json.loads((diode / ".executive.json").read_text())
+    assert root["world_id"] == executive.world_id and root["tick"] == 0
+    assert not journal_events(state, "root_record_rewritten")
+    recorded_run(resumed, diode, {}, 2)
+    resumed.close()
+    (diode / ".executive.json").write_text(json.dumps({**root, "world_id": None, "tick": 0}))
+    again, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert resumption.tick == 2 and resumption.root_record.startswith("rewrite"), resumption.root_record
+    assert len(journal_events(state, "root_record_rewritten")) == 1
+    again.close()
+
+
+def test_a_root_record_between_the_checkpoints_tick_and_the_recovered_tick_is_routine_and_any_other_disagreement_is_not(tmp_path):
+    """#20's review note 1: a root record ahead of the checkpoint is the normal restart, not a tampering.
+
+    The root record is rewritten every cycle and the checkpoint every `N` ticks, so compared with the
+    checkpoint's tick the record disagreed on every restart and `root_record_rewritten` stopped meaning
+    anything. Compared with the recovered state: a record of this world at a tick in `[T, L]` is
+    routine — rewritten, journaled inside the `resumed` event, no mismatch event; at `L` it agrees. A
+    record ahead of `L`, or one that disagrees on another key (an extra slug), is still a mismatch —
+    rewritten with its event — and a readable record of another world still refuses the resume.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 9, snapshot_at=5)
+    executive.close()
+    record_path = diode / ".executive.json"
+    base = json.loads(record_path.read_text())
+    cases = [
+        ({**base, "tick": 7}, "routine", 0),
+        ({**base, "tick": 5}, "routine", 0),
+        ({**base, "tick": 9}, "agree", 0),
+        ({**base, "tick": 12}, "rewrite", 1),
+        ({**base, "slugs": ["alpha", "zulu"], "ring_slots": {"alpha": 300, "zulu": 300}}, "rewrite", 1),
+    ]
+    for record, expected, events in cases:
+        for path in state.glob("journal.*.jsonl"):
+            if path.name != f"journal.{executive.boot_id}.jsonl":
+                path.unlink()
+        record_path.write_text(json.dumps(record))
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.root_record.startswith(expected), (record, resumption.root_record)
+        assert len(journal_events(state, "root_record_rewritten")) == events, record
+        assert json.loads(record_path.read_text())["tick"] == 9
+        resumed.close()
+    record_path.write_text(json.dumps({**base, "world_id": "f" * 32}))
+    with pytest.raises(console.ResumeRefused) as refused:
+        resume_from(console, checkpoint, world, diode, state)
+    assert "f" * 32 in str(refused.value) and "two executives" in str(refused.value)
+
+
+def test_beside_a_verified_checkpoint_a_windows_legacy_pending_file_is_an_advisory_and_never_a_refusal(tmp_path):
+    """#20's review note 2 and ADR 0002 H: the refuse-only `pending.json` checks become advisory beside a checkpoint.
+
+    A window's `pending.json` is agent-writable, and refusing on it at a restart would hand the agent the
+    stop button the checkpoint exists to take away. A `pending.json` naming another world, or a tick
+    past the recovered one, is noted in the `resumed` event's `advisories` and the world resumes; the
+    next publication rewrites the file from the executive's state.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, {}, 3, snapshot_at=3)
+    executive.close()
+    (diode / "alpha" / "pending.json").write_text(json.dumps({"ticks": 40, "world_id": "f" * 32}))
+    (diode / "bravo" / "pending.json").write_text(json.dumps({"ticks": 40, "world_id": executive.world_id}))
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert resumption.advisories == [{"window": "alpha", "pending_world_id": repr("f" * 32)}, {"window": "bravo", "pending_ticks": 40}]
+    (event,) = journal_events(state, "resumed")
+    assert event["advisories"] == resumption.advisories
+    resumed.cycle()
+    assert json.loads((diode / "alpha" / "pending.json").read_text())["world_id"] == executive.world_id
+    resumed.close()
+
+
+def test_a_named_max_batch_replaces_the_saved_one_and_named_interlocks_join_the_saved_trips_and_both_are_journaled(tmp_path):
+    """ADR 0002 G "remembered versus named" and addendum A4: the operator's live inputs across a restart.
+
+    `--max-batch` and `--closed-interlock` are the operator's live state, remembered by the checkpoint.
+    Named anew on a restart, a batch cap replaces the saved one; interlocks are *added* to the saved
+    trips, so a restart that names none — or names others — never silently un-trips one. Each change is
+    in the `resumed` event as `[before, after]`; naming nothing changes nothing and journals nothing.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, max_batch=7, tripped_interlocks={"tie_dv_limit"})
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 2, snapshot_at=2)
+    executive.close()
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert (resumed.max_batch, resumed.tripped, resumption.run_inputs) == (7, {"tie_dv_limit"}, {})
+    resumed.close()
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state, max_batch=3, closed_interlocks={"rcs_quad_temp"})
+    assert resumed.max_batch == 3 and resumed.tripped == {"tie_dv_limit", "rcs_quad_temp"}
+    assert resumption.run_inputs == {"max_batch": [7, 3], "tripped_interlocks": [["tie_dv_limit"], ["rcs_quad_temp", "tie_dv_limit"]]}
+    (event,) = [e for e in journal_events(state, "resumed") if e["boot_id"] == resumed.boot_id]
+    assert event["run_inputs"] == resumption.run_inputs
+    resumed.close()
+
+
+def test_a_publication_that_fails_before_its_frame_consumes_the_marked_frame_number_live_as_a_replay_does(tmp_path, monkeypatch):
+    """Design note S16 (required by B11): live state and replayed state agree on the next frame number.
+
+    The record's mark names the frame a window is about to write. When the publication then fails
+    before the frame, the live executive kept that number and wrote it next cycle, while a replay
+    through the mark (`replay_record`: `seq = mark + 1`) skipped it — so a checkpoint of the live run
+    and a resume through the record disagreed. The live executive now consumes the number too: the
+    gap is a visible loss, and capture after the failure equals the replay's body for every window.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _p, _c, snapshot = recorded_run(executive, diode, {}, 2, snapshot_at=2)
+    real = console.Window.write_frame
+
+    def broken(self):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(console.Window, "write_frame", broken)
+    executive.cycle()
+    monkeypatch.setattr(console.Window, "write_frame", real)
+    assert executive.windows["alpha"].seq == 3, "the marked frame 2 is consumed"
+    executive.cycle()
+    live = checkpoint.capture_state(executive, checkpoint.Compatibility.current(world))
+    replayed = console.replay_record(world, snapshot, console.read_record(state, anchor=console.record_anchor(snapshot)))
+    assert live["windows"] == replayed.body["windows"]
+    assert sorted(int(p.stem) for p in (diode / "alpha" / "telemetry").glob("*.json")) == [0, 1, 3]
+    executive.close()
+
+
+def test_a_journal_file_with_more_startup_events_than_the_bound_before_its_header_is_refused_by_name(tmp_path):
+    """The coordinator's bound on B5's "first header": a named constant, and a refusal past it.
+
+    An anchored read finds a segment's successors by reading only each file's first header, past the
+    unchained startup events a boot journals before its first cycle. Those are a handful; a file with
+    more than `STARTUP_LINES_BEFORE_HEADER` of them before any header is not one this vehicle wrote,
+    and the read refuses it by name (`startup`) rather than reading on without bound.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _p, _c, snapshot = recorded_run(executive, diode, {}, 2, snapshot_at=2)
+    executive.close()
+    events = "".join(json.dumps({"event": "resumed", "boot_id": "c" * 32, "wall": "w"}) + "\n" for _ in range(console.STARTUP_LINES_BEFORE_HEADER + 1))
+    (state / f"journal.{'c' * 32}.jsonl").write_text(events)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(state, anchor=console.record_anchor(snapshot))
+    assert refused.value.check == "startup" and str(console.STARTUP_LINES_BEFORE_HEADER) in str(refused.value)
+    (state / f"journal.{'c' * 32}.jsonl").write_text("".join(events.splitlines(keepends=True)[: console.STARTUP_LINES_BEFORE_HEADER]))
+    console.read_record(state, anchor=console.record_anchor(snapshot)).close()

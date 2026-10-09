@@ -192,6 +192,7 @@ from checkpoint import (  # noqa: E402
     choose_generation,
     decode,
     encode,
+    restore_state,
 )
 from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
@@ -2330,6 +2331,9 @@ class Executive:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
         self.world = world
         self.diode_dir = Path(diode_dir)
+        # An explicit `--journal` every boot appends to, rather than one segment file per boot in the
+        # state directory: a resume reads it by name through its held directory.
+        self.journal_shared = journal is not None
         # One boot of this executive (ADR 0002's "segment"): the journal segment's name, and the id
         # `main` draws first so that a startup event and the ticks that follow share one file. A
         # window's own `boot_id` stays per window, as `presentation.yaml#frame` publishes it.
@@ -2394,6 +2398,8 @@ class Executive:
         # This boot's entry is appended when its header is written — at its first cycle, not here,
         # because a resumed executive (child 3) has its tick and its predecessors set by the restore.
         self.segments: list[dict[str, Any]] = []
+        # A world restored from its checkpoint (`resume_executive`): it exists at any tick, tick 0 included.
+        self.resumed = False
         self._segment: dict[str, Any] | None = None
         self._record_fd: int | None = None
         # The chain value of the last line this boot appended (format v2), `""` before its header.
@@ -2431,13 +2437,18 @@ class Executive:
         }
 
     # -- windows ------------------------------------------------------------------------------
-    def attach(self, slug: str, *, ring_slots: int = DEFAULT_RING_SLOTS) -> Window:
+    def attach(self, slug: str, *, ring_slots: int = DEFAULT_RING_SLOTS, prepare: bool = True) -> Window:
         """Create the view for one slug and prepare its directory. A slug attaches once.
 
         The slug is one safe path component. The window's paths are checked before anything is
         written — a directory that is a link, or an `output/` that is a file, is a failure recorded
         against the window rather than a traceback — and the window's record is written unbound
         (`world_id: null`): the first cycle that ticks it binds the directory.
+
+        **With `prepare=False` nothing is written** (child 3): a resume attaches the windows a
+        checkpoint names before `restore_state` can give them their state, and preparing them then
+        rewrote every mirror and `pending.json` to tick 0 and the root record to an unbound world —
+        a window shown an earlier tick than it had already shown (design note F1).
         """
         if not isinstance(slug, str) or not SLUG_PATTERN.match(slug):
             raise ValueError(
@@ -2447,6 +2458,12 @@ class Executive:
         if slug in self.windows:
             raise ValueError(f"slug {slug!r} is already attached to world {self.world_id}")
         root = self.diode_dir / slug
+        if not prepare:
+            # A resumed window: its directory is checked handle-relative by every cycle, and a link
+            # there is that window's recorded skip — never a refused start (child 3's S9).
+            window = Window(self, root, slug, ring_slots=ring_slots)
+            self.windows[slug] = window
+            return window
         if root.is_symlink():
             raise ValueError(f"the window directory {root} is a symlink, and a window is a directory")
         window = Window(self, root, slug, ring_slots=ring_slots)
@@ -2522,10 +2539,11 @@ class Executive:
                     window.open_handles()
                 except WindowAbsent as exc:
                     # A dark tick, then back: the directory is made again (handle-relative, following
-                    # no link) and served next cycle with the identity the executive kept.
+                    # no link) and served next cycle with the identity the executive kept. Repair, not
+                    # preparation: `prepare` wrote `pending.json` at tick 0 (addendum B7).
                     self._record_failure(window, "check", exc, tick)
                     try:
-                        window.prepare()
+                        window.repair()
                     except Exception as again:  # noqa: BLE001 - recorded, like the absence
                         self._record_failure(window, "prepare", again, tick)
                     finally:
@@ -2583,6 +2601,11 @@ class Executive:
                     raise
                 except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                     self._record_failure(window, "publish", exc, tick)
+                    # The record marked this frame number as written (J (ii)); a publication that failed
+                    # before the frame consumes it anyway, as a replay through the mark does, so a live
+                    # checkpoint and a replayed one agree on the next frame number (design note S16).
+                    if window.marked_seq is not None and window.seq == window.marked_seq:
+                        window.seq += 1
             return written
         finally:
             for window in order:
@@ -2632,6 +2655,8 @@ class Executive:
         set: `published_tick` is what the window has been told, whether or not anything keeps it.
         """
         marks = {window.slug: {"tick": self.tick, "seq": window.seq} for window in healthy}
+        for window in self.windows.values():
+            window.marked_seq = window.seq if window.slug in marks else None
         if self.journal is not None:
             receipts = [entry for rows in verdicts.values() for entry in receipt_entries(rows)]
             changes: dict[str, dict[str, Any]] = {}
@@ -2792,8 +2817,9 @@ class Executive:
         rings = dict(self.record_slugs)
         rings.update({slug: window.ring_slots for slug, window in self.windows.items()})
         return {
-            # Bound by the first tick, like the windows' own records (ADR 0001 choice D).
-            "world_id": self.world_id if self.tick > 0 else None,
+            # Bound by the first tick, like the windows' own records (ADR 0001 choice D) — or by a
+            # checkpoint: a resumed world exists at tick 0 too (child 3, addendum B9).
+            "world_id": self.world_id if self.tick > 0 or self.resumed else None,
             "slugs": sorted(rings),
             "scenario": self.scenario,
             "seed": self.seed,
@@ -3448,6 +3474,14 @@ class Window:
         # file of at most `MAX_READ_BYTES` and the rewrite is no larger), and what the vehicle
         # *honours* of it is computed from it each cycle by `honoured()`.
         self.variables: dict[str, Any] = {}
+        # Whether `variables` is the map the agent last wrote. A resume does not have it — ADR 0002 G
+        # keeps it out of the checkpoint, in the agent's own console — until it reads a console that
+        # carries one; while it is unknown the gates are at their defaults and no rewrite of the
+        # console invents a map (child 3).
+        self.variables_known = True
+        # The frame number the record's mark for this cycle named, so a publication that fails before
+        # its frame still consumes it (design note S16); `None` when this cycle did not mark the window.
+        self.marked_seq: int | None = None
         # `honoured()`'s answer for the current preserved map, computed once per cycle after the
         # claim and invalidated when the map is replaced.
         self._honoured: tuple[dict[str, bool], int] | None = None
@@ -3565,6 +3599,28 @@ class Window:
         except FileNotFoundError:
             write_json_atomic(self.console, {"commands": [], "variables": {}}, dir_fd=handles.root)
 
+    def repair(self) -> None:
+        """Make a window's missing directories again, and an empty console where none is — nothing else.
+
+        Repair is not initialisation (addendum B7): a directory lost while the vehicle runs, or while
+        it is down, is re-made handle-relative and following no link, and the next publication writes
+        its mirror, `pending.json` and generated files from the state the executive holds. `prepare`
+        wrote `pending.json` at tick 0 here, which showed a window an earlier tick than it had seen.
+        """
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(self.slug, dir_fd=self.executive.diode_fd)
+        root = open_directory(self.slug, dir_fd=self.executive.diode_fd)
+        try:
+            for name in (self.output, self.telemetry):
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(name, dir_fd=root)
+            try:
+                os.lstat(self.console, dir_fd=root)
+            except FileNotFoundError:
+                write_json_atomic(self.console, self.claimed_console(), dir_fd=root)
+        finally:
+            os.close(root)
+
     # -- the claim --------------------------------------------------------------------------
     def claim(self) -> list[Any] | str:
         """Read the console and clear it, *before* acting on anything.
@@ -3587,9 +3643,7 @@ class Window:
         root = self._handles().root
         payload, problem = read_ingress(self.console, dir_fd=root)
         if payload is None:
-            write_json_atomic(
-                self.console, {"commands": [], "variables": self.variables}, dir_fd=root, durable=self.executive.journal is not None
-            )
+            write_json_atomic(self.console, self.claimed_console(), dir_fd=root, durable=self.executive.journal is not None)
             return str(problem)
         commands = payload.get("commands")
         variables = payload.get("variables")
@@ -3597,6 +3651,7 @@ class Window:
         # `variables` object keeps the previous one, which is what "never clears it" means.
         if isinstance(variables, dict):
             self.variables = variables
+            self.variables_known = True
             self._honoured = None
         # A claim that takes a batch is made durable — the file and the directory — before the record
         # says it was answered: a crash must not bring the commands back to run twice (child 4's review
@@ -3604,7 +3659,7 @@ class Window:
         # relies on the claim being durable, and nothing is `fsync`ed.
         write_json_atomic(
             self.console,
-            {"commands": [], "variables": self.variables},
+            self.claimed_console(),
             dir_fd=root,
             durable=commands not in (None, []) and self.executive.journal is not None,
         )
@@ -3616,6 +3671,18 @@ class Window:
                 "there is no batch here to run"
             )
         return commands
+
+    def claimed_console(self) -> dict[str, Any]:
+        """What the claim rewrites the console to: commands emptied, the preserved `variables` — when known.
+
+        A resumed window whose console could not be read has no map to preserve (ADR 0002 G keeps it
+        out of the checkpoint); its claim leaves the `variables` key out rather than writing `{}`,
+        which would read as "the vehicle cleared it", and the window honours the defaults until the
+        agent writes a console that carries one. The mid-run claim is this same rule with a known map.
+        """
+        if not self.variables_known:
+            return {"commands": []}
+        return {"commands": [], "variables": self.variables}
 
     def honoured(self) -> tuple[dict[str, bool], int]:
         """What the vehicle honours of the preserved map: the published gates, and the allowance.
@@ -3864,6 +3931,284 @@ class Window:
 
 # The old name, for readers of the round log: the class that used to own the physics.
 Console = Window
+
+
+# -- resume (ADR 0002, WP08 child 3 — #21) ------------------------------------------------------------
+class ResumeRefused(Exception):
+    """A saved world this start will not resume; the message is the operator's sentence."""
+
+
+@dataclass
+class Resumption:
+    """What a resume did, for the banner, the journal and the tests."""
+
+    snapshot_tick: int
+    tick: int
+    fell_back: str | None
+    root_record: str
+    run_inputs: dict[str, Any]
+    advisories: list[dict[str, Any]]
+    events: list[dict[str, Any]] = field(default_factory=list)
+    republished: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def replayed(self) -> int:
+        return self.tick - self.snapshot_tick
+
+
+def classify_root_record(
+    record: dict[str, Any] | None, problem: str | None, expected: dict[str, Any], snapshot_tick: int
+) -> tuple[str, str]:
+    """`reconcile_root_record` against the *recovered* state, with one more answer: `routine` (#20's note 1).
+
+    The root record is rewritten every cycle after the cycle's row (`cycle`), and a checkpoint is taken
+    every `N` ticks, so on an ordinary restart the record is ahead of the checkpoint and at, or one
+    behind, the last durable row `L`. Compared with the checkpoint's own tick that is a disagreement on
+    every boot, and the `root_record_rewritten` event would stop meaning "damaged or tampered". So the
+    record is compared with the state the replay recovered: a record that agrees on every identity key
+    but the tick, naming this world at a tick in `[T, L]`, is **routine** — journaled inside the
+    `resumed` event and rewritten without a mismatch event. So is an unbound record at tick 0 beside a
+    world that has neither ticked nor been replayed (`T = L = 0`, addendum B9). Everything else is
+    `reconcile_root_record`'s: agree, rewrite with its event, or — a readable record of another world —
+    refuse. A record ahead of `L` is a disagreement: an `fsync`ed row does not vanish.
+    """
+    action, why = reconcile_root_record(record, problem, expected)
+    if action != "rewrite" or record is None or problem is not None:
+        return action, why
+    tick, bound = record.get("tick"), record.get("world_id")
+    if not all(record.get(key) == expected[key] for key in ROOT_RECORD_IDENTITY if key not in ("world_id", "tick")):
+        return action, why
+    recovered = expected["tick"]
+    if bound == expected["world_id"] and isinstance(tick, int) and not isinstance(tick, bool) and snapshot_tick <= tick <= recovered:
+        return "routine", f"the root record is at tick {tick}, within the checkpoint's tick {snapshot_tick} and the recovered tick {recovered}: routine"
+    if bound is None and tick == 0 and snapshot_tick == recovered == 0:
+        return "routine", "the root record is unbound at tick 0 beside a world saved at tick 0: routine"
+    return action, why
+
+
+def _newest_journal_mtime(executive: Executive) -> tuple[str | None, str]:
+    """`wall_down`, and where it came from: the newest journal file's last write (rows carry no wall stamp)."""
+    dir_fd = executive.journal_dir_fd
+    if dir_fd is None or executive.journal is None:
+        return None, "no record"
+    names = [executive.journal.name] if executive.journal_shared else [n for n in os.listdir(dir_fd) if JOURNAL_SEGMENT_NAME.fullmatch(n)]
+    newest: tuple[float, str] | None = None
+    for name in names:
+        with contextlib.suppress(OSError):
+            info = os.lstat(name, dir_fd=dir_fd)
+            if stat.S_ISREG(info.st_mode) and (newest is None or info.st_mtime > newest[0]):
+                newest = (info.st_mtime, name)
+    if newest is None:
+        return None, "no journal file"
+    return datetime.fromtimestamp(newest[0], UTC).isoformat(), f"mtime of {newest[1]}, its last append"
+
+
+def resume_executive(
+    world: World,
+    diode_dir: Path,
+    loaded: Any,
+    *,
+    boot_id: str | None = None,
+    state_dir: Path | None = None,
+    state_fd: int | None = None,
+    journal: Path | None = None,
+    journal_dir_fd: int | None = None,
+    max_batch: int | None = None,
+    closed_interlocks: set[str] | None = None,
+) -> tuple[Executive, Resumption]:
+    """An executive resumed from a verified checkpoint (`checkpoint.choose_generation`) and the record after it.
+
+    ADR 0002 F1, G, J and L, as the design note for child 3 (#21) and its addenda decide them:
+
+    1. The executive is built at the checkpoint's phase, scenario and seed, and its windows are
+       attached **without preparing them** (`attach(prepare=False)`), so nothing in a window is written
+       before the state exists.
+    2. The record is read from the checkpoint's anchor through the held handle (`read_record(anchor=)`)
+       and replayed onto the body (`replay_record`): every row after the snapshot's tick `T` to the last
+       durable row `L`. Mission time resumes at `L` (F1). There is no effect-free tail to step: a
+       window's published tick is set only after its cycle's row is durable, so it is never past `L`.
+    3. `restore_state` sets the world, the tick, truth, dwell, lineage, the receipt counters, the
+       segments and every window's `seq`, receipts, spend, deferrals, arm tokens and published tick.
+       Each window keeps its new `boot_id`, so the frames say the vehicle restarted; `seq` continues.
+    4. The operator's live inputs: a named `--max-batch` replaces the saved one; named interlocks are
+       added to the saved trips (a restart that names none cannot un-trip one). Changes are journaled.
+    5. The root record is classified against the recovered state (`classify_root_record`); the
+       `resumed` event — the downtime gap `(wall_down, wall_up, tick)`, the generation and whether it
+       was a fall-back, the root record's class, the run-input changes and any `pending.json`
+       advisories — is journaled, then a mismatch event if there is one, then the record is rewritten.
+    6. Each window is opened once: a lost directory is repaired (never re-initialised), the agent's
+       preserved `variables` are read back from its console without claiming it, and a window that
+       cannot be opened is a recorded failure — never a refused start, because a file an agent planted
+       in its own window must not hold the vehicle dark.
+
+    Refusals are `ResumeRefused`, with the executive closed. The caller holds the lock.
+    """
+    body = loaded.body
+    run = body["run"]
+    snapshot_tick = int(body["identity"]["tick"])
+    try:
+        executive = Executive(
+            world,
+            diode_dir,
+            phase=run["phase"],
+            scenario=run["scenario"],
+            seed=run["seed"],
+            max_batch=run["max_batch"],
+            journal=journal,
+            record_slugs={slug: row["ring_slots"] for slug, row in body["windows"].items()},
+            state_dir=state_dir,
+            boot_id=boot_id,
+            state_fd=state_fd,
+            journal_dir_fd=journal_dir_fd,
+        )
+    except ValueError as exc:
+        raise ResumeRefused(str(exc)) from exc
+    try:
+        return executive, _resume(executive, world, loaded, snapshot_tick, max_batch, closed_interlocks)
+    except BaseException:
+        executive.close()
+        raise
+
+
+def _resume(
+    executive: Executive, world: World, loaded: Any, snapshot_tick: int, max_batch: int | None, closed_interlocks: set[str] | None
+) -> Resumption:
+    body = loaded.body
+    where = f"the checkpoint at {loaded.path}"
+    if executive.journal is None or executive.journal_dir_fd is None:
+        raise ResumeRefused(f"{where} can only be resumed with its record, and no journal is named for this executive")
+    anchor = record_anchor(body)
+    try:
+        if executive.journal_shared:
+            record = read_record(executive.journal, dir_fd=executive.journal_dir_fd, names=[executive.journal.name], anchor=anchor)
+        else:
+            record = read_record(executive.state_dir or executive.journal.parent, dir_fd=executive.journal_dir_fd, anchor=anchor)
+        with record:
+            replayed = replay_record(world, body, record)
+    except RecordRefused as exc:
+        raise ResumeRefused(f"the record cannot continue {where}: {exc}") from exc
+    recovered = replayed.body
+    tick = int(recovered["identity"]["tick"])
+    for slug, row in recovered["windows"].items():
+        if row["published_tick"] is not None and row["published_tick"] > tick:
+            raise ResumeRefused(f"window {slug!r} was published at tick {row['published_tick']}, past the record's last durable tick {tick}")
+    for slug in sorted(recovered["windows"]):
+        executive.attach(slug, ring_slots=recovered["windows"][slug]["ring_slots"], prepare=False)
+    try:
+        restore_state(executive, recovered)
+    except ValueError as exc:
+        raise ResumeRefused(f"{where} cannot be restored: {exc}") from exc
+    executive.resumed = True
+
+    run_inputs: dict[str, Any] = {}
+    if max_batch is not None and int(max_batch) != executive.max_batch:
+        run_inputs["max_batch"] = [executive.max_batch, int(max_batch)]
+        executive.max_batch = int(max_batch)
+    added = sorted(set(closed_interlocks or ()) - executive.tripped)
+    if added:
+        run_inputs["tripped_interlocks"] = [sorted(executive.tripped), sorted(executive.tripped | set(added))]
+        executive.tripped |= set(added)
+
+    record_now, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=executive.diode_fd)
+    expected = root_record_from_checkpoint(recovered)
+    action, why = classify_root_record(record_now, problem, expected, snapshot_tick)
+    if action == "refuse":
+        raise ResumeRefused(
+            f"the root record at {executive.diode_dir / RECORD_FILE} and {where} disagree about which world this is: {why}. "
+            "Neither is rewritten; stop the other executive or point --state-dir at the directory that serves this one"
+        )
+
+    advisories: list[dict[str, Any]] = []
+    for slug in sorted(executive.windows):
+        # ADR 0002 H: beside a verified checkpoint the legacy `pending.json` checks are advisory. The
+        # window's copy is read for nothing but a note to the operator.
+        with contextlib.suppress(OSError):
+            window_fd = open_directory(slug, dir_fd=executive.diode_fd)
+            try:
+                legacy = read_json_bounded("pending.json", dir_fd=window_fd) or {}
+            finally:
+                os.close(window_fd)
+            named, ticks = legacy.get("world_id"), legacy.get("ticks")
+            if isinstance(named, str) and named and named != executive.world_id:
+                advisories.append({"window": slug, "pending_world_id": bounded_repr(named)})
+            elif isinstance(ticks, int) and not isinstance(ticks, bool) and ticks > tick:
+                advisories.append({"window": slug, "pending_ticks": ticks})
+
+    wall_down, source = _newest_journal_mtime(executive)
+    segments = recovered["segments"]
+    resumed_event = {
+        "event": "resumed",
+        "wall": utc_now().isoformat(),
+        "boot_id": executive.boot_id,
+        "world_id": executive.world_id,
+        "tick": tick,
+        "wall_down": wall_down,
+        "wall_down_source": source,
+        "wall_up": utc_now().isoformat(),
+        "previous_boot": segments[-1]["segment"] if segments else None,
+        "checkpoint": {
+            "file": Path(loaded.path).name,
+            "tick": snapshot_tick,
+            "fell_back": str(loaded.fell_back) if getattr(loaded, "fell_back", None) is not None else None,
+        },
+        "replayed": tick - snapshot_tick,
+        "root_record": f"{action}: {why}",
+        "run_inputs": run_inputs,
+        "advisories": advisories,
+    }
+    events = [resumed_event]
+    if action == "rewrite":
+        events.append({
+            "event": "root_record_rewritten",
+            "wall": utc_now().isoformat(),
+            "boot_id": executive.boot_id,
+            "world_id": expected["world_id"],
+            "tick": expected["tick"],
+            "checkpoint": Path(loaded.path).name,
+            "reason": why,
+            "problem": problem,
+            **superseded_record(record_now, record_bytes),
+        })
+    try:
+        for event in events:
+            append_journal_line(executive.journal, event, dir_fd=executive.journal_dir_fd)
+    except Exception as exc:  # noqa: BLE001 - the refusal names it
+        raise ResumeRefused(
+            f"the journal at {executive.journal} cannot take the resume's events ({type(exc).__name__}: {exc}), so nothing was rewritten"
+        ) from exc
+    if action != "agree":
+        try:
+            write_json_atomic(RECORD_FILE, executive.root_record(), dir_fd=executive.diode_fd)
+        except Exception as exc:  # noqa: BLE001 - the refusal names it
+            raise ResumeRefused(
+                f"the root record at {executive.diode_dir / RECORD_FILE} cannot be rewritten from the recovered world "
+                f"({type(exc).__name__}: {exc}); {why}. The events were journaled first: remove what is at that path and start again"
+            ) from exc
+
+    for window in executive.windows.values():
+        window.variables_known = False
+        try:
+            try:
+                handles = window.open_handles()
+            except WindowAbsent:
+                window.repair()
+                handles = window.open_handles()
+            payload, _problem = read_ingress(window.console, dir_fd=handles.root)
+            if payload is not None and isinstance(payload.get("variables"), dict):
+                window.variables, window.variables_known, window._honoured = payload["variables"], True, None
+        except Exception as exc:  # noqa: BLE001 - the window's, recorded; the world resumes
+            executive._record_failure(window, "resume", exc, tick)
+        finally:
+            window.close_handles()
+    return Resumption(
+        snapshot_tick=snapshot_tick,
+        tick=tick,
+        fell_back=resumed_event["checkpoint"]["fell_back"],
+        root_record=f"{action}: {why}",
+        run_inputs=run_inputs,
+        advisories=advisories,
+        events=events,
+    )
 
 
 def positive_int(text: str) -> int:
