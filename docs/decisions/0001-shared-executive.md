@@ -84,7 +84,12 @@ other window. A stalled consumer only lets its own `output/` grow; its ring is b
 directory before attaching windows, and stamps each window's `pending.json` with its `world_id`.
 A second executive on the same directory refuses to start. *Choice D:* an executive refuses a window
 whose `pending.json` names a different world, live or not: starting a fresh world on an old window
-would silently reset its physics, and restart continuity is WP08's to decide.
+would silently reset its physics, and restart continuity is WP08's to decide. *Amended by WP08 child
+2, per ADR 0002 H (2026-10-09):* with `--state-dir`, the exclusive lock is taken in the state
+directory and the diode root's lock is not opened at all — a lock on a volume the agents can write
+is a lock they can hold — and one world per directory is then held by the root record, not by the
+lock; a start that finds a verified checkpoint in the state directory refuses with exit 3 naming
+child 3 (#21) rather than starting over it.
 
 ## Acceptance and consequences
 
@@ -102,7 +107,9 @@ would silently reset its physics, and restart continuity is WP08's to decide.
   `report.refuse` pins in the chassis reconciliation README move in a chassis commit.
 - **Restart consequence of choice D.** Every second process on a bound window exits 3, so a
   vehicle container restarted under `restart: unless-stopped` stays dark until the operator clears
-  or renames its windows, or WP08 defines continuity. `--init` prepares a window (scenario, seed,
+  or renames its windows, or WP08 defines continuity. *Amended by WP08 child 2, per ADR 0002 H
+  (2026-10-09):* where `--state-dir` holds a verified checkpoint, clearing the windows is the wrong
+  action and the refusal says so; the directory waits for child 3's resume. `--init` prepares a window (scenario, seed,
   ring) without binding it; the first executive to tick it binds it. The old cross-process resume of
   ticks, arm tokens, dwell and deferrals from the agent-writable `pending.json` is withdrawn: it
   restored authority (arm tokens) from a file an agent can write, and restored counters while the
@@ -132,7 +139,12 @@ the owner's revision. Two items filled gaps the decision text left silent; they 
   `<diode-dir>/.executive.json`, written atomically beside `.executive.lock` by the executive at
   `--init` (unbound) and at every tick, and read only under the lock. A record that cannot be
   read — unreadable, oversized, a link, malformed — refuses the start; it is never treated as a
-  fresh directory. A window's `pending.json` still carries the identity keys for its reader and is
+  fresh directory. *Amended by WP08 child 2, per ADR 0002 H (2026-10-09):* when `--state-dir`
+  holds a verified checkpoint, **the checkpoint is authoritative and the record is its copy**: a
+  record that is missing, garbled, a link or disagrees is rewritten from the checkpoint and the
+  mismatch journaled, never a refusal; only a readable record naming a different world refuses. The
+  lock the record is read under is then the state directory's, not the root's. Without a checkpoint
+  every sentence above stands. A window's `pending.json` still carries the identity keys for its reader and is
   read for nothing but the refuse-only legacy check: `ticks > 0` or a `world_id` on a slug the
   directory's record does not name refuses the start. One directory is therefore one identity.
   *(gap filled)*: a second `--init` on an unbound directory

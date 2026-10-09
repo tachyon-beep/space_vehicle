@@ -40,19 +40,55 @@ What this slice substitutes, and says so (ADR 0001 "not established"):
   - **One tick per cycle, multiplier undecided.** The loop inherits one tick per cycle from the old
     console. How many ticks a wall second carries, and the pause, overload and downtime policy, are
     WP08's and are **not** decided here; `--poll` is a wall-clock sleep between cycles and nothing more.
-  - **No persistence, no restart.** The old cross-process resume of ticks, arm tokens, dwell and
+  - **No resume yet.** The old cross-process resume of ticks, arm tokens, dwell and
     deferrals from the agent-writable `pending.json` is withdrawn: it restored authority from a file
     an agent can write. The directory's own record, `<diode-dir>/.executive.json`, written by the
-    executive beside its lock and never by an agent, says which world a directory is; a second
-    executive refuses a bound directory (choice D) until WP08 defines continuity. `--init` prepares
-    the directory's identity without binding it.
+    executive and never by an agent, says which world a directory is; a second
+    executive refuses a bound directory (choice D). Resuming a world from its checkpoint is
+    WP08 child 3 (`tachyon-beep/space_vehicle#21`): until it lands, a start that finds a verified
+    checkpoint in `--state-dir` still refuses, because starting a fresh world over a saved one is
+    the alternative choice D rejected. `--init` prepares the directory's identity without binding it.
+
+**`--state-dir PATH` is the executive's private directory** (ADR 0002 H1, child 2 — `#20`): the
+checkpoint generations (`tools/checkpoint.py`), the exclusive lock and the journal segments live
+there, and nothing an agent can reach does. It is refused inside `--diode-dir` by the rule the
+journal uses (`resolve()`, then `is_relative_to`, so `..` and a planted link are the same spelling),
+refused when it is a file or a dangling link (`checkpoint.CheckpointStateDirUnusable`), and a
+`--diode-dir` inside it is refused for the symmetric reason. With it:
+
+  - **The lock moves** (H(i)). `.executive.lock` is taken in the state directory and the one in the
+    diode root is not opened at all: in the deployed compose every agent can write the diode root,
+    and an exclusive lock on a volume the adversary can write is a lock the adversary can hold — a
+    stop button for the vehicle. What the root lock used to guarantee, the record now does: a second
+    executive on the same *state* directory is refused by the lock; a second executive with its own
+    state directory on one diode directory is refused by the root record (ADR 0001's binding rule
+    without a checkpoint; the foreign-world rule below with one). The gap this leaves is named rather
+    than hidden: two executives with two fresh state directories racing onto one *fresh* diode
+    directory are separated only by the record each writes at `attach`, where the root lock used to
+    serialise them. `serves.json` in the state directory records the diode directory it serves, so
+    pointing a state directory at another diode directory refuses from that side too.
+  - **The journal moves** (J). Without `--journal`, the lineage goes to one segment file per boot in
+    the state directory, `journal.<boot_id>.jsonl`; an explicit `--journal PATH` still wins. Rows
+    with an `event` key are startup events (a root record rewritten); rows without one are ticks.
+  - **The checkpoint is authoritative for identity and the root record is its copy** (H(ii)). When a
+    verified checkpoint exists, `root_record_from_checkpoint` says what `.executive.json` must hold
+    and `reconcile_root_record` says what to do about what is there: a record that is missing,
+    garbled, a link, or disagrees with the checkpoint is **rewritten and the mismatch journaled with
+    the superseded record** — never a refusal, because refusing on a file the agents can write would
+    hand them the stop button; a *readable* record naming a different world refuses, because that is
+    two executives with separate state directories on one diode directory. Without a checkpoint,
+    ADR 0001's rules stand unchanged. Both are functions so that child 3 only has to call them.
+
+`--state-dir` is **not required**: without it the lock, the journal and every refusal are exactly as
+before. Whether the deployed stack must always name one is the chassis's decision when it adds the
+private mount (ADR 0002, cross-repository item 1), not this module's.
 
 Lineage and truth are never written into a window file. A truth hash published to agents would be a
-side channel that reveals hidden changes; `--journal PATH` writes them as JSONL for the operator and
-is refused if the path lies inside `--diode-dir`.
+side channel that reveals hidden changes; the journal carries them for the operator, in the state
+directory or at `--journal PATH`, and either is refused if the path lies inside `--diode-dir`.
 
     python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --init
-    python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --cycles 60 --poll 1
+    python3 tools/console.py --diode-dir .scratch/diode --state-dir .scratch/state --slug alpha --slug bravo --cycles 60 --poll 1
     python3 contract/diode_probe.py --diode-dir .scratch/diode --slug alpha --poll-seconds 1
 """
 
@@ -80,6 +116,13 @@ from typing import Any
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from checkpoint import (  # noqa: E402
+    CheckpointRefused,
+    CheckpointStateDirUnusable,
+    Compatibility,
+    choose_generation,
+    open_state_dir,
+)
 from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
 from generate_readme import generate as generate_readme  # noqa: E402
@@ -142,11 +185,19 @@ ARGUMENT_LENGTH_BYTES = 128
 # cannot name another directory, climb, or carry a separator.
 SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-# The exclusive lock that makes a directory one world, and the directory's own record beside it.
-# Both live in the diode root, which the agents' mounts do not reach (`/diode/<slug>/` is theirs);
-# the executive is the only writer of either, and reads the record only under the lock.
+# The exclusive lock that makes a directory one world, and the directory's own record. Without
+# `--state-dir` both live in the diode root, as ADR 0001 wrote them; with it the lock moves into the
+# state directory (ADR 0002 H(i)) and the record stays in the root as the windows' copy of the
+# checkpoint's identity (H(ii)). The executive is the only writer of either.
 LOCK_FILE = ".executive.lock"
 RECORD_FILE = ".executive.json"
+# The state directory's own two files beside the checkpoint generations: which diode directory it
+# serves, and one journal segment per boot (ADR 0002 J: `journal.<segment>.jsonl`, segment = boot).
+SERVES_FILE = "serves.json"
+JOURNAL_SEGMENT = "journal.{boot_id}.jsonl"
+# The keys of the root record that are identity, compared when a checkpoint exists; `updated_at` is
+# a wall stamp and is not one of them.
+ROOT_RECORD_IDENTITY = ("world_id", "slugs", "scenario", "seed", "ring_slots", "tick")
 
 # What the executive keeps of its own history in memory. The journal holds all of it.
 RECENT_FAILURES = 64
@@ -444,6 +495,128 @@ def read_root_record(
     return loaded, None
 
 
+# -- the state directory (ADR 0002 H, child 2) ----------------------------------------------------
+def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
+    """The refusal for a `--state-dir` that overlaps `--diode-dir`, or `None`.
+
+    The journal's rule, applied to the whole private directory: both paths are `resolve()`d first, so
+    `diode/alpha/../.private` and a link planted outside the diode directory that points into it are
+    the same spelling as `diode/.private`, and the directory itself is inside itself. The symmetric
+    overlap — the agents' directories inside the executive's private one — is refused too: nothing
+    in H wants the adversary's directory under the thing it must not reach.
+    """
+    state = Path(state_dir).resolve()
+    diode = Path(diode_dir).resolve()
+    if state.is_relative_to(diode):
+        return (
+            f"--state-dir {state_dir} lies inside --diode-dir {diode_dir}: the checkpoint, the lock and "
+            "the journal are the executive's and never go where an agent can reach them (ADR 0002 H)"
+        )
+    if diode.is_relative_to(state):
+        return (
+            f"--diode-dir {diode_dir} lies inside --state-dir {state_dir}: the agents' directories do "
+            "not belong inside the executive's private one (ADR 0002 H)"
+        )
+    return None
+
+
+def journal_segment_path(state_dir: str | os.PathLike[str], boot_id: str) -> Path:
+    """This boot's journal segment in the state directory (ADR 0002 J: one segment file per boot)."""
+    return Path(state_dir) / JOURNAL_SEGMENT.format(boot_id=boot_id)
+
+
+def append_journal_line(path: Path, row: dict[str, Any]) -> None:
+    """One JSON line onto the journal. A tick row has no `event` key; a startup event has one."""
+    with Path(path).open("a", encoding="utf-8") as handle:
+        handle.write(dumps_json(row, sort_keys=True) + "\n")
+
+
+def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
+    """The diode directory this state directory serves, `(None, None)` for none, or a refusal.
+
+    The file is the executive's own, so one that exists and cannot be read is a problem and not an
+    empty answer, like the root record: the one thing a start must not do is serve a directory it
+    could not check it was meant to.
+    """
+    try:
+        os.lstat(SERVES_FILE, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"{SERVES_FILE} cannot be examined ({exc.strerror})"
+    raw, problem = read_regular_bounded(SERVES_FILE, dir_fd=dir_fd)
+    if raw is None:
+        return None, problem
+    try:
+        loaded = loads_json(raw)
+    except Exception as exc:  # noqa: BLE001 - the refusal names the shape
+        return None, f"{SERVES_FILE} is not valid JSON ({type(exc).__name__})"
+    served = loaded.get("diode_dir") if isinstance(loaded, dict) else None
+    if not isinstance(served, str) or not served:
+        return None, f"{SERVES_FILE} names no diode directory"
+    return served, None
+
+
+def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str]) -> None:
+    """Record, in the state directory, the diode directory it serves — resolved, as it is compared."""
+    write_json_atomic(
+        SERVES_FILE,
+        {"diode_dir": str(Path(diode_dir).resolve()), "recorded_at": utc_now().isoformat()},
+        dir_fd=dir_fd,
+    )
+
+
+def root_record_from_checkpoint(body: dict[str, Any]) -> dict[str, Any]:
+    """`.executive.json` as the windows' copy of a verified checkpoint's identity (ADR 0002 H(ii)).
+
+    The same shape `Executive.root_record` writes — the world, the slugs with their ring bounds, the
+    scenario, the seed, the tick — so `read_root_record` reads it unchanged. Nothing else of the
+    checkpoint's header crosses: not `body_sha256` (a hash over the truth is the side channel the
+    journal exists to keep private), not `engine`, `python` or `platform` (the host's), and not the
+    state directory's path. A checkpoint is a world that exists, so its `world_id` is written whether
+    or not the tick is zero; the live record's "bound by the first tick" is about a world that has
+    not yet been saved.
+    """
+    windows = body["windows"]
+    return {
+        "world_id": body["identity"]["world_id"],
+        "slugs": sorted(windows),
+        "scenario": body["run"]["scenario"],
+        "seed": body["run"]["seed"],
+        "ring_slots": {slug: windows[slug]["ring_slots"] for slug in sorted(windows)},
+        "tick": body["identity"]["tick"],
+        "updated_at": utc_now().isoformat(),
+    }
+
+
+def reconcile_root_record(
+    record: dict[str, Any] | None, problem: str | None, expected: dict[str, Any]
+) -> tuple[str, str]:
+    """What to do about the root record beside a verified checkpoint: `("agree" | "rewrite" | "refuse", why)`.
+
+    `record` and `problem` are `read_root_record`'s answer; `expected` is `root_record_from_checkpoint`.
+    A record that cannot be read, is missing, or disagrees with the checkpoint on any identity key is
+    *rewritten* — never a refusal, because the deployed root is agent-writable and a refusal there is
+    a stop button in the agents' hands (ADR 0002 H). An unbound record (`world_id: null`) is a
+    disagreement: the checkpoint is a world that exists. A *readable* record naming a different world
+    is the one refusal: two executives with separate state directories on one diode directory.
+    """
+    if problem is not None:
+        return "rewrite", f"the root record cannot be read ({problem}), so it is rewritten from the checkpoint"
+    if record is None:
+        return "rewrite", "there is no root record beside the checkpoint, so it is written from it"
+    bound = record.get("world_id")
+    if isinstance(bound, str) and bound and bound != expected["world_id"]:
+        return "refuse", (
+            f"the root record names world {bound!r} and the checkpoint records {expected['world_id']!r}: "
+            "two executives with separate state directories on one diode directory (ADR 0002 H)"
+        )
+    differing = [key for key in ROOT_RECORD_IDENTITY if record.get(key) != expected[key]]
+    if differing:
+        return "rewrite", f"the root record disagrees with the checkpoint on {differing}, so it is rewritten from it"
+    return "agree", "the root record is the checkpoint's copy"
+
+
 @dataclass
 class Verdict:
     """One result in the making: what a window's line became, and the receipts it was given.
@@ -496,11 +669,31 @@ class Executive:
         max_batch: int = DEFAULT_MAX_BATCH,
         journal: Path | None = None,
         record_slugs: dict[str, int] | None = None,
+        state_dir: Path | None = None,
+        boot_id: str | None = None,
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
         self.world = world
         self.diode_dir = Path(diode_dir)
+        # One boot of this executive (ADR 0002's "segment"): the journal segment's name, and the id
+        # `main` draws first so that a startup event and the ticks that follow share one file. A
+        # window's own `boot_id` stays per window, as `presentation.yaml#frame` publishes it.
+        self.boot_id = boot_id or uuid.uuid4().hex
+        # The private directory (ADR 0002 H1), or `None` for the pre-`--state-dir` layout. Held to the
+        # same two rules the entrypoint applies, because an in-process executive journals there too.
+        self.state_dir: Path | None = None
+        if state_dir is not None:
+            problem = check_state_dir(state_dir, self.diode_dir)
+            if problem is not None:
+                raise ValueError(problem)
+            try:
+                os.close(open_state_dir(Path(state_dir), create=True))
+            except CheckpointStateDirUnusable as exc:
+                raise ValueError(str(exc)) from exc
+            self.state_dir = Path(state_dir)
+            if journal is None:
+                journal = journal_segment_path(self.state_dir, self.boot_id)
         self.phase = phase
         # Live interlock state the *operator* has asserted, and the default is nothing tripped. A
         # declared interlock is a guard evaluated when a command arrives, not a standing condition;
@@ -726,6 +919,7 @@ class Executive:
         line = {
             "tick": self.tick,
             "world_id": self.world_id,
+            "boot_id": self.boot_id,
             "lineage": self.lineage_head,
             "state_hash": state_hash(self.truth),
             "effects": [[e.offset_us, e.verb, e.arguments] for e in effects],
@@ -742,8 +936,7 @@ class Executive:
             ],
             "failures": self.failure_count,
         }
-        with self.journal.open("a", encoding="utf-8") as handle:
-            handle.write(dumps_json(line, sort_keys=True) + "\n")
+        append_journal_line(self.journal, line)
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
@@ -1858,7 +2051,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="PATH",
         help="append one JSON line per tick — lineage, state hash, effects, receipts — for the "
-        "operator; refused inside --diode-dir",
+        "operator; refused inside --diode-dir. With --state-dir and no --journal, the journal is "
+        "one segment file per boot in the state directory",
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=None,
+        metavar="PATH",
+        help="the executive's private directory (ADR 0002 H): checkpoint generations, the exclusive "
+        "lock and the journal segments. Refused inside --diode-dir. Optional until the chassis mounts "
+        "one; without it the lock and the journal are where ADR 0001 put them",
     )
     parser.add_argument(
         "--plan",
@@ -1920,17 +2122,39 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- one world per directory, and everything the start reads is read under the lock -------
     #
-    # The lock says *a* world is here; the directory's record says *which*, and what identity it
-    # has. Both live in the diode root, which no agent's mount reaches, and the record is read only
-    # while the lock is held so that nothing can change between the reading and the acting. A second
-    # executive on the directory refuses to start; an executive on a directory whose record names a
-    # world refuses too, live or not — starting a fresh world on it would silently reset its physics,
-    # and restart continuity is WP08's (ADR 0001 choice D). A record that cannot be read is a
-    # refusal and never "a fresh directory".
+    # The lock says *an* executive is here; the directory's record says *which* world, and what
+    # identity it has. Without `--state-dir` both live in the diode root and the lock is the root's
+    # (ADR 0001). With `--state-dir` the lock is the state directory's (ADR 0002 H(i)): the deployed
+    # root is agent-writable, and a lock an agent can hold is a stop button, so the root lock is not
+    # opened at all and the record alone holds one world per diode directory. Either way the record
+    # is read only while this executive's lock is held. An executive on a directory whose record names
+    # a world refuses, live or not — starting a fresh world on it would silently reset its physics —
+    # until child 3 resumes it (ADR 0001 choice D). A record that cannot be read is a refusal and
+    # never "a fresh directory", except beside a verified checkpoint, where it is the checkpoint's
+    # copy and is rewritten (ADR 0002 H(ii), below).
     diode_dir = Path(args.diode_dir)
+    state_dir = Path(args.state_dir) if args.state_dir else None
+    state_fd: int | None = None
+    if state_dir is not None:
+        problem = check_state_dir(state_dir, diode_dir)
+        if problem is not None:
+            sys.stderr.write(problem + "\n")
+            return 3
+        try:
+            state_fd = open_state_dir(state_dir, create=True)
+        except CheckpointStateDirUnusable as exc:
+            sys.stderr.write(f"{exc}\n")
+            return 3
     diode_dir.mkdir(parents=True, exist_ok=True)
     diode_fd = open_directory(diode_dir.resolve())
-    lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=diode_fd)
+    lock_in = state_fd if state_fd is not None else diode_fd
+    lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in)
+
+    def close_all() -> None:
+        for fd in (lock_fd, diode_fd, state_fd):
+            if fd is not None:
+                os.close(fd)
+
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -1938,21 +2162,95 @@ def main(argv: list[str] | None = None) -> int:
             holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
         except OSError:
             holder = "unknown holder"
-        os.close(lock_fd)
-        os.close(diode_fd)
-        sys.stderr.write(
-            f"another executive holds {diode_dir} ({holder}). One directory is one world "
-            "(ADR 0001); stop it, or point --diode-dir at another directory\n"
-        )
+        close_all()
+        if state_dir is not None:
+            sys.stderr.write(
+                f"another executive holds the state directory {state_dir} ({holder}). One state "
+                "directory is one executive (ADR 0002 H); stop it, or point --state-dir at another directory\n"
+            )
+        else:
+            sys.stderr.write(
+                f"another executive holds {diode_dir} ({holder}). One directory is one world "
+                "(ADR 0001); stop it, or point --diode-dir at another directory\n"
+            )
         return 3
 
     def refuse(message: str) -> int:
         sys.stderr.write(message + "\n")
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
         return 3
 
+    # This boot's id is drawn here so that a startup event and the ticks that follow share one
+    # journal segment; the executive is handed it below.
+    boot_id = uuid.uuid4().hex
+    journal = Path(args.journal) if args.journal else None
+    if journal is None and state_dir is not None:
+        journal = journal_segment_path(state_dir, boot_id)
+
     record, problem = read_root_record(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
+    checkpoint_found = None
+    if state_fd is not None:
+        # One state directory serves one diode directory, and says which (ADR 0002 H).
+        served, serves_problem = read_serves_record(state_fd)
+        if serves_problem is not None:
+            return refuse(
+                f"the state directory's record at {state_dir / SERVES_FILE} cannot be read: {serves_problem}. "
+                "Repair or clear it; a state directory that cannot say which diode directory it serves is not one to run"
+            )
+        if served is not None and served != str(diode_dir.resolve()):
+            return refuse(
+                f"the state directory {state_dir} serves the diode directory {served}, not {diode_dir.resolve()}. "
+                "One state directory serves one diode directory (ADR 0002 H); point --state-dir at the directory "
+                "that serves this one, or at a fresh one"
+            )
+        # The checkpoint is authoritative for identity (ADR 0002 H(ii)); K2 chooses the generation and
+        # its refusals — corrupt both, incompatible — are the operator's to read (K).
+        try:
+            checkpoint_found = choose_generation(state_dir, Compatibility.current(world))
+        except CheckpointRefused as exc:
+            return refuse(
+                f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
+                "and the executive does not start a fresh world over one (ADR 0002 K)"
+            )
+    if checkpoint_found is not None:
+        expected = root_record_from_checkpoint(checkpoint_found.body)
+        action, why = reconcile_root_record(record, problem, expected)
+        if action == "refuse":
+            return refuse(
+                f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
+                f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
+                "or point --state-dir at the directory that serves this one"
+            )
+        if not (args.plan or args.plan_json):
+            if action == "rewrite":
+                write_json_atomic(RECORD_FILE, expected, dir_fd=diode_fd)
+                append_journal_line(
+                    journal,
+                    {
+                        "event": "root_record_rewritten",
+                        "wall": utc_now().isoformat(),
+                        "boot_id": boot_id,
+                        "world_id": expected["world_id"],
+                        "tick": expected["tick"],
+                        "checkpoint": checkpoint_found.path.name,
+                        "reason": why,
+                        "problem": problem,
+                        "previous": record,
+                    },
+                )
+                sys.stderr.write(f"[console] {diode_dir / RECORD_FILE}: {why}; the mismatch is journaled\n")
+            write_serves_record(state_fd, diode_dir)
+            # Choice D, kept: a verified checkpoint is a world, and this executive does not start a
+            # fresh one over it. Resuming it is WP08 child 3.
+            return refuse(
+                f"the state directory {state_dir} holds a verified checkpoint ({checkpoint_found.path.name}, "
+                f"world {expected['world_id']}, tick {expected['tick']}), and resuming a world from its "
+                "checkpoint is WP08 child 3 (tachyon-beep/space_vehicle#21), not yet landed. The executive does "
+                "not start a fresh world over a saved one (ADR 0001 choice D, as amended by ADR 0002); the root "
+                "record is the checkpoint's copy, and the diode directory is not to be touched"
+            )
+        # `--plan` answers from the checkpoint's identity and writes nothing.
+        record, problem = expected, None
     if problem is not None:
         return refuse(
             f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
@@ -2006,9 +2304,8 @@ def main(argv: list[str] | None = None) -> int:
             plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
         except Exception as exc:  # noqa: BLE001 - the refusal is the answer
             return refuse(f"the scenario cannot be planned: {exc}")
-        os.close(lock_fd)
         plan.pop("_armed_faults", None)
-        os.close(diode_fd)
+        close_all()
         if args.plan_json:
             json.dump(plan, sys.stdout, indent=2)
             sys.stdout.write("\n")
@@ -2087,7 +2384,8 @@ def main(argv: list[str] | None = None) -> int:
             "choice D)"
         )
 
-    journal = Path(args.journal) if args.journal else None
+    if state_fd is not None:
+        write_serves_record(state_fd, diode_dir)
     try:
         executive = Executive(
             world,
@@ -2099,6 +2397,8 @@ def main(argv: list[str] | None = None) -> int:
             max_batch=args.max_batch,
             journal=journal,
             record_slugs=recorded_slugs,
+            state_dir=state_dir,
+            boot_id=boot_id,
         )
     except ValueError as exc:
         return refuse(str(exc))
@@ -2120,8 +2420,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {args.phase!r}")
         # `--init` binds nothing: the lock is released and the records say `world_id: null`.
         executive.close()
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
         return 0
 
     rings = sorted(set(resolved_slots.values()))
@@ -2129,7 +2428,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"[console] {diode_dir} slugs={','.join(slugs)} phase={args.phase} "
         f"scenario={executive.scenario} seed={executive.seed} ring={ring} "
-        f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}",
+        f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}"
+        + (f" state-dir={state_dir}" if state_dir is not None else ""),
         flush=True,
     )
     # `--cycles` counts the cycles **this invocation** runs; an executive always starts at tick 0.
@@ -2151,8 +2451,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     finally:
         executive.close()
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
     return 0
 
 

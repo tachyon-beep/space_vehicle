@@ -23951,3 +23951,449 @@ def test_a_failing_write_step_is_a_typed_refusal_and_a_live_writers_temporary_is
     assert "there is no checkpoint.json" in str(caught.value), str(caught.value)
     assert "unchanged" not in str(caught.value), str(caught.value)
     assert checkpoint.read_generation(state_dir, "checkpoint.prev.json", compat).body["executive"]["tick"] == 4
+
+
+# ---- ADR 0002 child 2: `--state-dir` — the lock, the journal and the root record as a copy ------
+
+
+def console_entry(diode: Path, state: Path | None = None, *slugs: str) -> list[str]:
+    """`tools/console.py` on a diode directory and, when given, a private state directory."""
+    entry = [sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode)]
+    if state is not None:
+        entry += ["--state-dir", str(state)]
+    for slug in slugs or ("alpha",):
+        entry += ["--slug", slug]
+    return entry
+
+
+def start(diode: Path, state: Path | None, *slugs: str, extra: list[str] | None = None) -> subprocess.CompletedProcess:
+    """One console start that runs at most one cycle and comes back with its exit and stderr."""
+    return subprocess.run(
+        [*console_entry(diode, state, *slugs), *(extra or ["--cycles", "1", "--poll", "0"])],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def hidden_state_hits(diode: Path, forbidden: dict[str, str]) -> list[tuple[str, str]]:
+    """`(file, name)` for every forbidden string found in any regular file under the diode directory.
+
+    The root record is scanned too: `.executive.json` is the file most likely to grow a hash by
+    accident once it is rewritten from a checkpoint, and the deployed root is agent-writable today.
+    """
+    hits = []
+    for path in sorted(diode.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        text = path.read_bytes().decode("utf-8", "replace")
+        hits.extend((path.relative_to(diode).as_posix(), name) for name, needle in forbidden.items() if needle in text)
+    return hits
+
+
+def test_a_state_dir_inside_the_diode_dir_is_refused_however_it_is_spelled(tmp_path):
+    """ADR 0002 H1: the checkpoint, the lock and the journal never go where an agent can reach them.
+
+    The rule is the journal's — `resolve()` on both sides, then `is_relative_to` — so a path that
+    reaches the diode directory through `..` or through a symlink planted outside it is refused by
+    the same comparison as the obvious spelling, and the executive refuses before it has created a
+    window or taken a lock. The symmetric case is refused too: a diode directory *inside* the state
+    directory would put the agents' directories inside the private one, and nothing in H wants that.
+    A `--state-dir` that is a file or a dangling link is `CheckpointStateDirUnusable`'s case, named
+    as the operator's path (child 1, review finding L4), and the thing at the path is left alone. A
+    symlink to a real directory *outside* the diode directory is the operator's alias, as
+    `--diode-dir` already is, and is accepted.
+
+    Before this round `--state-dir` was not a flag at all, so every start here exited 2 from
+    argparse rather than 3 from the executive, and the function-level checks were `AttributeError`.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    (diode / "alpha").mkdir(parents=True)
+    (diode / "hidden").mkdir()
+    link_in = tmp_path / "link-into-diode"
+    link_in.symlink_to(diode / "hidden")
+    inside = (
+        diode / "state",
+        diode / "alpha" / ".." / ".private",
+        link_in,
+        diode,
+    )
+    for state in inside:
+        assert console.check_state_dir(state, diode) is not None, state
+        refused = start(diode, state)
+        assert refused.returncode == 3, (state, refused.returncode, refused.stderr)
+        assert "--state-dir" in refused.stderr and "inside" in refused.stderr, (state, refused.stderr)
+        assert not (diode / "state").exists() and not (diode / ".private").exists(), state
+        assert not (diode / ".executive.lock").exists() and not (diode / ".executive.json").exists(), state
+        assert not list((diode / "alpha").iterdir()), "nothing was prepared in the window"
+        with pytest.raises(ValueError, match="inside"):
+            console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    # The symmetric spelling: the agents' directories inside the executive's private one.
+    outer = tmp_path / "outer"
+    refused = start(outer / "diode", outer)
+    assert refused.returncode == 3 and "--diode-dir" in refused.stderr and "inside" in refused.stderr, refused.stderr
+    assert console.check_state_dir(outer, outer / "diode") is not None
+    assert console.check_state_dir(tmp_path / "elsewhere", diode) is None
+
+    # Unusable: a file, a dangling link, a path below a file. Each is named as the operator's path.
+    as_file = tmp_path / "a-file"
+    as_file.write_text("the operator's typo")
+    dangling = tmp_path / "dangling"
+    dangling.symlink_to(tmp_path / "nowhere")
+    for state in (as_file, dangling, as_file / "below"):
+        refused = start(diode, state)
+        assert refused.returncode == 3, (state, refused.returncode, refused.stderr)
+        assert "state directory" in refused.stderr and str(state) in refused.stderr, (state, refused.stderr)
+        assert not (diode / ".executive.json").exists(), "refused before anything was written"
+    assert as_file.read_text() == "the operator's typo" and dangling.is_symlink() and not dangling.exists()
+
+    # An alias to a real directory outside the diode directory is the operator's and is accepted.
+    real = tmp_path / "real-state"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real)
+    ran = start(diode, alias)
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert (real / ".executive.lock").exists() and list(real.glob("journal.*.jsonl")), sorted(p.name for p in real.iterdir())
+
+
+def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refused(tmp_path):
+    """ADR 0002 H(i): an exclusive lock on a volume the adversary can write is a lock the adversary can hold.
+
+    With `--state-dir` the executive takes `.executive.lock` in the state directory and does not open
+    the one in the diode root at all — an agent that can write the root can no longer hold the
+    vehicle's stop button, and a lock it could hold would enforce nothing. A second executive on the
+    same state directory is refused with the holder's pid and the directory named. One state
+    directory serves one diode directory: `serves.json` records which, and a start that points the
+    same state directory at another diode directory refuses. The journal lives in the state directory
+    as one segment file per boot, `journal.<boot_id>.jsonl` (J), unless `--journal` names a path,
+    which still wins.
+
+    What the root lock used to do, the record now does: a third executive with its *own* fresh state
+    directory on the bound diode directory is refused by ADR 0001's binding rule, not by a lock —
+    and the same refusal stands after the first executive is dead, because without a checkpoint
+    (child 4 writes none yet) ADR 0001's rules are unchanged.
+    """
+    diode = tmp_path / "diode"
+    state = tmp_path / "state"
+    first = subprocess.Popen(
+        [*console_entry(diode, state, "alpha", "bravo"), "--cycles", "0", "--poll", "0.05"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            record_path = diode / ".executive.json"
+            if (state / ".executive.lock").exists() and record_path.exists() and json.loads(record_path.read_text() or "{}").get("world_id"):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(f"the first executive never bound its directory: {first.stderr.read() if first.poll() is not None else 'still running'}")
+        holder = (state / ".executive.lock").read_text()
+        assert f"pid={first.pid}" in holder, holder
+        assert not (diode / ".executive.lock").exists(), "the root lock is not even opened"
+        serves = json.loads((state / "serves.json").read_text())
+        assert serves["diode_dir"] == str(diode.resolve()), serves
+        segments = sorted(state.glob("journal.*.jsonl"))
+        assert len(segments) == 1 and re.fullmatch(r"journal\.[0-9a-f]{32}\.jsonl", segments[0].name), segments
+
+        second = start(tmp_path / "other-diode", state, "charlie")
+        assert second.returncode == 3, (second.returncode, second.stderr)
+        assert "another executive" in second.stderr and str(first.pid) in second.stderr and str(state) in second.stderr, second.stderr
+        assert not (tmp_path / "other-diode" / "charlie").exists()
+        third = start(diode, tmp_path / "third-state", "charlie")
+        assert third.returncode == 3 and "another executive" not in third.stderr, (third.returncode, third.stderr)
+        assert "bound to world" in third.stderr and "choice D" in third.stderr, third.stderr
+        assert not (diode / "charlie").exists()
+    finally:
+        first.terminate()
+        first.wait(timeout=30)
+
+    bound = json.loads((diode / ".executive.json").read_text())
+    assert isinstance(bound["world_id"], str) and bound["tick"] >= 1, bound
+    lines = [json.loads(line) for line in segments[0].read_text().splitlines()]
+    assert lines and all("lineage" in row and row["world_id"] == bound["world_id"] for row in lines), lines[:2]
+    assert segments[0].name == f"journal.{lines[0]['boot_id']}.jsonl", "the segment is the boot's"
+    # The same state directory on another diode directory: refused by what it recorded it serves.
+    mismatched = start(tmp_path / "other-diode", state, "alpha")
+    assert mismatched.returncode == 3 and "serves" in mismatched.stderr and str(diode.resolve()) in mismatched.stderr, mismatched.stderr
+    assert not (tmp_path / "other-diode" / "alpha").exists()
+    # The dead executive's own state directory on its own diode directory, no checkpoint: ADR 0001 stands.
+    stale = start(diode, state, "alpha")
+    assert stale.returncode == 3 and bound["world_id"] in stale.stderr and "choice D" in stale.stderr, stale.stderr
+    assert "another executive" not in stale.stderr
+    assert sorted(p.name for p in state.glob("journal.*.jsonl")) == [segments[0].name], "a refused start opens no segment"
+    # An explicit `--journal` still wins over the segment file.
+    explicit = tmp_path / "explicit.jsonl"
+    ran = start(tmp_path / "fresh-diode", tmp_path / "fresh-state", "alpha", extra=["--journal", str(explicit), "--cycles", "2", "--poll", "0"])
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert len(explicit.read_text().splitlines()) == 2
+    assert not list((tmp_path / "fresh-state").glob("journal.*.jsonl"))
+    assert (tmp_path / "fresh-state" / ".executive.lock").exists() and not (tmp_path / "fresh-diode" / ".executive.lock").exists()
+    assert "state-dir=" in ran.stdout, ran.stdout
+
+
+def test_without_a_state_dir_the_lock_and_the_journal_are_where_they_were(tmp_path):
+    """Backward compatibility: `--state-dir` is optional, and without it nothing moved.
+
+    The flag is not required yet — whether the deployed stack must always name one is the chassis's
+    decision when it adds the mount (ADR 0002 cross-repository item 1) — so a start that names none
+    takes the lock in the diode root, writes no segment file anywhere, honours `--journal` exactly
+    as before, and prints the banner it always printed. The existing one-world-per-directory test
+    holds the rest of that behaviour; this one holds the three files the round moved.
+    """
+    diode = tmp_path / "diode"
+    journal = tmp_path / "j.jsonl"
+    ran = start(diode, None, "alpha", extra=["--journal", str(journal), "--cycles", "2", "--poll", "0"])
+    assert ran.returncode == 0, ran.stderr[-800:]
+    assert (diode / ".executive.lock").exists() and len(journal.read_text().splitlines()) == 2
+    assert not list(tmp_path.rglob("journal.*.jsonl")) and not list(tmp_path.rglob("serves.json"))
+    assert "state-dir=" not in ran.stdout and "scenario=nominal seed=0 ring=300" in ran.stdout, ran.stdout
+    # And the journal is refused inside the diode directory, as it always was.
+    refused = start(tmp_path / "d2", None, "alpha", extra=["--journal", str(tmp_path / "d2" / "j.jsonl")])
+    assert refused.returncode == 3 and "--journal" in refused.stderr, refused.stderr
+
+
+def test_the_root_record_is_the_checkpoints_copy_and_only_a_foreign_world_refuses(tmp_path):
+    """ADR 0002 H(ii) as functions: what the root record is made of, and what the startup rule says.
+
+    `root_record_from_checkpoint` produces today's record — `world_id`, `slugs`, `scenario`, `seed`,
+    `ring_slots`, `tick` — from a verified body and nothing else: no `body_sha256`, no `engine`, no
+    `platform`, no `python`, because the deployed root is agent-writable and the body hash is a hash
+    over the truth. `read_root_record` accepts what it writes. `reconcile_root_record` is the rule
+    the issue states: missing, garbled or disagreeing is *rewrite* with the reason, a readable record
+    of another world is *refuse*, and an identical record is *agree* — compared without `updated_at`,
+    which is a wall stamp. An unbound record (`world_id: null`, another executive's `--init`) beside
+    a checkpoint is a disagreement, not a foreign world: a checkpoint is a world that exists.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    expected = console.root_record_from_checkpoint(body)
+    assert set(expected) == {"world_id", "slugs", "scenario", "seed", "ring_slots", "tick", "updated_at"}, expected
+    assert expected["world_id"] == executive.world_id == body["identity"]["world_id"]
+    assert expected["slugs"] == ["alpha", "bravo"] and expected["ring_slots"] == {"alpha": 5, "bravo": 9}
+    assert expected["scenario"] == "nominal" and expected["seed"] == 0 and expected["tick"] == 3
+    live = executive.root_record()
+    assert {k: v for k, v in live.items() if k != "updated_at"} == {k: v for k, v in expected.items() if k != "updated_at"}
+    for secret in ("body_sha256", "body_bytes", "engine", "platform", "python", "format", "lineage_head", "truth"):
+        assert secret not in json.dumps(expected), secret
+    (tmp_path / "copy.json").write_text(json.dumps(expected))
+    read_back, problem = console.read_root_record(tmp_path / "copy.json", postures={"nominal", "degraded", "crisis"})
+    assert problem is None and read_back == expected
+
+    reconcile = console.reconcile_root_record
+    action, why = reconcile(None, ".executive.json is not valid JSON (JSONDecodeError)", expected)
+    assert action == "rewrite" and "not valid JSON" in why, why
+    action, why = reconcile(None, None, expected)
+    assert action == "rewrite" and "no root record" in why, why
+    unbound = {**expected, "world_id": None, "tick": 0}
+    action, why = reconcile(unbound, None, expected)
+    assert action == "rewrite" and "world_id" in why and "tick" in why, why
+    ahead = {**expected, "tick": 8, "slugs": ["alpha", "bravo", "charlie"], "ring_slots": {**expected["ring_slots"], "charlie": 300}}
+    action, why = reconcile(ahead, None, expected)
+    assert action == "rewrite" and "tick" in why and "slugs" in why and "ring_slots" in why and "world_id" not in why, why
+    action, why = reconcile({**expected, "updated_at": "1999-01-01T00:00:00+00:00"}, None, expected)
+    assert action == "agree", why
+    action, why = reconcile({**expected, "world_id": "f" * 32}, None, expected)
+    assert action == "refuse" and "f" * 32 in why and executive.world_id in why and "ADR 0002 H" in why, why
+    # Foreign is decided on the world alone: a foreign record agreeing on everything else still refuses.
+    action, _why = reconcile({**expected, "world_id": "f" * 32, "tick": 3}, None, expected)
+    assert action == "refuse"
+
+
+def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start_still_refuses_until_resume_lands(tmp_path):
+    """ADR 0002 H(ii) end to end, and ADR 0001 choice D kept: a checkpoint is never started over.
+
+    A world is run in-process with `--state-dir` semantics (journal segment in the state directory),
+    its checkpoint written there with `checkpoint.write_checkpoint`, and then `console.py` is started
+    on the pair with the root record in each state the issue names. Missing, garbled, a symlink, or
+    disagreeing (the same world, a later tick and an extra prepared slug): the record is rewritten to
+    the checkpoint's copy — equal to `root_record_from_checkpoint` of the body but for `updated_at` —
+    the mismatch is journaled into this boot's segment with the superseded record verbatim, and the
+    start is **not** refused on the record's account. A readable record naming another world refuses,
+    names both worlds and both files, and leaves the record byte-identical. In every case the start
+    then refuses with exit 3 because resume is child 3 (#21): starting a fresh world over a checkpoint
+    is the alternative choice D rejected, and the message must not give the old advice — "clear or
+    rename the directory" is now the one thing the operator must not do. `--init` refuses the same
+    way; `--plan` answers from the checkpoint's identity and writes nothing, a garbled record included.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode = tmp_path / "diode"
+    state = tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", max_batch=7, state_dir=state)
+    executive.attach("alpha", ring_slots=5)
+    executive.attach("bravo", ring_slots=9)
+    executive.cycle()
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    executive.cycle()
+    executive.cycle()
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    checkpoint.write_checkpoint(state, body)
+    assert executive.journal == state / f"journal.{executive.boot_id}.jsonl" and executive.journal.exists()
+    run_segment = executive.journal
+    expected = {k: v for k, v in console.root_record_from_checkpoint(body).items() if k != "updated_at"}
+    record_path = diode / ".executive.json"
+
+    def record_now() -> dict:
+        loaded = json.loads(record_path.read_text())
+        return {k: v for k, v in loaded.items() if k != "updated_at"}
+
+    def events() -> list[dict]:
+        rows = []
+        for segment in sorted(state.glob("journal.*.jsonl")):
+            if segment == run_segment:
+                continue
+            rows.extend(json.loads(line) for line in segment.read_text().splitlines())
+        return rows
+
+    def refused_for_resume(result: subprocess.CompletedProcess) -> None:
+        assert result.returncode == 3, (result.returncode, result.stderr)
+        assert "#21" in result.stderr and "checkpoint.json" in result.stderr and f"tick {body['identity']['tick']}" in result.stderr, result.stderr
+        assert "clear or rename the directory" not in result.stderr and "WP08's to define" not in result.stderr, result.stderr
+
+    # Agreeing: nothing rewritten, nothing journaled, still refused for want of a resume.
+    assert record_now() == expected
+    before = record_path.read_bytes()
+    refused_for_resume(start(diode, state, "alpha", "bravo"))
+    assert record_path.read_bytes() == before and events() == []
+
+    # Missing.
+    record_path.unlink()
+    refused_for_resume(start(diode, state, "alpha", "bravo"))
+    assert record_now() == expected
+    rewritten = [row for row in events() if row.get("event") == "root_record_rewritten"]
+    assert len(rewritten) == 1 and rewritten[0]["previous"] is None and "no root record" in rewritten[0]["reason"], rewritten
+    assert rewritten[0]["world_id"] == executive.world_id and rewritten[0]["tick"] == 3 and rewritten[0]["checkpoint"] == "checkpoint.json"
+
+    # Garbled, and a symlink to a file that would otherwise read: rewritten as a regular file, target untouched.
+    record_path.write_text("{not json")
+    refused_for_resume(start(diode, state, "alpha", "bravo"))
+    assert record_now() == expected
+    assert any("not valid JSON" in row["reason"] and row["previous"] is None for row in events() if row.get("event") == "root_record_rewritten")
+    aside = tmp_path / "aside.json"
+    aside.write_text(json.dumps({**expected, "updated_at": "x"}))
+    record_path.unlink()
+    record_path.symlink_to(aside)
+    refused_for_resume(start(diode, state, "alpha", "bravo"))
+    assert not record_path.is_symlink() and record_now() == expected
+    assert json.loads(aside.read_text())["updated_at"] == "x", "the link's target was not written through"
+    assert any("symlink" in row["reason"] for row in events() if row.get("event") == "root_record_rewritten")
+
+    # Disagreeing: the same world, ahead by five ticks, with a slug another `--init` prepared.
+    stale = {**expected, "tick": 8, "slugs": ["alpha", "bravo", "charlie"], "ring_slots": {**expected["ring_slots"], "charlie": 300}, "updated_at": "later"}
+    record_path.write_text(json.dumps(stale))
+    refused_for_resume(start(diode, state, "alpha", "bravo"))
+    assert record_now() == expected
+    disagreement = [row for row in events() if row.get("event") == "root_record_rewritten" and row["previous"] is not None]
+    assert len(disagreement) == 1 and disagreement[0]["previous"] == stale, disagreement
+    assert "tick" in disagreement[0]["reason"] and "slugs" in disagreement[0]["reason"]
+    # Every event row carries the boot it belongs to, and its segment is that boot's file.
+    for segment in state.glob("journal.*.jsonl"):
+        for row in (json.loads(line) for line in segment.read_text().splitlines()):
+            assert segment.name == f"journal.{row['boot_id']}.jsonl", (segment.name, row)
+
+    # A readable record of another world: refused by name, nothing rewritten, nothing journaled as a rewrite.
+    foreign = {**expected, "world_id": "f" * 32, "updated_at": "theirs"}
+    record_path.write_text(json.dumps(foreign))
+    before = record_path.read_bytes()
+    rewrites_before = len([row for row in events() if row.get("event") == "root_record_rewritten"])
+    other = start(diode, state, "alpha", "bravo")
+    assert other.returncode == 3, (other.returncode, other.stderr)
+    assert "f" * 32 in other.stderr and executive.world_id in other.stderr, other.stderr
+    assert ".executive.json" in other.stderr and "checkpoint.json" in other.stderr and "ADR 0002 H" in other.stderr, other.stderr
+    assert "#21" not in other.stderr and "clear or rename the directory" not in other.stderr, other.stderr
+    assert record_path.read_bytes() == before
+    assert len([row for row in events() if row.get("event") == "root_record_rewritten"]) == rewrites_before
+    record_path.write_text(json.dumps({**expected, "updated_at": "restored"}))
+
+    # `--init` refuses the same way; `--plan` answers from the checkpoint and writes nothing.
+    refused_for_resume(start(diode, state, "alpha", "bravo", extra=["--init"]))
+    record_path.write_text("{not json")
+    planned = start(diode, state, "alpha", "bravo", extra=["--plan"])
+    assert planned.returncode == 0, planned.stderr[-800:]
+    assert "scenario 'nominal' at seed 0" in planned.stdout, planned.stdout
+    assert record_path.read_text() == "{not json", "--plan writes nothing, a garbled record included"
+    # The lock the refused starts took was the state directory's, and the root never grew one.
+    assert (state / ".executive.lock").exists() and not (diode / ".executive.lock").exists()
+
+
+def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_restart(tmp_path):
+    """The issue's last bullet: nothing under `/diode/<slug>/` names what the executive keeps private.
+
+    The forbidden set is built from the live objects, not from the module under test: every link of
+    the executive's lineage, the compare-point hash of its truth, every truth-only key (the `__delay`
+    rings, `__residual` accumulators and `__shortfall` records, by name and by suffix), the state
+    directory's path in both spellings and its deliberately distinctive basename, and the checkpoint's
+    own `body_sha256` and `engine`. Every regular file under the diode directory is scanned — the
+    windows' five files, every result and every frame, and the root record, which is the one file a
+    checkpoint-derived rewrite could most easily leak into. The scan runs after commanded cycles,
+    after the checkpoint is written into the state directory, and after a restart attempt that
+    rewrote a garbled root record from the checkpoint and was then refused for want of a resume.
+
+    A scanner that cannot fail is not a scanner: a lineage link and the state directory's path are
+    planted into a result file first, must be found, and are removed before the real scans.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode = tmp_path / "diode"
+    state = tmp_path / "private-zq7-state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    script = {
+        0: {"alpha": ["set_rcs_mode mode=manual"]},
+        1: {"bravo": ["set_rcs_quad group=sm_primary state=enable", "set_rcs_mode mode=auto"]},
+        2: {"alpha": ["request_imu_alignment source=star target=LVLH"], "bravo": ["zzz_not_a_verb"]},
+        3: {"alpha": ["ack_alarm alert_id=a"]},
+    }
+    for tick in range(4):
+        for slug, commands in script.get(tick, {}).items():
+            submit(diode / slug, commands)
+        executive.cycle()
+    assert executive.failure_count == 0, list(executive.failures)
+    assert results_of(diode / "alpha") and results_of(diode / "bravo")
+
+    truth_only = [key for key in executive.truth if key.endswith(("__delay", "__residual", "__shortfall"))]
+    assert len(truth_only) >= 3, truth_only
+    forbidden = {
+        **{f"lineage[{i}]": link for i, link in enumerate(executive.lineage)},
+        "state_hash": _plant.state_hash(executive.truth),
+        "state_dir": str(state),
+        "state_dir.resolved": str(state.resolve()),
+        "state_dir.name": state.name,
+        **{f"truth-only key {key}": f'"{key}"' for key in truth_only},
+        "suffix __delay": "__delay",
+        "suffix __residual": "__residual",
+        "suffix __shortfall": "__shortfall",
+    }
+    planted = diode / "alpha" / "output" / "planted.txt"
+    planted.write_text(f"{executive.lineage_head}\n{state}\n")
+    found = hidden_state_hits(diode, forbidden)
+    assert ("alpha/output/planted.txt", f"lineage[{len(executive.lineage) - 1}]") in found and ("alpha/output/planted.txt", "state_dir") in found, found
+    planted.unlink()
+    assert hidden_state_hits(diode, forbidden) == []
+
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    written = checkpoint.write_checkpoint(state, body)
+    header, _body_bytes = split_checkpoint(written.read_bytes())
+    forbidden["body_sha256"] = header["body_sha256"]
+    forbidden["engine"] = header["engine"]
+    forbidden["dwell record"] = json.dumps(executive.dwell["mode"])
+    assert hidden_state_hits(diode, forbidden) == []
+    # The journal, which may carry all of it, is in the state directory and nowhere under the diode directory.
+    assert list(state.glob("journal.*.jsonl")) and not list(diode.rglob("*.jsonl"))
+
+    # A restart attempt: the garbled root record is rewritten from the checkpoint, the start is refused
+    # (resume is #21), and the rewritten record carries nothing the checkpoint header does beyond identity.
+    (diode / ".executive.json").write_text("{not json")
+    restarted = start(diode, state, "alpha", "bravo")
+    assert restarted.returncode == 3 and "#21" in restarted.stderr, (restarted.returncode, restarted.stderr)
+    record = json.loads((diode / ".executive.json").read_text())
+    assert record["world_id"] == executive.world_id and record["tick"] == 4 and record["slugs"] == ["alpha", "bravo"]
+    assert hidden_state_hits(diode, forbidden) == []

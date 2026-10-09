@@ -591,8 +591,13 @@ def _errno_name(exc: OSError) -> str:
     return errno.errorcode.get(exc.errno or 0, type(exc).__name__)
 
 
-def _open_state_dir(state_dir: Path, *, create: bool) -> int:
-    """The state directory's handle, or `CheckpointStateDirUnusable`/`CheckpointAbsent` naming the path."""
+def open_state_dir(state_dir: Path, *, create: bool) -> int:
+    """The state directory's handle, or `CheckpointStateDirUnusable`/`CheckpointAbsent` naming the path.
+
+    Public because the console takes its lock relative to this handle (ADR 0002 H, child 2): the one
+    opener means the one set of refusals, so a file or a dangling link at `--state-dir` is named the
+    same way whether the writer, the reader or the executive's start found it.
+    """
     if os.path.lexists(state_dir) and not os.path.isdir(state_dir):
         what = "a dangling symlink" if os.path.islink(state_dir) else "not a directory"
         raise CheckpointStateDirUnusable("directory", state_dir, f"the state directory {state_dir} is {what}")
@@ -646,7 +651,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
         raise CheckpointInvalid(problem[0], target, f"the body would be refused on reading, so it is not written: {problem[1]}")
     body_bytes = encode(body)
     header_line = encode(make_header(body, body_bytes))
-    dir_fd = _open_state_dir(state_dir, create=True)
+    dir_fd = open_state_dir(state_dir, create=True)
     step = "write"
     temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
     try:
@@ -699,7 +704,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
 def _read_bytes(state_dir: Path, name: str) -> bytes:
     """The file's bytes through a handle that follows no link, or the refusal that says why not."""
     path = state_dir / name
-    dir_fd = _open_state_dir(state_dir, create=False)
+    dir_fd = open_state_dir(state_dir, create=False)
     try:
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)

@@ -18772,6 +18772,80 @@ the field is `None`.
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+## The vehicle's stop button was on the agents' volume
+
+ADR 0001 put the executive's exclusive lock, `.executive.lock`, in the diode root beside the record
+that says which world the directory is, and read both under the lock. The root is where no agent's
+mount was *meant* to reach — and ADR 0001's own clarification records that in the deployed compose
+every `agent_N` mounts `./volumes/diode:/diode` read-write. The two halves that never met are that
+sentence and the lock's semantics: `fcntl.flock(LOCK_EX | LOCK_NB)` refuses the *second* holder,
+whoever it is, so an agent that opened `/diode/.executive.lock` and held it would have kept the
+vehicle from ever starting again, and a vehicle whose private journal has nowhere private to go
+(`--journal` refuses the diode directory and the container has no other writable path) was a vehicle
+that could not keep its lineage at all. ADR 0002 H decides the shape — a private `--state-dir` the
+chassis mounts for the vehicle service alone — and this round is child 2 of that record
+(`tachyon-beep/space_vehicle#20`): the flag, the lock, the journal, and the diode root's
+`.executive.json` as a *copy* of the checkpoint rather than the authority.
+
+| | ADR 0002 says | `tools/console.py` does |
+|---|---|---|
+| `--state-dir` | H1: the checkpoint, its previous generation, the lock and the journal live there; refused inside `--diode-dir` by the journal's `is_relative_to` rule | `check_state_dir`: both paths `resolve()`d, so `diode/alpha/../.private`, a link planted outside the diode directory that points into it, and the diode directory itself are one spelling; the symmetric overlap (`--diode-dir` inside `--state-dir`) is refused too; a file or a dangling link is `checkpoint.CheckpointStateDirUnusable`, named as the operator's path through the one public opener `open_state_dir`; a link to a real directory outside is the operator's alias, as `--diode-dir` already is. All exit 3 before a window or a lock exists |
+| the lock | H(i): "`.executive.lock` moves to `--state-dir`: an exclusive lock on a volume the adversary can write is a lock the adversary can hold" | taken relative to the state directory's handle; the root lock is **not opened at all**; a second executive on the same state directory is refused naming the directory and the holder's pid |
+| one diode directory, one state directory | H(ii): "the state directory records the diode directory it serves so a mismatch is caught from either side" | `serves.json` in the state directory, the resolved diode path, written on every start that binds; a start pointing the same state directory at another diode directory refuses from that side; a readable root record naming another world refuses from the other |
+| the journal | J: "`--journal` is retired as a separate flag and lives in `--state-dir`, one segment file per boot (`journal.<segment>.jsonl`)" | `journal.<boot_id>.jsonl` in the state directory when no `--journal` is named; an explicit `--journal PATH` still wins (retiring the flag is child 4's, with the record's content); every row now carries the boot it belongs to, and a row with an `event` key is a startup event |
+| the root record beside a verified checkpoint | H(ii): "a root record that is missing, garbled or disagrees is not a refusal: it is rewritten and the mismatch is journaled"; a *readable* record "naming a different world than the checkpoint's … refuses" | `root_record_from_checkpoint` makes today's record shape from the body — world, slugs, rings, scenario, seed, tick, and nothing of the header's hash, engine, Python or platform; `reconcile_root_record` answers `agree`, `rewrite` or `refuse` with the reason; the rewrite event carries the superseded record verbatim and the checkpoint's tick; the refusal names both worlds and both files and rewrites nothing |
+| a start on a checkpoint | choice D as amended: a bound directory *resumes* from a verified checkpoint (child 3) | after the record rule, **exit 3 naming `#21`**: resume has not landed, and starting a fresh world over a saved one is the alternative choice D rejected. The message does not give the old advice — clearing the diode directory is now the one thing the operator must not do. `--init` refuses the same way; `--plan` answers from the checkpoint's identity and writes nothing |
+| without `--state-dir` | — | exactly as before: the lock in the root, `--journal` as it was, the banner unchanged byte for byte. The flag is **not required**; whether the deployed stack must always name one is the chassis's decision when it adds the mount (cross-repository item 1) |
+
+Where the record was silent, the round chose, and each choice is stated in the module docstring so
+child 3 inherits it rather than rediscovers it. **The root lock is not opened at all** with a state
+directory, rather than opened advisorily: a lock an agent can hold conveys nothing enforceable, and
+what it used to guarantee the record now does — a second executive with its *own* fresh state
+directory on a bound diode directory is refused by ADR 0001's binding rule, and on a checkpointed one
+by the foreign-world rule. The gap this leaves is named: two executives with two fresh state
+directories racing onto one *fresh* diode directory are separated only by the record each writes at
+`attach`, where the root lock used to serialise them; child 4's checkpoints close it from the first
+write. **A checkpoint is a world that exists**, so its `world_id` goes into the copy whether or not
+its tick is zero, where the live record is "bound by the first tick"; an unbound record (`world_id:
+null`, another executive's `--init`) beside a checkpoint is therefore a disagreement and is
+rewritten, not a foreign world. **A record ahead of the checkpoint** — the executive died after its
+last checkpoint, or another `--init` prepared a slug the checkpoint does not know — is rewritten
+*backwards* to the checkpoint's copy, per H, and the superseded record goes into the journal event
+verbatim so that child 3 can see what was there. **The segment is the executive's boot**, a new
+`Executive.boot_id` drawn by `main` before the executive exists so that a startup event and the
+ticks that follow share one file; a window's own `boot_id` stays per window, as
+`presentation.yaml#frame` publishes it.
+
+The hidden-state isolation test the issue asks for scans every regular file under the diode
+directory — the five window files, every result, every frame, and the root record, which is the one
+file a checkpoint-derived rewrite could most easily leak into — for every link of the live lineage,
+the compare-point hash, every truth-only key by name and by suffix, the state directory's path in
+both spellings and its distinctive basename, and the checkpoint's `body_sha256` and `engine`; after
+commanded cycles, after the checkpoint is written, and after a restart attempt that rewrote a
+garbled root record and was refused. A scanner that cannot fail is not a scanner, so a lineage link
+and the path are planted into a result file first and must be found.
+
+What the round got wrong on the way. The "no stale advice" assertion — that the `#21` refusal
+never says "clear or rename the directory" — was first written as `"choice D" not in stderr`, and
+caught the new message's own legitimate citation of choice D as amended; it now names the stale
+sentence itself. And of the six referee tests, five failed before the change for the right reason
+(argparse exit 2 on the unknown flag; `AttributeError` and `TypeError` on the functions and the
+keyword) and one, the without-`--state-dir` test, passed before it: that one is the regression
+guard for the compatibility this round claims to have kept, and a test that only fails before the
+change could not say that.
+
+ADR 0001's "One world per directory" paragraph, its "restart consequence of choice D" bullet and
+its clarification "the directory's record is authoritative" each carry a dated amendment sentence
+(WP08 child 2, per ADR 0002 H); the chassis
+side — the private volume, `serve_vehicle.sh` passing `--state-dir`, the one-process change — is the
+separate package ADR 0002 lists, and nothing here depends on it: the tests use a scratch directory.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 385 | **391** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 
