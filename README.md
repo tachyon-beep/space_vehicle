@@ -19215,6 +19215,78 @@ the two rows the documentation now cites (the full-batch flood, and the record's
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+## A saved world was a refusal, and a restart now resumes it
+
+`docs/decisions/0002-mission-clock-and-continuity.md` (ADR 0002) decided that a restart *resumes* a
+world from the executive's own checkpoint and the durable record after it, losing no mission time
+(F1) and running no command twice. Children 1, 2 and 4 landed the format, the private directory and
+the record; until this round (#21) a start that found a verified checkpoint refused with exit 3 —
+and nothing wrote a checkpoint during a run anyway, so every restart of a bound directory was ADR
+0001's choice-D refusal: a vehicle container under `restart: unless-stopped` stayed dark. A design
+note went through two independent reviews (Codex `gpt-6-astra` high; Claude Opus) before any code,
+and their addenda bound it; ADR 0002 J (xxi)–(xxix) and ADR 0001 choice D carry the dated decisions.
+
+The two halves the round joined are the checkpoint (child 1) and the record (child 4), against the
+command line the chassis already runs (`--state-dir`, the slugs, scenario, seed, ring, `--cycles 0`):
+
+| | before | now |
+|---|---|---|
+| a start beside a verified checkpoint | exit 3 naming #21 | `resume_executive`: the checkpoint, the record after it to the last durable tick `L`, the windows restored; the world, its tick, `seq` and receipts continue, every `boot_id` changes |
+| checkpoints during a run | none | a genesis at tick 0 (mandatory), every `N = tick_hz` ticks at the end of a cycle, one at the recovered tick before a resume claims anything (mandatory), one at a clean end |
+| what a resume reads | — | from the checkpoint's anchor (a byte offset per segment entry, format v2): `O(L − T)` lines, not the boot's whole segment |
+| a result the record holds and the disk does not | listed by `unwritten_results`, written by nothing | owed (`obligations`, checkpointed) and written once, after a bounded look for it on disk by its exact receipt line |
+| a restart naming another world's identity | `--ring-slots` alone refused | `--scenario`, `--seed`, `--phase`, `--ring-slots`, the slug set: exit 3, one sentence, the flag and both values |
+| `--max-batch`, `--closed-interlock` named anew | the parser's default was indistinguishable from the operator's word | `None` by default; a cap replaces the saved one, interlocks join the saved trips; journaled |
+| the root record on an ordinary restart | always "disagrees on tick", a mismatch event every boot | compared with the recovered state: routine within `[T, L]`, a mismatch otherwise |
+
+What the round found on the way, each a test that failed first:
+
+- **`attach` showed every window tick zero before a restore could run** (design note F1). Preparing a
+  window rewrote its mirror and `pending.json` at tick 0 and the root record unbound; the probe caught
+  it. A resume attaches without preparing, and before its first cycle writes nothing in a window but
+  owed results. The same fault lived in the live repair of a lost directory, which re-ran `prepare`;
+  repair now re-makes directories and nothing else (B7).
+- **A kill tearing a boot's first append crash-looped** (F2). Header and first row are one `write`; a
+  fragment with no header before it in its file was "corrupt", at every later restart. It is a torn
+  append — nothing was published from it — and a shared `--journal`'s startup events now begin their
+  own line after a torn tail (B8).
+- **A restart read the whole boot** (A1, B5). One boot is one segment, so the record a restart follows
+  is that boot's whole segment: ADR 0002 (xx)'s 30–45 minutes at mission end. Measured here after a
+  5,007-tick boot (5,008 lines): the anchored resume read **21** lines and took 0.70 s end to end
+  (executive construction included); the whole-record check, replay and listing read 15,025 lines
+  (0.37 s at this size, growing with the boot). The unread prefix is attested by the verified
+  checkpoint, not re-verified — a stated limitation; the whole-record read remains for offline replay.
+- **A fall-back could rotate the corrupt generation over the good one** (B2). The resume moves the
+  refused current generation aside to `checkpoint.rejected.<boot>.json` before anything writes.
+- **What a window was owed depended on the generation chosen** (B4): a result whose publication failed
+  live was never written at all. Obligations are checkpointed and written at the window's next
+  publication; the look on disk is bounded per window (4,096 entries, 256 KiB), so an agent flooding
+  its own `output/` costs at most a duplicate in its own window (B6).
+- **Two flag defaults could not be told from the operator** (A6, B10): `--max-batch` defaulted to 32
+  and `--closed-interlock` to `[]`, and `--phase` to its value. The linter now reads the checkpoint's
+  `run` section too and refuses each by name; the linter fixtures copy `tools/checkpoint.py`.
+- **A publication that failed before its frame kept a frame number a replay had consumed** (S16): live
+  state and replayed state disagreed on the next frame. The mark now consumes it in both.
+
+**Commitment 1, as the contract allows.** Every command whose cycle's row became durable has exactly
+one result; a batch claimed in a cycle that died before its row is lost with no result
+(`docs/diode-contract.md` §2.2: "a crash mid-batch loses the rest of that batch; it never replays it").
+**Preconditions and residuals**: the kept refusals on the root record assume the chassis's per-slug
+mounts (`aurora-port`); the budget's wall clock restarts with the process (child 7); a scheduled-event
+or phase-boundary restart point is not exercised until faults are scheduled and the phase moves
+(child 11); retention, graceful `SIGTERM` and `--new-world` are child 10's.
+
+Costs (this machine, idle, p50): a checkpoint is 5.5 ms to capture and 7.0 ms to write on the warmed
+ring, 19.5 + 14.2 ms on the full ring (268 KB / 470 KB), once per `N = 50` ticks — the same with one
+window or ten. A run under load measured 29 / 59 ms for the two together. The oracle in every resume
+test is an uninterrupted run's own per-tick compare-points and lineage, never the resume's output.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 433 | **482** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 

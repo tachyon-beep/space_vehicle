@@ -579,7 +579,7 @@ no engine may be assumed to read an arbitrary saved world. The mechanics follow:
   `checkpoint.json`; `fsync` the directory. A kill at any point leaves one verifiable generation.
 - **Integrity**: a SHA-256 of the body inside a small header, and the body's byte length; a
   checkpoint whose hash or length disagrees is *corrupt* (K).
-- **Compatibility**: `format: vehicle.checkpoint.v1`; `engine`; `python` (`major.minor.micro`);
+- **Compatibility**: `format: vehicle.checkpoint.v1` (*v2 since WP08 child 3, 2026-10-10: J (xxiii), (xxiv)*); `engine`; `python` (`major.minor.micro`);
   `platform` (`platform.platform()`); `tick_hz`. A mismatch on any of them is *incompatible* (K).
   *Amended 2026-10-09 (coordinator, under the owner's delegation, on child 1's review):* `platform` is
   `platform.system()`, `platform.machine()` and `platform.libc_ver()` — OS, architecture and libc — and
@@ -761,6 +761,72 @@ retention (child 3) matter. (xii)'s "detects corruption and truncation" is **cor
 truncation**: deleting complete rows at the *end* of the last segment is accepted, because there is no
 end anchor — a correct filesystem cannot lose an `fsync`ed row, so a missing tail is what a crash
 before the `fsync` leaves, and nothing was published from it.
+
+*Amended by WP08 child 3 (`#21`, 2026-10-10), the resume; its design note and two independent design
+reviews (Codex `gpt-6-astra` high; Claude Opus), decided by the coordinator under the owner's
+delegation.* (xxi) **Rule 2's effect-free tail is empty.** Since (i) every cycle writes a row, and a
+window's published tick is set only after its row is durable, so no published tick is past the last
+durable row `L`: a resume replays the record from the checkpoint's tick `T` to `L` and steps nothing
+more, and mission time resumes at `L` (F1). (xxii) **`N` is `tick_hz`**, recorded in the checkpoint's
+clock inputs (`clock.N`) and taken from there by a resume, until child 5 makes it a run input. The
+executive checkpoints at the end of every cycle whose tick is a multiple of `N` — after every window
+has published, so the checkpoint's anchor is past the cycle's notes and what it owes is exact — and
+also at a world's genesis (tick 0, before its first cycle), at the recovered tick before a resumed run
+claims anything, and at a clean end (cycles exhausted, or an interrupt between cycles; never
+mid-cycle). The genesis and the resume's checkpoint are mandatory — a failure refuses the start with
+nothing bound or claimed; a cadence or clean-end failure is recorded, journaled (`checkpoint_failed`,
+with the consecutive count) and on stderr, and the run goes on, because the record is what is durable.
+(xxiii) **Restart cost is `O(L − T)`.** A checkpoint's segment entries carry the byte offset just after
+the last line it covers (checkpoint format `vehicle.checkpoint.v2`; no v1 was ever written by a
+deployed vehicle), and a resume reads the record from that anchor: the seek point is held to the file
+(a regular file through the held handle, within its size, just after a newline), other segment files
+are read to their first header only (past at most 64 startup events, or refused), a boot continuing
+the anchor is read whole, one the checkpoint lists is skipped, and any other refuses. **What this
+trusts**: the record before the anchor is attested by the checkpoint, which is verified (I) and lives
+in the same private directory; it is not re-verified, so an edit below the anchor that keeps the
+anchor's line boundary and everything after it is not detected by a resume, by design. The
+whole-record read still verifies end to end, offline. (xxiv) **Commitment 1, as the contract
+allows.** Every command whose cycle's row became durable has exactly one result; a batch claimed in a
+cycle that died before its row is lost with no result (contract §2.2, "a crash mid-batch loses the
+rest of that batch; it never replays it"; (viii)). A result durable in the record and not on disk — a
+crash between the row and the results, or a publication that failed live — is an *obligation*,
+carried by the checkpoint (`obligations`), so what a window is owed does not depend on which
+generation a resume chose; a resume adds every unnoted verdict after `T`, and the window's next
+publication writes each once, before its own results, after looking for it in its `output/` by its
+exact receipt line. That look is bounded per window as a whole (4,096 entries examined, 256 KiB read,
+candidates by name, each opened without following a link and `fstat`ed regular); past the bound the
+result is written. So exactly one result per recorded command holds except in a window's own
+pathological cases — its agent deleting or forging files in its own `output/`, or flooding it past the
+bound — which cost at most a duplicate or a missing copy in that window alone. This closes (iii)'s
+residual window under wall-stamped names, before child 12. A window owed more than 256 results gives up
+the oldest, as a recorded failure. (xxv) **The root record against the recovered state** (#20's review
+note 1): a record of this world agreeing on every identity key but the tick, at a tick in `[T, L]`,
+is *routine* — rewritten and journaled inside the `resumed` event, with no `root_record_rewritten`
+event — as is an unbound record at tick 0 beside a world with `T = L = 0`; anything else keeps H's
+rules. Beside a verified checkpoint a window's legacy `pending.json` is advisory: noted in the
+`resumed` event, never a refusal. (xxvi) **What the `resumed` event says**: the downtime gap — `wall_down`
+(the newest journal file's last write: rows carry no wall stamp, so this is a proxy, labelled; child 10
+may refine it), `wall_up`, the tick — the generation and whether it fell back, the root record's class,
+the run-input changes and the advisories. (xxvii) **A fall-back never rotates a corrupt generation over
+the good one**: when K2 chose the previous generation, the resume renames the refused current one to
+`checkpoint.rejected.<boot>.json` before anything writes a checkpoint. (xxviii) **What the restart may
+name** (G, "remembered versus named"): `--scenario`, `--seed`, `--phase`, `--ring-slots` and the slug
+set either name nothing (`None`: the checkpoint's) or the checkpoint's own, else exit 3 with one
+sentence naming the flag, both values and the file — a world's slug set is fixed, and adding an agent
+is a new world; `--max-batch` named anew replaces the saved cap and `--closed-interlock` is *added* to
+the saved trips (a restart that omits it cannot un-trip one; clearing one is a new world until WP05),
+each journaled. `check_console_flags` holds `--phase`, `--max-batch` and `--closed-interlock` to the
+`None` default by reading the checkpoint's `run` section (`tripped_interlocks` ↔ `--closed-interlock`).
+A fresh start over a state directory that holds a record and no checkpoint refuses, naming the files to
+move aside. (xxix) **Not applicable yet, and residual.** A restart at a scheduled-event tick or a phase
+boundary is not exercised: `advance` applies no fault schedule and the phase is constant until child
+11. The budget's wall clock (`Window.started`) restarts with the process — child 7's (E2). The agents'
+`variables` are read back from their consoles without claiming them (G keeps them out of the
+checkpoint); a console unreadable at a resume leaves them unknown, the gates at their defaults, and the
+claim rewrites it without a `variables` key, never `{}`. The kept refusals on the root record (a
+directory planted there; a readable record of another world) assume the chassis's per-slug mounts
+(`adf38d6`, branch `aurora-port`); on a stack where agents mount the whole diode root they are stop
+buttons an agent holds at every restart.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 

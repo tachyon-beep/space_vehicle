@@ -89,7 +89,13 @@ would silently reset its physics, and restart continuity is WP08's to decide. *A
 directory and the diode root's lock is not opened at all — a lock on a volume the agents can write
 is a lock they can hold — and one world per directory is then held by the root record, not by the
 lock; a start that finds a verified checkpoint in the state directory refuses with exit 3 naming
-child 3 (#21) rather than starting over it.
+child 3 (#21) rather than starting over it. *Amended by WP08 child 3, per ADR 0002 (2026-10-10):* a
+bound directory whose state directory holds a verified checkpoint **resumes** that world from the
+checkpoint and the record after it; it refuses without one (choice D, unchanged), with a corrupt or
+incompatible one that no verifying previous generation replaces (ADR 0002 K), and when the restart
+names a scenario, seed, phase, ring bound or slug set the checkpoint does not record. A world's slug
+set is fixed: adding a window is a new world. `--new-world` (#28) remains the operator's only
+recorded exit.
 
 ## Acceptance and consequences
 
@@ -109,7 +115,10 @@ child 3 (#21) rather than starting over it.
   vehicle container restarted under `restart: unless-stopped` stays dark until the operator clears
   or renames its windows, or WP08 defines continuity. *Amended by WP08 child 2, per ADR 0002 H
   (2026-10-09):* where `--state-dir` holds a verified checkpoint, clearing the windows is the wrong
-  action and the refusal says so; the directory waits for child 3's resume. `--init` prepares a window (scenario, seed,
+  action and the refusal says so; the directory waits for child 3's resume. *Amended by WP08 child 3
+  (2026-10-10):* the restart consequence is withdrawn where `--state-dir` holds a checkpoint — every
+  world started with `--state-dir` writes one at tick 0 — and the container restarted under
+  `restart: unless-stopped` resumes its world. `--init` prepares a window (scenario, seed,
   ring) without binding it; the first executive to tick it binds it. The old cross-process resume of
   ticks, arm tokens, dwell and deferrals from the agent-writable `pending.json` is withdrawn: it
   restored authority (arm tokens) from a file an agent can write, and restored counters while the
