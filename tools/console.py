@@ -124,23 +124,26 @@ configuration constraint. With it:
     (`choose_generation(..., dir_fd=)`, `write_checkpoint(..., dir_fd=)`); the path forms remain for
     callers that hold no handle, and they re-resolve the path, as child 1 wrote them.
 
-**The journal is the durable per-cycle record** (ADR 0002 J, child 4 — `#22`; the comment block
-above `RecordRefused` is the format). Each boot's segment opens with a header naming the format, the
-boot, the tick its first cycle started at and the boot before it, and every cycle appends one tick row
-— effects with their stamps, every verdict's receipts, each window's spend, deferral and arm-token
-changes, the compare-point, the lineage link, and the `published` mark of every window about to
-publish — and `fsync`s it *before* the root record, a result, a frame or a mirror of the cycle is
-written; a `results_written` note naming the results that reached the disk follows them, `fsync`ed
-too. A record that cannot be made durable stops the run by name (exit 3) before the cycle is
-published. Every agent-derived string in it is cut at `RECORD_TEXT_BYTES` with its fingerprint, so a
-line is bounded whatever the agents send. `read_record` reads the segments back, through the held
-state-directory handle where there is one; `replay_record` re-executes them onto a checkpoint body
-(`tools/checkpoint.py`) through `advance` and `dwell_after_effect`, the functions the live cycle
-uses, holding every tick to its recorded compare-point and lineage link and refusing a missing cycle
-by name; `unwritten_results` says which recorded verdicts no note covers, for child 3 (#21) to
-re-publish. **An explicit `--journal` without `--state-dir` is the same record with the same
-durability**: every boot appends its own header and rows to the one file, and the headers are the
-segment boundaries. Writing a checkpoint every `N` ticks is not here (J's cadence, with the resume).
+**The journal is the durable per-cycle record** (ADR 0002 J, child 4 — `#22`, format
+`vehicle.record.v2` since its review; the comment block above `RecordRefused` is the format). Each
+boot's segment opens with a header naming the format, the boot, the tick its first cycle started at,
+the boot before it and the chain value that boot ended on; every cycle appends one tick row — effects
+with their stamps, every verdict's receipts, the receipt counters, each window's spend, deferral and
+arm-token changes, the compare-point, the lineage link, and the `published` mark of every window about
+to publish — and `fsync`s it *before* the root record, a result, a frame or a mirror of the cycle is
+written, after any batch the cycle claimed is durable; each window's results are made durable and
+then noted (`results_written`) before its frame. Every line carries a chain value, so an edit or a
+deletion anywhere refuses by name. What a cycle may add is bounded on the encoded bytes, per window
+and per receipt, whatever the agents send. A record that cannot be made durable stops the run by name
+(exit 3). `read_record` checks the segments end to end as a stream, through the held state-directory
+handle where there is one; `replay_record` streams them again onto a checkpoint body
+(`tools/checkpoint.py`) through `advance` and `dwell_after_effect`, the functions the live cycle uses,
+holding every tick to its recorded compare-point and lineage link, the record to the checkpoint's own
+segment history, and refusing a missing cycle by name; `unwritten_results` says which recorded
+verdicts no note covers, for child 3 (#21) to re-publish. **An explicit `--journal` without
+`--state-dir` is the same record with the same durability**: every boot appends its own header and
+rows to the one file, and the headers are the segment boundaries. Writing a checkpoint every `N`
+ticks, and pruning the record, are not here (J's cadence and retention, with the resume).
 
 `--state-dir` is **not required**: without it the lock and every refusal are exactly as before, and an
 explicit `--journal` is the record above, in the same format with the same durability. Whether the deployed stack must always name one is the chassis's decision when it adds the
@@ -172,6 +175,7 @@ import sys
 import time
 import uuid
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -264,14 +268,22 @@ JOURNAL_SEGMENT = "journal.{boot_id}.jsonl"
 JOURNAL_SEGMENT_NAME = re.compile(r"journal\.([A-Za-z0-9_-]{1,64})\.jsonl")
 # The record's format (ADR 0002 J, child 4), named in every segment's header row. A change to what a
 # row carries or how replay reads it is a change of this id, as a change to the checkpoint's body is
-# a change of `checkpoint.FORMAT`.
-RECORD_FORMAT = "vehicle.record.v1"
-# The most bytes of one agent-derived string — a receipt's command or body, a deferral's command —
-# the record keeps. A longer one is kept by its first bytes (cut on a character boundary) with the
-# SHA-256 and byte length of the whole, so an agent's 900 kB token is a few kilobytes of record and
-# still recognisable (child 2's review F5, one file over). Every result body the vehicle writes for a
-# well-formed command is well under it.
+# a change of `checkpoint.FORMAT`. v2 added the row chain, the counters, the parsed deferral and the
+# per-window budget (child 4's review); a v1 segment is refused by name.
+RECORD_FORMAT = "vehicle.record.v2"
+# The record's bounds, every one on the *encoded* bytes: rows are ASCII-escaped JSON, where an `é` is
+# six bytes and a lone surrogate twelve (review finding 1). A receipt's body keeps `RECORD_TEXT_BYTES`
+# and its command — the agent's own text, echoed — `RECORD_ECHO_BYTES`, each cut on a character with
+# the SHA-256 and byte length of the whole. One window's receipts in one cycle share
+# `RECORD_WINDOW_BYTES`; past it a receipt is fingerprint-only, at most `RECORD_FINGERPRINT_BYTES`.
+# Every result body the vehicle writes for a well-formed command fits `RECORD_TEXT_BYTES`.
 RECORD_TEXT_BYTES = 4096
+RECORD_ECHO_BYTES = 256
+RECORD_WINDOW_BYTES = 16 * 1024
+RECORD_FINGERPRINT_BYTES = 512
+# A schema-checked argument value (at most its `max_length`, or `ARGUMENT_LENGTH_BYTES`, of UTF-8) can
+# escape to six times its bytes; the reader's bound on one is this, which no accepted value passes.
+ARGUMENT_RECORD_BYTES = 6 * 1024
 # The reader's bound on one line of the record. The writer refuses to write a longer one (and the run
 # stops by name), so a line past it is not one this vehicle wrote.
 MAX_RECORD_LINE_BYTES = 64 * 1024 * 1024
@@ -351,7 +363,13 @@ def open_directory(path: str | os.PathLike[str], *, dir_fd: int | None = None) -
 
 
 def write_text_atomic(
-    path: str | os.PathLike[str], text: str, *, dir_fd: int | None = None, noclobber: bool = False
+    path: str | os.PathLike[str],
+    text: str,
+    *,
+    dir_fd: int | None = None,
+    noclobber: bool = False,
+    sync_file: bool = False,
+    sync_dir: bool = False,
 ) -> None:
     """Write through a temporary file and rename, the way the contract requires of the claim.
 
@@ -363,7 +381,9 @@ def write_text_atomic(
     same handle renames *over* a link rather than through it, so a link planted at the target becomes
     a regular file and the thing it pointed at is untouched. With `noclobber`, the final name is made
     with `os.link`, which fails `EEXIST` rather than replacing anything — a result file is never
-    overwritten, and the caller picks another name.
+    overwritten, and the caller picks another name. With `sync_file` the temporary is `fsync`ed before
+    it takes its name, and with `sync_dir` the directory is `fsync`ed after, so the name is durable too
+    (ADR 0002 J, child 4's review finding 6: a claim and a result the record relies on are disk facts).
     """
     name = os.fspath(path)
     opened: int | None = None
@@ -382,11 +402,16 @@ def write_text_atomic(
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(text)
+                if sync_file:
+                    handle.flush()
+                    os.fsync(handle.fileno())
             if noclobber:
                 os.link(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
                 os.unlink(temporary, dir_fd=dir_fd)
             else:
                 os.replace(temporary, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            if sync_dir:
+                os.fsync(dir_fd)
         except BaseException:
             with contextlib.suppress(OSError):
                 os.unlink(temporary, dir_fd=dir_fd)
@@ -425,8 +450,8 @@ def dumps_json(payload: Any, **kwargs: Any) -> str:
     return json.dumps(payload, allow_nan=False, **kwargs)
 
 
-def write_json_atomic(path: str | os.PathLike[str], payload: Any, *, dir_fd: int | None = None) -> None:
-    write_text_atomic(path, dumps_json(payload, indent=2, sort_keys=False) + "\n", dir_fd=dir_fd)
+def write_json_atomic(path: str | os.PathLike[str], payload: Any, *, dir_fd: int | None = None, durable: bool = False) -> None:
+    write_text_atomic(path, dumps_json(payload, indent=2, sort_keys=False) + "\n", dir_fd=dir_fd, sync_file=durable, sync_dir=durable)
 
 
 def read_regular_bounded(
@@ -906,9 +931,9 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
     relative to a handle opened here on the path's parent. Either way the file itself is opened
     `O_NOFOLLOW`: the lineage is not appended through a link (second review, Codex P1). This is the
     startup events' writer — `main` journals a root-record rewrite *before* it rewrites (review F2) —
-    and since child 4 it `fsync`s the line and creates the file `0600`, as the executive's own record
-    writer does: an event the rewrite relies on is only journaled once it is on the disk, and the
-    record is the operator's, not the host's other users'.
+    and since child 4 it `fsync`s the line and then the directory, and creates the file `0600`, as the
+    executive's own record writer does: an event the rewrite relies on is only journaled once its bytes
+    and its name are on the disk, and the record is the operator's, not the host's other users'.
     """
     opened: int | None = None
     if dir_fd is None:
@@ -922,6 +947,8 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
             os.fsync(fd)
         finally:
             os.close(fd)
+        # The line is durable; the name, when this append made the file, is durable with its directory.
+        os.fsync(dir_fd)
     finally:
         if opened is not None:
             os.close(opened)
@@ -936,31 +963,47 @@ def _write_all(fd: int, data: bytes) -> None:
 # -- the record (ADR 0002 J, child 4) ------------------------------------------------------------
 # **The journal is the record.** One segment per boot — `journal.<boot_id>.jsonl` in the state
 # directory, or a run of rows inside an explicit `--journal` file — whose first row is a header
-# (`event: segment`: the format, the boot, the world, the tick the boot's first cycle started at, and
-# the boot before it), then one *tick row* per cycle, and after a cycle that wrote results a
-# `results_written` note. A tick row is `tick` (the tick the cycle reached), `world_id`, `boot_id`, the
-# compare-point `state_hash` and the `lineage` link of that tick, the `effects` with their stamps in
-# arbitration order, every verdict's `receipts` (global `seq`, window-local `local`, window, state,
-# offset, command, body), the per-window `windows` deltas (spend, deferrals added and removed, arm
+# (`event: segment`: the format, the boot, the world, the tick the boot's first cycle started at, the
+# boot before it and the chain value that boot ended on), then one *tick row* per cycle, and after each
+# window's results a `results_written` note for that window. A tick row is `tick` (the tick the cycle
+# reached), `world_id`, `boot_id`, the compare-point `state_hash` and the `lineage` link of that tick,
+# the `effects` with their stamps in arbitration order, every verdict's `receipts` (global `seq`,
+# window-local `local`, window, state, offset, command, body), the global `receipt` counter, the
+# per-window `windows` deltas (spend, the window's receipt counter, deferrals added and removed, arm
 # tokens set and cleared), the `published` mark of every window about to publish (the tick and the
 # frame number it will write), and the executive's `failures` count.
 #
-# **Every cycle writes its row, quiet or not**, and that answers "how does replay know the tick range"
-# without a second mechanism: rule 2 makes the published-tick mark durable at every publication, and a
-# cycle always publishes (the mirror is rewritten every cycle), so a row is appended and `fsync`ed every
-# cycle anyway — the compare-point and the lineage link ride in it for bytes, not for an `fsync`. The
-# ticks of a record are therefore contiguous by construction, a hole is a missing cycle wherever it
-# falls, and replay checks every tick against the run's own compare-point. Rule 1 asks only for the
-# verdict cycles; the quiet rows are the price of that check, about two hundred bytes each.
+# **Every row carries `chain`** (format v2, child 4's review finding 3): the SHA-256 of the previous
+# row's chain and the row's own canonical bytes (sorted compact JSON without `chain`), seeded by the
+# header from the chain its predecessor ended on. Any edit, insertion or deletion of any line refuses
+# by name at the line it touched — the non-physics half of a row (receipts, deltas, marks, notes) as
+# well as the compare-point. It detects corruption and truncation, not a forger: there is no secret,
+# and whoever can write the `0600` state directory can re-chain. Against that, every field is typed
+# and bounded, a mark is its row's tick, a note is its row's, and the physics is re-run.
 #
-# The order inside a cycle is the three rules: the tick row (and on the boot's first cycle the header
-# with it) is appended and `fsync`ed **before** the root record, any result, frame or mirror is
-# written (rules 1–3); the results are written; then the `results_written` note naming each by window
-# and window-local receipt is appended and `fsync`ed (rule 3 under wall-stamped result names, which
-# child 12's L(b) makes deterministic). One `fsync` per quiet cycle, two per cycle with results — the
-# cost ADR 0002 J prices as "one per verdict cycle, one per publication mark", and
-# `tools/measure_clock.py` measures. A record that cannot be written stops the run by name
-# (`RecordUnwritable`, exit 3) before anything of the cycle is published.
+# **Every cycle writes its row, quiet or not**: rule 2's mark is written at every publication, and a
+# cycle always publishes (the mirror is rewritten every cycle), so a row is appended and `fsync`ed every
+# cycle anyway — the compare-point, the lineage link and the chain ride in it for bytes, not for an
+# `fsync`. The ticks of a record are therefore contiguous by construction, a hole is a missing cycle
+# wherever it falls, and replay checks every tick against the run's own compare-point.
+#
+# **What one cycle may add is bounded, on the encoded bytes** (review finding 1). Rows are written as
+# ASCII-escaped JSON, so every bound counts the escaped form (an `é` is six bytes, a lone surrogate
+# twelve): a receipt's command keeps `RECORD_ECHO_BYTES`, its body `RECORD_TEXT_BYTES`, and each
+# window's receipts in one cycle share `RECORD_WINDOW_BYTES`, past which a receipt is recorded
+# fingerprint-only (`RECORD_FINGERPRINT_BYTES` at most); its result file is written in full either way.
+# A window has at most `2 × --max-batch` verdicts a cycle (its batch and the deferrals it accepted the
+# cycle before), and the deltas are bounded by the command schemas (a deferral is its parsed command,
+# finding 4), so a row is at most `windows × (RECORD_WINDOW_BYTES + 2 × max_batch ×
+# RECORD_FINGERPRINT_BYTES)` plus the deltas and a fixed overhead, whatever the agents send.
+#
+# The order inside a cycle is the three rules (review finding 6 made each promise a disk fact): a
+# claimed batch's rewritten console and its window directory are `fsync`ed; the tick row (and on the
+# boot's first cycle the header with it) is appended and `fsync`ed **before** the root record, any
+# result, frame or mirror is written; then, window by window, the results are written and each file
+# `fsync`ed, the `output/` directory `fsync`ed, and the window's note appended and `fsync`ed, before
+# its frame, mirror and generated files. A quiet cycle is one `fsync`. A record that cannot be made
+# durable stops the run by name (`RecordUnwritable`, exit 3).
 
 
 class RecordRefused(Exception):
@@ -980,18 +1023,57 @@ class RecordRefused(Exception):
 
 
 class RecordUnwritable(RuntimeError):
-    """The record could not be appended or made durable: the run stops before the cycle is published."""
+    """The record could not be appended or made durable: the run stops."""
 
 
-def record_text(entry: dict[str, Any], key: str, text: str) -> None:
-    """`entry[key] = text`, or its first `RECORD_TEXT_BYTES` bytes with `key_sha256` and `key_bytes` of the whole."""
-    raw = text.encode("utf-8")
-    if len(raw) <= RECORD_TEXT_BYTES:
-        entry[key] = text
-        return
-    entry[key] = raw[:RECORD_TEXT_BYTES].decode("utf-8", "ignore")
-    entry[f"{key}_sha256"] = hashlib.sha256(raw).hexdigest()
-    entry[f"{key}_bytes"] = len(raw)
+def record_line(row: dict[str, Any]) -> bytes:
+    """One row as the record writes it: sorted, compact, ASCII-escaped RFC 8259 JSON and a newline."""
+    return (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+
+
+def record_chain(previous: str, row: dict[str, Any]) -> str:
+    """The chain value of `row` after `previous`: `sha256(previous + "\\n" + the row's canonical bytes)`.
+
+    The canonical bytes are `record_line` of the row without its `chain` key, without the newline. A
+    segment header's `previous` is the chain its predecessor ended on (`previous_chain`, `""` for the
+    first segment of a world); every other row's is the row before it.
+    """
+    body = {key: value for key, value in row.items() if key != "chain"}
+    return hashlib.sha256(previous.encode("ascii") + b"\n" + record_line(body)[:-1]).hexdigest()
+
+
+def _encoded_len(text: str) -> int:
+    """The bytes a string costs in a record row, quotes aside: its ASCII-escaped JSON form."""
+    return len(json.dumps(text)) - 2
+
+
+def _fingerprint(text: str) -> tuple[str, int]:
+    """SHA-256 and length of the whole string as UTF-8, lone surrogates passed through rather than refused."""
+    raw = text.encode("utf-8", "surrogatepass")
+    return hashlib.sha256(raw).hexdigest(), len(raw)
+
+
+def _prefix(text: str, limit: int) -> str:
+    """The longest prefix of `text` whose encoded form is at most `limit` bytes."""
+    if _encoded_len(text) <= limit:
+        return text
+    low, high = 0, min(len(text), limit)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _encoded_len(text[:middle]) <= limit:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
+
+
+def record_text(entry: dict[str, Any], key: str, text: str, limit: int = 0) -> None:
+    """`entry[key] = text`, or its prefix within `limit` encoded bytes with `key_sha256` and `key_bytes` of the whole."""
+    limit = limit or RECORD_TEXT_BYTES
+    kept = _prefix(text, limit)
+    entry[key] = kept
+    if kept != text:
+        entry[f"{key}_sha256"], entry[f"{key}_bytes"] = _fingerprint(text)
 
 
 def lineage_link(previous: str, digest: str, effects: list[Effect]) -> str:
@@ -1054,15 +1136,254 @@ def dwell_after_effect(
     return changed
 
 
+def canonical_command(verb: str, arguments: dict[str, str]) -> str:
+    """The command a parse spells: the verb and each argument once, `key=value`, in the parse's order.
+
+    A deferral is queued, checkpointed and recorded as this (review finding 4): `parse_arguments`
+    keeps the last value of a repeated key and ignores tokens without `=`, so the raw line and its
+    parse can differ, and a prefix of the raw line can parse to *another valid command*.
+    """
+    return " ".join([verb, *(f"{key}={value}" for key, value in arguments.items())])
+
+
+def receipt_entries(verdicts: list[Verdict]) -> list[dict[str, Any]]:
+    """One window's receipts for a tick row, within `RECORD_WINDOW_BYTES`; past it, fingerprint-only.
+
+    A full entry keeps the command to `RECORD_ECHO_BYTES` and the body to `RECORD_TEXT_BYTES`, each with
+    the whole's fingerprint when cut. A fingerprint-only entry keeps the receipt numbers, the state, the
+    offset, a prefix of the verb, and the SHA-256 and length of the command and the body: what a
+    resume needs to number the window's next result and to recognise this one, and no more.
+    """
+    entries: list[dict[str, Any]] = []
+    used = 0
+    for verdict in verdicts:
+        entry: dict[str, Any] = {
+            "seq": verdict.receipt,
+            "local": verdict.local,
+            "window": verdict.window,
+            "state": verdict.state,
+            "offset_us": verdict.effect.offset_us if verdict.effect is not None else 0,
+        }
+        full = dict(entry)
+        record_text(full, "command", verdict.command, RECORD_ECHO_BYTES)
+        record_text(full, "body", verdict.body, RECORD_TEXT_BYTES)
+        size = len(record_line(full))
+        if used + size > RECORD_WINDOW_BYTES:
+            full = entry
+            full["fingerprint_only"] = True
+            full["verb"] = _prefix(str(verdict.verb or verdict.command.split(" ", 1)[0]), 64)
+            full["command_sha256"], full["command_bytes"] = _fingerprint(verdict.command)
+            full["body_sha256"], full["body_bytes"] = _fingerprint(verdict.body)
+            size = len(record_line(full))
+        used += size
+        entries.append(full)
+    return entries
+
+
+# -- the record's schema: every field typed and bounded, or a named refusal ----------------------
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+# `plant.state_hash` is a prefix of a SHA-256 (sixteen hex digits today); the reader takes 16 to 64.
+_COMPARE_POINT = re.compile(r"[0-9a-f]{16,64}")
+_IDENT = re.compile(r"[A-Za-z0-9_-]{1,64}")
+VERDICT_STATES = frozenset({"accepted", "refused", "settled", "duplicate", "superseded", "deferred"})
+_ROW_KEYS = frozenset(
+    {"tick", "world_id", "boot_id", "lineage", "state_hash", "effects", "receipts", "receipt", "windows", "published", "failures", "chain"}
+)
+_HEADER_KEYS = frozenset({"event", "format", "world_id", "segment", "boot_id", "first_tick", "previous", "previous_chain", "wall_epoch", "chain"})
+_NOTE_KEYS = frozenset({"event", "boot_id", "world_id", "tick", "results", "chain"})
+_RECEIPT_KEYS = frozenset({"seq", "local", "window", "state", "offset_us"})
+_RECEIPT_TEXT = frozenset({"command", "body", "command_sha256", "command_bytes", "body_sha256", "body_bytes"})
+_DELTA_KEYS = frozenset({"spend", "receipts", "deferred_removed", "deferred_added", "arms_set", "arms_cleared"})
+_DEFERRAL_KEYS = frozenset({"verb", "command", "arguments", "accepted_tick", "due_tick", "maximum_queue_age_s", "receipt"})
+
+
+def _count(value: Any, low: int = 0) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= low
+
+
+def _text(value: Any, limit: int) -> bool:
+    return isinstance(value, str) and _encoded_len(value) <= limit
+
+
+def _ident(value: Any) -> bool:
+    return isinstance(value, str) and _IDENT.fullmatch(value) is not None
+
+
+def _hex(value: Any) -> bool:
+    return isinstance(value, str) and _HEX64.fullmatch(value) is not None
+
+
+def _arguments_problem(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return "arguments are not an object"
+    for name, given in value.items():
+        if not _text(name, 768) or not _text(given, ARGUMENT_RECORD_BYTES):
+            return f"argument {bounded_repr(name)} is not a bounded string pair"
+    return None
+
+
+def _deferral_problem(entry: Any) -> str | None:
+    if not isinstance(entry, dict) or set(entry) != _DEFERRAL_KEYS:
+        return "a deferral entry is not the parsed command's seven fields"
+    if not _text(entry["verb"], 128) or not _text(entry["command"], 16 * ARGUMENT_RECORD_BYTES):
+        return "a deferral's verb or command is not a bounded string"
+    problem = _arguments_problem(entry["arguments"])
+    if problem is not None:
+        return f"a deferral's {problem}"
+    if entry["command"] != canonical_command(entry["verb"], entry["arguments"]):
+        return "a deferral's command is not the one its verb and arguments spell"
+    if not (_count(entry["accepted_tick"]) and _count(entry["due_tick"]) and _count(entry["receipt"], 1)):
+        return "a deferral's ticks or receipt are not counts"
+    age = entry["maximum_queue_age_s"]
+    if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0):
+        return "a deferral's maximum_queue_age_s is neither null nor a non-negative number"
+    return None
+
+
+def _receipt_problem(entry: Any) -> str | None:
+    if not isinstance(entry, dict):
+        return "a receipt is not an object"
+    keys = set(entry)
+    if not keys >= _RECEIPT_KEYS:
+        return "a receipt lacks one of seq, local, window, state, offset_us"
+    if not (_count(entry["seq"], 1) and _count(entry["local"], 1) and _ident(entry["window"]) and _count(entry["offset_us"])):
+        return "a receipt's numbers or window are not what a receipt carries"
+    if entry["state"] not in VERDICT_STATES:
+        return f"a receipt's state {bounded_repr(entry['state'])} is not a verdict state"
+    if entry.get("fingerprint_only") is True:
+        if keys != _RECEIPT_KEYS | {"fingerprint_only", "verb", "command_sha256", "command_bytes", "body_sha256", "body_bytes"}:
+            return "a fingerprint-only receipt does not carry exactly its fingerprint"
+        if not (_text(entry["verb"], 64) and _hex(entry["command_sha256"]) and _hex(entry["body_sha256"])):
+            return "a fingerprint-only receipt's verb or fingerprints are malformed"
+        if not (_count(entry["command_bytes"]) and _count(entry["body_bytes"])):
+            return "a fingerprint-only receipt's lengths are not counts"
+        return None
+    if not keys <= _RECEIPT_KEYS | _RECEIPT_TEXT or not {"command", "body"} <= keys:
+        return "a receipt carries a key a receipt does not, or lacks its command or body"
+    if not (_text(entry["command"], RECORD_ECHO_BYTES) and _text(entry["body"], RECORD_TEXT_BYTES)):
+        return "a receipt's command or body is past its bound"
+    for key in ("command", "body"):
+        if (f"{key}_sha256" in entry) != (f"{key}_bytes" in entry):
+            return f"a receipt's {key} fingerprint is half there"
+        if f"{key}_sha256" in entry and not (_hex(entry[f"{key}_sha256"]) and _count(entry[f"{key}_bytes"])):
+            return f"a receipt's {key} fingerprint is malformed"
+    return None
+
+
+def _delta_problem(delta: Any) -> str | None:
+    if not isinstance(delta, dict) or not set(delta) <= _DELTA_KEYS:
+        return "a window's delta is not an object of the six delta keys"
+    spend = delta.get("spend")
+    if spend is not None and not (isinstance(spend, dict) and set(spend) == {"version", "accepted"} and _count(spend["version"]) and _count(spend["accepted"])):
+        return "a window's spend delta is not a version and an accepted count"
+    if "receipts" in delta and not _count(delta["receipts"]):
+        return "a window's receipt counter is not a count"
+    removed = delta.get("deferred_removed", [])
+    if not isinstance(removed, list) or not all(_count(r, 1) for r in removed):
+        return "a window's removed deferrals are not receipt numbers"
+    added = delta.get("deferred_added", [])
+    if not isinstance(added, list):
+        return "a window's added deferrals are not a list"
+    for entry in added:
+        problem = _deferral_problem(entry)
+        if problem is not None:
+            return problem
+    armed = delta.get("arms_set", {})
+    if not isinstance(armed, dict) or not all(_text(k, ARGUMENT_RECORD_BYTES) and _text(v, 64) for k, v in armed.items()):
+        return "a window's arm tokens are not bounded string pairs"
+    cleared = delta.get("arms_cleared", [])
+    if not isinstance(cleared, list) or not all(_text(k, ARGUMENT_RECORD_BYTES) for k in cleared):
+        return "a window's cleared arms are not bounded strings"
+    return None
+
+
+def _row_problem(row: dict[str, Any]) -> tuple[str, str] | None:
+    """`(check, sentence)` for the first thing about a tick row this format cannot vouch for, or `None`."""
+    if set(row) != _ROW_KEYS:
+        return "row", f"the row's keys are not a tick row's ({sorted(set(row) ^ _ROW_KEYS)})"
+    if not (_count(row["tick"], 1) and _ident(row["world_id"]) and _ident(row["boot_id"])):
+        return "row", "the row's tick, world or boot is malformed"
+    compare_point = row["state_hash"]
+    if not (isinstance(compare_point, str) and _COMPARE_POINT.fullmatch(compare_point)):
+        return "row", "the row's compare-point is not a state hash"
+    if not (_hex(row["lineage"]) and _count(row["receipt"]) and _count(row["failures"])):
+        return "row", "the row's lineage or counters are malformed"
+    effects = row["effects"]
+    if not isinstance(effects, list):
+        return "row", "the row's effects are not a list"
+    for effect in effects:
+        if not (isinstance(effect, list) and len(effect) == 3 and _count(effect[0]) and _text(effect[1], 128)):
+            return "row", "an effect is not `[offset_us, verb, arguments]`"
+        problem = _arguments_problem(effect[2])
+        if problem is not None:
+            return "row", f"an effect's {problem}"
+    receipts = row["receipts"]
+    if not isinstance(receipts, list):
+        return "row", "the row's receipts are not a list"
+    for entry in receipts:
+        problem = _receipt_problem(entry)
+        if problem is not None:
+            return "row", problem
+    windows = row["windows"]
+    if not isinstance(windows, dict):
+        return "row", "the row's window deltas are not an object"
+    for slug, delta in windows.items():
+        problem = None if _ident(slug) else "a window name is not a slug"
+        problem = problem or _delta_problem(delta)
+        if problem is not None:
+            return "row", problem
+    published = row["published"]
+    if not isinstance(published, dict):
+        return "row", "the row's marks are not an object"
+    for slug, mark in published.items():
+        if not (_ident(slug) and isinstance(mark, dict) and set(mark) == {"tick", "seq"} and _count(mark["tick"]) and _count(mark["seq"])):
+            return "published", f"the mark of {bounded_repr(slug)} is not a tick and a frame number"
+        if mark["tick"] != row["tick"] or mark["seq"] >= row["tick"]:
+            return "published", (
+                f"window {slug!r} is marked at tick {mark['tick']} with frame {mark['seq']} in the row for tick {row['tick']}: a mark is "
+                "its row's own tick, and a window has written fewer frames than the ticks it has seen"
+            )
+    return None
+
+
+def _header_problem(row: dict[str, Any]) -> str | None:
+    if set(row) != _HEADER_KEYS:
+        return f"the header's keys are not a segment header's ({sorted(set(row) ^ _HEADER_KEYS)})"
+    if not (_ident(row["world_id"]) and _ident(row["boot_id"]) and row["segment"] == row["boot_id"] and _count(row["first_tick"])):
+        return "the header's world, boot, segment or first tick is malformed"
+    if row["previous"] is not None and not _ident(row["previous"]):
+        return "the header's predecessor is not a boot"
+    if row["previous_chain"] != "" and not _hex(row["previous_chain"]):
+        return "the header's predecessor chain is not a chain value"
+    if not _text(row["wall_epoch"], 64):
+        return "the header's wall epoch is not a stamp"
+    return None
+
+
+def _note_problem(row: dict[str, Any]) -> str | None:
+    if set(row) != _NOTE_KEYS:
+        return f"the note's keys are not a results note's ({sorted(set(row) ^ _NOTE_KEYS)})"
+    if not (_ident(row["boot_id"]) and _ident(row["world_id"]) and _count(row["tick"], 1)):
+        return "the note's boot, world or tick is malformed"
+    results = row["results"]
+    if not isinstance(results, dict) or not results:
+        return "the note names no results"
+    for slug, locals_ in results.items():
+        if not (_ident(slug) and isinstance(locals_, list) and locals_ and all(_count(n, 1) for n in locals_) and len(set(locals_)) == len(locals_)):
+            return f"the note's results for {bounded_repr(slug)} are not distinct receipt numbers"
+    return None
+
+
 @dataclass
-class Segment:
-    """One boot's run of the record: its header, its tick rows, its results-written notes, and where it was read."""
+class SegmentInfo:
+    """One boot's run of the record, as the first pass found it: its header, its range and its last chain value."""
 
     boot_id: str
     name: str
     header: dict[str, Any]
-    rows: list[dict[str, Any]] = field(default_factory=list)
-    notes: list[dict[str, Any]] = field(default_factory=list)
+    last_tick: int
+    chain: str
+    rows: int = 0
     torn: bool = False
 
     @property
@@ -1074,40 +1395,11 @@ class Segment:
         return self.header.get("previous")
 
 
-# What a tick row must carry, and of what JSON type, for replay to read it.
-_TICK_ROW_SHAPE: dict[str, Any] = {
-    "tick": int,
-    "world_id": str,
-    "boot_id": str,
-    "lineage": str,
-    "state_hash": str,
-    "effects": list,
-    "receipts": list,
-    "windows": dict,
-    "published": dict,
-}
-_HEADER_SHAPE: dict[str, Any] = {"format": str, "boot_id": str, "world_id": str, "first_tick": int, "previous": (str, type(None))}
+def _file_lines(dir_fd: int, name: str) -> Iterator[tuple[int, dict[str, Any] | None]]:
+    """`(line number, object or None)` for each line of one journal file, bounded, read a line at a time.
 
-
-def _shape_problem(row: dict[str, Any], shape: dict[str, Any]) -> str | None:
-    for key, kind in shape.items():
-        if key not in row:
-            return f"has no `{key}`"
-        value = row[key]
-        if isinstance(value, bool) or not isinstance(value, kind):
-            return f"`{key}` is a JSON {type(value).__name__}"
-    return None
-
-
-def _record_file_segments(dir_fd: int, name: str) -> list[Segment]:
-    """Every segment of one journal file, read through the directory's handle, bounded per line.
-
-    A segment begins at its header row. A tick row or a note before any header, or of another boot
-    than its header's, is corruption. A line that does not end the file with a newline is a torn
-    append — the crash came before its `fsync` returned, so nothing of it was published — and is
-    dropped and said to be (`torn`); so is a complete line that does not parse when it is the file's
-    last or the next boot's header follows it (that boot ended the torn line with a newline before its
-    header). Any other line that does not parse, and any line past `MAX_RECORD_LINE_BYTES`, refuses.
+    `None` is a line that is not a complete JSON object (a torn append, or worse — the caller decides
+    which). A line past `MAX_RECORD_LINE_BYTES` refuses. Nothing is kept: memory is one line.
     """
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
@@ -1118,83 +1410,181 @@ def _record_file_segments(dir_fd: int, name: str) -> list[Segment]:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RecordRefused("file", f"{name} is not a regular file")
         limit = MAX_RECORD_LINE_BYTES
-        lines: list[tuple[int, bytes, bool]] = []
         number = 0
         while True:
             raw = handle.readline(limit + 1)
             if not raw:
-                break
+                return
             number += 1
             # The bound counts the newline, as the writer's does: a line it would not write is refused.
             if len(raw) > limit:
                 raise RecordRefused("line", f"line {number} of {name} is longer than the {limit} bytes a record line may be")
-            complete = raw.endswith(b"\n")
-            lines.append((number, raw[:-1] if complete else raw, complete))
-    parsed: list[tuple[int, Any]] = []
-    torn_at: list[int] = []
-    for index, (number, raw, complete) in enumerate(lines):
-        try:
-            row = loads_json(raw.decode("utf-8")) if complete else None
-        except Exception:  # noqa: BLE001 - any decoder failure is "does not parse"
             row = None
-        if isinstance(row, dict):
-            parsed.append((number, row))
+            if raw.endswith(b"\n"):
+                try:
+                    row = loads_json(raw[:-1].decode("utf-8"))
+                except Exception:  # noqa: BLE001 - any decoder failure is "not an object"
+                    row = None
+            yield number, row if isinstance(row, dict) else None
+
+
+def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str, Any]]]:
+    """Every line of one journal file that belongs to the trace, verified: `(kind, line number, row)`.
+
+    `kind` is `header`, `row`, `note`, or `torn` (the row is then `{}`, and closes its segment). Each
+    header starts a segment and is held to its schema and its format; each tick row to the tick after
+    the last (`missing` or `order`), to the chain (`chain`), then to its schema (`row`, `published`);
+    each note to the chain, its schema, and its row (`note`: the same world, boot and tick, naming only
+    that row's receipts, each once). A line that is not an object is a torn append when it is the last
+    line of its segment — the file's last, or followed by the next boot's header — and refuses
+    (`corrupt`) anywhere else; whether a torn segment was really the end of its boot is the seam's
+    question (`concatenated`): the next segment names the chain its predecessor ended on. A startup
+    event (child 2) is the operator's, unchained, and not part of the trace.
+    """
+    pending: tuple[int, None] | None = None
+    header: dict[str, Any] | None = None
+    chain = ""
+    last_tick: int | None = None
+    receipts: set[tuple[str, int]] = set()
+    noted: set[tuple[str, int]] = set()
+    for number, row in _file_lines(dir_fd, name):
+        if pending is not None:
+            if row is not None and row.get("event") == "segment":
+                yield "torn", pending[0], {}
+                pending = None
+            else:
+                raise RecordRefused(
+                    "corrupt", f"line {pending[0]} of {name} is not a JSON object, and it is neither the last line of its segment nor a torn append"
+                )
+        if row is None:
+            pending = (number, None)
             continue
-        following = lines[index + 1] if index + 1 < len(lines) else None
-        header_follows = False
-        if following is not None:
-            try:
-                nxt = loads_json(following[1].decode("utf-8"))
-                header_follows = isinstance(nxt, dict) and nxt.get("event") == "segment"
-            except Exception:  # noqa: BLE001 - the next line is judged on its own turn
-                header_follows = False
-        if following is None or header_follows:
-            torn_at.append(len(parsed))
-            continue
-        raise RecordRefused("corrupt", f"line {number} of {name} is not a JSON object, and it is neither the file's last line nor followed by a segment header")
-    segments: list[Segment] = []
-    current: Segment | None = None
-    for position, (number, row) in enumerate(parsed):
-        if position in torn_at and current is not None:
-            current.torn = True
         event = row.get("event")
+        segment = header["boot_id"] if header is not None else None
         if event == "segment":
-            problem = _shape_problem(row, _HEADER_SHAPE)
+            written = row.get("format")
+            if written != RECORD_FORMAT:
+                raise RecordRefused(
+                    "format", f"line {number} of {name} is a segment of format {bounded_repr(written)} and this engine reads {RECORD_FORMAT!r}"
+                )
+            problem = _header_problem(row)
             if problem is not None:
-                raise RecordRefused("header", f"line {number} of {name}: the segment header {problem}")
-            if row["format"] != RECORD_FORMAT:
-                raise RecordRefused("format", f"line {number} of {name} is format {row['format']!r} and this engine reads {RECORD_FORMAT!r}", segment=row["boot_id"])
-            current = Segment(boot_id=row["boot_id"], name=name, header=row)
-            segments.append(current)
+                raise RecordRefused("header", f"line {number} of {name}: {problem}")
+            if row.get("chain") != record_chain(row["previous_chain"], row):
+                raise RecordRefused("chain", f"line {number} of {name}: the header's chain value is not its own", segment=row["boot_id"])
+            header, chain, last_tick, receipts, noted = row, row["chain"], int(row["first_tick"]), set(), set()
+            yield "header", number, row
             continue
         if event is not None and event != "results_written":
             continue  # a startup event (child 2): the operator's, and not part of the trace
-        if current is None or row.get("boot_id") != current.boot_id:
+        if header is None:
+            raise RecordRefused("header", f"line {number} of {name} comes before any segment header", tick=row.get("tick") if _count(row.get("tick")) else None)
+        tick = row.get("tick")
+        if event is not None and _count(tick, 1) and last_tick is not None and tick > last_tick:
             raise RecordRefused(
-                "header",
-                f"line {number} of {name} belongs to boot {bounded_repr(row.get('boot_id'))} and no header of that boot precedes it",
-                tick=row.get("tick") if isinstance(row.get("tick"), int) else None,
+                "missing", f"the record has no cycle for tick {last_tick + 1}: a note for tick {tick} follows the row for tick {last_tick} "
+                f"in segment {segment}", tick=last_tick + 1, segment=segment,
+            )
+        if event is None and _count(tick, 1) and last_tick is not None and tick != last_tick + 1:
+            if tick > last_tick + 1:
+                raise RecordRefused(
+                    "missing", f"the record has no cycle for tick {last_tick + 1}: segment {segment} goes from tick {last_tick} to tick {tick}",
+                    tick=last_tick + 1, segment=segment,
+                )
+            raise RecordRefused("order", f"line {number} of {name} is tick {tick} after tick {last_tick}", tick=tick, segment=segment)
+        if row.get("chain") != record_chain(chain, row):
+            raise RecordRefused(
+                "chain", f"line {number} of {name} does not follow from the line before it: an edit, an insertion or a deletion",
+                tick=tick if _count(tick) else None, segment=segment,
             )
         if event == "results_written":
-            current.notes.append(row)
+            problem = _note_problem(row)
+            named = {(slug, n) for slug, locals_ in row["results"].items() for n in locals_} if problem is None else set()
+            if problem is None and (row["world_id"], row["boot_id"], row["tick"]) != (header["world_id"], header["boot_id"], last_tick):
+                problem = f"the note names world {row['world_id']}, boot {row['boot_id']} and tick {row['tick']}, not its row's"
+            if problem is None and not named <= receipts - noted:
+                problem = f"the note names results {sorted(named - (receipts - noted))} its row did not issue, or that another note named"
+            if problem is not None:
+                raise RecordRefused("note", f"line {number} of {name}: {problem}", tick=row.get("tick") if _count(row.get("tick")) else None, segment=segment)
+            noted |= named
+            chain = row["chain"]
+            yield "note", number, row
             continue
-        problem = _shape_problem(row, _TICK_ROW_SHAPE)
-        if problem is not None:
-            raise RecordRefused("row", f"line {number} of {name}: the tick row {problem}", segment=current.boot_id)
-        current.rows.append(row)
-    if len(parsed) in torn_at and current is not None:
-        current.torn = True
-    return segments
+        found = _row_problem(row)
+        if found is not None:
+            raise RecordRefused(found[0], f"line {number} of {name}: {found[1]}", tick=tick if _count(tick) else None, segment=segment)
+        if (row["world_id"], row["boot_id"]) != (header["world_id"], header["boot_id"]):
+            raise RecordRefused("row", f"line {number} of {name} is of world {row['world_id']}, boot {row['boot_id']}, not its header's", tick=tick, segment=segment)
+        chain, last_tick = row["chain"], tick
+        receipts, noted = {(r["window"], r["local"]) for r in row["receipts"]}, set()
+        yield "row", number, row
+    if pending is not None:
+        if header is None:
+            raise RecordRefused("corrupt", f"line {pending[0]} of {name} is not a JSON object and no segment precedes it")
+        yield "torn", pending[0], {}
 
 
-def _chain(segments: list[Segment]) -> tuple[list[Segment], RecordRefused | None]:
+class Record:
+    """The record's segments, checked once end to end, and a way to stream any of them again.
+
+    `read_record` makes one: a first pass over every journal file verifies every line (`_verified_lines`)
+    and keeps only each segment's header, last tick, last chain value, row count and whether it ended
+    torn. `lines(segment)` streams that segment again, verifying it again, so what is replayed is what
+    was checked; nothing is held between lines. The directory handle is a duplicate the record owns.
+    """
+
+    def __init__(self, where: Path, dir_fd: int, segments: list[SegmentInfo]) -> None:
+        self.where = where
+        self._fd: int | None = dir_fd
+        self.segments = segments
+
+    def close(self) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def __enter__(self) -> Record:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with contextlib.suppress(Exception):
+            self.close()
+
+    def lines(self, segment: SegmentInfo) -> Iterator[tuple[str, dict[str, Any]]]:
+        """`(kind, row)` for the segment's rows and notes, in order, verified again; its summary must still hold."""
+        if self._fd is None:
+            raise RecordRefused("file", "the record has been closed")
+        inside = False
+        last_tick, chain, rows = segment.first_tick, segment.header["chain"], 0
+        for kind, _number, row in _verified_lines(self._fd, segment.name):
+            if kind == "header":
+                if inside:
+                    break
+                inside = row["boot_id"] == segment.boot_id
+                continue
+            if not inside:
+                continue
+            if kind == "torn":
+                break
+            chain = row["chain"]
+            if kind == "row":
+                last_tick, rows = row["tick"], rows + 1
+            yield kind, row
+        if (last_tick, chain, rows) != (segment.last_tick, segment.chain, segment.rows):
+            raise RecordRefused("changed", f"{segment.name} changed between its check and its replay", segment=segment.boot_id)
+
+
+def _chain(segments: list[SegmentInfo]) -> tuple[list[SegmentInfo], RecordRefused | None]:
     """The segments in predecessor order — the first names no segment that is present — or why they are not one chain."""
-    by_id: dict[str, Segment] = {}
+    by_id: dict[str, SegmentInfo] = {}
     for segment in segments:
         if segment.boot_id in by_id:
             return segments, RecordRefused("chain", f"two segments name boot {segment.boot_id}", segment=segment.boot_id)
         by_id[segment.boot_id] = segment
-    following: dict[str, list[Segment]] = {}
+    following: dict[str, list[SegmentInfo]] = {}
     roots = []
     for segment in segments:
         if segment.previous in by_id:
@@ -1218,107 +1608,104 @@ def _chain(segments: list[Segment]) -> tuple[list[Segment], RecordRefused | None
     return order, None
 
 
-def read_record(where: str | os.PathLike[str], *, dir_fd: int | None = None) -> list[Segment]:
-    """The record's segments, in predecessor order: a state directory's `journal.*.jsonl`, or one `--journal` file.
+def read_record(where: str | os.PathLike[str], *, dir_fd: int | None = None) -> Record:
+    """The record of a state directory's `journal.*.jsonl`, or of one `--journal` file, checked end to end.
 
-    With `dir_fd`, `where` is the state directory and is only named: the segments are listed and
-    opened through the held handle (child 2), never by path. Without it, a directory is opened once
-    following no link, or, for a file, its parent is. Every file is opened `O_NOFOLLOW` and read a
-    bounded line at a time (`_record_file_segments`). A startup event's segment that holds no header
-    (child 2's refused starts) is not part of the trace and is not returned. The order is the chain
-    of predecessors when the segments form one, and by first tick otherwise — `concatenate` is what
-    refuses a broken chain, so that the refusal is replay's, by name.
+    With `dir_fd`, `where` is the state directory and is only named: the segments are listed and opened
+    through a duplicate of the held handle (child 2), never by path — the form a resume uses. Without
+    it, a directory is opened following no link, or, for a file, its parent is; a link there is a named
+    refusal (`directory`). Every file is read a bounded line at a time and every line verified
+    (`_verified_lines`); the record keeps one summary per segment, not the rows. The segments are in
+    predecessor order when they form one chain and by first tick otherwise — `concatenated` refuses a
+    broken chain, so that the refusal is replay's, by name.
     """
     where = Path(where)
-    opened: int | None = None
-    if dir_fd is None:
+    if dir_fd is not None:
+        held = os.dup(dir_fd)
+        names = sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+    else:
+        if where.is_symlink():
+            raise RecordRefused(
+                "directory", f"{where} is a symlink, and the record is read following no link; read it through the held handle (`dir_fd=`)"
+            )
         directory = where if where.is_dir() else where.parent
-        opened = dir_fd = open_directory(directory)
+        try:
+            held = open_directory(directory)
+        except OSError as exc:
+            raise RecordRefused(
+                "directory", f"{where} cannot be opened as the record's directory following no link "
+                f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}); read it through the held handle (`dir_fd=`)"
+            ) from None
+        names = [where.name] if directory != where else sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
     try:
-        if opened is not None and not where.is_dir():
-            names = [where.name]
-        else:
-            names = sorted(name for name in os.listdir(dir_fd) if JOURNAL_SEGMENT_NAME.fullmatch(name))
-        segments: list[Segment] = []
+        segments: list[SegmentInfo] = []
         for name in names:
-            segments.extend(_record_file_segments(dir_fd, name))
-    finally:
-        if opened is not None:
-            os.close(opened)
+            current: SegmentInfo | None = None
+            for kind, _number, row in _verified_lines(held, name):
+                if kind == "header":
+                    current = SegmentInfo(row["boot_id"], name, row, int(row["first_tick"]), row["chain"])
+                    segments.append(current)
+                elif current is not None and kind == "torn":
+                    current.torn = True
+                elif current is not None:
+                    current.chain = row["chain"]
+                    if kind == "row":
+                        current.last_tick, current.rows = row["tick"], current.rows + 1
+    except BaseException:
+        os.close(held)
+        raise
     order, problem = _chain(segments)
-    if problem is not None:
-        return sorted(segments, key=lambda s: (s.first_tick, s.boot_id))
-    return order
+    return Record(where, held, sorted(segments, key=lambda s: (s.first_tick, s.boot_id)) if problem is not None else order)
 
 
-def concatenate(segments: list[Segment]) -> list[tuple[Segment, dict[str, Any]]]:
-    """Every tick row of the record, in tick order, with its segment — or the refusal that names the break.
+def concatenated(segments: list[SegmentInfo]) -> list[SegmentInfo]:
+    """The segments as one trace: one chain of predecessors, each beginning where and as the one before ended.
 
-    The segments must form one chain of predecessors; inside a segment the rows begin at the tick
-    after its header's `first_tick` and go up by one; and each segment begins at the tick its
-    predecessor's last row reached. A hole anywhere is a missing cycle (`missing`, naming the tick and
-    the segment), a segment beginning before its predecessor ended is an `overlap`, and rows of another
-    world than the first segment's are refused (`world`). No segment at all is an empty trace.
+    Each segment must begin at the tick its predecessor's last row reached (`missing` when later,
+    `overlap` when earlier) and name, as `previous_chain`, the chain value its predecessor ended on
+    (`chain`: a predecessor that lost lines, or a successor that was not continued from it). All are
+    of one world (`world`).
     """
     if not segments:
         return []
     order, problem = _chain(segments)
     if problem is not None:
         raise problem
-    rows: list[tuple[Segment, dict[str, Any]]] = []
-    previous: Segment | None = None
-    reached: int | None = None
-    world_id = order[0].header["world_id"] if order else None
-    for segment in order:
+    world_id = order[0].header["world_id"]
+    for previous, segment in zip(order, order[1:], strict=False):
         if segment.header["world_id"] != world_id:
             raise RecordRefused("world", f"the segment is of world {segment.header['world_id']} and the record's first is of {world_id}", segment=segment.boot_id)
-        if reached is not None and segment.first_tick != reached:
-            assert previous is not None
-            if segment.first_tick > reached:
-                raise RecordRefused(
-                    "missing",
-                    f"the record has no cycle for tick {reached + 1}: segment {segment.boot_id} begins at tick {segment.first_tick} "
-                    f"and the segment before it, {previous.boot_id}, ends at tick {reached}",
-                    tick=reached + 1,
-                    segment=segment.boot_id,
-                )
+        if segment.first_tick > previous.last_tick:
             raise RecordRefused(
-                "overlap",
-                f"segment {segment.boot_id} begins at tick {segment.first_tick}, before the segment before it, {previous.boot_id}, ends at tick {reached}",
-                tick=segment.first_tick,
-                segment=segment.boot_id,
+                "missing",
+                f"the record has no cycle for tick {previous.last_tick + 1}: segment {segment.boot_id} begins at tick {segment.first_tick} "
+                f"and the segment before it, {previous.boot_id}, ends at tick {previous.last_tick}",
+                tick=previous.last_tick + 1, segment=segment.boot_id,
             )
-        expected = segment.first_tick + 1
-        for row in segment.rows:
-            if row["world_id"] != world_id:
-                raise RecordRefused("world", f"the row is of world {row['world_id']} and the record's is {world_id}", tick=row["tick"], segment=segment.boot_id)
-            if row["tick"] != expected:
-                if row["tick"] > expected:
-                    raise RecordRefused(
-                        "missing",
-                        f"the record has no cycle for tick {expected}: segment {segment.boot_id} goes from tick {expected - 1} to tick {row['tick']}",
-                        tick=expected,
-                        segment=segment.boot_id,
-                    )
-                raise RecordRefused("order", f"the row for tick {row['tick']} follows the row for tick {expected - 1}", tick=row["tick"], segment=segment.boot_id)
-            rows.append((segment, row))
-            expected += 1
-        previous, reached = segment, expected - 1
-    return rows
+        if segment.first_tick < previous.last_tick:
+            raise RecordRefused(
+                "overlap", f"segment {segment.boot_id} begins at tick {segment.first_tick}, before the segment before it, {previous.boot_id}, ends at tick {previous.last_tick}",
+                tick=segment.first_tick, segment=segment.boot_id,
+            )
+        if segment.header["previous_chain"] != previous.chain:
+            raise RecordRefused(
+                "chain", f"segment {segment.boot_id} continues from a chain value {previous.boot_id} did not end on: the predecessor lost lines, or this boot was not continued from it",
+                tick=segment.first_tick, segment=segment.boot_id,
+            )
+    return order
 
 
 @dataclass
 class Replayed:
-    """What a replay reached: the checkpoint body advanced to the last tick replayed, and the compare-points on the way."""
+    """What a replay reached: the checkpoint body advanced to the last tick replayed, the compare-points on the way, and the chain value there."""
 
     body: dict[str, Any]
     points: list[tuple[int, str, str]]
+    chain: str | None = None
 
 
-def _replay_window_delta(row: dict[str, Any], slug: str, delta: Any, tick: int, segment: Segment) -> None:
-    """Apply one window's recorded delta to its checkpoint row: spend, deferrals removed then added, arms."""
-    if not isinstance(delta, dict):
-        raise RecordRefused("row", f"the delta of window {slug!r} is not an object", tick=tick, segment=segment.boot_id)
+def _replay_window_delta(row: dict[str, Any], slug: str, delta: dict[str, Any], tick: int, segment: SegmentInfo) -> None:
+    """Apply one window's recorded delta to its checkpoint row: spend, receipt counter, deferrals removed then added, arms."""
     spend = delta.get("spend")
     if spend is not None:
         held = row["spend"]
@@ -1327,10 +1714,13 @@ def _replay_window_delta(row: dict[str, Any], slug: str, delta: Any, tick: int, 
                 "spend",
                 f"window {slug!r} holds spend version {held.get('version')!r} and the record a version {spend.get('version')!r} delta; "
                 f"this engine replays version {SPEND_PLACEHOLDER_VERSION} (the accepted count) and child 7 owns the rest",
-                tick=tick,
-                segment=segment.boot_id,
+                tick=tick, segment=segment.boot_id,
             )
-        held["accepted"] = int(held.get("accepted", 0)) + int(spend.get("accepted", 0))
+        held["accepted"] = int(held.get("accepted", 0)) + int(spend["accepted"])
+    if "receipts" in delta:
+        if delta["receipts"] < row["receipts"]:
+            raise RecordRefused("row", f"window {slug!r}'s receipt counter goes back from {row['receipts']} to {delta['receipts']}", tick=tick, segment=segment.boot_id)
+        row["receipts"] = delta["receipts"]
     removed = set(delta.get("deferred_removed") or [])
     if removed:
         row["deferred"] = [entry for entry in row["deferred"] if entry.get("receipt") not in removed]
@@ -1340,134 +1730,190 @@ def _replay_window_delta(row: dict[str, Any], slug: str, delta: Any, tick: int, 
         row["arms"].pop(event, None)
 
 
-def replay_record(
-    world: World, body: dict[str, Any], segments: list[Segment], *, through: int | None = None
-) -> Replayed:
+def replay_record(world: World, body: dict[str, Any], record: Record, *, through: int | None = None) -> Replayed:
     """Re-execute the record's ticks onto a checkpoint body (child 1), through the live cycle's own functions.
 
-    `plant.md` §6: replay drives from the trace keyed by tick, not wall time. From the snapshot's
-    tick `T`, every recorded tick `T+1, T+2, …` (to `through`, or to the end of the record) is advanced
-    by `advance` — `plant.step` with the row's effects in their recorded order and stamps, the
-    compare-point, the lineage link — and each tick's `state_hash` and `lineage` are held to the
-    row's: the first disagreement refuses (`state_hash` or `lineage`, naming the tick). The dwell clock
-    is restarted by `dwell_after_effect` for each effect, as the live cycle does; the receipts move the
-    global and window-local counters; each window's delta moves its spend, its deferral queue and its
-    arm tokens; the published mark sets its `published_tick` and its next frame number. Validation is
-    not re-run: its inputs include the agents' `variables`, which the vehicle preserves for them and
-    does not keep, and its outcome is what the record holds.
+    `plant.md` §6: replay drives from the trace keyed by tick, not wall time. From the snapshot's tick
+    `T`, every recorded tick `T+1, T+2, …` (to `through`, or to the end of the record) is advanced by
+    `advance` — `plant.step` with the row's effects in their recorded order and stamps, the
+    compare-point, the lineage link — and each tick's `state_hash` and `lineage` are held to the row's
+    (`state_hash`, `lineage`). The dwell clock is restarted by `dwell_after_effect` for each effect, as
+    the live cycle does; the row's counters set the global and window receipt counters; each window's
+    delta moves its spend, its deferral queue and its arm tokens; the published mark sets its
+    `published_tick` and its next frame number. Validation is not re-run: its inputs include the agents'
+    `variables`, which the vehicle preserves for them and does not keep, and its outcome is what the
+    record holds — every line of which the record's chain and schema have vouched for.
 
-    The record must reach the snapshot with no hole (`concatenate`'s refusals), the cycle for `T+1`
-    must be in it (`missing` otherwise), and a recorded row for `T` itself must carry the snapshot's
-    lineage head (`join`): a snapshot and a record of different histories are refused, not merged.
-    Returns the body advanced to the last tick replayed — a checkpoint body child 1's writer accepts,
-    whose `segments` gain the segments crossed — and the `(tick, state_hash, lineage)` of every tick
-    replayed. A deferral whose command the record cut (`RECORD_TEXT_BYTES`) comes back cut, with its
-    fingerprint beside it.
+    **The record must continue the checkpoint's own history** (review finding 5): its first segment is
+    one the checkpoint lists (and then the checkpoint's last segment is in the record), or it names the
+    checkpoint's last segment as its predecessor, beginning at the snapshot's tick from the chain that
+    segment had reached; on the checkpoint's last segment, the chain at the snapshot's tick is the one
+    the checkpoint recorded, and a row for the snapshot's tick carries its lineage head (`join`). The
+    cycle for `T+1` must be in the record (`missing`), and the segments must be one trace
+    (`concatenated`). Rows at or before the snapshot are verified and dropped as they are read: memory
+    does not grow with the record. Returns the body advanced — a checkpoint body child 1's writer
+    accepts, whose `segments` gain the segments crossed with the chain value reached — the
+    `(tick, state_hash, lineage)` of every tick replayed, and that chain value.
     """
     body = decode(encode(body))
     problem = _structure_problem(body)
     if problem is not None:
         raise RecordRefused("snapshot", f"the checkpoint body cannot be replayed onto: {problem[0]} — {problem[1]}")
-    rows = concatenate(segments)
+    segments = concatenated(record.segments)
     state, windows = body["executive"], body["windows"]
     start = int(state["tick"])
-    if rows and rows[0][0].header["world_id"] != body["identity"]["world_id"]:
-        raise RecordRefused(
-            "world", f"the record is of world {rows[0][0].header['world_id']} and the snapshot of {body['identity']['world_id']}"
-        )
-    for segment, row in rows:
-        if row["tick"] == start and row["lineage"] != state["lineage_head"]:
+    history = [entry for entry in body["segments"] if isinstance(entry, dict)]
+    if not segments:
+        return Replayed(body=body, points=[])
+    first = segments[0]
+    if first.header["world_id"] != body["identity"]["world_id"]:
+        raise RecordRefused("world", f"the record is of world {first.header['world_id']} and the snapshot of {body['identity']['world_id']}")
+    known = [entry.get("segment") for entry in history]
+    anchor = history[-1] if history else None
+    present = [segment.boot_id for segment in segments]
+    if anchor is None:
+        if first.previous is not None:
+            raise RecordRefused("join", f"the snapshot lists no segment and the record's first, {first.boot_id}, continues {first.previous}", segment=first.boot_id)
+    elif first.boot_id in known:
+        if anchor["segment"] not in present:
             raise RecordRefused(
-                "join", "the record's row for the snapshot's tick carries another lineage link: the two are of different histories",
-                tick=start, segment=segment.boot_id,
+                "join", f"the record does not reach the checkpoint's last segment, {anchor['segment']}: it ends in {present[-1]}",
+                segment=present[-1],
             )
-    pending = [(segment, row) for segment, row in rows if row["tick"] > start]
-    if pending and pending[0][1]["tick"] != start + 1:
-        segment = pending[0][0]
+    elif first.previous == anchor["segment"]:
+        if first.first_tick > start:
+            raise RecordRefused(
+                "missing", f"the record has no cycle for tick {start + 1}: the snapshot is at tick {start} and the record's first segment, "
+                f"{first.boot_id}, begins at tick {first.first_tick}", tick=start + 1, segment=first.boot_id,
+            )
+        if first.first_tick < start or ("chain" in anchor and first.header["previous_chain"] != anchor["chain"]):
+            raise RecordRefused(
+                "join", f"segment {first.boot_id} does not continue the checkpoint's {anchor['segment']} from the snapshot's tick {start} and chain",
+                tick=start, segment=first.boot_id,
+            )
+    else:
         raise RecordRefused(
-            "missing",
-            f"the record has no cycle for tick {start + 1}: the snapshot is at tick {start} and the record's next cycle is tick "
-            f"{pending[0][1]['tick']}, in segment {segment.boot_id}",
-            tick=start + 1,
-            segment=segment.boot_id,
+            "join", f"the record's first segment, {first.boot_id}, is neither in the checkpoint's history {known} nor continues its last",
+            segment=first.boot_id,
         )
-    if through is not None:
-        last = pending[-1][1]["tick"] if pending else start
-        if through < start or through > last:
-            raise RecordRefused("through", f"tick {through} is not between the snapshot's tick {start} and the record's last tick {last}")
-        pending = [(segment, row) for segment, row in pending if row["tick"] <= through]
+    last = segments[-1].last_tick
+    if through is not None and (through < start or through > max(last, start)):
+        raise RecordRefused("through", f"tick {through} is not between the snapshot's tick {start} and the record's last tick {last}")
+    stop = through if through is not None else max(last, start)
     dt = tick_seconds(world)
     tick_us = int(round(dt * 1_000_000))
     truth, head, dwell, receipt = state["truth"], state["lineage_head"], state["dwell"], int(state["receipt"])
     points: list[tuple[int, str, str]] = []
-    crossed: list[Segment] = []
-    for segment, row in pending:
-        tick = row["tick"]
-        try:
-            effects = [Effect(int(offset), str(verb), dict(arguments)) for offset, verb, arguments in row["effects"]]
-        except (TypeError, ValueError) as exc:
-            raise RecordRefused("row", f"an effect is not `[offset_us, verb, arguments]` ({exc})", tick=tick, segment=segment.boot_id) from None
-        before = truth
-        truth, digest, link = advance(world, before, head, effects, dt)
-        if digest != row["state_hash"]:
-            raise RecordRefused("state_hash", "the replayed truth's compare-point is not the recorded one", tick=tick, segment=segment.boot_id)
-        if link != row["lineage"]:
-            raise RecordRefused("lineage", "the replayed lineage link is not the recorded one", tick=tick, segment=segment.boot_id)
-        for effect in effects:
-            dwell_after_effect(world, dwell, effect.verb, (tick - 1) * tick_us + effect.offset_us, before, truth)
-        for entry in row["receipts"]:
-            window = windows.get(entry.get("window")) if isinstance(entry, dict) else None
-            if window is None:
-                raise RecordRefused("window", f"a receipt names window {bounded_repr(entry)} the snapshot does not hold", tick=tick, segment=segment.boot_id)
-            receipt = max(receipt, int(entry["seq"]))
-            window["receipts"] = max(int(window["receipts"]), int(entry["local"]))
-        for slug, delta in row["windows"].items():
-            if slug not in windows:
-                raise RecordRefused("window", f"the record moves window {slug!r} and the snapshot does not hold it", tick=tick, segment=segment.boot_id)
-            _replay_window_delta(windows[slug], slug, delta, tick, segment)
-        for slug, mark in row["published"].items():
-            if slug not in windows or not isinstance(mark, dict):
-                raise RecordRefused("window", f"the record marks window {slug!r} and the snapshot does not hold it", tick=tick, segment=segment.boot_id)
-            windows[slug]["published_tick"] = int(mark["tick"])
-            windows[slug]["seq"] = int(mark["seq"]) + 1
-        head = link
-        points.append((tick, digest, link))
-        if not crossed or crossed[-1] is not segment:
-            crossed.append(segment)
+    reached: dict[str, str] = {}
+    chain: str | None = None
+    for segment in segments:
+        anchored = anchor is not None and segment.boot_id == anchor["segment"] and "chain" in anchor
+        running = segment.header["chain"]
+        checked = not anchored or segment.first_tick > start
+        crossed = False
+        for kind, row in record.lines(segment):
+            tick = row["tick"]
+            if not checked and tick > start:
+                if running != anchor["chain"]:
+                    raise RecordRefused("join", "the record's chain at the snapshot's tick is not the one the checkpoint recorded", tick=start, segment=segment.boot_id)
+                checked = True
+            if tick > stop:
+                break
+            running = row["chain"]
+            if kind == "note" or tick < start:
+                continue
+            if tick == start:
+                if row["lineage"] != state["lineage_head"]:
+                    raise RecordRefused(
+                        "join", "the record's row for the snapshot's tick carries another lineage link: the two are of different histories",
+                        tick=start, segment=segment.boot_id,
+                    )
+                continue
+            if not points and tick != start + 1:
+                raise RecordRefused(
+                    "missing", f"the record has no cycle for tick {start + 1}: the snapshot is at tick {start} and the record's next cycle is tick {tick}",
+                    tick=start + 1, segment=segment.boot_id,
+                )
+            effects = [Effect(offset, verb, dict(arguments)) for offset, verb, arguments in row["effects"]]
+            before = truth
+            truth, digest, link = advance(world, before, head, effects, dt)
+            if digest != row["state_hash"]:
+                raise RecordRefused("state_hash", "the replayed truth's compare-point is not the recorded one", tick=tick, segment=segment.boot_id)
+            if link != row["lineage"]:
+                raise RecordRefused("lineage", "the replayed lineage link is not the recorded one", tick=tick, segment=segment.boot_id)
+            for effect in effects:
+                dwell_after_effect(world, dwell, effect.verb, (tick - 1) * tick_us + effect.offset_us, before, truth)
+            if row["receipt"] < receipt:
+                raise RecordRefused("row", f"the receipt counter goes back from {receipt} to {row['receipt']}", tick=tick, segment=segment.boot_id)
+            receipt = row["receipt"]
+            for entry in row["receipts"]:
+                if entry["window"] not in windows:
+                    raise RecordRefused("window", f"a receipt names window {entry['window']!r} the snapshot does not hold", tick=tick, segment=segment.boot_id)
+                windows[entry["window"]]["receipts"] = max(int(windows[entry["window"]]["receipts"]), entry["local"])
+            for slug, delta in row["windows"].items():
+                if slug not in windows:
+                    raise RecordRefused("window", f"the record moves window {slug!r} and the snapshot does not hold it", tick=tick, segment=segment.boot_id)
+                _replay_window_delta(windows[slug], slug, delta, tick, segment)
+            for slug, mark in row["published"].items():
+                if slug not in windows:
+                    raise RecordRefused("window", f"the record marks window {slug!r} and the snapshot does not hold it", tick=tick, segment=segment.boot_id)
+                windows[slug]["published_tick"] = mark["tick"]
+                windows[slug]["seq"] = mark["seq"] + 1
+            head = link
+            points.append((tick, digest, link))
+            crossed = True
+        if not checked and running != anchor["chain"]:
+            raise RecordRefused("join", "the record's chain at the snapshot's tick is not the one the checkpoint recorded", tick=start, segment=segment.boot_id)
+        if crossed or segment.boot_id in known:
+            reached[segment.boot_id] = running
+            chain = running
+        if segment.last_tick >= stop and (crossed or segment.boot_id in known):
+            break
     if points:
         state.update(tick=points[-1][0], truth=truth, dwell=dwell, lineage_head=head, receipt=receipt)
         body["identity"]["tick"] = points[-1][0]
-    known = {entry.get("segment") if isinstance(entry, dict) else entry for entry in body["segments"]}
-    for segment in crossed:
-        if segment.boot_id not in known:
-            body["segments"].append({key: segment.header[key] for key in ("segment", "boot_id", "first_tick", "previous", "wall_epoch") if key in segment.header})
+    for entry in history:
+        if entry.get("segment") in reached:
+            entry["chain"] = reached[entry["segment"]]
+    for segment in segments:
+        if segment.boot_id in reached and segment.boot_id not in known:
+            header = segment.header
+            body["segments"].append({
+                "segment": header["segment"], "boot_id": header["boot_id"], "first_tick": header["first_tick"],
+                "previous": header["previous"], "wall_epoch": header["wall_epoch"], "chain": reached[segment.boot_id],
+            })
     body["identity"]["segments"] = [entry.get("segment") if isinstance(entry, dict) else entry for entry in body["segments"]]
-    return Replayed(body=decode(encode(body)), points=points)
+    return Replayed(body=decode(encode(body)), points=points, chain=chain)
 
 
-def unwritten_results(segments: list[Segment]) -> list[dict[str, Any]]:
+def unwritten_results(record: Record) -> list[dict[str, Any]]:
     """Every recorded verdict whose result no `results_written` note covers, in the record's order (J rule 3).
 
     What a resume (child 3) re-publishes after a crash between a cycle's record and its results. Each
     entry is the receipt as recorded — window, window-local `local`, global `seq`, `state`,
-    `offset_us`, `command`, `body` (cut and fingerprinted past `RECORD_TEXT_BYTES`) — plus the `tick`
-    the verdict was decided at (the receipt block's, one before the row's), the `world_id` and the
-    `boot_id`, which is everything the result file's text needs. A note names results by window and
-    window-local receipt, which are unique in a world across its boots. Under wall-stamped result
-    names a crash *after* the files and before the note leaves results listed that are on disk; under
-    child 12's L(b) names re-publication finds the exact name and skips it.
+    `offset_us`, `command`, `body` (cut and fingerprinted past their bounds, or fingerprint-only past
+    the window's budget, which a re-publication must say it cannot reproduce) — plus the `tick` the
+    verdict was decided at (the receipt block's, one before the row's), the `world_id` and the
+    `boot_id`. Notes follow their row within the cycle, so the record is streamed with one row's
+    receipts pending at a time. Under wall-stamped result names a crash *after* the files and before
+    the note leaves results listed that are on disk; under child 12's L(b) names re-publication finds
+    the exact name and skips it.
     """
-    noted: set[tuple[str, int]] = set()
-    for segment in segments:
-        for note in segment.notes:
-            for slug, locals_ in (note.get("results") or {}).items():
-                noted.update((slug, int(local)) for local in locals_)
     unwritten: list[dict[str, Any]] = []
-    for segment in segments:
-        for row in segment.rows:
-            for entry in row["receipts"]:
-                if (entry.get("window"), entry.get("local")) not in noted:
-                    unwritten.append({**entry, "tick": row["tick"] - 1, "world_id": row["world_id"], "boot_id": row["boot_id"]})
+    for segment in concatenated(record.segments):
+        pending: dict[tuple[str, int], dict[str, Any]] = {}
+        for kind, row in record.lines(segment):
+            if kind == "note":
+                for slug, locals_ in row["results"].items():
+                    for local in locals_:
+                        pending.pop((slug, local), None)
+                continue
+            unwritten.extend(pending.values())
+            pending = {
+                (entry["window"], entry["local"]): {**entry, "tick": row["tick"] - 1, "world_id": row["world_id"], "boot_id": row["boot_id"]}
+                for entry in row["receipts"]
+            }
+        unwritten.extend(pending.values())
     return unwritten
 
 
@@ -1686,6 +2132,8 @@ class Executive:
         self.segments: list[dict[str, Any]] = []
         self._segment: dict[str, Any] | None = None
         self._record_fd: int | None = None
+        # The chain value of the last line this boot appended (format v2), `""` before its header.
+        self._chain = ""
         self.journal: Path | None = None
         if journal is not None:
             if self.journal_dir_fd is not None:
@@ -1796,7 +2244,7 @@ class Executive:
         healthy: list[Window] = []
         # Each window's half of the state before the cycle, so the record can carry what it changed.
         before_windows = {
-            slug: (window.accepted, [entry.get("receipt") for entry in window.deferred], dict(window.arms))
+            slug: (window.accepted, [entry.get("receipt") for entry in window.deferred], dict(window.arms), window.receipts)
             for slug, window in self.windows.items()
         }
         try:
@@ -1823,14 +2271,17 @@ class Executive:
                     self._record_failure(window, "check", exc, tick)
                     continue
                 healthy.append(window)
+                # The verdicts are made into the cycle's own list, so those made before an internal
+                # fault are kept — recorded and published — rather than dropped with a local list
+                # (child 4's review finding 7).
+                verdicts[window.slug] = []
                 try:
-                    verdicts[window.slug] = self._settle(window)
+                    self._settle(window, verdicts[window.slug])
                 except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                     self._record_failure(window, "settle", exc, tick)
-                    verdicts.setdefault(window.slug, [])
             for window in healthy:
                 try:
-                    verdicts[window.slug].extend(self._ingest(window))
+                    self._ingest(window, verdicts[window.slug])
                 except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                     self._record_failure(window, "claim", exc, tick)
             for window in healthy:
@@ -1859,13 +2310,15 @@ class Executive:
 
             written: list[Path] = []
             for window in healthy:
+                # Rule 3's second half is inside `publish`: each window's results, made durable, then its
+                # note, then its frame and mirror (child 4's review finding 6).
                 window.landed = []
                 try:
                     written.extend(window.publish(verdicts.get(window.slug, [])))
+                except RecordUnwritable:
+                    raise
                 except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                     self._record_failure(window, "publish", exc, tick)
-            # Rule 3's second half: which results reached the disk, durable before the next cycle.
-            self._note_results({window.slug: list(window.landed) for window in healthy})
             return written
         finally:
             for window in order:
@@ -1899,53 +2352,41 @@ class Executive:
         effects: list[Effect],
         verdicts: dict[str, list[Verdict]],
         healthy: list[Window],
-        before_windows: dict[str, tuple[int, list[Any], dict[str, str]]],
+        before_windows: dict[str, tuple[int, list[Any], dict[str, str], int]],
     ) -> None:
         """Append this cycle's tick row and `fsync` it; then mark each publishing window's `published_tick`.
 
         `tick` is the tick the cycle started at; the row is keyed by the tick it reached, as every
         journal row has been. The window deltas are what the cycle changed, against `before_windows`:
-        the accepted count (spend, version 0 until child 7), deferral entries removed (by the
-        window-local receipt each carries) and added (whole, the command cut past
-        `RECORD_TEXT_BYTES`), and arm tokens set and cleared. A window with a verdict this cycle gets
-        an entry even when nothing moved, so a refusal-only cycle says its spend delta is zero rather
-        than leaving it to be inferred. Without a journal nothing is written and the marks are still
+        the accepted count (spend, version 0 until child 7), the window's receipt counter (review
+        finding 7: a number drawn before an internal fault is recorded though no verdict carries it),
+        deferral entries removed (by the window-local receipt each carries) and added (whole: a
+        deferral is its parsed command, bounded by its schema, finding 4), and arm tokens set and
+        cleared. A window with a verdict this cycle gets an entry even when nothing moved, so a
+        refusal-only cycle says its spend delta is zero rather than leaving it to be inferred. Each
+        window's receipts are `receipt_entries`', within the window's budget (finding 1). Without a journal nothing is written and the marks are still
         set: `published_tick` is what the window has been told, whether or not anything keeps it.
         """
         marks = {window.slug: {"tick": self.tick, "seq": window.seq} for window in healthy}
         if self.journal is not None:
-            receipts = []
-            for rows in verdicts.values():
-                for verdict in rows:
-                    entry: dict[str, Any] = {
-                        "seq": verdict.receipt,
-                        "local": verdict.local,
-                        "window": verdict.window,
-                        "state": verdict.state,
-                        "offset_us": verdict.effect.offset_us if verdict.effect is not None else 0,
-                    }
-                    record_text(entry, "command", verdict.command)
-                    record_text(entry, "body", verdict.body)
-                    receipts.append(entry)
+            receipts = [entry for rows in verdicts.values() for entry in receipt_entries(rows)]
             changes: dict[str, dict[str, Any]] = {}
             for slug, window in self.windows.items():
-                accepted, deferred_ids, arms = before_windows.get(slug, (window.accepted, [], dict(window.arms)))
+                accepted, deferred_ids, arms, issued = before_windows.get(
+                    slug, (window.accepted, [], dict(window.arms), window.receipts)
+                )
                 delta: dict[str, Any] = {}
                 spend = window.accepted - accepted
                 if verdicts.get(slug) or spend:
                     delta["spend"] = {"version": SPEND_PLACEHOLDER_VERSION, "accepted": spend}
+                if verdicts.get(slug) or window.receipts != issued:
+                    delta["receipts"] = window.receipts
                 remaining = {entry.get("receipt") for entry in window.deferred}
                 removed = [receipt for receipt in deferred_ids if receipt not in remaining]
                 if removed:
                     delta["deferred_removed"] = removed
                 known = set(deferred_ids)
-                added = []
-                for queued in window.deferred:
-                    if queued.get("receipt") in known:
-                        continue
-                    copy = dict(queued)
-                    record_text(copy, "command", str(queued.get("command", "")))
-                    added.append(copy)
+                added = [dict(queued) for queued in window.deferred if queued.get("receipt") not in known]
                 if added:
                     delta["deferred_added"] = added
                 armed = {event: token for event, token in window.arms.items() if arms.get(event) != token}
@@ -1964,6 +2405,7 @@ class Executive:
                 "state_hash": digest,
                 "effects": [[e.offset_us, e.verb, e.arguments] for e in effects],
                 "receipts": receipts,
+                "receipt": self.receipt,
                 "windows": changes,
                 "published": marks,
                 "failures": self.failure_count,
@@ -1972,22 +2414,31 @@ class Executive:
         for window in healthy:
             window.published_tick = self.tick
 
-    def _note_results(self, noted: dict[str, list[int]]) -> None:
-        """Append and `fsync` the `results_written` note: each result on disk, by window and window-local receipt.
+    def _note_window_results(self, window: Window) -> None:
+        """Append and `fsync` one window's `results_written` note: its results on disk, by window-local receipt.
 
-        Not by file name: the name is wall-stamped until child 12's L(b) makes it a function of the
+        Called by `Window.publish` once the window's result files and its `output/` directory are
+        durable, and before its frame and mirror (child 4's review finding 6), so the stretch in which
+        a result is published and still listed unwritten is one window's, not the cycle's. By receipt,
+        not by file name: the name is wall-stamped until child 12's L(b) makes it a function of the
         trace, and the receipt is what a resume matches a recorded verdict on (`unwritten_results`).
         """
-        results = {slug: locals_ for slug, locals_ in noted.items() if locals_}
-        if not results or self.journal is None:
+        if not window.landed or self.journal is None:
             return
-        note = {"event": "results_written", "boot_id": self.boot_id, "world_id": self.world_id, "tick": self.tick, "results": results}
-        self._append_record([note], first_tick=self.tick - 1)
+        note = {
+            "event": "results_written",
+            "boot_id": self.boot_id,
+            "world_id": self.world_id,
+            "tick": self.tick,
+            "results": {window.slug: list(window.landed)},
+        }
+        self._append_record([note], first_tick=self.tick - 1, published=True)
 
     def _record_handle(self) -> int:
         """The boot's segment, opened once and held: `O_APPEND | O_NOFOLLOW`, `0600`, relative to the journal's held directory.
 
         On creation the directory is `fsync`ed so the new name is durable with its first row. A file
+        that exists is made `0600` if this process owns it and refused otherwise. A file
         that does not end in a newline — a previous boot's append torn by a crash, in an explicit
         `--journal` every boot shares — is ended with one first, so this boot's header begins a line.
         """
@@ -2002,6 +2453,16 @@ class Executive:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
                 raise OSError(errno.EINVAL, f"{self.journal.name} is not a regular file")
+            # `O_CREAT` sets no mode on a file that exists: an operator's journal made `0644` before
+            # stays readable with the lineage in it unless it is made private here — and one another
+            # user owns cannot be, so it is refused by name (child 4's review finding 8).
+            if info.st_uid != os.geteuid():
+                raise RecordUnwritable(
+                    f"the record {self.journal} is owned by uid {info.st_uid}, not by this process's {os.geteuid()}, so it "
+                    "cannot be made private (0600); name a journal this executive owns"
+                )
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.fchmod(fd, 0o600)
             if info.st_size > 0 and os.pread(fd, 1, info.st_size - 1) != b"\n":
                 _write_all(fd, b"\n")
             os.fsync(self.journal_dir_fd)
@@ -2011,21 +2472,25 @@ class Executive:
         self._record_fd = fd
         return fd
 
-    def _append_record(self, rows: list[dict[str, Any]], *, first_tick: int) -> None:
+    def _append_record(self, rows: list[dict[str, Any]], *, first_tick: int, published: bool = False) -> None:
         """Append rows to the boot's segment as one write, and `fsync`; on the boot's first append, its header first.
 
         The header is ADR 0002 G's segment entry — the boot, the tick its first cycle started at
-        (`first_tick`), the segment before it (the last of `segments`, which a restore sets), its
-        wall epoch — with the format and the world; the entry is appended to `segments` only once
-        the header is durable, so the next checkpoint names this boot. Every row is RFC 8259 JSON
-        (`allow_nan=False`), sorted, one line each; a line past `MAX_RECORD_LINE_BYTES`, or any
-        failure to write or `fsync`, is `RecordUnwritable`.
+        (`first_tick`), the segment before it and the chain value it ended on (the last of `segments`,
+        which a restore sets), its wall epoch — with the format and the world. Every line gets its
+        `chain` (`record_chain`); the boot's entry in `segments` carries the chain reached, so a
+        checkpoint names the exact point of the record it was taken at. The entry is appended to
+        `segments` only once the header is durable. A line past `MAX_RECORD_LINE_BYTES`, or any failure
+        to write or `fsync`, is `RecordUnwritable` — whose sentence says whether anything of the cycle
+        was already published (`published`, true for a window's note after its results).
         """
         header: dict[str, Any] | None = None
         entry: dict[str, Any] | None = None
+        chain = self._chain
         if self._segment is None:
             last = self.segments[-1] if self.segments else None
             previous = last.get("segment") if isinstance(last, dict) else last
+            previous_chain = last.get("chain", "") if isinstance(last, dict) else ""
             entry = {
                 "segment": self.boot_id,
                 "boot_id": self.boot_id,
@@ -2033,16 +2498,22 @@ class Executive:
                 "previous": previous,
                 "wall_epoch": utc_now().isoformat(),
             }
-            header = {"event": "segment", "format": RECORD_FORMAT, "world_id": self.world_id, **entry}
-        lines = []
-        for row in ([header] if header is not None else []) + rows:
-            line = (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            header = {"event": "segment", "format": RECORD_FORMAT, "world_id": self.world_id, "previous_chain": previous_chain, **entry}
+            header["chain"] = chain = record_chain(previous_chain, header)
+        lines = [record_line(header)] if header is not None else []
+        for row in rows:
+            row["chain"] = chain = record_chain(chain, row)
+            lines.append(record_line(row))
+        after = (
+            "the window's results are on disk and the record will list them as unwritten"
+            if published
+            else "nothing of the cycle has been published"
+        )
+        for line in lines:
             if len(line) > MAX_RECORD_LINE_BYTES:
                 raise RecordUnwritable(
-                    f"a record row for tick {row.get('tick')} encodes to {len(line)} bytes, past the {MAX_RECORD_LINE_BYTES} a "
-                    "record line may be; nothing of the cycle has been published"
+                    f"a record line encodes to {len(line)} bytes, past the {MAX_RECORD_LINE_BYTES} a record line may be; {after}"
                 )
-            lines.append(line)
         try:
             fd = self._record_handle()
             _write_all(fd, b"".join(lines))
@@ -2050,12 +2521,14 @@ class Executive:
         except OSError as exc:
             raise RecordUnwritable(
                 f"the record at {self.journal} cannot be written or made durable "
-                f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}); the vehicle stops rather than "
-                "publish what it cannot recover (ADR 0002 J)"
+                f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}); the vehicle stops, and {after} (ADR 0002 J)"
             ) from exc
+        self._chain = chain
         if entry is not None:
             self._segment = entry
-            self.segments.append(dict(entry))
+            self.segments.append(entry)
+        if self._segment is not None:
+            self._segment["chain"] = chain
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
@@ -2093,10 +2566,9 @@ class Executive:
         window.receipts += 1
         return Verdict(command, state, body, self.receipt, window.receipts, self.tick, window.slug, **extra)
 
-    def _ingest(self, window: Window) -> list[Verdict]:
-        """Claim one window's console and validate what it held, in order."""
+    def _ingest(self, window: Window, verdicts: list[Verdict]) -> list[Verdict]:
+        """Claim one window's console and validate what it held, in order, into `verdicts` (the cycle's list)."""
         claimed = window.claim()
-        verdicts: list[Verdict] = []
         if isinstance(claimed, str):
             verdicts.append(
                 self._verdict(
@@ -2140,10 +2612,11 @@ class Executive:
                 )
             )
             return verdicts
-        verdicts.extend(self.validate(window, command) for command in claimed)
+        for command in claimed:
+            verdicts.append(self.validate(window, command))
         return verdicts
 
-    def _settle(self, window: Window) -> list[Verdict]:
+    def _settle(self, window: Window, verdicts: list[Verdict]) -> list[Verdict]:
         """Run every deferral of this window that has come due, and give each its own result.
 
         A due command is **revalidated** through the whole chain — phase, gate, interlocks,
@@ -2153,13 +2626,14 @@ class Executive:
         `maximum_queue_age_s`, in simulated seconds: `(tick - accepted_tick) * dt`, so the poll
         interval no longer decides whether a command's intent has gone stale. And it **reports in a
         file of its own**, because a command that takes longer than one cycle reports when it is done.
+        Each due entry leaves the queue as it is taken, and its verdict goes into `verdicts` (the
+        cycle's list), so an internal fault part-way leaves neither a settled entry queued nor a
+        settlement unrecorded (child 4's review finding 7). The entry is the parsed command (finding 4).
         """
-        verdicts: list[Verdict] = []
-        still_waiting: list[dict[str, Any]] = []
-        for entry in window.deferred:
+        for entry in list(window.deferred):
             if self.tick < int(entry.get("due_tick", 0)):
-                still_waiting.append(entry)
                 continue
+            window.deferred = [queued for queued in window.deferred if queued is not entry]
             verb = str(entry.get("verb"))
             command = str(entry.get("command", verb))
             accepted_tick = int(entry.get("accepted_tick", self.tick))
@@ -2183,7 +2657,6 @@ class Executive:
                 )
                 continue
             verdicts.append(self.validate(window, command, settling=entry))
-        window.deferred = still_waiting
         return verdicts
 
     @staticmethod
@@ -2576,10 +3049,13 @@ class Executive:
             # once, here; its settlement is the same command reporting.
             window.accepted += 1
             due = self.tick + 1
+            # The parse, not the line: a deferral is queued, checkpointed and recorded as its verb, its
+            # schema-checked arguments and the command they spell (child 4's review finding 4).
             window.deferred.append(
                 {
                     "verb": verb,
-                    "command": text,
+                    "command": canonical_command(verb, arguments),
+                    "arguments": dict(arguments),
                     "accepted_tick": self.tick,
                     "due_tick": due,
                     "maximum_queue_age_s": spec.get("maximum_queue_age_s"),
@@ -2854,7 +3330,9 @@ class Window:
         root = self._handles().root
         payload, problem = read_ingress(self.console, dir_fd=root)
         if payload is None:
-            write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
+            write_json_atomic(
+                self.console, {"commands": [], "variables": self.variables}, dir_fd=root, durable=self.executive.journal is not None
+            )
             return str(problem)
         commands = payload.get("commands")
         variables = payload.get("variables")
@@ -2863,7 +3341,16 @@ class Window:
         if isinstance(variables, dict):
             self.variables = variables
             self._honoured = None
-        write_json_atomic(self.console, {"commands": [], "variables": self.variables}, dir_fd=root)
+        # A claim that takes a batch is made durable — the file and the directory — before the record
+        # says it was answered: a crash must not bring the commands back to run twice (child 4's review
+        # finding 6). An empty claim is a quiet cycle's and costs no `fsync`; without a record nothing
+        # relies on the claim being durable, and nothing is `fsync`ed.
+        write_json_atomic(
+            self.console,
+            {"commands": [], "variables": self.variables},
+            dir_fd=root,
+            durable=commands not in (None, []) and self.executive.journal is not None,
+        )
         if commands is None:
             return []
         if not isinstance(commands, list):
@@ -2934,7 +3421,7 @@ class Window:
         counter = 1
         while True:
             try:
-                write_text_atomic(name, body, dir_fd=output, noclobber=True)
+                write_text_atomic(name, body, dir_fd=output, noclobber=True, sync_file=self.executive.journal is not None)
                 return self.root / self.output / name
             except FileExistsError:
                 name = f"{base}_{counter}.txt"
@@ -2968,6 +3455,12 @@ class Window:
         for verdict in sorted(verdicts, key=lambda v: v.receipt):
             written.append(self.write_result(verdict.command, verdict.body + self.receipt(verdict)))
             self.landed.append(verdict.local)
+        if self.landed and self.executive.journal is not None:
+            # Each result file was `fsync`ed as it was made; the directory makes their names durable,
+            # and only then does the record say they were written (child 4's review finding 6). With no
+            # record nothing relies on it, and nothing is `fsync`ed.
+            os.fsync(self._handles().output)
+            self.executive._note_window_results(self)
         # The frame first, so the mirror's ring accounting describes the directory as it is: the old
         # console wrote the mirror before the frame and its `newest_seq` ran one behind the ring.
         self.write_frame()

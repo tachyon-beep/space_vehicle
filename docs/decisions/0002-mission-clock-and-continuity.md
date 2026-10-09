@@ -171,6 +171,22 @@ cycle's `fsync` on the warmed ring and several times over on the full one. A fir
 quiet cycle that the clean run did not reproduce; like the checkpoint write's 32 ms, it is the
 filesystem's tail and J's budget does not rest on the p50 alone.
 
+**After child 4's review** (format v2: the row chain, the per-window budget, the durability of the
+claim and the results; same machine, Python and disk, `--samples 100`, `--windows 1 2 10`, each ring
+shape a run of its own). The `fsync` counts are counted by the tool.
+
+| Quantity (`tools/measure_clock.py --samples 100`, after child 4's review) | ring as warmed | ring full |
+|---|---|---|
+| `Executive.cycle`, no record, 1 / 2 / 10 windows | 5.3 / 7.9 / 23.4 ms p50 | 13.5 / 16.6 / 35.0 ms p50 |
+| quiet cycle with the record (**1 `fsync`**; row 393 / 420 / 637 B) | 6.6 / 10.2 / 24.8 ms p50 (7.9 / 13.9 / 30.6 p95) | 13.8 / 16.7 / 33.9 ms p50 (16.7 / 20.1 / 36.9 p95) |
+| verdict in every window with the record (**6 / 11 / 51 `fsync`**; row 765 / 1,167 / 4,367 B) | 10.5 / 17.3 / 64.0 ms p50 (15.3 / 21.4 / 77.9 p95) | 19.4 / 25.3 / 71.2 ms p50 (24.3 / 32.0 / 82.7 p95) |
+| the same verdict cycle with no record | 5.5 / 8.0 / 26.6 ms p50 | 14.1 / 16.3 / 34.3 ms p50 |
+
+A quiet cycle costs what it did. A cycle in which a window wrote results now costs five `fsync`s for
+that window (the claim's file and directory, the result, `output/`, the note) beside the row's one:
+about 1 ms each on this disk, so ten windows commanding in one cycle add ≈ 37 ms — inside the 100 ms a
+cycle has at `m = 1, k = 5`, and the worst case, since agents command seconds to minutes apart.
+
 Mission ladder: 8 phases over `[0, 34,560,000)`; shortest phase `entry`, 180,000 ticks. An earlier
 scratch measurement of the durable write on this machine saw a 32 ms p95 that neither tool run
 reproduced; the tail is the filesystem's and is noted so that J does not rest on the p50 alone.
@@ -647,7 +663,7 @@ file name, so L(b) changes nothing in it. The residual window — a crash after 
 its note — is the one this record already names as "one more reason for L(b)". (iv) **The record
 carries each verdict's body**, which rule 1's list omits: a re-publication (rule 3) needs the text, and
 validation cannot be re-run to make it (its inputs include the agents' `variables`, which the vehicle
-preserves for them and does not keep). (v) **Agent text is bounded in the record**: any agent-derived
+preserves for them and does not keep). (v) *[Superseded by (x) and (xiii) below.]* **Agent text is bounded in the record**: any agent-derived
 string (a command, a body, a deferral's command) past 4 KiB is kept by its prefix with the SHA-256 and
 length of the whole, as child 2 bounded the superseded root record; a resume (child 3) must treat a
 deferral whose command was cut — possible only with tokens the argument parser ignores — as one it
@@ -658,6 +674,49 @@ boot's entry joins `segments` once the header is durable. (vii) **An explicit `-
 one file. (viii) **A record that cannot be made durable stops the run** by name (exit 3) before the cycle
 is published; the commands that cycle claimed are lost with it. (ix) The checkpoint cadence `N` is not
 written by child 4: its tests write checkpoints as child 2's did, and the cadence lands with the resume.
+
+*Amended after child 4's two independent reviews (Codex `gpt-6-astra` high and Claude Opus, both
+"request changes"; decided by the coordinator under the owner's delegation, 2026-10-09). The record's
+format is now `vehicle.record.v2`, and a v1 segment is refused by name.* (x) **Every bound counts the
+encoded bytes**, because rows are ASCII-escaped JSON (an `é` is six bytes, a lone surrogate twelve): a
+receipt's command keeps 256 B and its body 4 KiB, each with the whole's SHA-256 and length; one
+window's receipts in one cycle share 16 KiB, past which a receipt is fingerprint-only (at most 512 B:
+numbers, state, verb prefix, the SHA-256 and length of command and body), its result file written in
+full. A row is therefore at most `windows × (16 KiB + 2 × max_batch × 512 B)` plus deltas the command
+schemas bound. "A refused command's echoed text beyond a small prefix" is read as the command field
+(256 B): a refusal's body keeps 4 KiB because its reason (up to ≈ 1.5 KB for an interlock refusal) is
+what a re-publication must carry, and the per-window budget is what bounds the volume. (xi) **No
+pruning in child 4**: the record is §6's replay trace and release.md's evidence. Its size: a quiet tick
+row is ≈ `365 + 27 × windows` bytes (393 B at one window, 637 B at ten), so ≈ 14–22 GB per mission at
+`k = 1` and ≈ 13–15 GB at `k = 5` if every tick keeps its row, plus a few kilobytes per commanded
+cycle. The reader is two sequential streams (check, then replay) whose memory does not grow with the
+record; recovery stays `≤ N × (step + hash)` plus that scan. (xii) **Every line carries a chain value**,
+`sha256(previous chain + "\n" + the line's canonical bytes)`, seeded by the segment header from the
+chain its predecessor ended on, so any edit, insertion or deletion of any field refuses by name. This
+detects corruption and truncation, not a forger: there is no secret, and whoever can write the `0600`
+state directory can re-chain — against which every field is typed and bounded, a published mark is
+its row's own tick, a results note is its row's (world, boot, tick, and only that row's receipts,
+once), and the physics is re-run. A line that is not JSON is accepted only as the last line of its
+segment, and the next segment's header must then name the chain of its predecessor's last intact line;
+anywhere else it refuses. (The review asked for "the last line of the last segment" only; a boot that
+dies mid-append leaves such a line before the next boot's segment, and the successor's chain anchor is
+what makes accepting it checkable.) (xiii) **A deferral is its parse**: queued, checkpointed and
+recorded as its verb, its schema-checked arguments and the canonical command they spell, and settled
+from that — because `parse_arguments` keeps the last value of a repeated key, a prefix of the raw line
+could be another valid command, which (v) wrongly said it could not. (xiv) **The record must continue
+the checkpoint's own segment history**: its first segment is one the checkpoint lists (and the
+checkpoint's last segment is then in the record), or continues the checkpoint's last segment from the
+snapshot's tick and chain; a checkpoint's segment entries carry the chain reached when it was taken,
+and on that segment the chain at the snapshot's tick must match. (xv) **With a record, every promise
+is a disk fact**: a cycle that claimed a batch `fsync`s the rewritten console and its window directory
+before the tick row; each window's result files and then its `output/` directory are `fsync`ed before
+its note, and the note is written right after that window's results, before its frame and mirror. A
+quiet cycle is still one `fsync`; a cycle in which every one of ten windows wrote a result is 51
+(measured below). Without a record nothing new is `fsync`ed. (xvi) **Receipt numbers are recorded as
+issued**: every tick row carries the global receipt counter and each window's, and verdicts made before
+an internal fault are kept and published, so no boot reissues a number. (xvii) An existing explicit
+journal this process owns is made `0600`, one another user owns is refused by name; a startup event
+`fsync`s its directory; a note that cannot be made durable says the window's results are on disk.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 

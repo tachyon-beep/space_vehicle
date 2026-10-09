@@ -32,9 +32,10 @@ The durable record (ADR 0002 J, WP08 child 4) is priced the same way. One append
 its `fsync` are timed alone, and `Executive.cycle` is timed again with a state directory, so that
 every cycle appends its row and `fsync`s it before publishing: a *quiet* cycle (no command anywhere,
 one `fsync`: the row carries the published-tick marks) and a *verdict* cycle (one refused command per
-window, so every window writes a result and the `results_written` note costs a second `fsync`). The
-`fsync`s of one quiet and one verdict cycle are counted rather than assumed, and the two rows' sizes
-are reported. The difference between these rows and `Executive.cycle` without a record is J's cost.
+window, so every window's claim is made durable — the console and its directory — and every window
+writes a result, `fsync`s it and its `output/` directory, and appends its `results_written` note with
+an `fsync` of its own: five per window and the row's one). The `fsync`s of one quiet and one verdict
+cycle are counted rather than assumed, and the two rows' sizes are reported. The difference between these rows and `Executive.cycle` without a record is J's cost.
 
     python3 tools/measure_clock.py                         # the empty-ring table
     python3 tools/measure_clock.py --full-ring             # the steady-state table

@@ -24206,10 +24206,11 @@ def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refus
 
 # A journal tick row's keys, every one of them: the lineage and the hash are the operator's, `boot_id`
 # names the segment (ADR 0002 J, child 2), `windows` carries each window's deltas and `published` its
-# published-tick mark (child 4: the journal is the record), and nothing else is in a row. A segment
-# header, a results-written note and a startup event are the rows that have an `event` key instead.
+# published-tick mark (child 4: the journal is the record), `receipt` the global receipt counter and
+# `chain` the row chain (child 4's review, format v2), and nothing else is in a row. A segment header,
+# a results-written note and a startup event are the rows that have an `event` key instead.
 TICK_ROW_KEYS = frozenset(
-    {"tick", "world_id", "boot_id", "lineage", "state_hash", "effects", "receipts", "windows", "published", "failures"}
+    {"tick", "world_id", "boot_id", "lineage", "state_hash", "effects", "receipts", "receipt", "windows", "published", "failures", "chain"}
 )
 
 
@@ -24227,9 +24228,9 @@ def test_without_a_state_dir_the_lock_and_the_journal_are_where_they_were(tmp_pa
     segment a row belongs to is the boot that wrote it, ADR 0002 J), with or without `--state-dir`.
     So the row's keys are compared against `TICK_ROW_KEYS`, the explicit set: a key added or lost is
     a change to the operator's record and must be made here, on purpose, with the README saying so.
-    Child 4 made two such changes: the tick row gained `windows` and `published`, and the file gained
+    Child 4 made such changes twice: the tick row gained `windows` and `published`, and the file gained
     a segment header row before the first tick row (an `event` row, so the tick rows are counted
-    without it).
+    without it); its review added `receipt` and `chain` (format v2).
     """
     diode = tmp_path / "diode"
     journal = tmp_path / "j.jsonl"
@@ -25127,6 +25128,31 @@ def record_lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
+def rewrite_record(console, source: Path, where: Path, change=None, *, keep=None, rechain: bool = True) -> Path:
+    """A copy of one segment file in `where`, each row passed through `change` and kept if `keep` says so.
+
+    With `rechain`, every row's `chain` is recomputed with `console.record_chain`, as a forger with write
+    access to the state directory could: what the chain cannot catch, replay's own checks must. Without
+    it, the copy is what an accident or an edit leaves, and the chain is what catches it.
+    """
+    where.mkdir(exist_ok=True)
+    rows = []
+    for row in record_lines(source):
+        if change is not None:
+            change(row)
+        if keep is None or keep(row):
+            rows.append(row)
+    if rechain:
+        previous = ""
+        for row in rows:
+            if row.get("event") == "segment":
+                previous = row.get("previous_chain", "")
+            row["chain"] = console.record_chain(previous, row)
+            previous = row["chain"]
+    (where / source.name).write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows))
+    return where / source.name
+
+
 def tick_rows(path: Path) -> list[dict]:
     """A journal's tick rows: the rows without an `event` key.
 
@@ -25212,8 +25238,10 @@ def test_a_record_replayed_onto_its_snapshot_reproduces_every_compare_point_and_
     A replay that cannot disagree is not a replay, so two tampered copies of the record are replayed
     too: a row whose compare-point was altered, and a row whose recorded *effect* was altered (the
     one that inhibits bravo's primary quad is made to enable it, which the plant then applies). Each
-    refuses at the tick it was altered at, naming the check — the second proves the replay drives the
-    recorded effects through the plant rather than copying the recorded hashes forward.
+    refuses at the tick it was altered at. Left as edited, the row chain refuses them (`chain`); re-chained
+    as a forger with write access to the state directory could, the physics does (`state_hash` or
+    `lineage`) — which proves the replay drives the recorded effects through the plant rather than
+    copying the recorded hashes forward.
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     diode, state = tmp_path / "diode", tmp_path / "state"
@@ -25245,21 +25273,18 @@ def test_a_record_replayed_onto_its_snapshot_reproduces_every_compare_point_and_
     checkpoint.write_checkpoint(again, replayed.body)
     assert checkpoint.choose_generation(again, compat).body == replayed.body
 
-    lines = segment.read_text().splitlines()
-
-    def tampered(tick: int, change) -> list:
-        where = tmp_path / f"tampered-{tick}"
-        where.mkdir()
-        altered = []
-        for line in lines:
-            row = json.loads(line)
+    def tampered(tick: int, change, *, rechain: bool = True):
+        def at(row: dict) -> None:
             if "event" not in row and row["tick"] == tick:
                 change(row)
-                line = json.dumps(row, sort_keys=True)
-            altered.append(line)
-        (where / segment.name).write_text("\n".join(altered) + "\n")
+
+        where = tmp_path / f"tampered-{tick}-{rechain}"
+        rewrite_record(console, segment, where, at, rechain=rechain)
         return console.read_record(where)
 
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, loaded.body, tampered(4, lambda row: row.update(state_hash="0" * 64), rechain=False))
+    assert refused.value.check == "chain" and refused.value.tick == 4, refused.value
     with pytest.raises(console.RecordRefused) as refused:
         console.replay_record(world, loaded.body, tampered(4, lambda row: row.update(state_hash="0" * 64)))
     assert refused.value.check == "state_hash" and refused.value.tick == 4, refused.value
@@ -25381,9 +25406,12 @@ def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_
     of the tick-2 checkpoint across both segments reproduces C's compare-point and lineage at every
     tick from 3 to 8, and C's executive and window sections at tick 8.
 
-    The seam is checked, not assumed: with A's last row gone, B begins at tick 5 after a predecessor
-    that ends at 4, and replay refuses tick 5 as missing; with A's segment gone altogether, B is the
-    first segment there is, it begins after the snapshot, and replay refuses tick 3.
+    The seam is checked, not assumed: B's header carries the chain A ended on (from the checkpoint B
+    was restored from); with A's last cycle gone, B begins at tick 5 after a predecessor that ends at 4,
+    and replay refuses tick 5 as missing; with A's segment gone altogether, B is the first segment
+    there is, it begins after the snapshot, and replay refuses tick 3. A torn line at the end of A (a crash
+    mid-append) is accepted because B's anchor is A's last intact line; A losing its last line (a note,
+    so no tick is missing) refuses at the seam, as `chain`, naming B.
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     compat = checkpoint.Compatibility.current(world)
@@ -25410,7 +25438,8 @@ def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_
     assert sorted(p.name for p in state.glob("journal.*.jsonl")) == [b_segment.name, a_segment.name]
 
     a_header, b_header = record_lines(a_segment)[0], record_lines(b_segment)[0]
-    assert a_header["event"] == "segment" and a_header["format"] == "vehicle.record.v1"
+    assert a_header["event"] == "segment" and a_header["format"] == "vehicle.record.v2"
+    assert a_header["previous_chain"] == "" and b_header["previous_chain"] == stopped["segments"][-1]["chain"]
     assert (a_header["boot_id"], a_header["first_tick"], a_header["previous"]) == (a_boot, 0, None), a_header
     assert (b_header["boot_id"], b_header["first_tick"], b_header["previous"]) == (b_boot, 5, a_boot), b_header
     assert a_header["world_id"] == b_header["world_id"] == stopped["identity"]["world_id"]
@@ -25427,7 +25456,7 @@ def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_
     uninterrupted.close()
 
     record = console.read_record(state)
-    assert [segment.boot_id for segment in record] == [a_boot, b_boot]
+    assert [segment.boot_id for segment in record.segments] == [a_boot, b_boot]
     replayed = console.replay_record(world, early, record)
     assert replayed.points == [(t, *oracle[t]) for t in range(3, 9)], replayed.points
     assert replayed.body["executive"] == oracle_body["executive"]
@@ -25436,7 +25465,7 @@ def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_
 
     cut = tmp_path / "cut"
     cut.mkdir()
-    a_lines = [line for line in a_segment.read_text().splitlines() if json.loads(line).get("tick") != 5 or "event" in json.loads(line)]
+    a_lines = [line for line in a_segment.read_text().splitlines() if json.loads(line).get("tick") != 5]
     (cut / a_segment.name).write_text("\n".join(a_lines) + "\n")
     (cut / b_segment.name).write_text(b_segment.read_text())
     with pytest.raises(console.RecordRefused) as refused:
@@ -25449,6 +25478,28 @@ def test_segments_name_their_boot_first_tick_and_predecessor_and_concatenate_by_
         console.replay_record(world, early, console.read_record(alone))
     assert refused.value.check == "missing" and refused.value.tick == 3, refused.value
 
+    # A boot that died mid-append leaves a torn last line before the next boot's segment. It is not
+    # the last segment's last line, and it is accepted — because B's header names the chain of A's last
+    # intact line, which is what makes accepting it checkable (review finding 8, as amended under J).
+    torn = tmp_path / "torn-seam"
+    torn.mkdir()
+    (torn / a_segment.name).write_text(a_segment.read_text() + '{"tick": 6, "lin')
+    (torn / b_segment.name).write_text(b_segment.read_text())
+    torn_record = console.read_record(torn)
+    assert [s.torn for s in torn_record.segments] == [True, False]
+    assert console.replay_record(world, early, torn_record).points == [(t, *oracle[t]) for t in range(3, 9)]
+    # And A losing its last line — a note of tick 5, so no tick is missing — is caught at the seam: B
+    # continues from a chain A no longer ends on.
+    lost = tmp_path / "lost-note"
+    lost.mkdir()
+    a_all = a_segment.read_text().splitlines()
+    assert json.loads(a_all[-1])["event"] == "results_written" and json.loads(a_all[-1])["tick"] == 5
+    (lost / a_segment.name).write_text("\n".join(a_all[:-1]) + "\n")
+    (lost / b_segment.name).write_text(b_segment.read_text())
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, early, console.read_record(lost))
+    assert refused.value.check == "chain" and refused.value.segment == b_boot, refused.value
+
 
 def test_a_result_is_written_only_after_its_cycles_record_is_durable_and_the_record_notes_it(tmp_path, monkeypatch):
     """ADR 0002 J rule 3, and the cost J prices: one `fsync` before the results, one after.
@@ -25456,8 +25507,9 @@ def test_a_result_is_written_only_after_its_cycles_record_is_durable_and_the_rec
     `os.fsync` and `Window.write_result` are watched. At the moment each result is written, the
     segment on disk must already hold this cycle's tick row with this result's receipt in it, and an
     `fsync` of the segment must already have happened in this cycle; after the last result, a second
-    `fsync` of the segment makes the `results_written` note durable. The note names each result by
-    window and window-local receipt — never by file name, which is wall-stamped until child 12's
+    `fsync` of the segment makes the window's `results_written` note durable. (The claim's and the result
+    files' own `fsync`s, review finding 6, are other descriptors; the next test holds those.) The note
+    names each result by window and window-local receipt — never by file name, which is wall-stamped until child 12's
     L(b) — and the names match the receipts of the files on disk. A quiet cycle costs exactly one
     `fsync` of the segment (its tick row carries the published-tick mark); a cycle with results costs
     exactly two.
@@ -25499,7 +25551,7 @@ def test_a_result_is_written_only_after_its_cycles_record_is_durable_and_the_rec
     for event in (events[i] for i in results):
         assert event[3] == tick and event[4] == [1, 2], event
 
-    notes = [row for row in record_lines(Path(segment)) if row.get("event") == "results_written"]
+    notes = [{k: v for k, v in row.items() if k != "chain"} for row in record_lines(Path(segment)) if row.get("event") == "results_written"]
     assert notes == [{"event": "results_written", "boot_id": executive.boot_id, "world_id": executive.world_id, "tick": tick, "results": {"alpha": [1, 2]}}], notes
     on_disk = sorted(int(receipt_of(body)["seq"]) for body in results_of(diode / "alpha"))
     assert on_disk == [1, 2]
@@ -25564,12 +25616,12 @@ def test_a_kill_between_the_record_and_the_result_leaves_the_record_naming_exact
     assert (first["command"], rebuilt) == handed[0], (first, handed[0])
 
     monkeypatch.undo()
-    real_note = console.Executive._note_results
+    real_note = console.Executive._note_window_results
 
     def killed_after(self, *args, **kwargs):
         raise SimulatedKill
 
-    monkeypatch.setattr(console.Executive, "_note_results", killed_after)
+    monkeypatch.setattr(console.Executive, "_note_window_results", killed_after)
     submit(diode / "alpha", ["zzz_again"])
     with pytest.raises(SimulatedKill):
         executive.cycle()
@@ -25577,7 +25629,7 @@ def test_a_kill_between_the_record_and_the_result_leaves_the_record_naming_exact
     listed = [(u["window"], u["local"], u["tick"]) for u in console.unwritten_results(console.read_record(state))]
     assert ("alpha", 2, executive.tick - 1) in listed, listed
 
-    monkeypatch.setattr(console.Executive, "_note_results", real_note)
+    monkeypatch.setattr(console.Executive, "_note_window_results", real_note)
     submit(diode / "alpha", ["zzz_third"])
     executive.cycle()
     still = [(u["window"], u["local"]) for u in console.unwritten_results(console.read_record(state))]
@@ -25646,9 +25698,10 @@ def test_a_record_line_is_bounded_however_large_the_agents_command(tmp_path, mon
     A command is the agent's: a single 900 kB token is an unknown verb whose refusal quotes it, and
     tokens without `=` are ignored by the argument parser, so an *accepted* deferral can carry
     kilobytes of them in its queue entry. Window files are unchanged — the result file still holds the
-    whole refusal — but in the record every agent-derived string (a receipt's command and body, a
-    deferral entry's command) longer than `RECORD_TEXT_BYTES` is cut, UTF-8-safely, and carries the
-    SHA-256 and the byte length of the whole, so the row stays within a few times that bound.
+    whole refusal — but in the record a receipt's command is kept to `RECORD_ECHO_BYTES` and its body to
+    `RECORD_TEXT_BYTES`, both counted on the *encoded* (escaped) bytes, each with the SHA-256 and byte
+    length of the whole, so the row stays within a few times that bound. A deferral is recorded as its
+    parsed command (review finding 4), so the ignored tokens never reach the queue or the record.
 
     The reader holds its own bound: a line longer than `MAX_RECORD_LINE_BYTES` is refused by name
     (the bound is lowered here so the test does not write 64 MiB); a torn *last* line — an append the
@@ -25671,18 +25724,18 @@ def test_a_record_line_is_bounded_however_large_the_agents_command(tmp_path, mon
     assert len(text) > 900_000, "the window's result is unchanged"
     body = text[: text.rindex("receipt: ")]
 
-    limit = console.RECORD_TEXT_BYTES
+    limit, echo = console.RECORD_TEXT_BYTES, console.RECORD_ECHO_BYTES
     line = [raw for raw in executive.journal.read_bytes().splitlines() if json.loads(raw).get("tick") == 2 and "event" not in json.loads(raw)]
     assert len(line) == 1 and len(line[0]) < 4 * limit + 4096, len(line[0]) if line else line
     row = json.loads(line[0])
     (alpha,) = [r for r in row["receipts"] if r["window"] == "alpha"]
-    assert len(alpha["command"].encode()) <= limit and huge.startswith(alpha["command"])
+    assert len(json.dumps(alpha["command"])) - 2 <= echo and huge.startswith(alpha["command"])
     assert alpha["command_sha256"] == hashlib.sha256(huge.encode()).hexdigest() and alpha["command_bytes"] == len(huge.encode())
-    assert len(alpha["body"].encode()) <= limit and body.startswith(alpha["body"])
+    assert len(json.dumps(alpha["body"])) - 2 <= limit and body.startswith(alpha["body"])
     assert alpha["body_sha256"] == hashlib.sha256(body.encode()).hexdigest() and alpha["body_bytes"] == len(body.encode())
     (entry,) = row["windows"]["bravo"]["deferred_added"]
-    assert entry["command_sha256"] == hashlib.sha256(padded.strip().encode()).hexdigest() and len(entry["command"].encode()) <= limit
-    assert executive.windows["bravo"].deferred[0]["command"] == padded.strip(), "the live queue keeps the whole command"
+    assert entry["command"] == "request_imu_alignment source=star target=LVLH" and entry["arguments"] == {"source": "star", "target": "LVLH"}
+    assert executive.windows["bravo"].deferred[0]["command"] == entry["command"], "the live queue holds the parsed command too"
     segment = executive.journal
     executive.close()
 
@@ -25696,8 +25749,8 @@ def test_a_record_line_is_bounded_however_large_the_agents_command(tmp_path, mon
     torn = tmp_path / "torn"
     torn.mkdir()
     (torn / segment.name).write_text("\n".join(lines) + '\n{"tick": 3, "lin')
-    (read,) = console.read_record(torn)
-    assert read.torn and [r["tick"] for r in read.rows] == [1, 2]
+    (read,) = console.read_record(torn).segments
+    assert read.torn and read.last_tick == 2
     broken = tmp_path / "broken"
     broken.mkdir()
     (broken / segment.name).write_text("\n".join([lines[0], lines[1], "{not json", *lines[2:]]) + "\n")
@@ -25728,7 +25781,8 @@ def test_nothing_the_record_keeps_reaches_any_window_file(tmp_path):
         **{f"state_hash@{row['tick']}": row["state_hash"] for row in rows},
         "boot_id": executive.boot_id,
         "segment": executive.journal.name,
-        "format": "vehicle.record.v1",
+        "format": "vehicle.record.v2",
+        **{f"chain@{row['tick']}": row["chain"] for row in rows},
         "note": "results_written",
         "state_dir": str(state.resolve()),
         "state_dir.name": state.name,
@@ -25789,7 +25843,7 @@ def test_an_explicit_journal_is_the_same_record_with_the_same_durability_and_hol
     headers = [row for row in record_lines(journal) if row.get("event") == "segment"]
     assert [(h["boot_id"], h["first_tick"], h["previous"]) for h in headers] == [("a" * 32, 0, None), ("b" * 32, 3, "a" * 32)], headers
     record = console.read_record(journal)
-    assert [segment.boot_id for segment in record] == ["a" * 32, "b" * 32]
+    assert [segment.boot_id for segment in record.segments] == ["a" * 32, "b" * 32]
     replayed = console.replay_record(world, early, record)
     assert [p for p in replayed.points if p[0] > 3] == [(t, *points[t]) for t in range(4, 7)]
     assert len(replayed.points) == 5
@@ -25837,3 +25891,546 @@ def test_a_record_that_cannot_be_made_durable_stops_the_run_before_the_cycle_is_
     code = console.main(["--diode-dir", str(tmp_path / "d2"), "--state-dir", str(tmp_path / "s2"), "--slug", "alpha", "--cycles", "2", "--poll", "0"])
     err = capsys.readouterr().err
     assert code == 3 and "stopped at tick 1" in err and "EIO" in err and "cannot be written or made durable" in err, (code, err)
+    assert "nothing of the cycle has been published" in err, err
+
+    # A note that cannot be made durable comes *after* the window's results: the sentence says so,
+    # and does not claim that nothing was published (review finding 8).
+    third = console.Executive(world, tmp_path / "d3", phase="translunar_coast", state_dir=tmp_path / "s3")
+    third.attach("alpha")
+    monkeypatch.setattr(os, "fsync", real_fsync)
+    third.cycle()
+    third_segment = os.path.realpath(third.journal)
+    calls = [0]
+
+    def second_dies(fd):
+        if os.path.realpath(f"/proc/self/fd/{fd}") == third_segment:
+            calls[0] += 1
+            if calls[0] == 2:
+                raise OSError(errno.EIO, "Input/output error")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", second_dies)
+    submit(tmp_path / "d3" / "alpha", ["zzz_noted"])
+    with pytest.raises(console.RecordUnwritable) as stopped:
+        third.cycle()
+    assert "results" in str(stopped.value) and "nothing of the cycle has been published" not in str(stopped.value), stopped.value
+    assert len(results_of(tmp_path / "d3" / "alpha")) == 1
+    third.close()
+
+
+# ---- ADR 0002 child 4, review (Codex gpt-6-astra high and Claude Opus, both "request changes") ----
+
+
+def test_a_flood_of_non_ascii_commands_from_every_window_grows_the_record_by_a_bounded_amount_per_cycle(tmp_path):
+    """Review finding 1: the record's growth per cycle has a stated bound, whatever the agents send.
+
+    The first version capped each agent string at 4 KiB of UTF-8 and nothing above that, and wrote
+    rows as escaped JSON, where `é` is six bytes: 32 commands of 4 KiB of `é` were ~0.8 MB of record per
+    window per cycle — ten windows could fill the private disk, and a full disk stops the vehicle for
+    everyone. Now every bound counts the *encoded* bytes; a receipt's command keeps
+    `RECORD_ECHO_BYTES` and its body `RECORD_TEXT_BYTES`; and each window's receipts in one cycle share
+    a budget of `RECORD_WINDOW_BYTES`, past which a receipt is recorded fingerprint-only (receipt
+    numbers, state, verb prefix, and the SHA-256 and length of the command and the body) — its result
+    file still written in full.
+
+    Ten windows each send a full batch of 32 commands of 2,000 `é`, one with a lone surrogate (a valid
+    JSON escape a conforming reader returns as a lone code point, which UTF-8 cannot encode and the
+    record must still carry). The bound the test holds the row to is computed from the constants alone:
+    per window `RECORD_WINDOW_BYTES` plus `RECORD_FINGERPRINT_BYTES` per verdict, plus a fixed row
+    overhead. Every one of the 320 receipts is in the row, numbered contiguously; every window has its
+    32 result files; past each window's budget the receipts are fingerprint-only and their fingerprint
+    is the SHA-256 of the whole command (UTF-8, surrogates passed through).
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, max_batch=32)
+    slugs = [f"w{i:02d}" for i in range(10)]
+    for slug in slugs:
+        executive.attach(slug)
+    executive.cycle()
+    flood = ["zz" + "é" * 2000 + str(n) for n in range(31)] + ["zz\ud800" + "é" * 2000]
+    size_before = executive.journal.stat().st_size
+    for slug in slugs:
+        (diode / slug / "console.json").write_text(json.dumps({"commands": flood, "variables": {}}), encoding="utf-8")
+    executive.cycle()
+    grown = executive.journal.stat().st_size - size_before
+    for slug in slugs:
+        assert len(list((diode / slug / "output").glob("*.txt"))) == 32, slug
+
+    bound = len(slugs) * (console.RECORD_WINDOW_BYTES + 32 * console.RECORD_FINGERPRINT_BYTES) + 4096
+    (row,) = [r for r in tick_rows(executive.journal) if r["tick"] == 2]
+    encoded = len(json.dumps(row, sort_keys=True, separators=(",", ":"))) + 1
+    assert encoded <= bound and grown <= bound + len(slugs) * 1024, (encoded, grown, bound)
+    assert sorted(r["seq"] for r in row["receipts"]) == list(range(1, 321))
+    for slug in slugs:
+        mine = [r for r in row["receipts"] if r["window"] == slug]
+        assert [r["local"] for r in mine] == list(range(1, 33))
+        share = sum(len(json.dumps(r, sort_keys=True, separators=(",", ":"))) for r in mine)
+        assert share <= console.RECORD_WINDOW_BYTES + 32 * console.RECORD_FINGERPRINT_BYTES, (slug, share)
+        prints = [r for r in mine if r.get("fingerprint_only")]
+        assert prints and len(prints) < 32, (slug, len(prints))
+        for receipt in prints:
+            command = flood[receipt["local"] - 1]
+            assert receipt["command_sha256"] == hashlib.sha256(command.encode("utf-8", "surrogatepass")).hexdigest()
+            assert "command" not in receipt and "body" not in receipt and receipt["state"] == "refused"
+            assert len(json.dumps(receipt, sort_keys=True, separators=(",", ":"))) <= console.RECORD_FINGERPRINT_BYTES
+        for receipt in mine:
+            if not receipt.get("fingerprint_only"):
+                assert len(json.dumps(receipt["command"])) - 2 <= console.RECORD_ECHO_BYTES
+                assert len(json.dumps(receipt["body"])) - 2 <= console.RECORD_TEXT_BYTES
+    assert console.read_record(state).segments[0].last_tick == 2
+    executive.close()
+
+
+def test_replay_memory_is_independent_of_how_much_record_precedes_the_checkpoint(tmp_path):
+    """Review finding 2: the reader streams, and a long record costs time before the snapshot, not memory.
+
+    The first `read_record` held every raw line and every parsed row of every segment before replay
+    filtered them, so recovery's memory grew with the whole mission. Now the record is read twice as a
+    stream — once to check it, once to replay the rows after the snapshot — and nothing before the
+    snapshot is kept.
+
+    A real run of three cycles gives the physics: a checkpoint at tick 1 and the live compare-points of
+    ticks 2 and 3. Two synthetic records are built around it, each a single segment of quiet rows, one
+    with 2,000 rows before the snapshot and one with 200,000, every row chained with the module's own
+    `record_chain` (the subject here is memory, not the chain): the checkpoint body is moved to the last
+    synthetic tick, the synthetic row at that tick carries its lineage head, and the two real rows are
+    renumbered after it (ticks enter no compare-point). `tracemalloc` measures the peak of
+    `read_record` plus `replay_record` over each; the peaks differ by less than 1 MiB, and both replays
+    reproduce the live compare-points of the two real ticks.
+    """
+    checkpoint, console, plant, world = checkpoint_tools()
+    import tracemalloc
+
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    points, _counters, body = recorded_run(executive, diode, {}, 3, snapshot_at=1)
+    real = [row for row in tick_rows(executive.journal) if row["tick"] > 1]
+    header = record_lines(executive.journal)[0]
+    executive.close()
+
+    def build(before: int) -> tuple[Path, dict]:
+        where = tmp_path / f"synthetic-{before}"
+        where.mkdir()
+        snapshot = json.loads(json.dumps(body))
+        chain = ""
+        with (where / f"journal.{header['boot_id']}.jsonl").open("w") as out:
+            def emit(row: dict) -> None:
+                nonlocal chain
+                row = {k: v for k, v in row.items() if k != "chain"}
+                row["chain"] = console.record_chain(chain, row)
+                chain = row["chain"]
+                out.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
+
+            emit({**header, "previous_chain": ""})
+            for tick in range(1, before + 1):
+                lineage = body["executive"]["lineage_head"] if tick == before else hashlib.sha256(str(tick).encode()).hexdigest()
+                emit({
+                    "tick": tick, "world_id": header["world_id"], "boot_id": header["boot_id"], "lineage": lineage,
+                    "state_hash": hashlib.sha256(str(-tick).encode()).hexdigest(), "effects": [], "receipts": [],
+                    "receipt": 0, "windows": {}, "published": {}, "failures": 0,
+                })
+                if tick == before:
+                    snapshot["segments"][-1]["chain"] = chain
+            for offset, row in enumerate(real, start=1):
+                emit({**row, "tick": before + offset, "published": {}})
+        snapshot["executive"]["tick"] = snapshot["identity"]["tick"] = before
+        return where, snapshot
+
+    peaks = {}
+    for before in (2_000, 200_000):
+        where, snapshot = build(before)
+        tracemalloc.start()
+        try:
+            replayed = console.replay_record(world, snapshot, console.read_record(where))
+            peaks[before] = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert replayed.points == [(before + 1, *points[2]), (before + 2, *points[3])], replayed.points
+    assert peaks[200_000] - peaks[2_000] < 1 << 20, peaks
+
+
+def test_any_edit_or_deletion_in_the_record_refuses_by_name_and_a_forged_row_is_held_to_its_schema(tmp_path):
+    """Review finding 3: replay trusted the half of a row that is not physics.
+
+    Edited receipt states, an injected deferral, an injected arm token, a changed spend, a published
+    mark of 10,000,000, a deleted results note and a note naming another world were all accepted by
+    the first replay, because it checked only the compare-point and the lineage. Every row now carries
+    a chain value — the SHA-256 of the previous row's chain and the row's own canonical bytes, seeded
+    from the segment header, which carries the world and the chain its predecessor ended on — so each
+    of those edits, left as made, refuses as `chain` at the row it touched. That detects corruption and
+    truncation; it is not a secret, and a forger with write access to the `0600` state directory can
+    re-chain. So the same edits are also re-chained, and each must then refuse on its own terms: a mark
+    is the row's own tick and a frame number below it (`published`), a note names its row's world, boot
+    and tick and only that row's receipts (`note`), a deleted note leaves its results listed by
+    `unwritten_results` rather than refusing, and every field is typed and bounded (`row`) — a string
+    where a list belongs refuses by name and is never iterated character by character. A header of the
+    previous format (`vehicle.record.v1`) is refused by name.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    _points, _counters, snapshot = recorded_run(executive, diode, RECORD_SCRIPT, 6, snapshot_at=1)
+    segment = executive.journal
+    executive.close()
+    assert console.replay_record(world, snapshot, console.read_record(state)).body["executive"]["tick"] == 6
+
+    def at(tick: int, change):
+        def apply(row: dict) -> None:
+            if "event" not in row and row["tick"] == tick:
+                change(row)
+        return apply
+
+    def refuse(name: str, change=None, *, keep=None, rechain: bool, check: str | tuple, tick: int | None = None):
+        where = rewrite_record(console, segment, tmp_path / f"{name}-{rechain}", change, keep=keep, rechain=rechain)
+        with pytest.raises(console.RecordRefused) as refused:
+            console.replay_record(world, snapshot, console.read_record(where.parent))
+        checks = check if isinstance(check, tuple) else (check,)
+        assert refused.value.check in checks, (name, rechain, refused.value)
+        if tick is not None:
+            assert refused.value.tick == tick, (name, rechain, refused.value)
+        assert refused.value.segment == executive.boot_id or refused.value.check in ("row", "header", "format"), (name, refused.value)
+
+    def receipt_state(row):
+        row["receipts"][0]["state"] = "refused" if row["receipts"][0]["state"] != "refused" else "accepted"
+
+    def inject_deferral(row):
+        row["windows"].setdefault("alpha", {})["deferred_added"] = [{
+            "verb": "request_imu_alignment", "command": "request_imu_alignment source=star target=LVLH",
+            "arguments": {"source": "star", "target": "LVLH"}, "accepted_tick": 2, "due_tick": 3,
+            "maximum_queue_age_s": 30, "receipt": 99,
+        }]
+
+    def inject_arm(row):
+        row["windows"].setdefault("alpha", {})["arms_set"] = {"lm_jettison": "deadbeefcafef00d"}
+
+    def spend(row):
+        row["windows"]["alpha"]["spend"]["accepted"] = 7
+
+    def far_mark(row):
+        row["published"]["alpha"]["tick"] = 10_000_000
+
+    first_with_receipts = next(row["tick"] for row in tick_rows(segment) if row["tick"] > 1 and row["receipts"] and "alpha" in row["windows"])
+    for name, change in (("state", receipt_state), ("deferral", inject_deferral), ("arm", inject_arm), ("spend", spend), ("mark", far_mark)):
+        refuse(name, at(first_with_receipts, change), rechain=False, check="chain", tick=first_with_receipts)
+    refuse("mark", at(first_with_receipts, far_mark), rechain=True, check="published", tick=first_with_receipts)
+
+    notes = [row for row in record_lines(segment) if row.get("event") == "results_written" and row["tick"] > 1]
+    assert notes
+    victim = notes[0]
+    refuse("note", keep=lambda row: row != victim, rechain=False, check="chain")
+    # Re-chained, a deleted note is not a refusal: its results are simply listed as unwritten.
+    where = rewrite_record(console, segment, tmp_path / "note-deleted", keep=lambda row: row != victim)
+    listed = {(u["window"], u["local"]) for u in console.unwritten_results(console.read_record(where.parent))}
+    assert {(slug, local) for slug, locals_ in victim["results"].items() for local in locals_} <= listed
+
+    def foreign_note(row):
+        if row == victim:
+            row["world_id"] = "f" * 32
+
+    refuse("foreign-note", foreign_note, rechain=False, check="chain")
+    refuse("foreign-note", foreign_note, rechain=True, check="note", tick=victim["tick"])
+
+    def stray_note(row):
+        if row == victim:
+            row["results"] = {"alpha": [999]}
+
+    refuse("stray-note", stray_note, rechain=True, check="note", tick=victim["tick"])
+
+    # A forger's malformed shapes: each a named refusal, never a KeyError, TypeError or AttributeError.
+    for name, change in (
+        ("receipts-a-string", lambda row: row.update(receipts="abc")),
+        ("windows-entry-a-string", lambda row: row["windows"].update(alpha="x")),
+        ("deferred-a-string", lambda row: row["windows"].setdefault("alpha", {}).update(deferred_added="x")),
+        ("mark-tick-a-bool", lambda row: row["published"]["alpha"].update(tick=True)),
+        ("seq-negative", lambda row: row["receipts"][0].update(seq=-1)),
+        ("unknown-key", lambda row: row.update(extra=1)),
+        ("effects-not-triples", lambda row: row.update(effects=[["x"]])),
+    ):
+        refuse(name, at(first_with_receipts, change), rechain=True, check=("row", "published"), tick=first_with_receipts)
+
+    old = rewrite_record(console, segment, tmp_path / "v1", lambda row: row.update(format="vehicle.record.v1") if row.get("event") == "segment" else None)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(old.parent)
+    assert refused.value.check == "format" and "vehicle.record.v1" in str(refused.value), refused.value
+
+
+def test_a_deferral_is_recorded_as_its_parsed_command_and_settles_the_same_after_a_restore(tmp_path):
+    """Review finding 4: a cut deferral could be a *different valid command*, so a deferral is its parse.
+
+    `parse_arguments` keeps the last value of a repeated key and ignores tokens without `=`, so
+    `request_imu_alignment source=star target=LVLH <2,100 "x "> target=MOON_J2000` is accepted as
+    `target=MOON_J2000`, and the first version's 4 KiB cut of its raw text kept `target=LVLH` — a
+    replay or a restore from the record would have settled the other target (Opus's probe p4; the
+    ADR's amendment v said a cut command could only fail to settle, which was wrong). A deferral is now
+    queued — live, in the checkpoint and in the record alike — as its verb, its parsed and
+    schema-checked arguments, and the canonical command they spell; settlement re-validates that.
+
+    The live run's queue entry, the record's `deferred_added` entry and the replayed body's queue all
+    say `target=MOON_J2000` and none carries an `x`. A twin restored from the replayed body (child 1's
+    `restore_state`) and the live run each settle it in the next cycle, and the two settlements'
+    result names agree once the wall stamp is set aside, naming `MOON_J2000`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _points, _counters, snapshot = recorded_run(executive, diode, {}, 1, snapshot_at=1)
+    probe = "request_imu_alignment source=star target=LVLH " + "x " * 2100 + "target=MOON_J2000"
+    submit(diode / "alpha", [probe])
+    executive.cycle()
+    (queued,) = executive.windows["alpha"].deferred
+    assert queued["arguments"] == {"source": "star", "target": "MOON_J2000"}, queued
+    assert queued["command"] == "request_imu_alignment source=star target=MOON_J2000"
+    (row,) = [r for r in tick_rows(executive.journal) if r["tick"] == 2]
+    (added,) = row["windows"]["alpha"]["deferred_added"]
+    assert added == queued and " x " not in json.dumps(added)
+
+    replayed = console.replay_record(world, snapshot, console.read_record(state))
+    assert replayed.body["windows"]["alpha"]["deferred"] == [queued]
+    twin = console.Executive(world, tmp_path / "twin", phase="translunar_coast")
+    twin.attach("alpha")
+    checkpoint.restore_state(twin, replayed.body)
+    clear_results(diode / "alpha")
+    executive.cycle()
+    twin.cycle()
+    names = []
+    for window in (diode / "alpha", tmp_path / "twin" / "alpha"):
+        (settled,) = (window / "output").glob("*.txt")
+        assert receipt_of(settled.read_text())["state"] == "settled", settled.read_text()
+        names.append(settled.name.split("_", 2)[2])
+    assert names[0] == names[1] and "MOON_J2000" in names[0] and "LVLH" not in names[0], names
+    executive.close()
+    twin.close()
+
+
+def test_replay_refuses_a_record_that_does_not_continue_the_checkpoints_own_segment_history(tmp_path):
+    """Review finding 5 (Codex P2): the first segment supplied must join the checkpoint's own history.
+
+    The first replay accepted any record of the same world whose ticks went past the snapshot's. Now
+    the record's first segment must be one the checkpoint already lists (and the checkpoint's last
+    segment must then be in the record), or name the checkpoint's last segment as its predecessor with
+    the chain that segment had reached; and on the checkpoint's own last segment the row chain at the
+    snapshot's tick must be the one the checkpoint recorded.
+
+    Boot A runs five cycles and stops with a checkpoint; boot B is restored from it and runs three
+    more, checkpointing at tick 7. A's segment alone against B's tick-7 checkpoint refuses (`join`): the
+    record does not reach the checkpoint's last segment — the first replay returned the body unchanged
+    and called it replayed. And A's own checkpoint at tick 2, with the chain it recorded altered,
+    refuses (`join`) against A's segment.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    first.attach("alpha")
+    first.attach("bravo")
+    _points, _counters, early = recorded_run(first, diode, RECORD_SCRIPT, 2, snapshot_at=2)
+    recorded_run(first, diode, RECORD_SCRIPT, 3, start=2)
+    stopped = checkpoint.capture_state(first, compat)
+    a_segment = first.journal
+    first.close()
+    second = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    second.attach("alpha")
+    second.attach("bravo")
+    checkpoint.restore_state(second, stopped)
+    _points, _counters, later = recorded_run(second, diode, RECORD_SCRIPT, 3, start=5, snapshot_at=7)
+    second.close()
+    assert [s["segment"] for s in later["segments"]] == [first.boot_id, second.boot_id]
+
+    only_a = tmp_path / "only-a"
+    only_a.mkdir()
+    (only_a / a_segment.name).write_text(a_segment.read_text())
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, later, console.read_record(only_a))
+    assert refused.value.check == "join" and second.boot_id in str(refused.value), refused.value
+
+    assert console.replay_record(world, early, console.read_record(only_a)).body["executive"]["tick"] == 5
+    altered = json.loads(json.dumps(early))
+    altered["segments"][-1]["chain"] = "0" * 64
+    with pytest.raises(console.RecordRefused) as refused:
+        console.replay_record(world, altered, console.read_record(only_a))
+    assert refused.value.check == "join" and refused.value.tick == 2, refused.value
+
+
+def test_a_claimed_batch_and_its_results_are_durable_before_the_record_and_the_note_that_rely_on_them(tmp_path, monkeypatch):
+    """Review finding 6: the record must not promise what the disk does not hold.
+
+    The tick row says a batch was claimed and answered; if the console's rewrite were still only in
+    the page cache, a crash could bring the commands back and run them twice. The note says a result
+    is on disk; if the result's file or its directory entry were not durable, a crash could lose a
+    result the record calls written. So on a cycle that claimed a batch, the rewritten `console.json`
+    and the window's directory are `fsync`ed before the tick row; each result file and then the
+    `output/` directory are `fsync`ed before that window's note; and the note is written right after
+    the window's results, before its frame, mirror and generated files. A quiet cycle is still one
+    `fsync`.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    segment = os.path.realpath(executive.journal)
+    window, output = os.path.realpath(diode / "alpha"), os.path.realpath(diode / "alpha" / "output")
+    events: list[tuple[str, str]] = []
+    real_fsync, real_frame = os.fsync, console.Window.write_frame
+
+    def watched(fd):
+        events.append(("fsync", os.path.realpath(f"/proc/self/fd/{fd}")))
+        return real_fsync(fd)
+
+    def frame(self):
+        events.append(("frame", self.slug))
+        return real_frame(self)
+
+    monkeypatch.setattr(os, "fsync", watched)
+    monkeypatch.setattr(console.Window, "write_frame", frame)
+    executive.cycle()
+    assert [e for e in events if e[0] == "fsync"] == [("fsync", segment)], events
+    events.clear()
+
+    submit(diode / "alpha", ["set_rcs_mode mode=manual", "zzz_not_a_verb"])
+    executive.cycle()
+    order = [e[1] if e[0] == "fsync" else "frame" for e in events]
+
+    def kind(target: str) -> str:
+        if target == "frame":
+            return "frame"
+        if target == segment:
+            return "record"
+        if target == window:
+            return "window-dir"
+        if target == output:
+            return "output-dir"
+        parent, name = os.path.split(target)
+        if parent == window and name.startswith(".console.json."):
+            return "console"
+        if parent == output:
+            return "result"
+        return "other:" + target
+
+    kinds = [kind(t) for t in order]
+    assert kinds == ["console", "window-dir", "record", "result", "result", "output-dir", "record", "frame"], kinds
+    executive.close()
+
+
+def test_a_receipt_issued_before_an_internal_fault_is_recorded_so_no_boot_reissues_it(tmp_path, monkeypatch):
+    """Review finding 7: a window-local receipt number drawn before a fault was lost to the record.
+
+    If validation raises part-way through a window's batch — an internal fault, recorded as the
+    window's failure while the tick goes on — the verdicts already made were dropped with the list
+    that held them, and the receipt numbers already drawn were in neither the results nor the record:
+    a later boot resuming from the record would issue the same window-local number again. Now the
+    verdicts made before the fault are kept, recorded and published, and every row carries the global
+    receipt counter and each window's local counter as they stand after the cycle, so the record
+    holds what was issued even when no verdict carries it.
+
+    Validation is made to draw the second command's receipt and then raise. The first command has its
+    result; the row's counters are the live ones (global 2, alpha 2, though only receipt 1 has a
+    result); and replay onto the checkpoint before the fault reaches the same counters.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _points, _counters, snapshot = recorded_run(executive, diode, {}, 1, snapshot_at=1)
+    real = console.Executive.validate
+    calls = [0]
+
+    def faulty(self, window, command, settling=None):
+        calls[0] += 1
+        verdict = real(self, window, command, settling)
+        if calls[0] == 2:
+            raise RuntimeError("an internal fault after the receipt was drawn")
+        return verdict
+
+    monkeypatch.setattr(console.Executive, "validate", faulty)
+    submit(diode / "alpha", ["zzz_one", "zzz_two"])
+    executive.cycle()
+    assert executive.failures[-1]["stage"] == "claim" and "internal fault" in executive.failures[-1]["error"]
+    assert executive.receipt == 2 and executive.windows["alpha"].receipts == 2
+    bodies = results_of(diode / "alpha")
+    assert len(bodies) == 1 and receipt_of(bodies[0])["seq"] == "1", bodies
+    (row,) = [r for r in tick_rows(executive.journal) if r["tick"] == 2]
+    assert row["receipt"] == 2 and row["windows"]["alpha"]["receipts"] == 2, row
+    replayed = console.replay_record(world, snapshot, console.read_record(state))
+    assert replayed.body["executive"]["receipt"] == 2 and replayed.body["windows"]["alpha"]["receipts"] == 2
+    executive.close()
+
+
+def test_an_existing_journal_is_made_private_and_one_another_user_owns_is_refused_by_name(tmp_path, monkeypatch):
+    """Review finding 8: an explicit `--journal` that already exists keeps the permissions it had.
+
+    The record is created `0600`, but `O_CREAT` sets no mode on a file that exists, so an operator's
+    journal made `0644` by an earlier tool stayed world-readable with the lineage in it. The executive
+    now `fchmod`s a journal it owns to `0600` when it opens it, and refuses by name one it does not own
+    (it cannot make another user's file private); the second is shown by having the effective uid
+    disagree with the file's owner.
+    """
+    console, _plant, world = console_tools()
+    journal = tmp_path / "ops" / "record.jsonl"
+    journal.parent.mkdir()
+    journal.write_text("")
+    journal.chmod(0o644)
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast", journal=journal)
+    executive.attach("alpha")
+    executive.cycle()
+    assert stat_mode(journal) == 0o600, oct(stat_mode(journal))
+    executive.close()
+
+    other = tmp_path / "ops" / "theirs.jsonl"
+    other.write_text("")
+    real_uid = os.geteuid()
+    monkeypatch.setattr(console.os, "geteuid", lambda: real_uid + 1)
+    stranger = console.Executive(world, tmp_path / "diode2", phase="translunar_coast", journal=other)
+    stranger.attach("alpha")
+    with pytest.raises(console.RecordUnwritable) as refused:
+        stranger.cycle()
+    assert "owned by uid" in str(refused.value) and other.name in str(refused.value), refused.value
+    stranger.close()
+
+
+def test_reading_a_record_through_a_symlinked_state_dir_is_a_refusal_by_name(tmp_path):
+    """Review finding 8: `read_record` opened its directory following nothing and let `ELOOP` escape.
+
+    The path form of `read_record` opens the directory `O_NOFOLLOW`, as child 2's discipline asks of a
+    private directory reached by spelling; a link there was a raw `OSError`. It is a `RecordRefused`
+    naming the path, and the `dir_fd` form — the one a resume uses, with the handle `main` already holds
+    — reads the same record.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    link = tmp_path / "alias"
+    link.symlink_to(state)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(link)
+    assert refused.value.check == "directory" and str(link) in str(refused.value), refused.value
+    assert [s.last_tick for s in console.read_record(state, dir_fd=executive.state_fd).segments] == [1]
+    executive.close()
+
+
+def test_a_startup_event_is_durable_with_its_directory_entry(tmp_path, monkeypatch):
+    """Review finding 8: `append_journal_line` `fsync`ed the line and not the name.
+
+    A startup event is written into a segment file that may not exist yet; the line's `fsync` makes
+    the bytes durable, and only the directory's `fsync` makes the new name durable with them. Both are
+    now done, the file's then the directory's.
+    """
+    console, _plant, _world = console_tools()
+    synced: list[str] = []
+    real = os.fsync
+
+    def counted(fd):
+        synced.append(os.path.realpath(f"/proc/self/fd/{fd}"))
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", counted)
+    target = tmp_path / "journal.feed.jsonl"
+    console.append_journal_line(target, {"event": "probe", "boot_id": "feed"})
+    assert synced == [str(target.resolve()), str(tmp_path.resolve())], synced
