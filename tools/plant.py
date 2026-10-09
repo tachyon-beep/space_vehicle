@@ -1134,39 +1134,112 @@ def canonical_state(values: dict[str, Any]) -> str:
     """A state encoded so that two equal states have equal strings, byte for byte.
 
     `plant.md` §6's compare-point is *"a hash over canonically-encoded state, every tick"*, and the
-    encoding is the half that matters: `json.dumps` with a sorted key order and `repr`-exact floats,
+    encoding is the half that matters: `json.dumps` with a sorted key order and no whitespace,
     because the contract is bit-identity and not equality within a tolerance — *"no ε survives a
     comparator"*. A float is written with `repr`, which round-trips exactly; an integer stays an
-    integer; and every other type is tagged with its name so that `0` and `False` cannot collide.
+    integer; `True` is `true`, `None` is `null`, a string is quoted — so every pair a reader might
+    fear collides (`0`/`False`, `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`) is written
+    differently by the stdlib's own encoder, and the referee holds a table of them.
 
-    Until this round **step 7 was a comment**. The tick's docstring listed the seven steps and said
-    steps 1, 2, 5, 6 and 7 were stubbed "with their contracts written down" — and for step 7 the
-    contract was written down and nothing else was: the plant produced a value map, and no reader
-    could tell whether two runs of it agreed. That is the definition of done's own second clause
-    (*"a stable determinism hash across two runs of the same seed"*) with no implementation, which
-    is this folder's oldest finding arriving in the one place the folder cannot lint.
+    **Until WP08 child 6 this function walked the truth in Python and tagged every scalar**
+    (`{"float": repr(x)}`, `{"int": n}`, `{"null": None}`, …) before `json.dumps` saw it. The tags
+    bought nothing plain JSON did not already say, and the walk visited each of the coolant
+    transport ring's 52,100 slots as a Python call: 20–26 ms per tick, more than the physics, and
+    the reason ADR 0002 found the live deadline `20 ms / m` missed at every tick for every `m ≥ 1`.
+    The encoder is now the C encoder over the values as they are, with three refusals where the
+    tags used to coerce:
+
+      - **a non-string key is refused, not coerced.** `json.dumps` writes `{1: x}` as `{"1": x}`,
+        which collides with the map keyed by the string `"1"`, and with `sort_keys=True` only a
+        *mixed* key set raises on its own; `_require_string_keys` is the explicit check, at every
+        depth, and it is the only Python-level walk left — it recurses into containers and scans a
+        scalar-only list once with `set(map(type, …))` rather than visiting each slot;
+      - **a value JSON cannot say is refused** (`default=_refuse_non_json`): with `default=repr` a
+        `Decimal` or an object would encode as a string and collide with an equal `str`;
+      - **NaN and ±Infinity are refused** (`allow_nan=False`): the tagged encoder hashed them as
+        `repr`; a non-finite number in the truth is a defect to surface, not a state to compare.
+
+    One collision is kept and stated: a `list` and a `tuple` of equal items encode the same, as
+    they did under the tags (`{"seq": …}` for both). Nothing in the truth is a tuple. Coverage is
+    §6's and unchanged — the whole state, the ring included; only the bytes hashed changed.
+
+    Before the compare-point existed at all, **step 7 was a comment**: the tick's docstring listed
+    the seven steps and said steps 1, 2, 5, 6 and 7 were stubbed "with their contracts written down",
+    and for step 7 the contract was written down and nothing else was. The plant produced a value
+    map, and no reader could tell whether two runs of it agreed — the definition of done's own
+    second clause (*"a stable determinism hash across two runs of the same seed"*) with no
+    implementation, which is this folder's oldest finding arriving in the one place it cannot lint.
     """
-    return json.dumps(_canonical(values), sort_keys=True, separators=(",", ":"))
+    _require_string_keys(values)
+    try:
+        return json.dumps(
+            values, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_refuse_non_json
+        )
+    except ValueError as exc:
+        # `allow_nan=False` raises from the C encoder with no key in the message, and a refusal the
+        # operator cannot locate is not one they can act on — so, on the failure path only, the
+        # truth is walked once to name every non-finite value's path.
+        raise UncomparableState(
+            f"the compare-point refuses a non-finite number at {_non_finite_paths(values)[:8]}: a "
+            "NaN or an infinity in the truth is a defect to surface, not a state to compare"
+        ) from exc
 
 
-def _canonical(value: Any) -> Any:
-    """One value, in a form `json.dumps` writes the same way twice — and tags what JSON cannot."""
-    if isinstance(value, bool):
-        return {"bool": value}
-    if isinstance(value, int):
-        return {"int": value}
-    if isinstance(value, float):
-        # `repr` and not `round`: the contract is bit-identity, so the encoding must round-trip.
-        return {"float": repr(value)}
-    if isinstance(value, str):
-        return {"str": value}
+class UncomparableState(TypeError, ValueError):
+    """A state the compare-point refuses to encode: a non-`str` key, a non-JSON value, or a
+    non-finite number. A `TypeError` and a `ValueError` both, so a caller that asked for either
+    still catches it, and one type a runner can catch without catching every other bug.
+
+    A state that cannot be hashed cannot be compared, so the lineage cannot honestly continue past
+    it: the executive refuses the tick *before* committing it and the entrypoint stops with exit 3
+    and the tick named (plant.md §4: never clamp silently — raise, and leave the evidence)."""
+
+
+def _non_finite_paths(value: Any, path: str = "") -> list[str]:
+    if isinstance(value, float) and not math.isfinite(value):
+        return [path or "<root>"]
     if isinstance(value, dict):
-        return {"map": {str(key): _canonical(item) for key, item in value.items()}}
+        return [p for key, item in value.items() for p in _non_finite_paths(item, f"{path}.{key}" if path else str(key))]
     if isinstance(value, (list, tuple)):
-        return {"seq": [_canonical(item) for item in value]}
-    if value is None:
-        return {"null": None}
-    return {"other": repr(value)}
+        return [p for i, item in enumerate(value) for p in _non_finite_paths(item, f"{path}[{i}]")]
+    return []
+
+
+# What `json.dumps` writes without calling back into Python: the types a list may hold without
+# the key check having to look inside it.
+_JSON_SCALARS = frozenset({str, int, float, bool, type(None)})
+
+
+def _require_string_keys(value: Any) -> None:
+    """Refuse a mapping key that is not a `str`, at any depth, before `json.dumps` can coerce it.
+
+    A list of scalars is scanned once with `set(map(type, …))` — a C-level pass over the 52,100-slot
+    ring, about half a millisecond — and recursed into only where it holds a container. The cost of
+    this check is the whole difference between `state_hash` and a bare `sha256(json.dumps(...))`,
+    and `tools/measure_clock.py` prints both so the difference stays visible.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise UncomparableState(
+                    f"the compare-point refuses a {type(key).__name__} key ({key!r}): json.dumps "
+                    "would coerce it to a string and two different states could hash the same"
+                )
+            _require_string_keys(item)
+    elif isinstance(value, (list, tuple)):
+        if set(map(type, value)) <= _JSON_SCALARS:
+            return
+        for item in value:
+            if type(item) not in _JSON_SCALARS:
+                _require_string_keys(item)
+
+
+def _refuse_non_json(value: Any) -> Any:
+    """`json.dumps`'s `default`: a value JSON cannot say is a refusal, never a `repr`."""
+    raise UncomparableState(
+        f"the compare-point refuses a {type(value).__name__} ({value!r}): it is not a JSON value, "
+        "and encoding its repr as a string would collide with an equal str"
+    )
 
 
 def state_hash(values: dict[str, Any]) -> str:

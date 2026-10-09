@@ -105,8 +105,8 @@ float and is the steady state of any run longer than one transit.
 |---|---|
 | truth keys at t=0 / after tick 1 | 114 / 131 (the 17 new keys are `__residual`, `__shortfall` and one `__delay`; all keys are strings) |
 | `canonical_state` bytes / plain sorted JSON bytes | 735,722 / 265,012 |
-| `state_hash` (canonical, §6 today) | **19.98 ms p50**, 21.43 p95 |
-| `sha256(json.dumps(sort_keys, compact, default=repr))` | **0.82 ms p50**, 0.87 p95 |
+| `state_hash` (tagged encoder, §6 before child 6) | **19.98 ms p50**, 21.43 p95 |
+| `sha256(json.dumps(sort_keys, compact, default=repr))` — the floor | **0.82 ms p50**, 0.87 p95 |
 | `plant.step`, no effects | 1.54 ms p50, 1.64 p95 |
 | checkpoint-shaped payload, 10 windows: bytes / `json.dumps` | 268,549 / 0.76 ms |
 | durable write (`write`, `fsync`, `rename`; a lower bound on §I's sequence) / without `fsync` | 1.01 ms p50, 1.52 p95, 4.12 max / 0.25 ms p50 |
@@ -115,12 +115,33 @@ float and is the steady state of any run longer than one transit.
 | Quantity (`python3 tools/measure_clock.py --samples 100 --full-ring`) | ring full (52,100 of 52,100) |
 |---|---|
 | `canonical_state` bytes / plain sorted JSON bytes | 1,094,444 / 467,464 |
-| `state_hash` (canonical, §6 today) | **25.93 ms p50**, 34.90 p95, 53.43 max |
-| `sha256(json.dumps(sort_keys, compact, default=repr))` | **7.98 ms p50**, 10.94 p95 |
+| `state_hash` (tagged encoder, §6 before child 6) | **25.93 ms p50**, 34.90 p95, 53.43 max |
+| `sha256(json.dumps(sort_keys, compact, default=repr))` — the floor | **7.98 ms p50**, 10.94 p95 |
 | `plant.step`, no effects | 1.55 ms p50, 1.96 p95 |
 | checkpoint-shaped payload, 10 windows: bytes / `json.dumps` | 471,001 / 7.70 ms |
 | durable write / without `fsync` | 1.36 ms p50, 2.01 p95, 2.73 max / 0.42 ms p50 |
 | `Executive.cycle`, 1 / 2 / 10 windows | 33.2 / 34.0 / 51.5 ms p50 (41.6 / 38.8 / 57.8 p95) |
+
+**After child 6** (the encoder swap; measured on that commit's working tree, which the tool reported
+as `47856fa-dirty`, same machine and Python, `--samples 100`, `--windows 1 2 10`). `state_hash` is now
+SHA-256 over plain sorted compact JSON with a `default` that raises, `allow_nan=False` and an explicit
+refusal of non-string keys; the tool keeps the retired tagged encoder as a reference row so the two
+can be read off one run. The difference between `state_hash` and the floor row is the key check
+(a `set(map(type, …))` pass over the ring, ≈ 0.4–0.5 ms); the floor itself is the `repr` of the
+ring's floats and does not move without a change to §6's coverage.
+
+| Quantity (`tools/measure_clock.py --samples 100`, after child 6) | ring as warmed (10 of 52,100) | ring full (52,100 of 52,100) |
+|---|---|---|
+| `canonical_state` bytes (now plain sorted JSON) / the retired tagged encoding | 265,012 / 735,722 | 467,464 / 1,094,444 |
+| `state_hash` (§6, sorted compact JSON) | **1.38 ms p50**, 1.50 p95, 1.91 max | **8.50 ms p50**, 11.12 p95, 13.81 max |
+| the floor (`default=repr`, no key check) | 0.84 ms p50, 1.04 p95 | 8.16 ms p50, 11.05 p95 |
+| the retired tagged encoder, as a reference row | 20.30 ms p50, 25.09 p95 | 25.52 ms p50, 32.54 p95 |
+| `plant.step`, no effects | 1.55 ms p50, 1.75 p95 | 1.53 ms p50, 1.63 p95 |
+| `Executive.cycle`, 1 / 2 / 10 windows | 5.5 / 8.1 / 25.7 ms p50 (5.9 / 10.1 / 28.1 p95) | 13.7 / 16.2 / 33.8 ms p50 (14.3 / 19.4 / 38.6 p95) |
+
+The same-session "before" rows from that run (`state_hash` tagged, 19.62 ms warmed / 23.99 ms full;
+`Executive.cycle` 26.4 / 29.5 / 45.2 ms warmed and 30.6 / 34.0 / 50.0 ms full) agree with the two
+tables above to within their own spread, so the before and after are one machine's figures.
 
 Mission ladder: 8 phases over `[0, 34,560,000)`; shortest phase `entry`, 180,000 ticks. An earlier
 scratch measurement of the durable write on this machine saw a 32 ms p95 that neither tool run
@@ -128,28 +149,34 @@ reproduced; the tail is the filesystem's and is noted so that J does not rest on
 
 Four consequences are load-bearing for this record and are stated here rather than in the options:
 
-1. **The per-tick compare-point costs more than the physics, and most of that is the encoder, not
-   the coverage.** `plant.state_hash` tags every scalar (`{"float": repr(x)}`, `{"int": n}`, …) and
-   that tagging is what costs 20–26 ms; a SHA-256 over the same truth encoded as plain sorted
-   compact JSON distinguishes every pair the tags exist to separate among JSON values (`0`/`False`,
-   `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`), collides list with tuple exactly where the tags
-   do, needs every key to be a string (true of the truth; the tool checks) and a `default` that
+1. **The per-tick compare-point cost more than the physics, and most of that was the encoder, not
+   the coverage.** Until child 6 `plant.state_hash` tagged every scalar (`{"float": repr(x)}`,
+   `{"int": n}`, …) and that tagging is what cost 20–26 ms; a SHA-256 over the same truth encoded as
+   plain sorted compact JSON distinguishes every pair the tags existed to separate among JSON values
+   (`0`/`False`, `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`), collides list with tuple exactly
+   where the tags did, needs every key to be a string (true of the truth; the encoder now *refuses*
+   any other key rather than coercing it, and the tool still reports the fact) and a `default` that
    *raises* on a non-JSON value (with `default=repr` such a value would encode as a string and collide
-   with an equal `str`, which the `other`/`str` tags keep apart), and costs 0.8 ms on the
-   warmed ring and 8 ms on the full one. The remaining 8 ms is the `repr` of 52,100 floats and is
-   the floor for any encoding that writes the whole ring out each tick. **Coverage of §6 is
-   unchanged by swapping the encoder**; only the bytes hashed change. So the live deadline
-   `20 ms / m` is missed at every tick for every `m ≥ 1` *today*, and after the swap one window's
-   tick alone (step + hash) sustains `m ≈ 8` on the warmed ring and `m ≈ 2` on the full one, with
-   the ceiling then set by publication I/O (B) and by the ring's float encoding, not by physics.
+   with an equal `str`, which the `other`/`str` tags kept apart). **Child 6 landed that encoder**,
+   with NaN and ±Infinity refused as well (`allow_nan=False`; the tags hashed them as `repr`), and
+   the referee holds the pairs table, the refusals and a one-slot ring change as tests. Measured:
+   1.4 ms on the warmed ring and 8.5 ms on the full one, of which 0.8 / 8.2 ms is the floor — the
+   `repr` of 52,100 floats, which no encoding that writes the whole ring out each tick can go below —
+   and the rest is the key check. **Coverage of §6 is unchanged by swapping the encoder**; only the
+   bytes hashed changed. So the live deadline `20 ms / m` was missed at every tick for every `m ≥ 1`
+   before the swap, and after it one window's tick alone (step + hash) sustains `m ≈ 7` on the
+   warmed ring and `m ≈ 2` on the full one, with the ceiling then set by publication I/O (B) and by
+   the ring's float encoding, not by physics.
 2. The WP01 README section "Measured, not fixed here (WP12)" assigns the compare-point cost to
    WP12, which depends on WP08 — and WP08's first acceptance bullet cannot be shown at `m ≥ 1`
    until the cost falls. The circularity is resolved by making the *encoder* a WP08 child (6), the
-   maintainer's, with coverage unchanged; the README's other option — hashing the ring's cursor and
+   maintainer's, with coverage unchanged — landed, and that README paragraph now says what remains
+   (the float-`repr` floor); the README's other option — hashing the ring's cursor and
    the slots the tick wrote — hashes *history* rather than *state* and is a change to §6's contract
    that only the operator can make (A recommends against it).
 3. Recovery by replaying `N` ticks from a snapshot costs `N × (step + hash)`: about 1.1 s at
-   `N = 50` today on the warmed ring (≈ 1.4 s on the full one), 0.5 s after the encoder swap on the full ring; `N` is bounded by the restart
+   `N = 50` before the encoder swap on the warmed ring (≈ 1.4 s on the full one), ≈ 0.5 s after it
+   on the full ring (measured: 50 × (1.53 + 8.50) ms); `N` is bounded by the restart
    time the operator will accept, not by physics (J).
 4. The replay goal of ≈ 8.7 µs/tick is three orders of magnitude from today's 1.5 ms step.
    `plant.md` §10 already says this "is not a Python number"; it is restated so that no option
@@ -206,8 +233,9 @@ be built now (child 5). `m` is a run input recorded beside the seed and **requir
 default**: the flag defaults to `None` (the rule `check_console_flags` already enforces for
 remembered flags), the checkpoint remembers it, and a first start that names nothing refuses, so the
 deployed stack cannot inherit an accidental `m` again. **The value of `m` is the operator's** (answered
-below), with the feasibility on record: today `m < 1` is all this engine sustains; after the
-encoder swap (child 6) one window's tick sustains `m ≈ 2` at steady state before publication I/O.
+below), with the feasibility on record: before child 6 `m < 1` was all this engine sustained; after
+the encoder swap one window's tick sustains `m ≈ 2` at steady state before publication I/O
+(measured after child 6: step 1.53 + hash 8.50 ms on the full ring).
 `m` is **not published** to the windows: it is in the journal and the manifest, and an agent that
 compares `published_at` with `met_s` can infer it, which is the experiment; the frame and mirror
 schemas (`presentation.yaml`) do not grow a field for it. Changing `m` between segments is
@@ -228,16 +256,18 @@ a burst would only save the per-cycle claim overhead, and would stretch B's fram
 command latency to `2k` while catching up. With `k`, both stay exact and shedding (C2) is the only
 pressure valve.
 
-**`m = 1` for ten windows needs child 6 first.** At `m = 1, k = 5` a cycle has `5 × 20 ms = 100 ms`
+**`m = 1` for ten windows needed child 6 first.** At `m = 1, k = 5` a cycle has `5 × 20 ms = 100 ms`
 of wall time. Ten windows' publication costs about 24 ms per cycle (the ten-window cycle less step
-and hash in the full-ring table). Today, with the tagged hash, a cycle is about
+and hash in the full-ring table). Before child 6, with the tagged hash, a cycle was about
 `5 × (1.55 + 25.9) + 24 ≈ 161 ms` on the full ring (≈ 133 ms warmed): every cycle overruns, the lag
 reaches the 30 s ceiling within a minute or two of wall time and C3 holds the run — shedding frames
 cannot rescue it, because the five ticks alone cost more than 100 ms. After the encoder swap it is
-about `5 × (1.55 + 7.98) + 24 + 1.4 ≈ 75 ms` at p50 (≈ 90 ms at p95; a checkpointing cycle adds
+about `5 × (1.53 + 8.50) + 24 + 1.4 ≈ 76 ms` at p50 (≈ 90 ms at p95; a checkpointing cycle adds
 ≈ 9 ms), so `m = 1` is sustainable with modest headroom and the ten-window ceiling at `k = 5` is
-about `m ≈ 1.35`. That figure, not the one-window `m ≈ 2`, is the baseline for any later decision to
-raise `m`. **The first integrated run at `m = 1` therefore waits on child 6.**
+about `m ≈ 1.3`. That figure, not the one-window `m ≈ 2`, is the baseline for any later decision to
+raise `m`. **The first integrated run at `m = 1` therefore waited on child 6**, which has landed; the
+measured after-table is in the evidence section, and the ten-window cycle it timed (one tick per
+cycle, full ring) fell from 50.0 to 33.8 ms p50.
 
 ### B — Publication and claim cadence `k`, separated from the tick (maintainer; operator confirms)
 
@@ -700,7 +730,7 @@ status, and CONTRIBUTING.md warns against a second editable copy of planning pro
 one reviewable PR with its own acceptance; children **1, 2, 4, 5, 6 and 11** are
 **policy-independent**; 3 waits only on other children. With the operator's answers recorded,
 every child may start once its dependencies have landed; the first integrated run at `m = 1` also
-waits on child 6 (see A).
+waited on child 6 (see A), which has landed.
 
 | # | Child | Acceptance example | Depends on |
 |---|---|---|---|
@@ -709,7 +739,7 @@ waits on child 6 (see A).
 | 3 | Resume mechanics: an executive constructed *from* a checkpoint plus record, continuing tick, dwell, deferrals, arms, `seq`, `receipts`, spend, lineage, `published_tick` (`G`, `L(a)`) | Kill at tick `T`, restart, truth and lineage at `T + 100` equal the uninterrupted run's; `boot_id` differs, `seq` continues, `met_s` never decreases, every claimed command has exactly one result | 1, 4; G1 for what `arms` means |
 | 4 | The per-cycle durable record, the published-tick mark, journal segments, replay-from-record (`J` rules 1–3) | A run's record replayed onto its snapshot reproduces every compare-point; a record with one missing cycle refuses; a refusal-only cycle is recorded; segments concatenate by tick | — |
 | 5 | The clock seam: `m`, wall epoch, due-vs-actual lag per tick, burst bound, `k` as the claim/publication cadence, `--poll` retired; `m`, `k`, `N` required with no default (`A2`, `B2` as mechanics) | With `m` and `k` set, the number of ticks between two frames is `k` regardless of machine load; a command lands within `k` ticks; the lag series is reported p50/p95/p99/max; a start naming no `m` refuses | — for the mechanism: the issue's acceptance text excludes A1, A3 and A4, so A2 is the only scheduler it admits; the *values* wait on A and B |
-| 6 | The compare-point encoder: replace `_canonical` tagging with sorted compact JSON + `repr`, coverage unchanged; measured with `tools/measure_clock.py` | Two runs of the same seed agree on every per-tick hash; each tagged pair (`0`/`False`, `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`) still hashes differently; a one-slot change in the delay ring changes it; cost recorded | — (maintainer) |
+| 6 | The compare-point encoder: replace `_canonical` tagging with sorted compact JSON and a `default` that raises, coverage unchanged; measured with `tools/measure_clock.py` — **landed** (the evidence section's after-table) | Two runs of the same seed agree on every per-tick hash; each tagged pair (`0`/`False`, `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`) still hashes differently; a non-string key, a non-JSON value and a NaN are refused; a one-slot change in the delay ring changes it; cost recorded | — (maintainer) |
 | 7 | Budget on the chosen clock, checkpointed (`E`) | After a restart `used_this_window` and `oldest_expires_in_seconds` continue; under E2 a replay reproduces every budget refusal | 1; E |
 | 8 | Overload behaviour: shed static files, then frames, never the mirror; dilate within the ceiling; stop with a recorded hold (`C`) | A deliberately slow instrument makes the lag series climb; the mirror is rewritten every cycle throughout; frames are shed before ticks; the clock stops at the ceiling and the record says why | 5, 6 (before 6 every tick is an overload); C |
 | 9 | Pause and resume control (`D`) | Paused: mirror rewritten, no frame, console unclaimed, dwell unchanged; resumed: the first cycle claims what was written during the pause | 5; D |

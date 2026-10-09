@@ -21048,6 +21048,266 @@ def test_two_runs_of_one_start_produce_the_same_compare_point(tmp_path):
     assert run(definition) == first, f"swapping {a} and {b} changed a compare-point"
 
 
+def _plant_module():
+    """`tools/plant.py` as the referee imports it everywhere else in this file."""
+    import sys as _sys
+
+    if str(VEHICLE / "tools") not in _sys.path:
+        _sys.path.insert(0, str(VEHICLE / "tools"))
+    import plant
+
+    return plant
+
+
+def _stepped_truth(plant, ticks: int = 3) -> dict:
+    """The truth after a few ticks: the coolant transport ring is born at tick one."""
+    world = plant.load_world(VEHICLE)
+    values = plant.initial_values(world)
+    dt = plant.tick_seconds(world)
+    for _ in range(ticks):
+        values = plant.step(world, values, dt, None, [])
+    return values
+
+
+def test_the_compare_point_is_plain_sorted_json_at_the_c_encoder_s_cost():
+    """ADR 0002, evidence consequence 1: the per-tick compare-point cost more than the physics, and
+    most of that was the encoder, not the coverage.
+
+    Until WP08 child 6 `canonical_state` walked the whole truth in Python and tagged every scalar
+    (`{"float": repr(x)}`, `{"int": n}`, `{"null": None}`, …) before handing it to `json.dumps`. The
+    tags existed to keep `0` and `False` apart, and they did; but the walk visited each of the 52,100
+    coolant transport slots as a Python function call, and that — not the ring — was the 20–26 ms.
+    Plain sorted compact JSON already writes every pair the tags separated differently (the next
+    test is the table), so the tags bought nothing the stdlib's own encoder did not, at twenty-five
+    times its price.
+
+    Two properties, both structural rather than a wall-clock number:
+
+      - **the encoding is the stdlib's**: `canonical_state` is byte-identical to
+        `json.dumps(values, sort_keys=True, separators=(",", ":"))`, so the only Python-level work
+        left in the encoder is the key check, which recurses into containers and scans a scalar-only
+        list once with `set(map(type, …))` rather than visiting each slot;
+      - **and it costs no more than a small multiple of that floor**: the medians of twenty samples
+        each, taken in the same process on the same truth, must sit within 3×. The tagged encoder
+        sat at about 23× on this machine; the adopted one at about 1.6× on the warmed ring, the
+        difference being the key check. A bound stated as a ratio measured in one process is what
+        makes this not flaky: a slow or loaded machine slows both alike, and 3× still separates the
+        two encoders by a factor of eight.
+
+    `plant.md` §6's coverage — the whole state, ring included — is unchanged; the test after the
+    pairs table holds that half.
+    """
+    import hashlib
+    import statistics
+    import time
+
+    plant = _plant_module()
+    truth = _stepped_truth(plant)
+    plain = json.dumps(truth, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    assert plant.canonical_state(truth) == plain, "the compare-point must be plain sorted compact JSON"
+    assert plant.state_hash(truth) == hashlib.sha256(plain.encode("utf-8")).hexdigest()[:16]
+    assert not hasattr(plant, "_canonical"), "the tagging walker is the cost this round removed"
+
+    def median_ms(fn, samples: int = 20) -> float:
+        xs = []
+        for _ in range(samples):
+            started = time.perf_counter()
+            fn()
+            xs.append((time.perf_counter() - started) * 1e3)
+        return statistics.median(xs)
+
+    floor = median_ms(lambda: hashlib.sha256(json.dumps(truth, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest())
+    cost = median_ms(lambda: plant.state_hash(truth))
+    assert cost <= 3.0 * floor, f"state_hash {cost:.2f} ms is {cost / floor:.1f}× the plain-JSON floor {floor:.2f} ms"
+
+
+def test_the_compare_point_still_separates_every_pair_the_tags_kept_apart():
+    """The trap in dropping the tags: the tagged encoding distinguished `bool` from `int` and `int`
+    from `float` by name, and a reader could reasonably fear plain JSON would not.
+
+    It does, and this table is the proof rather than the assumption: `json.dumps` writes `True` as
+    `true`, `1.0` as `1.0`, `-0.0` as `-0.0`, a string in quotes and `None` as `null`, so every pair
+    ADR 0002 names (`0`/`False`, `1`/`1.0`, `0.0`/`-0.0`, `"1"`/`1`, `None`/`0`) hashes differently
+    under the adopted encoder. Each pair is placed under the same key in otherwise identical maps,
+    so the only difference between the two encodings is the value under test.
+
+    One collision survives, and it is stated rather than hidden: a `list` and a `tuple` of the same
+    items hash the same. They did under the tagged encoder too (`{"seq": [...]}` for both), so this
+    is not a regression; it is the one place where the compare-point sees a sequence and not its
+    Python type, and nothing in the truth is a tuple today.
+    """
+    plant = _plant_module()
+    pairs = [
+        (0, False),
+        (1, 1.0),
+        (0.0, -0.0),
+        ("1", 1),
+        (None, 0),
+        (1, True),
+        ("", None),
+        ([], {}),
+        (1e16, 10000000000000000),
+    ]
+    for left, right in pairs:
+        a = plant.state_hash({"k": left, "other": 1.0})
+        b = plant.state_hash({"k": right, "other": 1.0})
+        assert a != b, f"{left!r} and {right!r} collide under the compare-point"
+    # Stated, not hidden: a tuple is a JSON array, exactly as it was a tagged `seq`.
+    assert plant.state_hash({"k": [1, 2.0, None]}) == plant.state_hash({"k": (1, 2.0, None)})
+    # And the two bits the ε-free contract cares about most: a 1 ulp change and a sign on zero.
+    assert plant.state_hash({"k": 0.1}) != plant.state_hash({"k": 0.1 + 2**-56})
+
+
+def test_the_compare_point_refuses_a_non_string_key_a_non_json_value_and_a_nan():
+    """A compare-point that coerces is a compare-point that can report two different states as one.
+
+    Three coercions `json.dumps` performs by default, and what each would hide:
+
+      - **a non-string key** — `{1: x}` is written `{"1": x}`, colliding with the map keyed by the
+        string `"1"`; the tagged encoder did the same with `str(key)`. With `sort_keys=True` only a
+        *mixed* key set raises on its own (`int` and `str` do not order), so an all-`int` or a `bool`
+        key (`{True: x}` → `{"true": x}`) must be refused by an explicit check, at any depth, inside
+        a list included;
+      - **a value JSON cannot say** — a `set`, a `Decimal`, an object: the old encoder wrote
+        `{"other": repr(x)}`, and `default=repr` would write the `repr` as a string and collide with
+        an equal `str`. The adopted `default` raises instead;
+      - **NaN and ±Infinity** — `json.dumps` writes `NaN`/`Infinity` by default, which is not JSON
+        and which the tagged encoder hashed as `repr`; `allow_nan=False` makes it a `ValueError`,
+        because a NaN in the truth is a defect to surface, not a state to compare.
+
+    Each refusal is raised, never hashed, and each is checked where it hides: at the top level, in a
+    nested map and inside a list. The string key `"1"` keeps hashing, so the refusal is of coercion
+    and not of the digit.
+    """
+    import decimal
+
+    plant = _plant_module()
+    assert plant.state_hash({"1": 2.0})
+    for bad in (
+        {1: 2.0},
+        {True: 2.0},
+        {None: 2.0},
+        {"a": {1: 2.0}},
+        {"a": [1.0, {"b": 1.0, 2: 2.0}]},
+        {"a": [[{3: 1.0}]]},
+    ):
+        with pytest.raises(TypeError, match="key"):
+            plant.canonical_state(bad)
+        with pytest.raises(TypeError, match="key"):
+            plant.state_hash(bad)
+    for bad in (
+        {"a": {1.0, 2.0}},
+        {"a": decimal.Decimal("1.0")},
+        {"a": object()},
+        {"a": [1.0, b"bytes"]},
+        {"a": {"b": complex(1, 2)}},
+    ):
+        with pytest.raises(TypeError):
+            plant.state_hash(bad)
+    for bad in (
+        {"a": float("nan")},
+        {"a": float("inf")},
+        {"a": [1.0, float("-inf")]},
+        {"a": {"b": float("nan")}},
+    ):
+        with pytest.raises(ValueError):
+            plant.state_hash(bad)
+
+
+def test_a_one_slot_change_in_the_delay_ring_changes_the_compare_point():
+    """`plant.md` §6's coverage is the whole state, and the 52,100-slot coolant transport ring is
+    the most expensive part of it — which is why ADR 0002 names it as the thing a cheaper
+    compare-point would be tempted to leave out, and says only the operator may make that change.
+
+    This round changed the encoding and not the coverage, and this is the reader for that claim:
+    with the ring born (tick one), a change to any one slot — the slot the tick just wrote, a slot
+    that is still `None`, the last slot — moves the hash, as does swapping two unequal slots (order
+    is part of the state) and moving the cursor by one. The ring's bytes are in the encoding too:
+    the encoded truth carries at least as many `null`s as the ring has empty slots.
+    """
+    plant = _plant_module()
+    truth = _stepped_truth(plant, ticks=3)
+    ring_key = next(key for key in truth if key.endswith("__delay"))
+    ring = truth[ring_key]
+    slots = ring["slots"]
+    assert len(slots) == 52_100 and sum(1 for s in slots if s is not None) == 3, (len(slots), ring["next"])
+    assert plant.canonical_state(truth).count("null") >= slots.count(None)
+    base = plant.state_hash(truth)
+
+    def with_ring(**changes):
+        altered = dict(truth)
+        altered[ring_key] = {**ring, **changes}
+        return plant.state_hash(altered)
+
+    written = [i for i, s in enumerate(slots) if s is not None]
+    nudged = list(slots)
+    nudged[written[0]] = float(nudged[written[0]]) + 1e-12
+    assert with_ring(slots=nudged) != base, "a 1e-12 change to the slot the tick wrote must move the hash"
+    filled = list(slots)
+    filled[len(slots) // 2] = 280.0
+    assert with_ring(slots=filled) != base, "filling one empty slot must move the hash"
+    last = list(slots)
+    last[-1] = 0.0
+    assert with_ring(slots=last) != base, "the last slot is covered"
+    swapped = list(slots)
+    swapped[written[0]], swapped[len(slots) - 1] = swapped[len(slots) - 1], swapped[written[0]]
+    assert with_ring(slots=swapped) != base, "slot order is part of the state"
+    assert with_ring(next=(ring["next"] + 1) % len(slots)) != base, "the cursor is part of the state"
+    assert with_ring(slots=list(slots)) == base, "an equal ring is an equal hash"
+
+
+def test_a_state_the_compare_point_refuses_stops_the_run_at_its_last_consistent_tick(
+    tmp_path, monkeypatch, capsys
+):
+    """A NaN in the truth stops the run where it is, named, rather than half-advancing it.
+
+    The plain-JSON compare-point refuses a non-finite number (`allow_nan=False`) where the tagged
+    encoder hashed `repr(nan)` and carried on — rightly, since a NaN in the truth is a plant defect
+    and plant.md §4 says never to carry one silently. Independent review of the encoder round found
+    what the refusal then did: the executive committed the stepped truth and the tick *before*
+    hashing, so the raise left truth at tick T+1 and the lineage at T, every later cycle raised
+    again, the C encoder's message named no key, and the entrypoint died with a traceback and exit 1
+    under a supervisor that would restart it into the same wall. Now the link is computed before the
+    commit, the refusal names the path of the non-finite value, and `console.py` stops with exit 3
+    naming the tick. Nothing in today's truth can be non-finite and no window can put one there, so
+    the NaN is injected by wrapping `step`.
+    """
+    console, plant, world = console_tools()
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast")
+    executive.attach("alpha")
+    executive.cycle()
+    executive.cycle()
+    tick, truth, head, links = (
+        executive.tick, executive.truth, executive.lineage_head, len(executive.lineage)
+    )
+
+    real_step = console.step
+
+    def poisoned(*args, **kwargs):
+        stepped = dict(real_step(*args, **kwargs))
+        stepped["probe_nan"] = float("nan")
+        return stepped
+
+    monkeypatch.setattr(console, "step", poisoned)
+    with pytest.raises(plant.UncomparableState, match="probe_nan") as refused:
+        executive.cycle()
+    assert isinstance(refused.value, ValueError) and isinstance(refused.value, TypeError)
+    assert (executive.tick, executive.lineage_head, len(executive.lineage)) == (tick, head, links)
+    assert executive.truth is truth, "the refused tick must not be committed"
+    executive.close()
+
+    capsys.readouterr()
+    code = console.main(
+        [
+            "--dir", str(VEHICLE), "--diode-dir", str(tmp_path / "entry"), "--slug", "alpha",
+            "--phase", "translunar_coast", "--cycles", "3", "--poll", "0",
+        ]
+    )
+    err = capsys.readouterr().err
+    assert code == 3, err[-600:]
+    assert "stopped at tick 0" in err and "probe_nan" in err, err[-600:]
+
+
 def test_the_determinism_view_runs_two_runs_and_says_so(tmp_path):
     """The CLI is a contract: it prints the compare-points and exits non-zero if two runs differ."""
     result = subprocess.run(
