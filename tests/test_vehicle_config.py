@@ -17417,7 +17417,7 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     assert result.returncode == 1, result.stdout[-900:]
     assert "tools/console.py:--scenario" in result.stdout, result.stdout[-900:]
     assert "defaults to 'nominal'" in result.stdout, result.stdout[-900:]
-    assert "written to `pending.json` as `scenario`" in result.stdout, result.stdout[-900:]
+    assert "remembered (written to `pending.json` or the directory's record) as `scenario`" in result.stdout, result.stdout[-900:]
 
     # The numeric one, on a flag whose value is an int: the message has to read the same way, and
     # the point is that `0` is as un-nameable-a-default as `"nominal"` is.
@@ -17436,15 +17436,17 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     # **A check that cannot run is not a check that passed.** Renaming the record the durable set is
     # derived from must refuse rather than pass: a silent pass here would leave every flag in the
     # file unchecked while the report said the vehicle composed.
+    # The record a restart reads is the directory's (`Executive.root_record`, ADR 0001's
+    # clarifications), so that is the one renamed; a window's `pending.json` is a published copy and
+    # no longer a required source.
     unwritten = copy_definition(fixture_dir(tmp_path, "console-unreadable"))
     path = unwritten / "tools" / "console.py"
     text = path.read_text()
-    assert text.count("write_json_atomic(self.pending,") == 1
-    assert text.count("self.pending,") >= 2
-    path.write_text(text.replace("self.pending", "self.record_file"))
+    assert text.count("def root_record(") == 1
+    path.write_text(text.replace("def root_record(", "def directory_record(", 1))
     result = run_linter(unwritten)
     assert result.returncode == 1, result.stdout[-900:]
-    assert "no longer writes `pending.json` in a form this check can read" in result.stdout, result.stdout[-900:]
+    assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
 
 
 def test_the_linter_refuses_a_shared_node_or_sentinel_count_that_has_drifted(tmp_path):

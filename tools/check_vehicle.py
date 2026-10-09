@@ -18159,9 +18159,29 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
 
     `None` means the writer could not be read, which the caller refuses rather than tolerates: a
     check that cannot run is not a check that passed.
+
+    **And the directory's record, since ADR 0001's clarifications made it the one a restart reads.**
+    The identity a restart resolves against — scenario, seed, ring bounds — moved to
+    `<diode-dir>/.executive.json`, which `Executive.root_record` returns as a literal dictionary; a
+    window's `pending.json` became a published copy read for nothing. Reading only the window writer
+    would let the run's identity leave the windows (they are agent-readable, and the seed keys the
+    fault plan) and take the check with it, so the record's keys are unioned in. **The record is the
+    required source and the window writer an optional one**: a `root_record` that is absent or does
+    not return a dictionary literal is a writer this check cannot read, and is `None`.
     """
     found = False
     keys: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "root_record":
+            returns = [n for n in ast.walk(node) if isinstance(n, ast.Return)]
+            if len(returns) != 1 or not isinstance(returns[0].value, ast.Dict):
+                return None
+            found = True
+            keys |= {
+                key.value
+                for key in returns[0].value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            }
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or len(node.args) < 2:
             continue
@@ -18176,7 +18196,6 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
             and target.value.id == "self"
         ):
             continue
-        found = True
         payload = node.args[1]
         if not isinstance(payload, ast.Dict):
             return None
@@ -18284,7 +18303,8 @@ def check_console_flags(root: Path, report: Report) -> None:
     if durable is None:
         report.refuse(
             "tools/console.py",
-            "no longer writes `pending.json` in a form this check can read, so the set of values a "
+            "no longer returns the directory's record (`Executive.root_record`) as a dictionary this "
+            "check can read, nor writes `pending.json` as one, so the set of values a "
             "restart remembers — and therefore the set of flags that must be able to tell `named` "
             "from `named nothing` — is unknown",
         )
@@ -18301,7 +18321,7 @@ def check_console_flags(root: Path, report: Report) -> None:
     if not remembered:
         report.refuse(
             "tools/console.py",
-            f"declares no flag for any of the {len(durable)} value(s) it writes to `pending.json` "
+            f"declares no flag for any of the {len(durable)} value(s) it remembers "
             "({', '.join(sorted(durable))}), so a run's identity cannot be named at all",
         )
     for dest, flag, default in sorted(remembered):
@@ -18310,7 +18330,7 @@ def check_console_flags(root: Path, report: Report) -> None:
         stated = ast.unparse(default) if default is not None else "nothing"
         report.refuse(
             f"tools/console.py:{flag}",
-            f"defaults to {stated} and its value is written to `pending.json` as `{dest}`, so a "
+            f"defaults to {stated} and its value is remembered (written to `pending.json` or the directory's record) as `{dest}`, so a "
             f"caller who names {stated} and a caller who names nothing are the same argument — and "
             "the restore that reads the record back cannot tell which it is looking at, so the "
             "window silently ignores whichever the caller asked for. Default it to `None`, which "
