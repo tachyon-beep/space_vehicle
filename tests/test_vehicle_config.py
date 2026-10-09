@@ -26635,3 +26635,23 @@ def test_a_map_states_return_guard_does_not_depend_on_the_order_of_its_keys(tmp_
     assert "DWELL" in (twin.dwell_refusal("set_breaker", returning) or ""), twin.dwell
     executive.close()
     twin.close()
+
+
+def test_a_node_held_map_state_reads_the_same_whatever_the_order_of_its_inner_keys():
+    """A value held inside a node is itself a map, and its text must not carry insertion order.
+
+    Confirmation review of c8f41c2 (Claude Opus): `value_of` had been made to list a map's values in
+    sorted key order, which reached the map states held directly under `internal` but not one held
+    inside a node — `rcs_valves = {thruster_valve: {sm_primary: …, sm_secondary: …}}` — because each
+    element was still `str()` of the inner map in its live insertion order. A replay from tick 0, whose
+    record encodes maps with sorted keys, then gave an executive whose `dwell.thruster_valve` differed
+    from the live run's only in that order. No guard flipped today (the valve's dwell is 0/0), but the
+    replayed body was not the live one. The oracle is the same value built in two orders.
+    """
+    console, _plant, world = console_tools()
+    state = next(s for s in world.states if s.id == "thruster_valve")
+    assert state.node != "internal", "the fixture no longer holds thruster_valve inside a node"
+    forward = {state.node: {"group": {"sm_primary": True, "sm_secondary": False}}}
+    reverse = {state.node: {"group": {"sm_secondary": False, "sm_primary": True}}}
+    assert console.value_of(forward, state) == console.value_of(reverse, state)
+    assert console.value_of({state.node: {"a": 1, "b": 2}}, state) == ["1", "2"], "scalars keep their str"

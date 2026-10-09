@@ -1133,8 +1133,21 @@ def value_of(values: dict[str, Any], state: Any) -> list[str]:
     else:
         value = values.get(state.node)
     if isinstance(value, dict):
-        return [str(v) for _key, v in sorted(value.items(), key=lambda item: str(item[0]))]
-    return [] if value is None else [str(value)]
+        return [_value_text(v) for _key, v in sorted(value.items(), key=lambda item: str(item[0]))]
+    return [] if value is None else [_value_text(value)]
+
+
+def _value_text(value: Any) -> str:
+    """A state's value as text that does not depend on insertion order, at any depth.
+
+    A scalar is its `str`, as it always was. A map or a list is canonical JSON, because a value held
+    inside a node is itself a map — `rcs_valves = {thruster_valve: {sm_primary: …, sm_secondary: …}}`
+    — and `str()` of it kept the live insertion order while a replayed one came back sorted, so the
+    replayed executive differed from the live one in `dwell` (confirmation review, Opus, at c8f41c2).
+    """
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return str(value)
 
 
 def dwell_after_effect(

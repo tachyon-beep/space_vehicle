@@ -19211,7 +19211,7 @@ the two rows the documentation now cites (the full-batch flood, and the record's
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 427 | **432** |
+| referee tests | 427 | **433** |
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
