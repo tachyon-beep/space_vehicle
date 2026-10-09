@@ -26434,3 +26434,204 @@ def test_a_startup_event_is_durable_with_its_directory_entry(tmp_path, monkeypat
     target = tmp_path / "journal.feed.jsonl"
     console.append_journal_line(target, {"event": "probe", "boot_id": "feed"})
     assert synced == [str(target.resolve()), str(tmp_path.resolve())], synced
+
+
+# ---- ADR 0002 child 4, confirmation reviews (Codex gpt-6-astra high: request changes; Opus: approve with findings) ----
+
+
+def test_a_deferral_written_with_its_arguments_out_of_order_is_read_back_and_replayed(tmp_path):
+    """Confirmation review P1 (Codex): a valid deferral poisoned the journal for good.
+
+    `canonical_command` spelled the arguments in the order the agent wrote them, and the record's
+    encoding sorts the keys of `arguments`; so `request_imu_alignment target=LVLH source=star` was
+    accepted live and, read back, its command no longer matched the one its verb and arguments spell —
+    the schema refused an intact, chained row, and because the first pass checks every row, no later
+    checkpoint could get past it. The canonical command is now spelled from the sorted keys, live, in the
+    checkpoint and in the record alike: the live queue holds `source=star target=LVLH`, the record reads
+    back, and a replay onto a checkpoint taken *after* the deferral settled goes through.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    submit(diode / "alpha", ["request_imu_alignment target=LVLH source=star"])
+    executive.cycle()
+    (queued,) = executive.windows["alpha"].deferred
+    assert queued["command"] == "request_imu_alignment source=star target=LVLH", queued
+    _points, _counters, after = recorded_run(executive, diode, {}, 1, snapshot_at=3)
+    recorded_run(executive, diode, {}, 2, start=3)
+    executive.close()
+    record = console.read_record(state)
+    assert record.segments[0].last_tick == 5
+    replayed = console.replay_record(world, after, record)
+    assert [p[0] for p in replayed.points] == [4, 5]
+
+
+def test_a_boot_whose_first_cycle_was_torn_stays_in_the_segment_history(tmp_path):
+    """Confirmation review P1 (Codex): a torn first cycle forked the segment history.
+
+    Boot B is restored from A's stopping checkpoint, writes its header and its first row, and dies with
+    the row torn: B's segment is a verified header and nothing else. A resume replays the record onto
+    A's checkpoint — and the first replay dropped B from the body's segments because it had replayed
+    no row of it, so the next boot, C, named A as its predecessor, A had two successors, and the record
+    refused as `chain` from then on. A segment the replay reaches, header-only or not, now stays in the
+    history with the chain it ended on: C names B, and a replay from an early checkpoint across A, B
+    and C equals the uninterrupted run.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    first.attach("alpha")
+    first.attach("bravo")
+    _points, _counters, early = recorded_run(first, diode, RECORD_SCRIPT, 2, snapshot_at=2)
+    recorded_run(first, diode, RECORD_SCRIPT, 3, start=2)
+    stopped = checkpoint.capture_state(first, compat)
+    first.close()
+    second = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    second.attach("alpha")
+    second.attach("bravo")
+    checkpoint.restore_state(second, stopped)
+    second.cycle()
+    b_segment, b_boot = second.journal, second.boot_id
+    second.close()
+    lines = b_segment.read_bytes().split(b"\n")
+    b_segment.write_bytes(lines[0] + b"\n" + lines[1][: len(lines[1]) // 2])
+    record = console.read_record(state)
+    assert [(s.boot_id, s.rows, s.torn) for s in record.segments][-1] == (b_boot, 0, True)
+
+    resumed = console.replay_record(world, stopped, record)
+    assert [s["segment"] for s in resumed.body["segments"]] == [first.boot_id, b_boot], resumed.body["segments"]
+    assert resumed.body["segments"][-1]["chain"] == json.loads(lines[0])["chain"]
+    third = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    third.attach("alpha")
+    third.attach("bravo")
+    checkpoint.restore_state(third, resumed.body)
+    recorded_run(third, diode, RECORD_SCRIPT, 3, start=5)
+    third_header = record_lines(third.journal)[0]
+    third.close()
+    assert (third_header["previous"], third_header["previous_chain"]) == (b_boot, json.loads(lines[0])["chain"])
+
+    uninterrupted = console.Executive(world, tmp_path / "c-diode", phase="translunar_coast", state_dir=tmp_path / "c-state")
+    uninterrupted.attach("alpha")
+    uninterrupted.attach("bravo")
+    oracle, _counters, _none = recorded_run(uninterrupted, tmp_path / "c-diode", RECORD_SCRIPT, 8)
+    uninterrupted.close()
+    replayed = console.replay_record(world, early, console.read_record(state))
+    assert replayed.points == [(t, *oracle[t]) for t in range(3, 9)], replayed.points
+
+
+def test_every_writer_of_the_journal_makes_it_private_or_refuses(tmp_path, monkeypatch):
+    """Confirmation review P2 (Codex): the startup-event writer left an existing journal as it found it.
+
+    `main` journals a root-record rewrite through `append_journal_line` before the executive's own
+    writer ever opens the file, and that writer checked neither owner nor mode: an operator's `0644`
+    journal stayed world-readable, and one another user owns was appended to. Both writers now share
+    one rule — a file this process owns is made `0600`, one it does not own is refused by name with
+    nothing written.
+    """
+    console, _plant, _world = console_tools()
+    journal = tmp_path / "record.jsonl"
+    journal.write_text("")
+    journal.chmod(0o644)
+    console.append_journal_line(journal, {"event": "probe", "boot_id": "feed"})
+    assert stat_mode(journal) == 0o600 and journal.read_text().count("\n") == 1
+    theirs = tmp_path / "theirs.jsonl"
+    theirs.write_text("")
+    real_uid = os.geteuid()
+    monkeypatch.setattr(console.os, "geteuid", lambda: real_uid + 1)
+    with pytest.raises(console.RecordUnwritable) as refused:
+        console.append_journal_line(theirs, {"event": "probe", "boot_id": "feed"})
+    assert "owned by uid" in str(refused.value) and theirs.name in str(refused.value), refused.value
+    assert theirs.read_text() == ""
+
+
+def test_a_journal_holding_many_boots_is_read_in_time_proportional_to_its_length(tmp_path, monkeypatch):
+    """Confirmation review P2 (Codex, Opus 3): every segment of a shared `--journal` re-read the file from the top.
+
+    `Record.lines(segment)` started each segment's second pass at the file's first line, so a
+    `--journal` holding many boots was read once per boot — quadratic in the number of boots. The first
+    pass now keeps each segment's byte offset and line number, and the second starts there. A synthetic
+    journal of 100 boots of 20 quiet rows each, chained with the module's own `record_chain`, is read
+    by `read_record` and streamed in full by `unwritten_results`; the lines the reader reads are counted
+    (`_file_lines`), and the total is at most twice the file's plus one line per boot — one pass to check,
+    one to stream, which reads the next boot's header to see where a segment ends. Before, 108,249 lines
+    were read for this file of 2,100.
+    """
+    console, _plant, _world = console_tools()
+    world_id = "e" * 32
+    path = tmp_path / "record.jsonl"
+    rows: list[dict] = []
+    previous, previous_chain, tick = None, "", 0
+    for boot in range(100):
+        boot_id = f"{boot:032x}"
+        header = {
+            "event": "segment", "format": console.RECORD_FORMAT, "world_id": world_id, "segment": boot_id, "boot_id": boot_id,
+            "first_tick": tick, "previous": previous, "previous_chain": previous_chain, "wall_epoch": "2026-10-09T00:00:00+00:00",
+        }
+        header["chain"] = chain = console.record_chain(previous_chain, header)
+        rows.append(header)
+        for _ in range(20):
+            tick += 1
+            row = {
+                "tick": tick, "world_id": world_id, "boot_id": boot_id, "lineage": hashlib.sha256(str(tick).encode()).hexdigest(),
+                "state_hash": hashlib.sha256(str(-tick).encode()).hexdigest()[:16], "effects": [], "receipts": [], "receipt": 0,
+                "windows": {}, "published": {}, "failures": 0,
+            }
+            row["chain"] = chain = console.record_chain(chain, row)
+            rows.append(row)
+        previous, previous_chain = boot_id, chain
+    path.write_text("".join(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n" for row in rows))
+    read = [0]
+    real = console._file_lines
+
+    def counted(*args, **kwargs):
+        for line in real(*args, **kwargs):
+            read[0] += 1
+            yield line
+
+    monkeypatch.setattr(console, "_file_lines", counted)
+    record = console.read_record(path)
+    assert len(record.segments) == 100 and record.segments[-1].last_tick == 2000
+    assert console.unwritten_results(record) == []
+    assert read[0] <= 2 * len(rows) + 100, (read[0], len(rows))
+
+
+def test_a_map_states_return_guard_does_not_depend_on_the_order_of_its_keys(tmp_path, monkeypatch):
+    """Confirmation review Opus 2: a dwell compared map values as lists in key order.
+
+    `value_of` turned a map state into the list of its values in the map's insertion order, and the
+    return guard compared that list with the one recorded when the state was left. A checkpoint (and the
+    record) encodes maps with sorted keys, so after a restore the same map compares in another order:
+    a replay from tick 0 gave `thruster_valve` dwell values differing only in order, and a map state
+    with a nonzero `min_off_s` (`hatch_state`, `breaker_panel`, …) could miss its return guard. The
+    values are now taken in key order, live and after a restore alike.
+
+    No map state today is both commandable without an interlock and guarded with `min_off_s` above its
+    `min_on_s`, so the guard is reached by giving `set_breaker` a floor of `(0, 5)` s: the breaker panel
+    is left from `{zeta: closed, alpha: open}` live, the executive is checkpointed and restored (the
+    maps come back key-sorted), and a command returning the panel to that value one tick later is
+    refused `DWELL` on the restored executive as on the live one.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast")
+    executive.attach("alpha")
+    panel = next(state for state, _on, _off in console.command_dwell(world, "set_breaker"))
+    monkeypatch.setattr(console, "command_dwell", lambda _world, verb: [(panel, 0.0, 5.0)] if verb == "set_breaker" else [])
+    left = {"zeta": "closed", "alpha": "open"}
+    now = {"zeta": "open", "alpha": "open"}
+    before = {**executive.truth, "internal": {**executive.truth["internal"], panel.id: left}}
+    after = {**executive.truth, "internal": {**executive.truth["internal"], panel.id: now}}
+    assert console.dwell_after_effect(world, executive.dwell, "set_breaker", 0, before, after)
+    executive.truth = after
+    executive.tick = 1
+    returning = {**after, "internal": {**after["internal"], panel.id: {"alpha": "open", "zeta": "closed"}}}
+    assert "DWELL" in (executive.dwell_refusal("set_breaker", returning) or ""), executive.dwell
+    twin = console.Executive(world, tmp_path / "twin", phase="translunar_coast")
+    twin.attach("alpha")
+    checkpoint.restore_state(twin, checkpoint.capture_state(executive, checkpoint.Compatibility.current(world)))
+    assert list(twin.truth["internal"][panel.id]) == ["alpha", "zeta"]
+    assert "DWELL" in (twin.dwell_refusal("set_breaker", returning) or ""), twin.dwell
+    executive.close()
+    twin.close()

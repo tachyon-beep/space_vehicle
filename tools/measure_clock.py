@@ -35,7 +35,11 @@ one `fsync`: the row carries the published-tick marks) and a *verdict* cycle (on
 window, so every window's claim is made durable — the console and its directory — and every window
 writes a result, `fsync`s it and its `output/` directory, and appends its `results_written` note with
 an `fsync` of its own: five per window and the row's one). The `fsync`s of one quiet and one verdict
-cycle are counted rather than assumed, and the two rows' sizes are reported. The difference between these rows and `Executive.cycle` without a record is J's cost.
+cycle are counted rather than assumed, and the two rows' sizes are reported. The worst case is timed
+too: a *full batch* (`--max-batch`, 32 by default, refused commands) in every window of the largest
+window count, one result file and one `fsync` each. And the record's read cost: a synthetic segment of
+quiet rows at mission-end tick numbers (eight digits) with every window's mark, read by `read_record`
+(the checking pass) and streamed by `unwritten_results` (the replaying pass's reader), per row. The difference between these rows and `Executive.cycle` without a record is J's cost.
 
     python3 tools/measure_clock.py                         # the empty-ring table
     python3 tools/measure_clock.py --full-ring             # the steady-state table
@@ -61,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import console  # noqa: E402
 from console import Executive  # noqa: E402
 from plant import (  # noqa: E402
     canonical_state,
@@ -214,10 +219,11 @@ def durable_writer(directory: Path, blob: bytes, *, fsync: bool) -> Any:
     return write
 
 
-def submit_refusal(diode: Path, slugs: list[str]) -> None:
-    """One command no vehicle knows, in every window: a verdict, and a result, everywhere."""
+def submit_refusal(diode: Path, slugs: list[str], count: int = 1) -> None:
+    """`count` commands no vehicle knows, in every window: a verdict, and a result, each."""
+    commands = [f"zzz_measure_{n}" for n in range(count)]
     for slug in slugs:
-        (diode / slug / "console.json").write_text(json.dumps({"commands": ["zzz_measure"], "variables": {}}))
+        (diode / slug / "console.json").write_text(json.dumps({"commands": commands, "variables": {}}))
 
 
 def counted_fsyncs(fn: Any) -> int:
@@ -237,11 +243,11 @@ def counted_fsyncs(fn: Any) -> int:
     return calls[0]
 
 
-def verdict_cycles(executive: Any, diode: Path, slugs: list[str], samples: int) -> dict[str, float]:
-    """`Executive.cycle` with one refused command in every window, the console's write not timed."""
+def verdict_cycles(executive: Any, diode: Path, slugs: list[str], samples: int, count: int = 1) -> dict[str, float]:
+    """`Executive.cycle` with `count` refused commands in every window, the console's write not timed."""
     xs: list[float] = []
     for _ in range(samples):
-        submit_refusal(diode, slugs)
+        submit_refusal(diode, slugs, count)
         t0 = time.perf_counter()
         executive.cycle()
         xs.append((time.perf_counter() - t0) * 1e6)
@@ -326,7 +332,66 @@ def record_costs(world: Any, tmpdir: Path, windows: list[int], samples: int, ful
         finally:
             executive.close()
     result["cycle_by_windows"] = cycles
+    n = max(windows) if windows else 10
+    slugs = [f"w{i:02d}" for i in range(n)]
+    diode, state = tmpdir / "flood-diode", tmpdir / "flood-state"
+    executive = Executive(world, diode, phase="translunar_coast", scenario="nominal", seed=0, state_dir=state)
+    try:
+        for slug in slugs:
+            executive.attach(slug)
+        for _ in range(2):
+            executive.cycle()
+        if full_ring:
+            executive.truth = fill_rings(executive.truth)
+        batch = executive.max_batch
+        submit_refusal(diode, slugs, batch)
+        flood_fsyncs = counted_fsyncs(executive.cycle)
+        result["flood"] = {
+            "windows": n,
+            "batch": batch,
+            "fsyncs": flood_fsyncs,
+            "cycle": verdict_cycles(executive, diode, slugs, min(samples, 10), batch),
+        }
+    finally:
+        executive.close()
+    result["read"] = record_read_cost(tmpdir, n)
     return result
+
+
+def record_read_cost(tmpdir: Path, windows: int, rows: int = 20_000) -> dict[str, Any]:
+    """Per-row cost of the record's two passes, on quiet rows at eight-digit ticks with every window's mark."""
+    where = tmpdir / "read-cost"
+    where.mkdir()
+    world_id, boot = "e" * 32, "b" * 32
+    first = 30_000_000
+    header = {
+        "event": "segment", "format": console.RECORD_FORMAT, "world_id": world_id, "segment": boot, "boot_id": boot,
+        "first_tick": first, "previous": None, "previous_chain": "", "wall_epoch": "2026-10-09T00:00:00+00:00",
+    }
+    header["chain"] = chain = console.record_chain("", header)
+    lines = [console.record_line(header)]
+    for tick in range(first + 1, first + rows + 1):
+        row = {
+            "tick": tick, "world_id": world_id, "boot_id": boot, "lineage": hashlib.sha256(str(tick).encode()).hexdigest(),
+            "state_hash": hashlib.sha256(str(-tick).encode()).hexdigest()[:16], "effects": [], "receipts": [], "receipt": 1_000,
+            "windows": {}, "published": {f"w{i:02d}": {"tick": tick, "seq": tick - 1} for i in range(windows)}, "failures": 0,
+        }
+        row["chain"] = chain = console.record_chain(chain, row)
+        lines.append(console.record_line(row))
+    (where / f"journal.{boot}.jsonl").write_bytes(b"".join(lines))
+    t0 = time.perf_counter()
+    record = console.read_record(where)
+    t1 = time.perf_counter()
+    console.unwritten_results(record)
+    t2 = time.perf_counter()
+    record.close()
+    return {
+        "rows": rows,
+        "windows": windows,
+        "row_bytes": len(lines[-1]),
+        "check_us_per_row": round((t1 - t0) / rows * 1e6, 1),
+        "stream_us_per_row": round((t2 - t1) / rows * 1e6, 1),
+    }
 
 
 def engine_identity(root: Path) -> str:
@@ -458,6 +523,14 @@ def render(result: dict[str, Any]) -> str:
             f"row {row['verdict_row_bytes']:,} B)",
             f"  the same verdict cycle, no record:    {us(row['verdict_without_record'])}",
         ]
+    flood = record["flood"]
+    read = record["read"]
+    lines += [
+        f"a full batch ({flood['batch']} refused commands) in each of {flood['windows']} windows, with the record: "
+        f"{us(flood['cycle'])} ({flood['fsyncs']} fsync)",
+        f"record read, {read['rows']:,} quiet rows of {read['row_bytes']} B ({read['windows']} windows' marks, 8-digit ticks): "
+        f"check {read['check_us_per_row']} µs/row, stream {read['stream_us_per_row']} µs/row",
+    ]
     m = result["mission"]
     lines.append(f"mission: {m['phases']} phases, {m['ticks']:,} ticks; shortest phase {m['shortest_phase_ticks']:,} ticks")
     return "\n".join(lines)

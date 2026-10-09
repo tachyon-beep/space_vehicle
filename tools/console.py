@@ -943,6 +943,7 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
             Path(path).name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd
         )
         try:
+            private_record_file(fd, str(path))
             _write_all(fd, (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
             os.fsync(fd)
         finally:
@@ -952,6 +953,27 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
     finally:
         if opened is not None:
             os.close(opened)
+
+
+def private_record_file(fd: int, name: str) -> None:
+    """The one rule for any file the record is appended to: this process's, and `0600`, or refused by name.
+
+    `O_CREAT` sets no mode on a file that exists, so an operator's journal made `0644` before would stay
+    readable with the lineage in it; one this process owns is made `0600` here, and one another user owns
+    cannot be, so it is `RecordUnwritable` before anything is written. Both writers call it — the
+    executive's (`Executive._record_handle`) and the startup events' (`append_journal_line`), which `main`
+    runs first (child 4's review finding 8 and its confirmation review P2).
+    """
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise RecordUnwritable(f"the record {name} is not a regular file")
+    if info.st_uid != os.geteuid():
+        raise RecordUnwritable(
+            f"the record {name} is owned by uid {info.st_uid}, not by this process's {os.geteuid()}, so it "
+            "cannot be made private (0600); name a journal this executive owns"
+        )
+    if stat.S_IMODE(info.st_mode) & 0o077:
+        os.fchmod(fd, 0o600)
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -1100,13 +1122,18 @@ def advance(
 
 
 def value_of(values: dict[str, Any], state: Any) -> list[str]:
-    """The current value(s) of a state, as text, wherever the map keeps them."""
+    """The current value(s) of a state, as text, wherever the map keeps them — a map's in key order.
+
+    In key order because the checkpoint and the record encode maps with sorted keys: in the map's own
+    insertion order, a value recorded live and the same value after a restore compared as different
+    lists, and a dwell's return guard could miss (confirmation review, Opus 2).
+    """
     if state.node == "internal":
         value = (values.get("internal") or {}).get(state.id)
     else:
         value = values.get(state.node)
     if isinstance(value, dict):
-        return [str(v) for v in value.values()]
+        return [str(v) for _key, v in sorted(value.items(), key=lambda item: str(item[0]))]
     return [] if value is None else [str(value)]
 
 
@@ -1137,13 +1164,16 @@ def dwell_after_effect(
 
 
 def canonical_command(verb: str, arguments: dict[str, str]) -> str:
-    """The command a parse spells: the verb and each argument once, `key=value`, in the parse's order.
+    """The command a parse spells: the verb and each argument once, `key=value`, in key order.
 
     A deferral is queued, checkpointed and recorded as this (review finding 4): `parse_arguments`
     keeps the last value of a repeated key and ignores tokens without `=`, so the raw line and its
-    parse can differ, and a prefix of the raw line can parse to *another valid command*.
+    parse can differ, and a prefix of the raw line can parse to *another valid command*. The keys are
+    sorted because every encoding of `arguments` sorts them: spelled in the agent's order, a deferral
+    written `target=… source=…` was accepted live and failed its own check on read-back (confirmation
+    review P1).
     """
-    return " ".join([verb, *(f"{key}={value}" for key, value in arguments.items())])
+    return " ".join([verb, *(f"{key}={value}" for key, value in sorted(arguments.items()))])
 
 
 def receipt_entries(verdicts: list[Verdict]) -> list[dict[str, Any]]:
@@ -1385,6 +1415,8 @@ class SegmentInfo:
     chain: str
     rows: int = 0
     torn: bool = False
+    offset: int = 0
+    line: int = 1
 
     @property
     def first_tick(self) -> int:
@@ -1395,8 +1427,14 @@ class SegmentInfo:
         return self.header.get("previous")
 
 
-def _file_lines(dir_fd: int, name: str) -> Iterator[tuple[int, dict[str, Any] | None]]:
-    """`(line number, object or None)` for each line of one journal file, bounded, read a line at a time.
+def _file_lines(
+    dir_fd: int, name: str, offset: int = 0, first: int = 1
+) -> Iterator[tuple[int, int, dict[str, Any] | None]]:
+    """`(line number, byte offset, object or None)` for each line of one journal file from `offset`, bounded.
+
+    `offset` and `first` start the read at a line the first pass found (a segment's header), so a
+    second pass over one segment of a shared `--journal` does not re-read the boots before it
+    (confirmation review P2).
 
     `None` is a line that is not a complete JSON object (a torn append, or worse — the caller decides
     which). A line past `MAX_RECORD_LINE_BYTES` refuses. Nothing is kept: memory is one line.
@@ -1410,8 +1448,10 @@ def _file_lines(dir_fd: int, name: str) -> Iterator[tuple[int, dict[str, Any] | 
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RecordRefused("file", f"{name} is not a regular file")
         limit = MAX_RECORD_LINE_BYTES
-        number = 0
+        handle.seek(offset)
+        number = first - 1
         while True:
+            at = handle.tell()
             raw = handle.readline(limit + 1)
             if not raw:
                 return
@@ -1425,11 +1465,13 @@ def _file_lines(dir_fd: int, name: str) -> Iterator[tuple[int, dict[str, Any] | 
                     row = loads_json(raw[:-1].decode("utf-8"))
                 except Exception:  # noqa: BLE001 - any decoder failure is "not an object"
                     row = None
-            yield number, row if isinstance(row, dict) else None
+            yield number, at, row if isinstance(row, dict) else None
 
 
-def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str, Any]]]:
-    """Every line of one journal file that belongs to the trace, verified: `(kind, line number, row)`.
+def _verified_lines(
+    dir_fd: int, name: str, offset: int = 0, first: int = 1
+) -> Iterator[tuple[str, int, int, dict[str, Any]]]:
+    """Every line of one journal file from `offset` that belongs to the trace, verified: `(kind, line, offset, row)`.
 
     `kind` is `header`, `row`, `note`, or `torn` (the row is then `{}`, and closes its segment). Each
     header starts a segment and is held to its schema and its format; each tick row to the tick after
@@ -1441,23 +1483,23 @@ def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str
     question (`concatenated`): the next segment names the chain its predecessor ended on. A startup
     event (child 2) is the operator's, unchained, and not part of the trace.
     """
-    pending: tuple[int, None] | None = None
+    pending: tuple[int, int] | None = None
     header: dict[str, Any] | None = None
     chain = ""
     last_tick: int | None = None
     receipts: set[tuple[str, int]] = set()
     noted: set[tuple[str, int]] = set()
-    for number, row in _file_lines(dir_fd, name):
+    for number, at, row in _file_lines(dir_fd, name, offset, first):
         if pending is not None:
             if row is not None and row.get("event") == "segment":
-                yield "torn", pending[0], {}
+                yield "torn", pending[0], pending[1], {}
                 pending = None
             else:
                 raise RecordRefused(
                     "corrupt", f"line {pending[0]} of {name} is not a JSON object, and it is neither the last line of its segment nor a torn append"
                 )
         if row is None:
-            pending = (number, None)
+            pending = (number, at)
             continue
         event = row.get("event")
         segment = header["boot_id"] if header is not None else None
@@ -1473,7 +1515,7 @@ def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str
             if row.get("chain") != record_chain(row["previous_chain"], row):
                 raise RecordRefused("chain", f"line {number} of {name}: the header's chain value is not its own", segment=row["boot_id"])
             header, chain, last_tick, receipts, noted = row, row["chain"], int(row["first_tick"]), set(), set()
-            yield "header", number, row
+            yield "header", number, at, row
             continue
         if event is not None and event != "results_written":
             continue  # a startup event (child 2): the operator's, and not part of the trace
@@ -1508,7 +1550,7 @@ def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str
                 raise RecordRefused("note", f"line {number} of {name}: {problem}", tick=row.get("tick") if _count(row.get("tick")) else None, segment=segment)
             noted |= named
             chain = row["chain"]
-            yield "note", number, row
+            yield "note", number, at, row
             continue
         found = _row_problem(row)
         if found is not None:
@@ -1517,11 +1559,11 @@ def _verified_lines(dir_fd: int, name: str) -> Iterator[tuple[str, int, dict[str
             raise RecordRefused("row", f"line {number} of {name} is of world {row['world_id']}, boot {row['boot_id']}, not its header's", tick=tick, segment=segment)
         chain, last_tick = row["chain"], tick
         receipts, noted = {(r["window"], r["local"]) for r in row["receipts"]}, set()
-        yield "row", number, row
+        yield "row", number, at, row
     if pending is not None:
         if header is None:
             raise RecordRefused("corrupt", f"line {pending[0]} of {name} is not a JSON object and no segment precedes it")
-        yield "torn", pending[0], {}
+        yield "torn", pending[0], pending[1], {}
 
 
 class Record:
@@ -1529,8 +1571,9 @@ class Record:
 
     `read_record` makes one: a first pass over every journal file verifies every line (`_verified_lines`)
     and keeps only each segment's header, last tick, last chain value, row count and whether it ended
-    torn. `lines(segment)` streams that segment again, verifying it again, so what is replayed is what
-    was checked; nothing is held between lines. The directory handle is a duplicate the record owns.
+    torn, and where its header is. `lines(segment)` streams that segment again from its header,
+    verifying it again, so what is replayed is what was checked; nothing is held between lines, and the
+    record is read twice in all however many boots share a file. The directory handle is a duplicate the record owns.
     """
 
     def __init__(self, where: Path, dir_fd: int, segments: list[SegmentInfo]) -> None:
@@ -1559,7 +1602,7 @@ class Record:
             raise RecordRefused("file", "the record has been closed")
         inside = False
         last_tick, chain, rows = segment.first_tick, segment.header["chain"], 0
-        for kind, _number, row in _verified_lines(self._fd, segment.name):
+        for kind, _number, _at, row in _verified_lines(self._fd, segment.name, segment.offset, segment.line):
             if kind == "header":
                 if inside:
                     break
@@ -1641,9 +1684,9 @@ def read_record(where: str | os.PathLike[str], *, dir_fd: int | None = None) -> 
         segments: list[SegmentInfo] = []
         for name in names:
             current: SegmentInfo | None = None
-            for kind, _number, row in _verified_lines(held, name):
+            for kind, number, at, row in _verified_lines(held, name):
                 if kind == "header":
-                    current = SegmentInfo(row["boot_id"], name, row, int(row["first_tick"]), row["chain"])
+                    current = SegmentInfo(row["boot_id"], name, row, int(row["first_tick"]), row["chain"], offset=at, line=number)
                     segments.append(current)
                 elif current is not None and kind == "torn":
                     current.torn = True
@@ -1807,10 +1850,11 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
     reached: dict[str, str] = {}
     chain: str | None = None
     for segment in segments:
+        if segment.first_tick > stop:
+            break
         anchored = anchor is not None and segment.boot_id == anchor["segment"] and "chain" in anchor
         running = segment.header["chain"]
         checked = not anchored or segment.first_tick > start
-        crossed = False
         for kind, row in record.lines(segment):
             tick = row["tick"]
             if not checked and tick > start:
@@ -1861,14 +1905,13 @@ def replay_record(world: World, body: dict[str, Any], record: Record, *, through
                 windows[slug]["seq"] = mark["seq"] + 1
             head = link
             points.append((tick, digest, link))
-            crossed = True
         if not checked and running != anchor["chain"]:
             raise RecordRefused("join", "the record's chain at the snapshot's tick is not the one the checkpoint recorded", tick=start, segment=segment.boot_id)
-        if crossed or segment.boot_id in known:
-            reached[segment.boot_id] = running
-            chain = running
-        if segment.last_tick >= stop and (crossed or segment.boot_id in known):
-            break
+        # Every segment the replay reaches stays in the history, a header-only one too — a boot whose
+        # first cycle was torn — or the next boot names its predecessor's predecessor and the record
+        # forks (confirmation review P1).
+        reached[segment.boot_id] = running
+        chain = running
     if points:
         state.update(tick=points[-1][0], truth=truth, dwell=dwell, lineage_head=head, receipt=receipt)
         body["identity"]["tick"] = points[-1][0]
@@ -2450,19 +2493,8 @@ class Executive:
             dir_fd=self.journal_dir_fd,
         )
         try:
+            private_record_file(fd, str(self.journal))
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                raise OSError(errno.EINVAL, f"{self.journal.name} is not a regular file")
-            # `O_CREAT` sets no mode on a file that exists: an operator's journal made `0644` before
-            # stays readable with the lineage in it unless it is made private here — and one another
-            # user owns cannot be, so it is refused by name (child 4's review finding 8).
-            if info.st_uid != os.geteuid():
-                raise RecordUnwritable(
-                    f"the record {self.journal} is owned by uid {info.st_uid}, not by this process's {os.geteuid()}, so it "
-                    "cannot be made private (0600); name a journal this executive owns"
-                )
-            if stat.S_IMODE(info.st_mode) & 0o077:
-                os.fchmod(fd, 0o600)
             if info.st_size > 0 and os.pread(fd, 1, info.st_size - 1) != b"\n":
                 _write_all(fd, b"\n")
             os.fsync(self.journal_dir_fd)

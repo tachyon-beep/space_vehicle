@@ -19159,7 +19159,8 @@ end, and anywhere else such a line refuses (`corrupt`). The reboot test holds bo
 appended to boot A's segment is accepted and the replay across A and B still equals the uninterrupted
 run, and A losing its last line (a note, so no tick goes missing) refuses at the seam (`chain`, naming B).
 
-**The record's size, stated rather than pruned.** A quiet tick row is 393 B with one window and 637 B
+**The record's size, stated rather than pruned.** *(Corrected by the confirmation round, below: rows at
+mission-end tick numbers are larger.)* A quiet tick row is 393 B with one window and 637 B
 with ten (about `365 + 27 × windows` bytes); at `k = 1` a mission's 34,560,000 ticks are ≈ 14 GB (one
 window) to ≈ 22 GB (ten), and at `k = 5` — if every tick keeps its row and one in five carries the
 marks — ≈ 13–15 GB, plus a few kilobytes per cycle in which agents commanded. Recovery reads it as a
@@ -19176,13 +19177,41 @@ same machine; ADR 0002's evidence section has the full table):
 | verdict in every window, no record, 1 / 10 windows | 5.5 / 26.6 ms | 14.1 / 34.3 ms |
 | verdict in every window, with the record, 1 / 10 windows (6 / 51 `fsync`) | 10.5 / 64.0 ms | 19.4 / 71.2 ms |
 
-Ten windows commanding in the same cycle is the worst case and costs about 37 ms more than with no
-record — five `fsync`s per window that wrote results; at `m = 1, k = 5` the cycle has 100 ms. A quiet
-cycle is unchanged.
+Ten windows commanding in the same cycle costs about 37 ms more than with no record — five `fsync`s per
+window that wrote one result. *(That is not the worst case, and the first version of this paragraph said
+it was; see the confirmation round.)* A quiet cycle is unchanged.
 
 | figure | before | after |
 |---|---:|---:|
 | referee tests | 417 | **427** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
+### The confirmation round
+
+Codex (`gpt-6-astra`, high) read `7b9f64c` and requested changes; Claude Opus approved with findings.
+Both judged the torn-line rule above correct and accepted the two other interpretations (the echo cap
+on the command field; the new `fsync`s only with a record). ADR 0002 J (xviii)–(xx) records the
+decisions. Each code finding has a test that failed at `7b9f64c`:
+
+| finding (who) | what `7b9f64c` did | what it does now | the test failed at `7b9f64c` with |
+|---|---|---|---|
+| deferrals poison the journal (Codex P1) | spelled a deferral's canonical command in the agent's argument order; the record sorts `arguments`, so `request_imu_alignment target=LVLH source=star` was accepted live and failed its own schema on read-back — for good, since the first pass checks every row | `canonical_command` spells the sorted keys, live, in the checkpoint and in the record | the live queue held `target=LVLH source=star` |
+| a torn first cycle forks the history (Codex P1) | dropped a header-only segment (boot B died in its first row) from the replayed body, so the next boot named B's predecessor and the record had two successors | every segment the replay reaches stays in the history with its chain; the next boot names B, and replay across A, B and C equals the uninterrupted run | the body's segments lacked B |
+| startup events left a journal public (Codex P2) | `append_journal_line`, which `main` runs before the executive's writer, neither checked the owner nor fixed the mode | both writers share `private_record_file`: owned → `0600`, another user's → refused by name, nothing written | `0o644` |
+| shared journals read quadratically (Codex P2, Opus 3) | the second pass began every segment at the file's first line: 108,249 lines read for 100 boots of 20 rows | the first pass keeps each segment's byte offset and line; 4,299 lines read for the same 2,100 | `108249 <= 4200` |
+| map dwell compared in key order (Opus 2) | `value_of` listed a map's values in insertion order; a checkpoint sorts keys, so after a restore the return guard compared the same map as a different list | values in key order, live and after a restore | `DWELL` not refused |
+| the worst case was not the worst case (Opus 1) | (xv) said ten single-result windows (+37 ms) were the worst case "since agents command seconds to minutes apart", the cooperative assumption finding 1 rejected | J (xix): `1 + windows × (4 + r)` `fsync`s, `r` up to `2 × --max-batch`; a full refused batch in ten windows is 361 `fsync`s and ≈ 312 ms, measured; `--max-batch` is the operator's throttle, C degrades the run rather than stopping it, and L(b) (child 12) makes the per-result `fsync` retirable | (documentation) |
+| numbers for (xi), (xii)'s wording (Opus 3–5) | no read cost; mission size from short tick numbers; "detects corruption and truncation" | J (xx): ≈ 25 µs per row per pass measured here (≈ 41 µs in the reviewer's run), ≈ 29–47 min to read and replay a whole mission's record; 765 B quiet rows at ten windows with eight-digit ticks, ≈ 14–26 GB a mission at `k = 1`; corruption and *mid-file* truncation (a missing tail is what a crash before the `fsync` leaves) | (documentation) |
+
+The return guard's test reaches the guard by patching `set_breaker`'s floor to `(0, 5)` s: no map state
+today is both commandable without an interlock and guarded with a `min_off_s` above its `min_on_s`, so
+the defect was latent; it is fixed where `value_of` is, for every caller. `tools/measure_clock.py` gained
+the two rows the documentation now cites (the full-batch flood, and the record's read cost per row).
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 427 | **432** |
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 

@@ -182,10 +182,19 @@ shape a run of its own). The `fsync` counts are counted by the tool.
 | verdict in every window with the record (**6 / 11 / 51 `fsync`**; row 765 / 1,167 / 4,367 B) | 10.5 / 17.3 / 64.0 ms p50 (15.3 / 21.4 / 77.9 p95) | 19.4 / 25.3 / 71.2 ms p50 (24.3 / 32.0 / 82.7 p95) |
 | the same verdict cycle with no record | 5.5 / 8.0 / 26.6 ms p50 | 14.1 / 16.3 / 34.3 ms p50 |
 
-A quiet cycle costs what it did. A cycle in which a window wrote results now costs five `fsync`s for
-that window (the claim's file and directory, the result, `output/`, the note) beside the row's one:
-about 1 ms each on this disk, so ten windows commanding in one cycle add ≈ 37 ms — inside the 100 ms a
-cycle has at `m = 1, k = 5`, and the worst case, since agents command seconds to minutes apart.
+A quiet cycle costs what it did. A cycle in which a window wrote results costs `4 + r` `fsync`s for
+that window (the claim's file and directory, `output/`, the note, one per result) beside the row's one.
+*[The sentence that called ten single-result windows "the worst case" is withdrawn: an agent controls
+`r` up to `--max-batch`; see J (xix) and the next table.]*
+
+**After child 4's confirmation review** (same machine, `--samples 100`, `--windows 1 2 10`):
+
+| Quantity (`tools/measure_clock.py`) | ring as warmed | ring full |
+|---|---|---|
+| verdict in every window with the record, 1 / 10 windows (6 / 51 `fsync`; row 771 / 4,427 B) | 10.2 / 65.4 ms p50 | 17.9 / 79.3 ms p50 |
+| the same verdict cycle with no record, 1 / 10 windows | 5.8 / 27.3 ms p50 | 13.4 / 35.6 ms p50 |
+| **a full batch of 32 refused commands in each of 10 windows, with the record (361 `fsync`)** | 311.8 ms p50, 328.9 p95 | 319.3 ms p50, 364.0 p95 |
+| record read, 20,000 quiet rows (ten windows' marks, eight-digit ticks: 765 B each), per row: check / stream | 25.1 / 26.6 µs | 24.7 / 23.9 µs |
 
 Mission ladder: 8 phases over `[0, 34,560,000)`; shortest phase `entry`, 180,000 ticks. An earlier
 scratch measurement of the durable write on this machine saw a 32 ms p95 that neither tool run
@@ -689,11 +698,11 @@ what a re-publication must carry, and the per-window budget is what bounds the v
 pruning in child 4**: the record is §6's replay trace and release.md's evidence. Its size: a quiet tick
 row is ≈ `365 + 27 × windows` bytes (393 B at one window, 637 B at ten), so ≈ 14–22 GB per mission at
 `k = 1` and ≈ 13–15 GB at `k = 5` if every tick keeps its row, plus a few kilobytes per commanded
-cycle. The reader is two sequential streams (check, then replay) whose memory does not grow with the
-record; recovery stays `≤ N × (step + hash)` plus that scan. (xii) **Every line carries a chain value**,
+cycle. *[Figures corrected by (xx).]* The reader is two sequential streams (check, then replay) whose
+memory does not grow with the record; recovery stays `≤ N × (step + hash)` plus that scan. (xii) **Every line carries a chain value**,
 `sha256(previous chain + "\n" + the line's canonical bytes)`, seeded by the segment header from the
 chain its predecessor ended on, so any edit, insertion or deletion of any field refuses by name. This
-detects corruption and truncation, not a forger: there is no secret, and whoever can write the `0600`
+detects corruption and truncation *[mid-file truncation only: see (xx)]*, not a forger: there is no secret, and whoever can write the `0600`
 state directory can re-chain — against which every field is typed and bounded, a published mark is
 its row's own tick, a results note is its row's (world, boot, tick, and only that row's receipts,
 once), and the physics is re-run. A line that is not JSON is accepted only as the last line of its
@@ -712,11 +721,46 @@ is a disk fact**: a cycle that claimed a batch `fsync`s the rewritten console an
 before the tick row; each window's result files and then its `output/` directory are `fsync`ed before
 its note, and the note is written right after that window's results, before its frame and mirror. A
 quiet cycle is still one `fsync`; a cycle in which every one of ten windows wrote a result is 51
-(measured below). Without a record nothing new is `fsync`ed. (xvi) **Receipt numbers are recorded as
+(measured below). Without a record nothing new is `fsync`ed. *[The cost sentence is replaced by (xix).]* (xvi) **Receipt numbers are recorded as
 issued**: every tick row carries the global receipt counter and each window's, and verdicts made before
 an internal fault are kept and published, so no boot reissues a number. (xvii) An existing explicit
 journal this process owns is made `0600`, one another user owns is refused by name; a startup event
 `fsync`s its directory; a note that cannot be made durable says the window's results are on disk.
+
+*Amended after child 4's confirmation reviews (Codex `gpt-6-astra` high, "request changes"; Claude
+Opus, "approve with findings"; both judged (xii)'s torn-line rule correct and accepted (x) and (xv);
+decided by the coordinator under the owner's delegation, 2026-10-09).* (xviii) **Replay correctness.** A
+deferral's canonical command is spelled from its arguments in *sorted* key order — live, in the
+checkpoint and in the record — because every encoding of `arguments` sorts them: in the agent's order,
+a deferral written `target=… source=…` was accepted live and failed its own schema on read-back, and
+the first pass checks every row, so it poisoned the record for good. A map state's value is taken in
+key order (`value_of`), live and after a restore, so a dwell's return guard does not depend on whether
+the map came from the live history or from a key-sorted checkpoint. A segment the replay reaches stays
+in the body's history with the chain it ended on, a header-only one too (a boot whose first cycle was
+torn): otherwise the next boot names its predecessor's predecessor and the record forks. The reader
+keeps each segment's byte offset, so a shared `--journal` of many boots is read twice in all, not once
+per boot; and both writers of the record — the executive's and `main`'s startup events — make an owned
+file `0600` and refuse another user's by name. (xix) **(xv)'s cost, restated without the cooperative
+assumption (x) rejected.** A cycle `fsync`s once for its row and, for each window that wrote results,
+`4 + r` times (the claim's file and directory, `output/`, the note, and one per result `r`), and an
+agent controls `r` up to `--max-batch` — up to `2 × --max-batch` when a full batch of deferrals settles
+beside a full new batch. So the worst case is `1 + windows × (4 + 2 × max_batch)` `fsync`s; a full refused
+batch of 32 in every one of ten windows is 361, measured at ≈ 312 ms p50 on the warmed ring and ≈ 319 ms
+on the full one, three cycles' budget at `m = 1, k = 5`. **`--max-batch` is the operator's throttle on
+it.** Such a cycle is overload, which the operator's C answers by degrading — shedding the static files
+and frames, then dilating within the lag ceiling — and only an overload sustained past the ceiling
+reaches C3's recorded hold; it does not stop the vehicle by itself. The per-result `fsync` is there
+because result names are wall-stamped; child 12's L(b) makes re-publication idempotent by name, after
+which it can be retired. (xx) **(xi) and (xii), with their numbers.** At mission-end tick numbers
+(eight digits) a quiet row is 414 B at one window and 765 B at ten, so a mission at `k = 1` is ≈ 14–26 GB.
+Reading costs ≈ 25 µs per row per pass on this machine (`tools/measure_clock.py`; the reviewer measured
+≈ 41 µs on another run): ≈ 4.5 s per mission hour per pass at 50 Hz (≈ 9–15 s for the check and the
+replay together), and at mission end ≈ 29–47 min to read and replay the whole record, ≈ 43–70 min with
+`unwritten_results`' pass — a cost of time, not memory, and the reason the checkpoint cadence and
+retention (child 3) matter. (xii)'s "detects corruption and truncation" is **corruption and mid-file
+truncation**: deleting complete rows at the *end* of the last segment is accepted, because there is no
+end anchor — a correct filesystem cannot lose an `fsync`ed row, so a missing tail is what a crash
+before the `fsync` leaves, and nothing was published from it.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
