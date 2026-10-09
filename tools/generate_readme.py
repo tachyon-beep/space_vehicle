@@ -195,14 +195,16 @@ def generate(root: Path) -> str:
     # line numbers, `points.yaml#not_published`, an aside on what a fleet would go looking for); that
     # prose is the maintainers', and publishing it did part of the fleet's analysis for it.
     write(
-        "**Truth is never published.** A value is what an instrument reported or what the vehicle "
-        "concluded, never the simulation's own state."
+        "**Truth is never published.** A value is what an instrument reported, what the vehicle "
+        "concluded, or what the vehicle did — never the simulation's own state."
     )
     write("")
-    if (presentation.get("epistemic_layers") or {}).get("quality_on_service"):
+    if "service" in ((presentation.get("epistemic_layers") or {}).get("mapping") or {}):
+        # Only what the code does: frames carry the quality map the instruments fill, and no tool
+        # stamps a code on a service value, so this does not promise one (review of 27aae35).
         write(
-            "**A commanded state is not a sensor.** A `service` value reports what the vehicle did. "
-            "It is layer A and always carries quality `GOOD`."
+            "**A commanded state is not a sensor.** A `service` value reports what the vehicle did, "
+            "not what an instrument read."
         )
         write("")
 
