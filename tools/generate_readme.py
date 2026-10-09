@@ -130,9 +130,7 @@ def generate(root: Path) -> str:
             else:
                 withheld_categories += 1
 
-    surface = list(presentation.get("surface") or [])
     mirror = presentation.get("mirror") or {}
-    single_cabin = presentation.get("single_cabin") or {}
     steps = [
         ("claim", "the console is read and emptied **before** anything runs"),
         ("validate", "schema, authority, phase, gate, interlock and freshness, in that order"),
@@ -174,14 +172,10 @@ def generate(root: Path) -> str:
     )
     write("")
 
-    if surface:
-        write("## What each file owes")
-        write("")
-        for entry in surface:
-            if not isinstance(entry, dict):
-                continue
-            write(f"- **`{entry.get('file')}`** — {entry.get('direction')}. {entry.get('far_side') or ''}".rstrip())
-        write("")
+    # `presentation.yaml#surface[].far_side` is the designers' obligation checklist ("the voice, the
+    # ordering, the file itself"), not protocol, and the files table above already says what each file
+    # is; it is no longer published (owner's direction, 2026-10-09: the window says how to use the
+    # interface and leaves the analysis to the fleet).
 
     write("## What a reading means")
     write("")
@@ -196,17 +190,22 @@ def generate(root: Path) -> str:
     for key, (letter, name, meaning) in LAYER_NAMES.items():
         write(f"| **{letter}** — {name} | `{key}` | {meaning} |")
     write("")
-    truth = str((presentation.get("epistemic_layers") or {}).get("truth") or "")
-    if truth:
-        write(f"**Truth is never published.** {truth}")
-        write("")
-    service_resolution = str((presentation.get("epistemic_layers") or {}).get("service_resolution") or "")
-    if service_resolution:
-        write(f"**A commanded state is not a sensor.** {service_resolution}")
-        write("")
-    quality = str((presentation.get("epistemic_layers") or {}).get("quality_on_service") or "")
-    if quality:
-        write(quality)
+    # The protocol facts, stated for the fleet. `presentation.yaml#epistemic_layers` carries the same
+    # facts with the designers' reasoning and citations of files no agent can read (the contract's
+    # line numbers, `points.yaml#not_published`, an aside on what a fleet would go looking for); that
+    # prose is the maintainers', and publishing it did part of the fleet's analysis for it.
+    write(
+        "**Truth is never published.** A value is what an instrument reported, what the vehicle "
+        "concluded, or what the vehicle did — never the simulation's own state."
+    )
+    write("")
+    if "service" in ((presentation.get("epistemic_layers") or {}).get("mapping") or {}):
+        # Only what the code does: frames carry the quality map the instruments fill, and no tool
+        # stamps a code on a service value, so this does not promise one (review of 27aae35).
+        write(
+            "**A commanded state is not a sensor.** A `service` value reports what the vehicle did, "
+            "not what an instrument read."
+        )
         write("")
 
     write("## The shape of a command cycle")
@@ -256,17 +255,19 @@ def generate(root: Path) -> str:
     write(
         f"Some quantities are deliberately withheld, and saying so is part of the protocol: "
         f"**{withheld_named} named channels** and **{withheld_categories} described categories** are "
-        f"not published. Each one is listed with its reason in the vehicle's own registry, and a "
+        f"not published. A "
         f"quantity that is missing from a frame is either one of those or a channel that could not "
         f"be computed this tick — never a value the vehicle declined to guess."
     )
     write("")
-    if single_cabin:
-        write("Two asymmetries are worth knowing about, because they change what a diagnosis can rest on:")
-        write("")
-        for channel, why in single_cabin.items():
-            write(f"- **`{channel}`** — {why}")
-        write("")
+    # **No diagnostic commentary.** This section used to publish `presentation.yaml#single_cabin`
+    # under "two asymmetries are worth knowing about, because they change what a diagnosis can rest
+    # on": why an LM leak is harder to diagnose than the CSM's, which supply has no instrument, and
+    # a fault id from the fault catalogue. That is the designers' analysis of the vehicle, and
+    # handing it to the fleet does part of the information management the experiment asks of it
+    # (owner's direction, 2026-10-09). The declaration stays for the linter's pairing check
+    # (`check_vehicle.py`, single-cabin channels); the window's protocol says what a reading means
+    # and leaves what it implies to the fleet.
     if mirror:
         bound = mirror.get("bound") or mirror.get("max_bytes")
         if bound:
@@ -276,9 +277,8 @@ def generate(root: Path) -> str:
     write("---")
     write("")
     write(
-        "This file is generated from `presentation.yaml`, `channels.yaml` and the command "
-        "registries by `tools/generate_readme.py`. Editing it by hand changes nothing that "
-        "survives the next cycle."
+        "The vehicle writes this file from its own configuration. Editing it by hand changes "
+        "nothing that survives the next cycle."
     )
     return "\n".join(out) + "\n"
 

@@ -11278,6 +11278,25 @@ def test_the_window_s_sixth_file_is_generated_from_the_configuration(tmp_path):
         assert f"| `{code}` |" in text, code
     # And it says what the vehicle withholds, which is part of the protocol rather than a leak.
     assert "not published" in text and "named channels" in text
+    # The protocol, not the designers' analysis: nothing from `single_cabin`, no fault-catalogue id,
+    # no failure-chain id, no "diagnosis". Removed on the owner's direction that the fleet manages
+    # its own information (2026-10-09); `single_cabin` is still declared, for the linter.
+    single = presentation.get("single_cabin") or {}
+    assert single, "the fixture no longer declares single_cabin"
+    for channel, why in single.items():
+        assert str(why)[:60] not in text, channel
+    assert "diagnos" not in text.lower(), "the window README explains a diagnosis"
+    # Short and long fault-catalogue ids (`ECL-13`, `ECL-07-suit-loop-fan-failure`), failure-chain
+    # ids in both forms (`F-05`, `F-PWR-01`), and citations of corpus files no agent can read.
+    assert not re.search(r"\b[A-Z]{3}-\d{2}\b", text), "a fault-catalogue id reached the window README"
+    assert not re.search(r"\bF-(?:[A-Z]{3}-)?\d{2}\b", text), "a failure-chain id reached the window README"
+    # A citation of a file the agent cannot read; the window's own HELP.md and README.md may be
+    # anchored into.
+    assert not re.search(r"[\w-]+(?<!HELP)(?<!README)\.(?:md|yaml)(?::\d|#)", text), (
+        "a corpus citation reached the window README"
+    )
+    assert "what the vehicle did" in text and "always carries quality" not in text
+    assert "would go looking" not in text and "far_side" not in text
 
     # No verb list and no thresholds: `HELP.md` owns the vocabulary and design.md §8's boundary is
     # that the vehicle publishes what it concluded and never what it suspects about itself.

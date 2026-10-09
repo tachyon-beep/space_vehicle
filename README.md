@@ -18964,6 +18964,38 @@ the directory's record.
 
 No configuration value or debt moved.
 
+## The window's protocol explained a diagnosis
+
+The README the vehicle writes into every window is its protocol: what the files are, what a reading
+and a refusal mean, how often each class of channel is published. Its last section added
+`presentation.yaml#single_cabin` under "two asymmetries are worth knowing about, because they change
+what a diagnosis can rest on" — why an LM leak never appears in `eclss.leak_rate_g_s` and is
+therefore *harder to diagnose*, which oxygen supply has no instrument, and a fault-catalogue id
+(`ECL-07-suit-loop-fan-failure`). That is the designers' analysis of the vehicle, and the experiment
+asks the fleet to do that analysis itself (the owner's direction, 2026-10-09: information and
+action management are the agents' to manage).
+
+The section is gone; `single_cabin` stays declared, because `check_vehicle.py` reads it for the ECLSS
+pairing check. The sixth-file test now holds the generated README to carry nothing from
+`single_cabin`, no fault-catalogue or failure-chain id, and no "diagnosis". `HELP.md`'s verb texts
+carry the same kind of commentary (failure-chain ids, advice on which mode answers a leak) and are a
+larger editorial sweep, tracked separately (#35).
+
+Independent review (Claude Opus) found more of the same in the README's other sections, and they
+went in the same round: "Truth is never published" quoted `presentation.yaml#epistemic_layers` with
+citations of files no agent can read; the service-layer paragraphs carried one protocol fact each
+inside the designers' reasoning, including an aside on what a fleet "would go looking for"; "What
+each file owes" published the designers' obligation checklist; the footer named configuration files
+and a tool. The generator now writes the protocol facts in its own words — truth is never published;
+a `service` value is layer A and always `GOOD` — and the test refuses short fault ids (`ECL-13`),
+signature-form chain ids (`F-PWR-01`) and corpus citations as well.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 406 | 406 |
+
+No configuration value or debt moved.
+
 ## The invariants, and which of them are enforced
 
 
