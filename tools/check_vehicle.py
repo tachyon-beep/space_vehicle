@@ -18141,13 +18141,13 @@ def check_tool_docstrings(
 
 
 def _console_durable_keys(tree: ast.Module) -> set[str] | None:
-    """The keys `tools/console.py` writes into `pending.json` — what a restart *remembers*.
+    """The keys `tools/console.py` remembers across a restart — read off its writers.
 
-    Read off the writer rather than listed here, for the reason this folder keeps rediscovering: a
-    second copy of a set is a second answer, and the copy is the one that goes stale. `pending.json`
-    is the window's only input file — the contract is explicit that `state.json` is published state
-    and that editing it changes nothing — so the dictionaries handed to `write_json_atomic` for
-    `self.pending` *are* the durable set, and there is nothing else they could be.
+    Read off the writers rather than listed here, for the reason this folder keeps rediscovering: a
+    second copy of a set is a second answer, and the copy is the one that goes stale. This first
+    read the dictionaries handed to `write_json_atomic` for `self.pending`, when a window's
+    `pending.json` was the record a restart read back; it is now `Executive.root_record` (below), and
+    the window writer contributes whatever keys it still carries.
 
     **Every such write, unioned, because there is more than one and the first is the smallest.**
     `initialise` seeds the file with `{"pending": []}` before anything has happened, and the cycle's
@@ -18166,8 +18166,10 @@ def _console_durable_keys(tree: ast.Module) -> set[str] | None:
     window's `pending.json` became a published copy read for nothing. Reading only the window writer
     would let the run's identity leave the windows (they are agent-readable, and the seed keys the
     fault plan) and take the check with it, so the record's keys are unioned in. **The record is the
-    required source and the window writer an optional one**: a `root_record` that is absent or does
-    not return a dictionary literal is a writer this check cannot read, and is `None`.
+    required source and the window writer an optional one** — optional in that it need not exist,
+    not in that it may be unreadable: a `root_record` that is absent or does not return a dictionary
+    literal, or a window writer that does not write one, is a writer this check cannot read, and is
+    `None`.
 
     **Every key must be readable, or none is trusted.** A `**` unpacking or a computed key carries
     values this check cannot name; skipping it would leave a partial set that still passes — the
@@ -18270,10 +18272,27 @@ def _console_flag_defaults(tree: ast.Module) -> list[tuple[str, str, ast.expr | 
     return found
 
 
+def _console_identity_keys(tree: ast.Module) -> tuple[str, ...] | None:
+    """`ROOT_RECORD_IDENTITY` as `tools/console.py` declares it: a tuple of string literals, or `None`."""
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "ROOT_RECORD_IDENTITY" for t in node.targets)
+        ):
+            value = node.value
+            if isinstance(value, (ast.Tuple, ast.List)) and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str) for e in value.elts
+            ):
+                return tuple(e.value for e in value.elts)  # type: ignore[union-attr]
+            return None
+    return None
+
+
 def check_console_flags(root: Path, report: Report) -> None:
     """A flag whose value the vehicle remembers must be distinguishable from its own default.
 
-    `tools/console.py` writes three values into `pending.json` that a caller can also *name*:
+    `tools/console.py` remembers three values a caller can also *name* (in the directory's record,
+    `Executive.root_record`; they were in `pending.json` until the windows stopped carrying them):
     `scenario`, `seed` and `ring_slots`. Each is therefore two things at once — a thing the vehicle
     remembers and a thing a command line can say — and the two are only tellable apart if *the
     caller named nothing* has a representation of its own. It did not: `--scenario` defaulted to
@@ -18286,7 +18305,7 @@ def check_console_flags(root: Path, report: Report) -> None:
     console keeps its scenario unless the caller names another."*
 
     So the rule is one sentence and it is about the *mechanism* rather than about three flags: **an
-    argument whose destination appears in `pending.json` must default to `None`.** `None` is the
+    argument whose destination the vehicle remembers must default to `None`.** `None` is the
     only value a caller cannot name, which is what makes it mean *named nothing*. The durable set
     comes from the console's own writer and the option list from its own parser, so a fourth durable
     flag added later is caught by this check the day it is declared rather than the day somebody
@@ -18327,12 +18346,33 @@ def check_console_flags(root: Path, report: Report) -> None:
             "remembered value is unknown",
         )
         return
+    # **The record must carry the identity `console.py` itself declares it reads back.** The flag check
+    # is only as good as the remembered set, and a key dropped from `root_record` drops its flag out
+    # of the check while the restart still reads it (`read_root_record`, `main`): independent review
+    # removed `scenario` from the record and defaulted `--scenario`, and this passed. The declaration
+    # is `ROOT_RECORD_IDENTITY`, read off the source like the rest.
+    declared = _console_identity_keys(tree)
+    if declared is None:
+        report.refuse(
+            "tools/console.py",
+            "no longer declares ROOT_RECORD_IDENTITY as a tuple of names this check can read, so the "
+            "identity a restart reads back is unknown",
+        )
+        return
+    missing = sorted(set(declared) - durable)
+    if missing:
+        report.refuse(
+            "tools/console.py:root_record",
+            f"does not carry {missing}, which ROOT_RECORD_IDENTITY declares a restart reads back. A "
+            "key the record drops is a value the restart resolves from nothing, and its flag drops "
+            "out of this check with it",
+        )
     remembered = [(dest, flag, default) for dest, flag, default in options if dest in durable]
     if not remembered:
         report.refuse(
             "tools/console.py",
             f"declares no flag for any of the {len(durable)} value(s) it remembers "
-            "({', '.join(sorted(durable))}), so a run's identity cannot be named at all",
+            f"({', '.join(sorted(durable))}), so a run's identity cannot be named at all",
         )
     for dest, flag, default in sorted(remembered):
         if isinstance(default, ast.Constant) and default.value is None:

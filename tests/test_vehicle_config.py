@@ -10923,9 +10923,11 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     # run, so a posture name in their vocabulary is not this run's.)
     mirror_record = json.loads((window / "pending.json").read_text())
     assert "scenario" not in mirror_record and "seed" not in mirror_record, mirror_record
-    for leaked in sorted(window.rglob("*.json")):
+    run_files = sorted(window.rglob("*.json")) + sorted((window / "output").glob("*.txt"))
+    for leaked in run_files:
         body = leaked.read_text(errors="replace")
-        assert '"seed"' not in body and '"scenario"' not in body and '"crisis"' not in body, leaked
+        assert '"seed"' not in body and '"scenario"' not in body and "master_seed" not in body, leaked
+        assert "crisis" not in body and "degraded" not in body, leaked
 
     # A directory prepared with the pair and run without the flags keeps it: the record describes the
     # run, and a run that reset itself to `nominal` would make a crisis run report itself as nominal.
@@ -17392,8 +17394,9 @@ def test_a_commanded_mode_holds_its_value_through_a_tick_and_a_code_moved_one_do
 def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(tmp_path):
     """The run's identity is three flags, and a flag that *is* its own default cannot be obeyed.
 
-    `tools/console.py` writes `scenario`, `seed` and `ring_slots` into `pending.json` — the window's
-    only input file — and all three are also command-line options. That makes each of them two
+    `tools/console.py` remembers `scenario`, `seed` and `ring_slots` (in `pending.json` when this was
+    written, in the directory's record `Executive.root_record` since) — and all three are also
+    command-line options. That makes each of them two
     things at once, a thing the vehicle remembers and a thing a caller can say, and the two are
     tellable apart only if *the caller named nothing* has a representation of its own. It did not:
     `--scenario` defaulted to `"nominal"`, `--seed` to `0`, `--ring-slots` to `300`, so `args.scenario`
@@ -17455,6 +17458,20 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     result = run_linter(unwritten)
     assert result.returncode == 1, result.stdout[-900:]
     assert "no longer returns the directory's record" in result.stdout, result.stdout[-900:]
+
+    # **The record must carry the identity console.py declares.** Independent review (Claude Opus)
+    # dropped `scenario` from `root_record` and defaulted `--scenario` to "nominal": the key left the
+    # remembered set, its flag left the check, and the linter passed while the restart still read it.
+    dropped = copy_definition(fixture_dir(tmp_path, "console-dropped"))
+    path = dropped / "tools" / "console.py"
+    text = path.read_text()
+    assert text.count('            "scenario": self.scenario,\n') == 1, "the fixture no longer matches root_record"
+    text = text.replace('            "scenario": self.scenario,\n', "", 1)
+    text = text.replace('"--scenario",\n        default=None,', '"--scenario",\n        default="nominal",', 1)
+    path.write_text(text)
+    result = run_linter(dropped)
+    assert result.returncode == 1, result.stdout[-900:]
+    assert "tools/console.py:root_record" in result.stdout and "'scenario'" in result.stdout, result.stdout[-900:]
 
     # **A partial set must not pass.** Independent review (Codex gpt-6-astra high) moved `scenario` and
     # `seed` into a `**{...}` unpacking inside `root_record` and defaulted `--scenario` to "nominal":

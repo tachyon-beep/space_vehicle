@@ -205,8 +205,8 @@ MAX_READ_BYTES = 1_000_000
 # happens once, in `main`, where the directory's record and the mission's declared postures are both
 # in hand. The declared defaults live here instead, and they are what an unnamed flag resolves to on
 # a directory that has no record — a fresh one. The record read for this is `<diode-dir>/.executive.json`,
-# which no agent can write; a window's `pending.json` carries the same keys for its reader's benefit
-# and is never read for authority.
+# which no agent can write under the per-slug mounts; a window's `pending.json` carries none of the
+# run's identity (no scenario, no seed) and is never read for authority.
 DEFAULT_SCENARIO = "nominal"
 DEFAULT_SEED = 0
 DEFAULT_RING_SLOTS = 300
@@ -2251,8 +2251,8 @@ class Window:
                 "seq": self.seq,
                 "boot_id": self.boot_id,
                 # **No scenario and no seed.** The run's identity is the operator's: it lives in the
-                # directory's `.executive.json` and the state directory, which no agent can read under
-                # the per-slug mounts. This file is in the agent's own window, and the seed keys the
+                # directory's `.executive.json` (and on the startup banner), which no agent can read
+                # under the per-slug mounts; checkpoints will carry it too once they are written. This file is in the agent's own window, and the seed keys the
                 # fault plan and the scenario names how hard the run is — telling the fleet either
                 # would do part of the diagnosis for it.
                 # The ring's own accounting: what it is bounded to, and what it has lost.
@@ -2462,7 +2462,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="POSTURE",
         help="the run's difficulty identity: a `mission.yaml#scenario_postures` id "
-        "(nominal, degraded, crisis). Recorded in the directory's own record and in the mirror, and "
+        "(nominal, degraded, crisis). Recorded in the directory's own record (never in a window), and "
         "a prepared directory keeps the one it recorded unless this names another",
     )
     parser.add_argument(
