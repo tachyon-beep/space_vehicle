@@ -3,10 +3,13 @@
 
 `docs/decisions/0002-mission-clock-and-continuity.md` (ADR 0002) decides that a restart *resumes*
 a world from a checkpoint the executive wrote for itself, never from anything an agent can write.
-This module is child 1 of that record: the file format and nothing else. It does not wire a
-resume into the executive (child 3), does not know where `--state-dir` is (child 2), and does not
-write the per-cycle record (child 4). What it fixes is what a checkpoint *is*, so those children
-can land as sections and flags rather than as formats.
+This module is child 1 of that record: the file format and nothing else. The resume that reads it
+is `tools/console.py`'s (`resume_executive`, child 3), the directory is `--state-dir` (child 2), and
+the per-cycle record is child 4's. What it fixes is what a checkpoint *is*, so those children land
+as sections and flags rather than as formats. **Format v2** (child 3, no v1 ever written by a
+deployed vehicle): every `segments` entry carries `offset`, the byte offset just after the last line
+of the record the checkpoint covers in that segment's file — the anchor a resume reads on from — and
+the body carries `obligations`, the results durable in the record and not confirmed written.
 
 **The file.** One header line, then the body. The header is a small JSON object — `format`,
 `engine`, `git_commit`, `python`, `platform`, `tick_hz`, `world_id`, `tick`, `segments`, and the
@@ -24,7 +27,7 @@ the rest — so a wrong `format` is held to the body too (the refusal rule under
 **What the body carries** is ADR 0002 G's list, section by section: `identity`; `run` (scenario,
 seed, phase, `phase_entry_seq`, the tripped interlocks, `--max-batch`, the allowance ceiling);
 `clock` (`m`, `k`, `N`, the burst bound, the lag ceiling — the keys exist from this version, and
-hold `null` until child 5 gives the executive the inputs, because a checkpoint missing a field the
+hold `null` until child 5 gives the executive the inputs, `N` excepted since child 3, because a checkpoint missing a field the
 engine needs is refused rather than defaulted, and a field that exists can be required later
 without a format change); `executive` (the tick, every key of the truth — `__delay` rings,
 `__residual` accumulators and `__shortfall` records included — the dwell, the lineage head, the

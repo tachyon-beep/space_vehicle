@@ -18272,6 +18272,36 @@ def _console_flag_defaults(tree: ast.Module) -> list[tuple[str, str, ast.expr | 
     return found
 
 
+# The checkpoint's `run` keys whose flag `dest` is spelled otherwise (WP08 child 3, addendum B10): the
+# checkpoint records the *state* (`tripped_interlocks`), the flag names one *assertion* of it at a time.
+CHECKPOINT_RUN_FLAG_DESTS = {"tripped_interlocks": "closed_interlock"}
+
+
+def _checkpoint_run_keys(tree: ast.Module) -> set[str] | None:
+    """The keys of the `run` section `tools/checkpoint.py`'s `capture_state` writes, as flag `dest`s.
+
+    A resume (WP08 child 3) takes the run's identity and the operator's live inputs from the checkpoint,
+    so a flag naming one of these is as remembered as one naming a root-record key, and is held to the
+    same rule. Read off the writer: the dictionary literal `capture_state` builds, its `run` entry a
+    dictionary literal of string keys — anything else is a writer this check cannot read, `None`.
+    """
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "capture_state"):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Dict):
+                continue
+            for key, value in zip(inner.keys, inner.values, strict=False):
+                if isinstance(key, ast.Constant) and key.value == "run":
+                    if not isinstance(value, ast.Dict) or not all(
+                        isinstance(k, ast.Constant) and isinstance(k.value, str) for k in value.keys
+                    ):
+                        return None
+                    return {CHECKPOINT_RUN_FLAG_DESTS.get(k.value, k.value) for k in value.keys}  # type: ignore[union-attr]
+        return None
+    return None
+
+
 def _console_identity_keys(tree: ast.Module) -> tuple[str, ...] | None:
     """`ROOT_RECORD_IDENTITY` as `tools/console.py` declares it: a tuple of string literals, or `None`."""
     for node in tree.body:
@@ -18329,6 +18359,23 @@ def check_console_flags(root: Path, report: Report) -> None:
         report.refuse("tools/console.py", f"does not parse, so its flags cannot be read: {exc}")
         return
     durable = _console_durable_keys(tree)
+    # **And the checkpoint's `run` section** (WP08 child 3, addenda A6 and B10): a resume takes the phase,
+    # the batch cap and the tripped interlocks from the checkpoint, so their flags are remembered too.
+    checkpoint_path = root / "tools" / "checkpoint.py"
+    try:
+        run_keys = _checkpoint_run_keys(ast.parse(checkpoint_path.read_text())) if checkpoint_path.is_file() else None
+    except SyntaxError:
+        run_keys = None
+    if run_keys is None:
+        report.refuse(
+            "tools/checkpoint.py",
+            "no longer builds the checkpoint's `run` section (`capture_state`) as a dictionary this check can read, "
+            "so the values a resume remembers — and the flags that must tell `named` from `named nothing` — are unknown",
+        )
+        return
+    record_keys = set(durable) if durable is not None else None
+    if durable is not None:
+        durable |= run_keys
     if durable is None:
         report.refuse(
             "tools/console.py",
@@ -18359,7 +18406,9 @@ def check_console_flags(root: Path, report: Report) -> None:
             "identity a restart reads back is unknown",
         )
         return
-    missing = sorted(set(declared) - durable)
+    # Held to the root record's own keys: the checkpoint remembering a value does not excuse the record
+    # a window-side restart reads from dropping it.
+    missing = sorted(set(declared) - (record_keys or set()))
     if missing:
         report.refuse(
             "tools/console.py:root_record",
@@ -18380,7 +18429,7 @@ def check_console_flags(root: Path, report: Report) -> None:
         stated = ast.unparse(default) if default is not None else "nothing"
         report.refuse(
             f"tools/console.py:{flag}",
-            f"defaults to {stated} and its value is remembered (written to `pending.json` or the directory's record) as `{dest}`, so a "
+            f"defaults to {stated} and its value is remembered (written to `pending.json`, the directory's record or the checkpoint) as `{dest}`, so a "
             f"caller who names {stated} and a caller who names nothing are the same argument — and "
             "the restore that reads the record back cannot tell which it is looking at, so the "
             "window silently ignores whichever the caller asked for. Default it to `None`, which "

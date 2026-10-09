@@ -42,14 +42,16 @@ What this slice substitutes, and says so (ADR 0001 "not established"):
   - **One tick per cycle, multiplier undecided.** The loop inherits one tick per cycle from the old
     console. How many ticks a wall second carries, and the pause, overload and downtime policy, are
     WP08's and are **not** decided here; `--poll` is a wall-clock sleep between cycles and nothing more.
-  - **No resume yet.** The old cross-process resume of ticks, arm tokens, dwell and
-    deferrals from the agent-writable `pending.json` is withdrawn: it restored authority from a file
-    an agent can write. The directory's own record, `<diode-dir>/.executive.json`, written by the
-    executive and never by an agent, says which world a directory is; a second
-    executive refuses a bound directory (choice D). Resuming a world from its checkpoint is
-    WP08 child 3 (`tachyon-beep/space_vehicle#21`): until it lands, a start that finds a verified
-    checkpoint in `--state-dir` still refuses, because starting a fresh world over a saved one is
-    the alternative choice D rejected. `--init` prepares the directory's identity without binding it.
+  - **Resume is from the executive's own checkpoint, never from a window.** The old cross-process
+    resume of ticks, arm tokens, dwell and deferrals from the agent-writable `pending.json` is
+    withdrawn: it restored authority from a file an agent can write. With `--state-dir`, a start that
+    finds a verified checkpoint **resumes** the world (WP08 child 3, `tachyon-beep/space_vehicle#21`,
+    `resume_executive`): the checkpoint and the record after it, mission time continuing at the last
+    durable tick (ADR 0002 F1), `seq` continuing under new `boot_id`s (L1), every recorded command's
+    result written once. Without a checkpoint ADR 0001's rules stand: the directory's own record,
+    `<diode-dir>/.executive.json`, says which world a directory is, and a second executive refuses a
+    bound directory (choice D). `--init` prepares the directory's identity without binding it, and
+    refuses on a saved world.
 
 **`--state-dir PATH` is the executive's private directory** (ADR 0002 H1, child 2 — `#20`): the
 checkpoint generations (`tools/checkpoint.py`), the exclusive lock and the journal segments live
@@ -113,16 +115,18 @@ configuration constraint. With it:
   - **The record's write is recorded, never raised.** It is rewritten every tick; a failure is a
     `root_record` entry in `failures` and on stderr, like a window's, and the tick goes on.
   - **A directory planted at `.executive.json` beside a checkpoint refuses every start** (EISDIR on
-    the rewrite, by name). It is kept (second review, Opus 2): under H the root is the vehicle's, and
-    with the per-slug mounts nothing else can plant there. **Child 3 (#21) must revisit it** if the
-    root is still agent-writable when resume lands, because a refusal at every restart is then a
-    stop button an agent holds.
-  - **One handle, for child 3 (#21) to keep.** `main` passes the held state-directory handle and
-    the journal's to `Executive` (`state_fd=`, `journal_dir_fd=`), which keeps duplicates and
-    resolves nothing; an in-process caller that passes paths has them canonicalised and opened once
-    in `__init__`. Resume should read and write its checkpoints through `executive.state_fd`
-    (`choose_generation(..., dir_fd=)`, `write_checkpoint(..., dir_fd=)`); the path forms remain for
-    callers that hold no handle, and they re-resolve the path, as child 1 wrote them.
+    the rewrite, by name). It is kept (second review, Opus 2; child 3 revisited it as asked): under H
+    the root is the vehicle's, and with the per-slug mounts nothing else can plant there. **That is a
+    precondition the deployment must meet** — the chassis's per-slug mounts (`adf38d6`, branch
+    `aurora-port`): where every agent still mounts the whole diode root, this refusal and the
+    foreign-world one are stop buttons an agent holds at every restart.
+  - **One handle, kept by the resume.** `main` passes the held state-directory handle and the
+    journal's to `Executive` (`state_fd=`, `journal_dir_fd=`), which keeps duplicates and resolves
+    nothing; an in-process caller that passes paths has them canonicalised and opened once in
+    `__init__`. A resume reads the generations (`choose_generation(..., dir_fd=)`), the record
+    (`read_record(..., dir_fd=)`, an explicit journal by `names=` through its own handle), journals
+    its events and writes every checkpoint (`write_checkpoint(..., dir_fd=)`) through those handles;
+    the path forms remain for callers that hold no handle.
 
 **The journal is the durable per-cycle record** (ADR 0002 J, child 4 — `#22`, format
 `vehicle.record.v2` since its review; the comment block above `RecordRefused` is the format). Each
@@ -140,10 +144,26 @@ handle where there is one; `replay_record` streams them again onto a checkpoint 
 (`tools/checkpoint.py`) through `advance` and `dwell_after_effect`, the functions the live cycle uses,
 holding every tick to its recorded compare-point and lineage link, the record to the checkpoint's own
 segment history, and refusing a missing cycle by name; `unwritten_results` says which recorded
-verdicts no note covers, for child 3 (#21) to re-publish. **An explicit `--journal` without
-`--state-dir` is the same record with the same durability**: every boot appends its own header and
-rows to the one file, and the headers are the segment boundaries. Writing a checkpoint every `N`
-ticks, and pruning the record, are not here (J's cadence and retention, with the resume).
+verdicts no note covers. **An explicit `--journal` without `--state-dir` is the same record with the
+same durability**: every boot appends its own header and rows to the one file, and the headers are
+the segment boundaries.
+
+**Checkpoints and resume** (ADR 0002 F, G, J, K, L; child 3 — `#21`). The executive writes its own
+checkpoints through the held handle: a world's genesis at tick 0 before its first cycle (mandatory:
+a failure refuses the start with nothing bound), one at the end of every cycle whose tick is a
+multiple of `N` (`tick_hz`, recorded in the checkpoint's clock inputs until child 5 makes it a run
+input; a failure there is recorded and the run goes on), one at the recovered tick before a resumed
+run claims anything (mandatory), and one at a clean end. A checkpoint's segment entries carry the
+byte offset of the record it covers (format v2), so a resume reads `O(L − T)` lines from that anchor
+— the prefix before it attested by the verified checkpoint, not re-verified (`read_record`). It
+carries the results owed to windows, too (`obligations`): a result the record holds and the disk does
+not is written once, at the window's next publication, after a bounded look for it already on disk by
+its exact receipt line (`results_on_disk`). A restart that names another world's scenario, seed,
+phase, ring bound or slug set is refused by one sentence (`identity_refusal`); `--max-batch` named
+anew replaces the saved cap and `--closed-interlock` adds to the saved trips, each journaled. A
+command claimed in a cycle whose row never became durable is lost with no result, as the contract
+allows ("a crash mid-batch loses the rest of that batch"); every command whose row is durable has
+exactly one result. Pruning the record is not here (child 10, with retention).
 
 `--state-dir` is **not required**: without it the lock and every refusal are exactly as before, and an
 explicit `--journal` is the record above, in the same format with the same durability. Whether the deployed stack must always name one is the chassis's decision when it adds the
@@ -155,6 +175,7 @@ directory or at `--journal PATH`, and either is refused if the path lies inside 
 
     python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --init
     python3 tools/console.py --diode-dir .scratch/diode --state-dir .scratch/state --slug alpha --slug bravo --cycles 60 --poll 1
+    python3 tools/console.py --diode-dir .scratch/diode --state-dir .scratch/state --slug alpha --slug bravo --cycles 60 --poll 1   # again: it resumes
     python3 contract/diode_probe.py --diode-dir .scratch/diode --slug alpha --poll-seconds 1
 """
 
@@ -243,6 +264,8 @@ MAX_READ_BYTES = 1_000_000
 DEFAULT_SCENARIO = "nominal"
 DEFAULT_SEED = 0
 DEFAULT_RING_SLOTS = 300
+# The phase a new world starts in when `--phase` names none; a resumed world's is its checkpoint's.
+DEFAULT_PHASE = "translunar_coast"
 
 # ADR 0001 choice B: a batch longer than this is refused whole, with one result, by the same rule as
 # a malformed one. It is an operator ceiling — a window cannot raise it — and it must be at least one.
@@ -2492,6 +2515,7 @@ class Executive:
         self.clock: dict[str, Any] = {"N": self.checkpoint_every}
         self.in_cycle = False
         self.checkpoint_failures = 0
+        self.last_checkpoint_tick: int | None = None
         self._compat: Compatibility | None = None
         self.dt = tick_seconds(world)
         self.tick_us = int(round(self.dt * 1_000_000))
@@ -2766,7 +2790,9 @@ class Executive:
             self._compat = Compatibility.current(self.world)
             self._git_commit = git_commit(self.world.root)
         body = capture_state(self, self._compat, git_commit=self._git_commit)
-        return write_checkpoint(self.state_dir, body, dir_fd=self.state_fd)
+        written = write_checkpoint(self.state_dir, body, dir_fd=self.state_fd)
+        self.last_checkpoint_tick = self.tick
+        return written
 
     def _cadence_checkpoint(self) -> None:
         """The cadence's checkpoint: a failure is recorded, journaled and on stderr, and the run goes on (B11).
@@ -4182,6 +4208,59 @@ Console = Window
 
 
 # -- resume (ADR 0002, WP08 child 3 — #21) ------------------------------------------------------------
+def identity_refusal(args: argparse.Namespace, body: dict[str, Any], path: Path) -> str | None:
+    """The one sentence a restart naming another world's identity is refused with, or `None` (commitment 2).
+
+    A checkpoint is the world; a flag that names the run's identity either names nothing (`None`: the
+    checkpoint's is resumed) or names the checkpoint's. A different slug set, scenario, seed, phase or
+    ring bound would be a different world, and that is the operator's `--new-world` (#28), never a
+    changed flag. The sentence names the flag, both values and the file.
+    """
+    world_id = body["identity"]["world_id"]
+    tail = (
+        f"for world {world_id}: a restart resumes the world its state directory holds, and a different world is the "
+        "operator's --new-world (#28), not a changed flag"
+    )
+    saved_slugs = sorted(body["windows"])
+    if args.slug is not None and sorted(args.slug) != saved_slugs:
+        return f"--slug names {sorted(args.slug)} and the checkpoint {path} records {saved_slugs} {tail}"
+    for flag, named, saved in (
+        ("--scenario", args.scenario, body["run"]["scenario"]),
+        ("--seed", args.seed, body["run"]["seed"]),
+        ("--phase", args.phase, body["run"]["phase"]),
+    ):
+        if named is not None and named != saved:
+            return f"{flag} names {named!r} and the checkpoint {path} records {saved!r} {tail}"
+    if args.ring_slots is not None:
+        for slug in saved_slugs:
+            saved = body["windows"][slug]["ring_slots"]
+            if args.ring_slots != saved:
+                return f"--ring-slots names {args.ring_slots} and the checkpoint {path} records {saved} for window {slug!r} {tail}"
+    return None
+
+
+def state_record_files(state_fd: int, journal_fd: int | None, journal: Path | None) -> list[str]:
+    """The journal files that hold a segment of a record — read to their first header only (S11).
+
+    The state directory's segments, and an explicit `--journal`'s file when there is one. A file that
+    holds only startup events (a refused start's) holds no record; one that cannot be read past its
+    startup events, or holds a line before any header, is named too — it is not a fresh directory.
+    """
+    places: list[tuple[int, str]] = [(state_fd, name) for name in sorted(os.listdir(state_fd)) if JOURNAL_SEGMENT_NAME.fullmatch(name)]
+    if journal is not None and journal_fd is not None:
+        with contextlib.suppress(FileNotFoundError):
+            os.lstat(journal.name, dir_fd=journal_fd)
+            places.append((journal_fd, journal.name))
+    holding = []
+    for dir_fd, name in places:
+        try:
+            if _first_header(dir_fd, name) is not None:
+                holding.append(name)
+        except RecordRefused:
+            holding.append(name)
+    return holding
+
+
 class ResumeRefused(Exception):
     """A saved world this start will not resume; the message is the operator's sentence."""
 
@@ -4386,7 +4465,12 @@ def _resume(
         run_inputs["tripped_interlocks"] = [sorted(executive.tripped), sorted(executive.tripped | set(added))]
         executive.tripped |= set(added)
 
-    record_now, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=executive.diode_fd)
+    # Read as `main` reads it at every start: a scenario that is not one of the vehicle's postures is garbled.
+    try:
+        postures: set[str] | None = set(load_postures(Path(world.root)))
+    except Exception:  # noqa: BLE001 - a record is then read without that one check
+        postures = None
+    record_now, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=executive.diode_fd, postures=postures)
     expected = root_record_from_checkpoint(recovered)
     action, why = classify_root_record(record_now, problem, expected, snapshot_tick)
     if action == "refuse":
@@ -4515,15 +4599,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="a window to serve from this executive; repeatable, default `vehicle`",
     )
-    parser.add_argument("--phase", default="translunar_coast")
+    parser.add_argument(
+        "--phase",
+        default=None,
+        help=f"the phase a new world starts in (default {DEFAULT_PHASE}); a restart resumes the phase its checkpoint "
+        "records, and naming another refuses",
+    )
     parser.add_argument("--poll", type=float, default=1.0, help="seconds between cycles")
     parser.add_argument("--cycles", type=int, default=0, help="0 runs until interrupted")
     parser.add_argument(
         "--closed-interlock",
         action="append",
-        default=[],
+        default=None,
         metavar="THRESHOLD",
-        help="an interlock that is currently tripped, by threshold id; repeatable",
+        help="an interlock that is currently tripped, by threshold id; repeatable. A restart keeps every "
+        "interlock its checkpoint records as tripped and adds these",
     )
     parser.add_argument("--init", action="store_true", help="prepare the windows, bind nothing, stop")
     parser.add_argument(
@@ -4538,10 +4628,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-batch",
         type=positive_int,
-        default=DEFAULT_MAX_BATCH,
+        default=None,
         metavar="N",
-        help="the most commands one window may submit in one cycle; a longer batch is refused "
-        "whole with one result (ADR 0001 choice B)",
+        help=f"the most commands one window may submit in one cycle (default {DEFAULT_MAX_BATCH}); a longer batch "
+        "is refused whole with one result (ADR 0001 choice B). A restart keeps its checkpoint's unless this names another",
     )
     parser.add_argument(
         "--journal",
@@ -4588,6 +4678,7 @@ def main(argv: list[str] | None = None) -> int:
         "keeps the pair it recorded unless this names another",
     )
     args = parser.parse_args(argv)
+    # `--slug` named nothing is `None`: a fresh world serves `vehicle`, a resumed one the slugs it was bound with.
     slugs = list(args.slug or ["vehicle"])
     for slug in slugs:
         if not SLUG_PATTERN.match(slug):
@@ -4746,7 +4837,7 @@ def main(argv: list[str] | None = None) -> int:
     if journal is None and state_path is not None:
         journal = journal_segment_path(state_path, boot_id)
 
-    record, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
+    record, problem, _record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
     checkpoint_found = None
     if state_fd is not None:
         # One state directory serves one diode directory, and says which (ADR 0002 H).
@@ -4756,9 +4847,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"the state directory's record at {state_dir / SERVES_FILE} cannot be read: {serves_problem}. "
                 "Repair or clear it; a state directory that cannot say which diode directory it serves is not one to run"
             )
-        if served is not None and served != str(diode_dir.resolve()):
+        if served is not None and served != str(diode_canonical.path):
             return refuse(
-                f"the state directory {state_dir} serves the diode directory {served}, not {diode_dir.resolve()}. "
+                f"the state directory {state_dir} serves the diode directory {served}, not {diode_canonical.path}. "
                 "One state directory serves one diode directory (ADR 0002 H); point --state-dir at the directory "
                 "that serves this one, or at a fresh one"
             )
@@ -4771,69 +4862,115 @@ def main(argv: list[str] | None = None) -> int:
                 f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
                 "and the executive does not start a fresh world over one (ADR 0002 K)"
             )
+
+    def run(executive: Executive, banner: str) -> int:
+        """The loop, for a fresh world and a resumed one alike: the lock's holder line, the banner, the cycles, a clean end."""
+        # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
+        try:
+            os.ftruncate(lock_fd, 0)
+            os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+        except OSError as exc:
+            executive.close()
+            return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
+        print(banner, flush=True)
+        # `--cycles` counts the cycles **this invocation** runs; a resumed world continues its tick.
+        ran = 0
+        clean = False
+        try:
+            try:
+                while args.cycles == 0 or ran < args.cycles:
+                    ran += 1
+                    written = executive.cycle()
+                    if written:
+                        print(f"[console] tick {executive.tick}: {len(written)} result(s)", flush=True)
+                    time.sleep(args.poll)
+                clean = True
+            except KeyboardInterrupt:
+                print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
+                # A checkpoint only at a cycle's boundary: mid-cycle the window counters can be ahead of the truth.
+                clean = not executive.in_cycle
+            except UncomparableState as exc:
+                sys.stderr.write(
+                    f"[console] stopped at tick {executive.tick}: the next tick's state cannot be compared "
+                    f"({exc}). The executive did not commit it; the lineage ends at tick {executive.tick}\n"
+                )
+                return 3
+            except RecordUnwritable as exc:
+                sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
+                return 3
+            # A clean end checkpoints the last completed cycle, unless the cadence just did; a failure is a
+            # line on stderr and not a changed exit, because the record already holds every tick.
+            if clean and executive.state_fd is not None and executive.last_checkpoint_tick != executive.tick:
+                try:
+                    executive.checkpoint()
+                except Exception as exc:  # noqa: BLE001 - said, not raised
+                    sys.stderr.write(f"[console] the checkpoint at the end, tick {executive.tick}, was not written: {exc}\n")
+            return 0
+        finally:
+            executive.close()
+            close_all()
+
     if checkpoint_found is not None:
-        expected = root_record_from_checkpoint(checkpoint_found.body)
-        action, why = reconcile_root_record(record, problem, expected)
-        if action == "refuse":
+        body = checkpoint_found.body
+        # **A restart names the world it resumes, or names nothing** (commitment 2): a named scenario, seed,
+        # phase, ring bound or slug set the checkpoint does not record is refused by one sentence.
+        named_other = identity_refusal(args, body, checkpoint_found.path)
+        if named_other is not None:
+            return refuse(named_other)
+        if args.init:
             return refuse(
-                f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
-                f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
-                "or point --state-dir at the directory that serves this one"
+                f"--init prepares an unbound directory, and the state directory {state_dir} holds world "
+                f"{body['identity']['world_id']} at tick {body['identity']['tick']}, which a start without --init resumes "
+                "(ADR 0001: a bound directory refuses every --init)"
             )
+        expected = root_record_from_checkpoint(body)
         if not (args.plan or args.plan_json):
-            if action == "rewrite":
-                # **The event first, then the rewrite: no rewrite without its journal event** (review
-                # F2). And every failure of either is a refusal by name, never a traceback (F1): the
-                # first version rewrote first, so a journal that could not take the event left a
-                # rewrite nobody recorded, and a directory planted at the record's path raised
-                # `IsADirectoryError` out of `main`.
-                if journal is None:  # a checkpoint implies a state directory, so a segment at least
-                    return refuse("no journal is named for the root record's rewrite event, so nothing was rewritten")
-                try:
-                    append_journal_line(
-                        journal,
-                        {
-                            "event": "root_record_rewritten",
-                            "wall": utc_now().isoformat(),
-                            "boot_id": boot_id,
-                            "world_id": expected["world_id"],
-                            "tick": expected["tick"],
-                            "checkpoint": checkpoint_found.path.name,
-                            "reason": why,
-                            "problem": problem,
-                            **superseded_record(record, record_bytes),
-                        },
-                        # The segment relative to the state directory's handle; an explicit journal
-                        # relative to a handle on its resolved parent.
-                        dir_fd=state_fd if journal_fd is None else journal_fd,
-                    )
-                except Exception as exc:  # noqa: BLE001 - the refusal names it
-                    return refuse(
-                        f"the journal at {journal} cannot take the event for rewriting the root record at "
-                        f"{diode_dir / RECORD_FILE} ({type(exc).__name__}: {exc}), so nothing was rewritten: "
-                        "no rewrite goes unjournaled (ADR 0002 H). Repair the journal's path and start again"
-                    )
-                try:
-                    write_json_atomic(RECORD_FILE, expected, dir_fd=diode_fd)
-                except Exception as exc:  # noqa: BLE001 - the refusal names it
-                    return refuse(
-                        f"the root record at {diode_dir / RECORD_FILE} cannot be rewritten from the checkpoint "
-                        f"at {checkpoint_found.path} ({type(exc).__name__}: {exc}); {why}. The mismatch was "
-                        f"journaled to {journal} before the attempt. The record is the checkpoint's copy, so "
-                        "nothing is lost: remove what is at that path and start again"
-                    )
-                sys.stderr.write(f"[console] {diode_dir / RECORD_FILE}: {why}; the mismatch is journaled\n")
-            problem = serves_refusal()
-            if problem is not None:
-                return refuse(problem)
-            # Choice D, kept: a verified checkpoint is a world, and this executive does not start a
-            # fresh one over it. Resuming it is WP08 child 3.
-            return refuse(
-                f"the state directory {state_dir} holds a verified checkpoint ({checkpoint_found.path.name}, "
-                f"world {expected['world_id']}, tick {expected['tick']}), and resuming a world from its "
-                "checkpoint is WP08 child 3 (tachyon-beep/space_vehicle#21), not yet landed. The executive does "
-                "not start a fresh world over a saved one (ADR 0001 choice D, as amended by ADR 0002); the root "
-                "record is the checkpoint's copy, and the diode directory is not to be touched"
+            action, why = reconcile_root_record(record, problem, expected)
+            if action == "refuse":
+                return refuse(
+                    f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
+                    f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
+                    "or point --state-dir at the directory that serves this one"
+                )
+            unserved = serves_refusal()
+            if unserved is not None:
+                return refuse(unserved)
+            # **Resume** (ADR 0002 F1, G, J, L; child 3): the checkpoint and the record after it.
+            try:
+                executive, resumption = resume_executive(
+                    world,
+                    diode_dir,
+                    checkpoint_found,
+                    boot_id=boot_id,
+                    state_dir=state_path,
+                    state_fd=state_fd,
+                    journal=journal_explicit,
+                    journal_dir_fd=journal_fd,
+                    max_batch=args.max_batch,
+                    closed_interlocks=set(args.closed_interlock or []),
+                )
+            except ResumeRefused as exc:
+                return refuse(f"{exc}. The executive does not start a fresh world over a saved one (ADR 0002 K)")
+            # Addendum B3: a checkpoint at the recovered tick before anything is claimed — it makes the
+            # named run inputs durable and bounds the next resume's replay and re-publication.
+            try:
+                executive.checkpoint()
+            except Exception as exc:  # noqa: BLE001 - the refusal names it
+                executive.close()
+                return refuse(
+                    f"the checkpoint at the recovered tick {resumption.tick} cannot be written ({exc}); nothing has been "
+                    "claimed this boot, and the world resumes from the record at the next start"
+                )
+            rings = sorted({w.ring_slots for w in executive.windows.values()})
+            return run(
+                executive,
+                f"[console] {diode_dir} resumed world {executive.world_id} at tick {executive.tick} "
+                f"(checkpoint {checkpoint_found.path.name} at tick {resumption.snapshot_tick}"
+                + (", fell back" if resumption.fell_back else "")
+                + f", replayed {resumption.replayed}, republished {sum(1 for r in resumption.republished if r.get('result') == 'written')}) "
+                f"slugs={','.join(sorted(executive.windows))} phase={executive.phase} scenario={executive.scenario} "
+                f"seed={executive.seed} ring={','.join(map(str, rings))} poll={args.poll}s "
+                f"cycles={args.cycles or 'until interrupted'} state-dir={state_dir}",
             )
         # `--plan` answers from the checkpoint's identity and writes nothing in the diode directory
         # (the state directory and its lock were made above, as for any start).
@@ -4973,19 +5110,31 @@ def main(argv: list[str] | None = None) -> int:
             "choice D)"
         )
 
+    if state_fd is not None and not args.init:
+        # Addendum B11 (S11): a fresh world over a record with no checkpoint. Its first segment would be a
+        # second root of the record, and every resume after it would refuse; one state directory is one
+        # world's (ADR 0002 H). Only the first header of each journal file is read.
+        holding = state_record_files(state_fd, journal_fd, journal_explicit)
+        if holding:
+            return refuse(
+                f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
+                "or one that died before its first checkpoint was written. One state directory is one world's "
+                f"(ADR 0002 H): move {', '.join(holding)} out of {state_dir}, or point --state-dir at an empty directory"
+            )
     if state_fd is not None:
         problem = serves_refusal()
         if problem is not None:
             return refuse(problem)
+    phase = args.phase if args.phase is not None else DEFAULT_PHASE
     try:
         executive = Executive(
             world,
             diode_dir,
-            phase=args.phase,
-            tripped_interlocks=set(args.closed_interlock),
+            phase=phase,
+            tripped_interlocks=set(args.closed_interlock or []),
             scenario=scenario,
             seed=seed,
-            max_batch=args.max_batch,
+            max_batch=args.max_batch if args.max_batch is not None else DEFAULT_MAX_BATCH,
             journal=journal,
             record_slugs=recorded_slugs,
             state_dir=state_path,
@@ -4997,13 +5146,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         return refuse(str(exc))
-    # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
-    try:
-        os.ftruncate(lock_fd, 0)
-        os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
-    except OSError as exc:
-        executive.close()
-        return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
     for slug in slugs:
         try:
             executive.attach(slug, ring_slots=resolved_slots[slug])
@@ -5019,45 +5161,33 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.init:
         for slug in slugs:
-            print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {args.phase!r}")
+            print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {phase!r}")
         # `--init` binds nothing: the lock is released and the records say `world_id: null`.
         executive.close()
         close_all()
         return 0
+    if state_fd is not None:
+        # Addendum B1: a world's genesis checkpoint, at tick 0, before its first cycle — so a kill before
+        # the first cadence checkpoint resumes rather than finding a bound root record and no checkpoint.
+        # It is mandatory: nothing is bound yet, so a failure refuses with nothing lost.
+        try:
+            executive.checkpoint()
+        except Exception as exc:  # noqa: BLE001 - the refusal names it
+            executive.close()
+            return refuse(
+                f"the world's first checkpoint cannot be written into {state_dir} ({exc}); nothing is bound yet, and a "
+                "world without a checkpoint cannot be resumed (ADR 0002 H)"
+            )
 
     rings = sorted(set(resolved_slots.values()))
     ring = str(rings[0]) if len(rings) == 1 else ",".join(f"{s}:{resolved_slots[s]}" for s in slugs)
-    print(
-        f"[console] {diode_dir} slugs={','.join(slugs)} phase={args.phase} "
+    return run(
+        executive,
+        f"[console] {diode_dir} slugs={','.join(slugs)} phase={phase} "
         f"scenario={executive.scenario} seed={executive.seed} ring={ring} "
         f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}"
         + (f" state-dir={state_dir}" if state_dir is not None else ""),
-        flush=True,
     )
-    # `--cycles` counts the cycles **this invocation** runs; an executive always starts at tick 0.
-    ran = 0
-    try:
-        while args.cycles == 0 or ran < args.cycles:
-            ran += 1
-            written = executive.cycle()
-            if written:
-                print(f"[console] tick {executive.tick}: {len(written)} result(s)", flush=True)
-            time.sleep(args.poll)
-    except KeyboardInterrupt:
-        print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
-    except UncomparableState as exc:
-        sys.stderr.write(
-            f"[console] stopped at tick {executive.tick}: the next tick's state cannot be compared "
-            f"({exc}). The executive did not commit it; the lineage ends at tick {executive.tick}\n"
-        )
-        return 3
-    except RecordUnwritable as exc:
-        sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
-        return 3
-    finally:
-        executive.close()
-        close_all()
-    return 0
 
 
 if __name__ == "__main__":

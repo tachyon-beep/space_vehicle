@@ -85,8 +85,9 @@ def copy_definition(destination: Path) -> Path:
     one of those checks refuse for absence in every test in this file — which is the same defect
     the domains clause above records, arriving in the fixture that clause was written for. So the
     fixture copies what the linter reads and nothing else: the two prose files and the tools whose
-    own text makes a claim — the fault scheduler's docstring and the console's parser
-    (`check_console_flags`) — not the 750 KB `check_vehicle.py` the fixture is *running*.
+    own text makes a claim — the fault scheduler's docstring, the console's parser and, since WP08
+    child 3, the checkpoint's `run` section (`check_console_flags`) — not the 750 KB `check_vehicle.py`
+    the fixture is *running*.
     """
     destination.mkdir(parents=True, exist_ok=True)
     for name in FILES:
@@ -94,7 +95,7 @@ def copy_definition(destination: Path) -> Path:
     for name in ("README.md", "plant.md"):
         shutil.copy(VEHICLE / name, destination / name)
     (destination / "tools").mkdir(exist_ok=True)
-    for name in ("faults.py", "console.py"):
+    for name in ("faults.py", "console.py", "checkpoint.py"):
         shutil.copy(VEHICLE / "tools" / name, destination / "tools" / name)
     domains = VEHICLE / "domains"
     if domains.is_dir():
@@ -17447,7 +17448,7 @@ def test_the_linter_refuses_a_console_flag_that_cannot_be_told_from_its_default(
     assert result.returncode == 1, result.stdout[-900:]
     assert "tools/console.py:--scenario" in result.stdout, result.stdout[-900:]
     assert "defaults to 'nominal'" in result.stdout, result.stdout[-900:]
-    assert "remembered (written to `pending.json` or the directory's record) as `scenario`" in result.stdout, result.stdout[-900:]
+    assert "remembered (written to `pending.json`, the directory's record or the checkpoint) as `scenario`" in result.stdout, result.stdout[-900:]
 
     # The numeric one, on a flag whose value is an int: the message has to read the same way, and
     # the point is that `0` is as un-nameable-a-default as `"nominal"` is.
@@ -24036,11 +24037,14 @@ def console_entry(diode: Path, state: Path | None = None, *slugs: str) -> list[s
 
 def start(diode: Path, state: Path | None, *slugs: str, extra: list[str] | None = None) -> subprocess.CompletedProcess:
     """One console start that runs at most one cycle and comes back with its exit and stderr."""
+    # A start that resumes a world runs its loop like any other; a generous timeout makes one that never
+    # stops (`--cycles 0`) a failure of the test, never a hang and never a skip.
     return subprocess.run(
         [*console_entry(diode, state, *slugs), *(extra or ["--cycles", "1", "--poll", "0"])],
         capture_output=True,
         text=True,
         check=False,
+        timeout=300,
     )
 
 
@@ -24139,9 +24143,10 @@ def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refus
     which still wins.
 
     What the root lock used to do, the record now does: a third executive with its *own* fresh state
-    directory on the bound diode directory is refused by ADR 0001's binding rule, not by a lock —
-    and the same refusal stands after the first executive is dead, because without a checkpoint
-    (child 4 writes none yet) ADR 0001's rules are unchanged.
+    directory on the bound diode directory is refused by ADR 0001's binding rule, not by a lock. After
+    the first executive is dead its own state directory holds its checkpoints (child 3: a genesis at
+    tick 0 and one every `N` ticks), so a restart on it resumes the world — with exactly the slugs the
+    world was bound with: naming fewer is refused by one sentence naming `--slug` and both sets.
     """
     diode = tmp_path / "diode"
     state = tmp_path / "state"
@@ -24189,11 +24194,13 @@ def test_the_lock_moves_into_the_state_dir_and_a_second_executive_on_it_is_refus
     mismatched = start(tmp_path / "other-diode", state, "alpha")
     assert mismatched.returncode == 3 and "serves" in mismatched.stderr and str(diode.resolve()) in mismatched.stderr, mismatched.stderr
     assert not (tmp_path / "other-diode" / "alpha").exists()
-    # The dead executive's own state directory on its own diode directory, no checkpoint: ADR 0001 stands.
+    # The dead executive's own state directory on its own diode directory: its checkpoint is the world.
     stale = start(diode, state, "alpha")
-    assert stale.returncode == 3 and bound["world_id"] in stale.stderr and "choice D" in stale.stderr, stale.stderr
-    assert "another executive" not in stale.stderr
+    assert stale.returncode == 3 and bound["world_id"] in stale.stderr and "--slug names ['alpha']" in stale.stderr, stale.stderr
+    assert "['alpha', 'bravo']" in stale.stderr and "another executive" not in stale.stderr
     assert sorted(p.name for p in state.glob("journal.*.jsonl")) == [segments[0].name], "a refused start opens no segment"
+    resumed = start(diode, state, "alpha", "bravo")
+    assert resumed.returncode == 0 and f"resumed world {bound['world_id']}" in resumed.stdout, (resumed.stdout, resumed.stderr)
     # An explicit `--journal` still wins over the segment file.
     explicit = tmp_path / "explicit.jsonl"
     ran = start(tmp_path / "fresh-diode", tmp_path / "fresh-state", "alpha", extra=["--journal", str(explicit), "--cycles", "2", "--poll", "0"])
@@ -24297,23 +24304,21 @@ def test_the_root_record_is_the_checkpoints_copy_and_only_a_foreign_world_refuse
     assert action == "refuse"
 
 
-def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start_still_refuses_until_resume_lands(tmp_path):
-    """ADR 0002 H(ii) end to end, and ADR 0001 choice D kept: a checkpoint is never started over.
+def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_world_resumes(tmp_path):
+    """ADR 0002 H(ii) end to end, and ADR 0001 choice D as amended: a checkpoint is resumed, never started over.
 
     A world is run in-process with `--state-dir` semantics (journal segment in the state directory),
     its checkpoint written there with `checkpoint.write_checkpoint`, and then `console.py` is started
     on the pair with the root record in each state the issue names. Missing, garbled, a symlink, or
-    disagreeing (the same world, a later tick and an extra prepared slug): the record is rewritten to
-    the checkpoint's copy — equal to `root_record_from_checkpoint` of the body but for `updated_at` —
-    the mismatch is journaled into this boot's segment with the superseded record's identity keys
-    (bounded, with the file's fingerprint — review F5; the record was copied verbatim at first), and the
-    start is **not** refused on the record's account. A readable record naming another world refuses,
-    names both worlds and both files, and leaves the record byte-identical. In every case the start
-    then refuses with exit 3 because resume is child 3 (#21): starting a fresh world over a checkpoint
-    is the alternative choice D rejected, and the message must not give the old advice — "clear or
-    rename the directory" is now the one thing the operator must not do. `--init` refuses the same
-    way; `--plan` answers from the checkpoint's identity and writes nothing in the diode directory, a
-    garbled record included (the state directory and its lock it makes, as any start does).
+    disagreeing (the same world ahead of what the record recovers, and an extra prepared slug): the
+    record is rewritten from the recovered world, the mismatch is journaled with the superseded
+    record's identity keys (bounded, with the file's fingerprint — review F5), and the world resumes:
+    exit 0, its own `world_id`, its tick continuing. A record that agrees, or that is the routine copy
+    a cycle left (child 3), is rewritten with no mismatch event. A readable record naming another world
+    refuses, names both worlds and both files, and leaves the record byte-identical. `--init` refuses
+    on a saved world (ADR 0001: a bound directory refuses every `--init`); `--plan` answers from the
+    checkpoint's identity and writes nothing in the diode directory, a garbled record included. Until
+    child 3 every one of these starts refused for want of a resume (#21), with exit 3.
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     diode = tmp_path / "diode"
@@ -24328,62 +24333,55 @@ def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start
     compat = checkpoint.Compatibility.current(world)
     body = checkpoint.capture_state(executive, compat)
     checkpoint.write_checkpoint(state, body)
+    executive.close()
     assert executive.journal == state / f"journal.{executive.boot_id}.jsonl" and executive.journal.exists()
-    run_segment = executive.journal
-    expected = {k: v for k, v in console.root_record_from_checkpoint(body).items() if k != "updated_at"}
+    identity = ("world_id", "slugs", "scenario", "seed", "ring_slots")
+    expected = {k: v for k, v in console.root_record_from_checkpoint(body).items() if k in identity}
     record_path = diode / ".executive.json"
 
     def record_now() -> dict:
         loaded = json.loads(record_path.read_text())
-        return {k: v for k, v in loaded.items() if k != "updated_at"}
+        return {k: v for k, v in loaded.items() if k in identity}
 
-    def events() -> list[dict]:
-        rows = []
-        for segment in sorted(state.glob("journal.*.jsonl")):
-            if segment == run_segment:
-                continue
-            rows.extend(json.loads(line) for line in segment.read_text().splitlines())
-        return rows
+    def rewrites() -> list[dict]:
+        return startup_events(state, executive, "root_record_rewritten")
 
-    def refused_for_resume(result: subprocess.CompletedProcess) -> None:
-        assert result.returncode == 3, (result.returncode, result.stderr)
-        assert "#21" in result.stderr and "checkpoint.json" in result.stderr and f"tick {body['identity']['tick']}" in result.stderr, result.stderr
-        assert "clear or rename the directory" not in result.stderr and "WP08's to define" not in result.stderr, result.stderr
+    def resumed(result: subprocess.CompletedProcess) -> int:
+        assert result.returncode == 0, (result.returncode, result.stderr)
+        assert f"resumed world {executive.world_id}" in result.stdout, result.stdout
+        tick = json.loads(record_path.read_text())["tick"]
+        assert record_now() == expected and tick > 3, (record_now(), tick)
+        return tick
 
-    # Agreeing: nothing rewritten, nothing journaled, still refused for want of a resume.
+    # Agreeing: nothing rewritten, no mismatch journaled; the world resumes at tick 3 and runs a cycle.
     assert record_now() == expected
-    before = record_path.read_bytes()
-    refused_for_resume(start(diode, state, "alpha", "bravo"))
-    assert record_path.read_bytes() == before and events() == []
+    assert resumed(start(diode, state, "alpha", "bravo")) >= 4 and rewrites() == []
 
     # Missing.
     record_path.unlink()
-    refused_for_resume(start(diode, state, "alpha", "bravo"))
-    assert record_now() == expected
-    rewritten = [row for row in events() if row.get("event") == "root_record_rewritten"]
-    assert len(rewritten) == 1 and rewritten[0]["previous"] is None and "no root record" in rewritten[0]["reason"], rewritten
-    assert rewritten[0]["world_id"] == executive.world_id and rewritten[0]["tick"] == 3 and rewritten[0]["checkpoint"] == "checkpoint.json"
+    resumed(start(diode, state, "alpha", "bravo"))
+    assert len(rewrites()) == 1 and rewrites()[0]["previous"] is None and "no root record" in rewrites()[0]["reason"], rewrites()
+    assert rewrites()[0]["world_id"] == executive.world_id and rewrites()[0]["checkpoint"] == "checkpoint.json"
 
     # Garbled, and a symlink to a file that would otherwise read: rewritten as a regular file, target untouched.
     record_path.write_text("{not json")
-    refused_for_resume(start(diode, state, "alpha", "bravo"))
-    assert record_now() == expected
-    assert any("not valid JSON" in row["reason"] and row["previous"] is None for row in events() if row.get("event") == "root_record_rewritten")
+    resumed(start(diode, state, "alpha", "bravo"))
+    assert any("not valid JSON" in row["reason"] and row["previous"] is None for row in rewrites())
     aside = tmp_path / "aside.json"
-    aside.write_text(json.dumps({**expected, "updated_at": "x"}))
+    aside.write_text(json.dumps({**json.loads(record_path.read_text()), "updated_at": "x"}))
     record_path.unlink()
     record_path.symlink_to(aside)
-    refused_for_resume(start(diode, state, "alpha", "bravo"))
-    assert not record_path.is_symlink() and record_now() == expected
-    assert json.loads(aside.read_text())["updated_at"] == "x", "the link's target was not written through"
-    assert any("symlink" in row["reason"] for row in events() if row.get("event") == "root_record_rewritten")
+    resumed(start(diode, state, "alpha", "bravo"))
+    assert not record_path.is_symlink() and json.loads(aside.read_text())["updated_at"] == "x", "the link's target was not written through"
+    assert any("symlink" in row["reason"] for row in rewrites())
 
-    # Disagreeing: the same world, ahead by five ticks, with a slug another `--init` prepared.
-    stale = {**expected, "tick": 8, "slugs": ["alpha", "bravo", "charlie"], "ring_slots": {**expected["ring_slots"], "charlie": 300}, "updated_at": "later"}
+    # Disagreeing: this world, ahead of the tick the record recovers, with a slug another `--init` prepared.
+    current = json.loads(record_path.read_text())
+    stale = {**current, "tick": current["tick"] + 50, "slugs": ["alpha", "bravo", "charlie"], "ring_slots": {**current["ring_slots"], "charlie": 300}, "updated_at": "later"}
     record_path.write_text(json.dumps(stale))
-    refused_for_resume(start(diode, state, "alpha", "bravo"))
-    assert record_now() == expected
-    disagreement = [row for row in events() if row.get("event") == "root_record_rewritten" and row["previous"] is not None]
+    before = len(rewrites())
+    resumed(start(diode, state, "alpha", "bravo"))
+    disagreement = rewrites()[before:]
     assert len(disagreement) == 1 and disagreement[0]["previous"] == stale, disagreement
     assert "tick" in disagreement[0]["reason"] and "slugs" in disagreement[0]["reason"]
     # Every event row carries the boot it belongs to, and its segment is that boot's file.
@@ -24392,29 +24390,28 @@ def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start
             assert segment.name == f"journal.{row['boot_id']}.jsonl", (segment.name, row)
 
     # A readable record of another world: refused by name, nothing rewritten, nothing journaled as a rewrite.
-    foreign = {**expected, "world_id": "f" * 32, "updated_at": "theirs"}
+    foreign = {**json.loads(record_path.read_text()), "world_id": "f" * 32, "updated_at": "theirs"}
     record_path.write_text(json.dumps(foreign))
-    before = record_path.read_bytes()
-    rewrites_before = len([row for row in events() if row.get("event") == "root_record_rewritten"])
+    before_bytes = record_path.read_bytes()
+    rewrites_before = len(rewrites())
     other = start(diode, state, "alpha", "bravo")
     assert other.returncode == 3, (other.returncode, other.stderr)
     assert "f" * 32 in other.stderr and executive.world_id in other.stderr, other.stderr
     assert ".executive.json" in other.stderr and "checkpoint.json" in other.stderr and "ADR 0002 H" in other.stderr, other.stderr
-    assert "#21" not in other.stderr and "clear or rename the directory" not in other.stderr, other.stderr
-    assert record_path.read_bytes() == before
-    assert len([row for row in events() if row.get("event") == "root_record_rewritten"]) == rewrites_before
-    record_path.write_text(json.dumps({**expected, "updated_at": "restored"}))
+    assert "clear or rename the directory" not in other.stderr, other.stderr
+    assert record_path.read_bytes() == before_bytes and len(rewrites()) == rewrites_before
+    record_path.write_text(json.dumps({**foreign, "world_id": executive.world_id, "updated_at": "restored"}))
 
-    # `--init` refuses the same way; `--plan` answers from the checkpoint and writes nothing in the diode directory.
-    refused_for_resume(start(diode, state, "alpha", "bravo", extra=["--init"]))
+    # `--init` refuses on a saved world; `--plan` answers from the checkpoint and writes nothing in the diode directory.
+    init = start(diode, state, "alpha", "bravo", extra=["--init"])
+    assert init.returncode == 3 and "--init prepares an unbound directory" in init.stderr and executive.world_id in init.stderr, init.stderr
     record_path.write_text("{not json")
     planned = start(diode, state, "alpha", "bravo", extra=["--plan"])
     assert planned.returncode == 0, planned.stderr[-800:]
     assert "scenario 'nominal' at seed 0" in planned.stdout, planned.stdout
     assert record_path.read_text() == "{not json", "--plan writes nothing, a garbled record included"
-    # The lock the refused starts took was the state directory's, and the root never grew one.
+    # The lock the starts took was the state directory's, and the root never grew one.
     assert (state / ".executive.lock").exists() and not (diode / ".executive.lock").exists()
-    executive.close()
 
 
 def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_restart(tmp_path):
@@ -24427,8 +24424,9 @@ def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_
     own `body_sha256` and `engine`. Every regular file under the diode directory is scanned — the
     windows' five files, every result and every frame, and the root record, which is the one file a
     checkpoint-derived rewrite could most easily leak into. The scan runs after commanded cycles,
-    after the checkpoint is written into the state directory, and after a restart attempt that
-    rewrote a garbled root record from the checkpoint and was then refused for want of a resume.
+    after the checkpoint is written into the state directory, and after a restart that rewrote a
+    garbled root record from the recovered world and resumed it for a cycle (child 3; until then the
+    restart was refused for want of a resume).
 
     A scanner that cannot fail is not a scanner: a lineage link and the state directory's path are
     planted into a result file first, must be found, and are removed before the real scans.
@@ -24483,13 +24481,13 @@ def test_no_window_file_carries_hidden_state_before_or_after_a_checkpoint_and_a_
     # The journal, which may carry all of it, is in the state directory and nowhere under the diode directory.
     assert list(state.glob("journal.*.jsonl")) and not list(diode.rglob("*.jsonl"))
 
-    # A restart attempt: the garbled root record is rewritten from the checkpoint, the start is refused
-    # (resume is #21), and the rewritten record carries nothing the checkpoint header does beyond identity.
+    # A restart: the garbled root record is rewritten from the recovered world, the world resumes for one
+    # cycle, and the rewritten record carries nothing the checkpoint header does beyond identity.
     (diode / ".executive.json").write_text("{not json")
     restarted = start(diode, state, "alpha", "bravo")
-    assert restarted.returncode == 3 and "#21" in restarted.stderr, (restarted.returncode, restarted.stderr)
+    assert restarted.returncode == 0 and "resumed world" in restarted.stdout, (restarted.returncode, restarted.stderr)
     record = json.loads((diode / ".executive.json").read_text())
-    assert record["world_id"] == executive.world_id and record["tick"] == 4 and record["slugs"] == ["alpha", "bravo"]
+    assert record["world_id"] == executive.world_id and record["tick"] == 5 and record["slugs"] == ["alpha", "bravo"]
     assert hidden_state_hits(diode, forbidden) == []
     executive.close()
 
@@ -24562,17 +24560,23 @@ def checkpointed_pair(tmp_path: Path):
     return console, executive, diode, state, expected
 
 
-def startup_events(state: Path, executive) -> list[dict]:
-    """Every row of every segment in the state directory but the dead executive's own, oldest first.
+def startup_events(state: Path, executive, name: str | None = None) -> list[dict]:
+    """Every startup event in every segment in the state directory but the dead executive's own, oldest first.
 
     A segment is named by its boot's uuid, so the files sort in no useful order; the events are put
-    in the order they were written by their wall stamp.
+    in the order they were written by their wall stamp. Since child 3 a start beside a checkpoint
+    resumes, so a later segment also holds the resumed boot's header, rows and notes, which are the
+    trace and not startup events; and every resume journals a `resumed` event — `name` picks one kind.
     """
     rows = []
     for segment in state.glob("journal.*.jsonl"):
         if segment != executive.journal:
-            rows.extend(json.loads(line) for line in segment.read_text().splitlines())
-    return sorted(rows, key=lambda row: row["wall"])
+            for line in segment.read_text().splitlines():
+                with contextlib.suppress(ValueError):
+                    row = json.loads(line)
+                    if isinstance(row, dict) and row.get("event") not in (None, "segment", "results_written"):
+                        rows.append(row)
+    return sorted((row for row in rows if name is None or row["event"] == name), key=lambda row: row["wall"])
 
 
 def test_a_root_record_that_cannot_be_rewritten_is_a_refusal_by_name_after_its_event_is_journaled(tmp_path):
@@ -24584,7 +24588,9 @@ def test_a_root_record_that_cannot_be_rewritten_is_a_refusal_by_name_after_its_e
     traceback, and no event, because the event was appended *after* the rewrite. Now the event is
     appended first, the rewrite's failure is caught, and the start refuses with exit 3 naming the file,
     the reason, and that the event was journaled — the record is a copy, so nothing is lost, and the
-    planted thing is left where it is for the operator to see.
+    planted thing is left where it is for the operator to see. Since child 3 the start is a resume, which
+    journals its `resumed` event and the mismatch event, and then refuses the same way: the refusal is
+    kept because under the chassis's per-slug mounts the root is the vehicle's alone (ADR 0002 H, A8).
     """
     _console, executive, diode, state, _expected = checkpointed_pair(tmp_path)
     record_path = diode / ".executive.json"
@@ -24597,8 +24603,8 @@ def test_a_root_record_that_cannot_be_rewritten_is_a_refusal_by_name_after_its_e
     assert str(record_path) in refused.stderr and "IsADirectoryError" in refused.stderr, refused.stderr
     assert "journaled" in refused.stderr and "#21" not in refused.stderr, refused.stderr
     assert record_path.is_dir() and (record_path / "planted").read_text() == "an agent's"
-    events = startup_events(state, executive)
-    assert len(events) == 1 and events[0]["event"] == "root_record_rewritten", events
+    assert [e["event"] for e in startup_events(state, executive)] == ["resumed", "root_record_rewritten"]
+    events = startup_events(state, executive, "root_record_rewritten")
     assert "a directory" in events[0]["problem"], events
 
 
@@ -24609,7 +24615,10 @@ def test_a_journal_that_cannot_take_the_event_refuses_and_nothing_is_rewritten(t
     unwritable journal is an explicit `--journal` that is a directory. The first version rewrote the
     garbled record and *then* died appending to it — exit 1, a traceback, and a rewrite with no event,
     which is the one outcome H(ii)'s "rewritten and the mismatch journaled" forbids. Now the start
-    refuses with exit 3 naming the journal, and the garbled record is byte-for-byte what it was.
+    refuses with exit 3 naming the journal, and the garbled record is byte-for-byte what it was. Since
+    child 3 the start is a resume, which reads the record from where this boot would write it — that
+    directory — and refuses there, before any event; the event-before-rewrite order is then held
+    in-process, with an append that fails: `ResumeRefused`, "nothing was rewritten", the record as it was.
     """
     _console, executive, diode, state, _expected = checkpointed_pair(tmp_path)
     record_path = diode / ".executive.json"
@@ -24619,9 +24628,23 @@ def test_a_journal_that_cannot_take_the_event_refuses_and_nothing_is_rewritten(t
     refused = start(diode, state, "alpha", extra=["--journal", str(journal_dir), "--cycles", "1", "--poll", "0"])
     assert refused.returncode == 3, (refused.returncode, refused.stderr)
     assert "Traceback" not in refused.stderr, refused.stderr
-    assert str(journal_dir) in refused.stderr and "nothing was rewritten" in refused.stderr, refused.stderr
+    assert journal_dir.name in refused.stderr and "not a regular file" in refused.stderr, refused.stderr
     assert record_path.read_text() == "{not json"
     assert list(journal_dir.iterdir()) == [] and startup_events(state, executive) == []
+
+    checkpoint, console, _plant, world = checkpoint_tools()
+    real = console.append_journal_line
+
+    def refusing(*args, **kwargs):
+        raise OSError(errno.EROFS, "Read-only file system")
+
+    console.append_journal_line = refusing
+    try:
+        with pytest.raises(console.ResumeRefused) as caught:
+            resume_from(console, checkpoint, world, diode, state)
+    finally:
+        console.append_journal_line = real
+    assert "nothing was rewritten" in str(caught.value) and record_path.read_text() == "{not json"
 
 
 def test_a_root_record_carrying_a_non_json_number_is_garbled_beside_a_checkpoint_and_rewritten(tmp_path):
@@ -24632,7 +24655,7 @@ def test_a_root_record_carrying_a_non_json_number_is_garbled_beside_a_checkpoint
     no conforming reader can parse, served as the checkpoint's copy — and one that also disagreed was
     rewritten and then crashed the start: the superseded record went into the journal through
     `dumps_json`, which refuses `NaN`, so the start died with exit 1 after the rewrite. With
-    `loads_json` both are garbled: rewritten, journaled, and the start refused only for want of resume.
+    `loads_json` both are garbled: rewritten, journaled, and — since child 3 — the world resumed.
     """
     console, executive, diode, state, expected = checkpointed_pair(tmp_path)
     record_path = diode / ".executive.json"
@@ -24643,19 +24666,22 @@ def test_a_root_record_carrying_a_non_json_number_is_garbled_beside_a_checkpoint
     assert record is None and problem is not None and "not valid JSON" in problem, (record, problem)
     for text in (agreeing, json.dumps({**expected, "tick": 8, "extra": float("nan")})):
         record_path.write_text(text)
-        refused = start(diode, state, "alpha")
-        assert refused.returncode == 3 and "#21" in refused.stderr and "Traceback" not in refused.stderr, refused.stderr
+        resumed = start(diode, state, "alpha")
+        assert resumed.returncode == 0 and "resumed world" in resumed.stdout and "Traceback" not in resumed.stderr, resumed.stderr
         assert "NaN" not in record_path.read_text()
-        assert {k: v for k, v in json.loads(record_path.read_text()).items() if k != "updated_at"} == expected
-    events = startup_events(state, executive)
+        rewritten = json.loads(record_path.read_text())
+        assert {k: rewritten[k] for k in ("world_id", "slugs", "scenario", "seed", "ring_slots")} == {
+            k: expected[k] for k in ("world_id", "slugs", "scenario", "seed", "ring_slots")
+        }
+    events = startup_events(state, executive, "root_record_rewritten")
     assert len(events) == 2 and all(row["previous"] is None and "not valid JSON" in row["problem"] for row in events), events
 
 
 def test_an_explicit_journal_inside_the_diode_dir_is_refused_before_anything_is_written(tmp_path):
     """Review F3: every destination is checked before the first write, the journal's included.
 
-    The `--journal` rule lived only in `Executive.__init__`. A start that finds a checkpoint never
-    constructs an executive — it refuses for #21 first — so a garbled record's rewrite event was
+    The `--journal` rule lived only in `Executive.__init__`. A start that found a checkpoint never
+    constructed an executive — it refused for #21 first — so a garbled record's rewrite event was
     appended to a `--journal` inside the diode directory, where every agent could read the lineage,
     and nothing ever refused it. Without `--state-dir` the refusal came, but after the diode directory
     was made and its lock was created. The rule is now checked in `main` before anything else is
@@ -24695,31 +24721,31 @@ def test_the_superseded_record_is_journaled_as_its_identity_and_fingerprint_neve
     record_path.write_text(json.dumps(padded))
     raw = record_path.read_bytes()
     assert 900_000 < len(raw) < 1_000_000
-    refused = start(diode, state, "alpha")
-    assert refused.returncode == 3 and "#21" in refused.stderr, (refused.returncode, refused.stderr[-800:])
-    segment_bytes = sum(p.stat().st_size for p in state.glob("journal.*.jsonl") if p != executive.journal)
-    assert segment_bytes < 4096, segment_bytes
-    (event,) = startup_events(state, executive)
+    resumed = start(diode, state, "alpha")
+    assert resumed.returncode == 0, (resumed.returncode, resumed.stderr[-800:])
+    event_bytes = sum(len(json.dumps(e)) for e in startup_events(state, executive))
+    assert event_bytes < 4096, event_bytes
+    (event,) = startup_events(state, executive, "root_record_rewritten")
     assert event["previous"] == {**expected, "tick": 8, "updated_at": "later"}, event
     assert event["previous_sha256"] == hashlib.sha256(raw).hexdigest() and event["previous_bytes"] == len(raw)
 
     bulky_identity = {**expected, "tick": 9, "updated_at": "y" * 900_000}
     record_path.write_text(json.dumps(bulky_identity))
     raw = record_path.read_bytes()
-    assert start(diode, state, "alpha").returncode == 3
-    event = startup_events(state, executive)[-1]
+    assert start(diode, state, "alpha").returncode == 0
+    event = startup_events(state, executive, "root_record_rewritten")[-1]
     assert len(json.dumps(event)) < 4096 and event["previous"] is None and "omitted" in event["previous_omitted"], event
     assert event["previous_sha256"] == hashlib.sha256(raw).hexdigest() and event["previous_bytes"] == len(raw)
 
     record_path.write_text("{not json")
-    assert start(diode, state, "alpha").returncode == 3
-    event = startup_events(state, executive)[-1]
+    assert start(diode, state, "alpha").returncode == 0
+    event = startup_events(state, executive, "root_record_rewritten")[-1]
     assert event["previous"] is None and event["previous_sha256"] == hashlib.sha256(b"{not json").hexdigest() and event["previous_bytes"] == 9
 
     # The bound found twice more on review of the fix. A refused value is quoted in `problem`, and a
     # 900 kB `scenario` was a 900 kB sentence in the event; and `updated_at`, the one kept key nothing
     # checked, parsed `1e400` to an infinity that `dumps_json` cannot write, so every restart was the
-    # journal's refusal. Each is now garbled at the reader: small, and refused only for want of resume.
+    # journal's refusal. Each is now garbled at the reader: small, rewritten, and the world resumes.
     # (The second review moved the infinity's refusal into `loads_json` itself; a stamp that is a number
     # at all is still the `updated_at` check's.)
     for planted, expect in (
@@ -24729,9 +24755,9 @@ def test_the_superseded_record_is_journaled_as_its_identity_and_fingerprint_neve
     ):
         record_path.write_text(planted if isinstance(planted, str) else json.dumps(planted))
         raw = record_path.read_bytes()
-        refused = start(diode, state, "alpha")
-        assert refused.returncode == 3 and "#21" in refused.stderr and len(refused.stderr) < 4096, (refused.returncode, refused.stderr[-800:])
-        event = startup_events(state, executive)[-1]
+        resumed = start(diode, state, "alpha")
+        assert resumed.returncode == 0 and len(resumed.stderr) < 4096, (resumed.returncode, resumed.stderr[-800:])
+        event = startup_events(state, executive, "root_record_rewritten")[-1]
         assert len(json.dumps(event)) < 4096 and event["previous"] is None and expect in event["problem"], event
         assert event["previous_sha256"] == hashlib.sha256(raw).hexdigest() and event["previous_bytes"] == len(raw)
 
@@ -24927,10 +24953,10 @@ def test_a_number_that_overflows_a_double_is_not_json_this_vehicle_reads(tmp_pat
     _console, executive, diode, state, expected = checkpointed_pair(tmp_path)
     record_path = diode / ".executive.json"
     record_path.write_text(json.dumps({**expected, "updated_at": "then"})[:-1] + ', "extra": 1e400}')
-    refused = start(diode, state, "alpha")
-    assert refused.returncode == 3 and "#21" in refused.stderr, refused.stderr
+    resumed = start(diode, state, "alpha")
+    assert resumed.returncode == 0 and "resumed world" in resumed.stdout, resumed.stderr
     assert "1e400" not in record_path.read_text()
-    (event,) = startup_events(state, executive)
+    (event,) = startup_events(state, executive, "root_record_rewritten")
     assert event["previous"] is None and "not valid JSON" in event["problem"], event
 
 
@@ -28130,3 +28156,437 @@ def test_a_cadence_checkpoint_that_cannot_be_written_is_a_recorded_journaled_fai
     recorded_run(resumed, diode, {}, 2, start=6)
     assert resumed.checkpoint_failures == 0 and generation_tick(state) == 8
     resumed.close()
+
+
+def all_tick_rows(state: Path) -> list[dict]:
+    """Every tick row of every segment in a state directory — or of one journal file — by tick, torn lines aside."""
+    rows = []
+    for path in [state] if state.is_file() else state.glob("journal.*.jsonl"):
+        for line in path.read_text().splitlines():
+            with contextlib.suppress(ValueError):
+                row = json.loads(line)
+                if isinstance(row, dict) and "event" not in row:
+                    rows.append(row)
+    return sorted(rows, key=lambda row: row["tick"])
+
+
+def quiet_oracle(console, plant, world, root: Path, slugs: tuple[str, ...], ticks: int) -> dict[int, tuple[str, str]]:
+    """The uninterrupted run's own per-tick compare-points and lineage links, with nothing commanded."""
+    oracle = console.Executive(world, root, phase="translunar_coast")
+    for slug in slugs:
+        oracle.attach(slug)
+    points = {}
+    for _ in range(ticks):
+        oracle.cycle()
+        points[oracle.tick] = (plant.state_hash(oracle.truth), oracle.lineage_head)
+    oracle.close()
+    return points
+
+
+def test_a_restart_with_the_same_arguments_resumes_the_same_world_and_journals_the_downtime_gap(tmp_path):
+    """Commitments 1 and 4: the chassis restarts `console.py` with the same arguments, and the world goes on.
+
+    A first start with a state directory writes the world's genesis checkpoint (tick 0) and, at its
+    clean end after three cycles, one at tick 3. A wall second later the same command line starts
+    again: it resumes the same `world_id` at tick 3 — mission time did not advance while it was down
+    (F1) — and runs on to tick 5. The frames on disk continue `seq` under a new `boot_id`, `met_s`
+    never decreases, and the `resumed` event carries the gap: `wall_down` (the newest journal file's
+    last write), `wall_up`, and the tick.
+    """
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = start(diode, state, "alpha", "bravo", extra=["--cycles", "3", "--poll", "0"])
+    assert first.returncode == 0, first.stderr[-800:]
+    world_id = json.loads((diode / ".executive.json").read_text())["world_id"]
+    assert generation_tick(state) == 3 and generation_tick(state, "checkpoint.prev.json") == 0
+    time.sleep(1.1)
+    second = start(diode, state, "alpha", "bravo", extra=["--cycles", "2", "--poll", "0"])
+    assert second.returncode == 0, second.stderr[-800:]
+    assert f"resumed world {world_id} at tick 3" in second.stdout, second.stdout
+    root = json.loads((diode / ".executive.json").read_text())
+    assert root["world_id"] == world_id and root["tick"] == 5
+    for slug in ("alpha", "bravo"):
+        frames = frames_of(diode / slug)
+        assert [f["seq"] for f in frames] == [0, 1, 2, 3, 4] and len({f["boot_id"] for f in frames[:3]} | {frames[3]["boot_id"]}) == 2
+        assert [f["met_s"] for f in frames] == [0.02 * t for t in range(1, 6)]
+    (event,) = journal_events(state, "resumed")
+    assert event["tick"] == 3 and event["world_id"] == world_id
+    gap = datetime_gap(event["wall_down"], event["wall_up"])
+    assert gap >= 1.0, event
+    assert [row["tick"] for row in all_tick_rows(state)] == [1, 2, 3, 4, 5]
+
+
+def datetime_gap(earlier: str, later: str) -> float:
+    from datetime import datetime
+
+    return (datetime.fromisoformat(later) - datetime.fromisoformat(earlier)).total_seconds()
+
+
+def test_a_console_killed_with_sigkill_and_restarted_resumes_and_matches_an_uninterrupted_run_tick_for_tick(tmp_path):
+    """Commitment 1 at the process boundary: `docker kill`, then the same command line.
+
+    `console.py` runs with no cycle limit until its record holds more than two checkpoint intervals
+    (`N = 50`), and is killed with `SIGKILL` — no handler runs, and the kill lands wherever the cycle
+    happened to be. The same command line then resumes it for twenty cycles. The oracle is an
+    uninterrupted in-process run of the same length: every tick in the concatenated record, across
+    both segments, carries the oracle's compare-point and lineage link, the ticks are contiguous with
+    no repeat, and `met_s` over every frame on disk never goes backward.
+    """
+    checkpoint, console, plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    process = subprocess.Popen(
+        [*console_entry(diode, state, "alpha", "bravo"), "--cycles", "0", "--poll", "0"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.time() + 120
+        while time.time() < deadline and len(all_tick_rows(state)) < 120:
+            time.sleep(0.05)
+        assert len(all_tick_rows(state)) >= 120, process.stderr.read() if process.poll() is not None else "too slow"
+    finally:
+        process.kill()
+        process.wait(timeout=30)
+    killed_at = all_tick_rows(state)[-1]["tick"]
+    resumed = start(diode, state, "alpha", "bravo", extra=["--cycles", "20", "--poll", "0"])
+    assert resumed.returncode == 0 and "resumed world" in resumed.stdout, resumed.stderr[-800:]
+    rows = all_tick_rows(state)
+    final = rows[-1]["tick"]
+    assert [row["tick"] for row in rows] == list(range(1, final + 1)) and final >= killed_at + 20, (killed_at, final)
+    expected = quiet_oracle(console, plant, world, tmp_path / "oracle", ("alpha", "bravo"), final)
+    assert {row["tick"]: (row["state_hash"], row["lineage"]) for row in rows} == expected
+    for slug in ("alpha", "bravo"):
+        frames = frames_of(diode / slug)
+        assert all(a["met_s"] <= b["met_s"] for a, b in itertools.pairwise(frames)) and len({f["boot_id"] for f in frames}) == 2
+
+
+def test_a_restart_naming_another_scenario_seed_ring_bound_phase_or_slug_set_refuses_with_one_sentence_naming_the_flag_and_both_values(tmp_path):
+    """Commitment 2: a restart that names another world's identity exits 3 with one sentence, and writes nothing.
+
+    The checkpoint is the world. A flag that names the run's identity either names nothing — the
+    checkpoint's is resumed — or names the checkpoint's own; anything else would be a different world,
+    which is the operator's `--new-world` (#28), never a changed flag. Each refusal is one line on
+    stderr naming the flag, the value named, the value recorded and the checkpoint's file, and the
+    refused start opens no journal segment and rewrites nothing. Naming the recorded values resumes.
+    """
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = start(diode, state, "alpha", "bravo", extra=["--cycles", "2", "--poll", "0", "--scenario", "degraded", "--seed", "7", "--ring-slots", "40"])
+    assert first.returncode == 0, first.stderr[-800:]
+    segments = sorted(p.name for p in state.glob("journal.*.jsonl"))
+    record = (diode / ".executive.json").read_bytes()
+    cases = [
+        (["--scenario", "crisis"], "--scenario names 'crisis'", "records 'degraded'"),
+        (["--seed", "8"], "--seed names 8", "records 7"),
+        (["--ring-slots", "41"], "--ring-slots names 41", "records 40 for window 'alpha'"),
+        (["--phase", "descent"], "--phase names 'descent'", "records 'translunar_coast'"),
+    ]
+    for extra, named, recorded in cases:
+        refused = start(diode, state, "alpha", "bravo", extra=[*extra, "--cycles", "1", "--poll", "0"])
+        lines = refused.stderr.strip().splitlines()
+        assert refused.returncode == 3 and len(lines) == 1, refused.stderr
+        assert named in lines[0] and recorded in lines[0] and "checkpoint.json" in lines[0] and "--new-world" in lines[0], lines[0]
+    refused = start(diode, state, "alpha", extra=["--cycles", "1", "--poll", "0"])
+    assert refused.returncode == 3 and "--slug names ['alpha']" in refused.stderr and "records ['alpha', 'bravo']" in refused.stderr
+    refused = start(diode, state, "alpha", "bravo", "charlie", extra=["--cycles", "1", "--poll", "0"])
+    assert refused.returncode == 3 and "['alpha', 'bravo', 'charlie']" in refused.stderr
+    assert sorted(p.name for p in state.glob("journal.*.jsonl")) == segments and (diode / ".executive.json").read_bytes() == record
+    same = start(diode, state, "alpha", "bravo", extra=["--scenario", "degraded", "--seed", "7", "--ring-slots", "40", "--phase", "translunar_coast", "--cycles", "1", "--poll", "0"])
+    assert same.returncode == 0 and "resumed world" in same.stdout and "scenario=degraded seed=7" in same.stdout, same.stderr
+    unnamed = subprocess.run([sys.executable, str(VEHICLE / "tools" / "console.py"), "--diode-dir", str(diode), "--state-dir", str(state), "--cycles", "1", "--poll", "0"], capture_output=True, text=True, timeout=300)
+    assert unnamed.returncode == 0 and "slugs=alpha,bravo" in unnamed.stdout, (unnamed.stdout, unnamed.stderr)
+
+
+def test_a_restart_naming_a_new_max_batch_or_closed_interlock_is_accepted_journaled_and_kept_by_the_next_resume(tmp_path):
+    """Commitment 2's other half (ADR 0002 G, addendum A4): the operator's live inputs may change across a restart.
+
+    `--max-batch` named anew replaces the saved cap; `--closed-interlock` named anew is added to the
+    saved trips. Both are journaled in the `resumed` event, and the checkpoint the resume takes before
+    it serves (B3) makes them durable: a second restart naming neither keeps both.
+    """
+    checkpoint, _console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    assert start(diode, state, "alpha", extra=["--cycles", "1", "--poll", "0", "--closed-interlock", "tie_dv_limit"]).returncode == 0
+    changed = start(diode, state, "alpha", extra=["--cycles", "1", "--poll", "0", "--max-batch", "3", "--closed-interlock", "rcs_quad_temp"])
+    assert changed.returncode == 0, changed.stderr[-800:]
+    (event,) = journal_events(state, "resumed")
+    assert event["run_inputs"] == {"max_batch": [32, 3], "tripped_interlocks": [["tie_dv_limit"], ["rcs_quad_temp", "tie_dv_limit"]]}, event
+    assert start(diode, state, "alpha", extra=["--cycles", "1", "--poll", "0"]).returncode == 0
+    body = checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    assert body["run"]["max_batch"] == 3 and body["run"]["tripped_interlocks"] == ["rcs_quad_temp", "tie_dv_limit"]
+    assert [e["run_inputs"] for e in journal_events(state, "resumed")].count({}) == 1
+
+
+def test_a_corrupt_or_incompatible_checkpoint_with_no_verifying_previous_generation_refuses_naming_the_file_and_the_check(tmp_path):
+    """Commitment 3: exit 3 naming the file and the check, whenever no generation can be resumed.
+
+    Both generations corrupt (a flipped byte each): exit 3 naming `checkpoint.json`,
+    `checkpoint.prev.json` and `body_sha256`. An incompatible current generation (written by another
+    Python): exit 3 naming the file and `python`, and the previous generation is never opened —
+    written by the same build, it is incompatible too (ADR 0002 K). Nothing is written in either case.
+    """
+    checkpoint, _console, _plant, _world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    assert start(diode, state, "alpha", extra=["--cycles", "2", "--poll", "0"]).returncode == 0
+    good = {name: (state / name).read_bytes() for name in ("checkpoint.json", "checkpoint.prev.json")}
+    for name, raw in good.items():
+        flipped = bytearray(raw)
+        flipped[-20] ^= 0x01
+        (state / name).write_bytes(bytes(flipped))
+    refused = start(diode, state, "alpha")
+    assert refused.returncode == 3 and "checkpoint.json" in refused.stderr and "checkpoint.prev.json" in refused.stderr and "body_sha256" in refused.stderr, refused.stderr
+    for name, raw in good.items():
+        (state / name).write_bytes(raw)
+    header, body_bytes = split_checkpoint(good["checkpoint.json"])
+    body = json.loads(body_bytes)
+    body["identity"]["python"] = header["python"] = "2.7.18"
+    body_bytes = checkpoint.encode(body)
+    header.update(body_sha256=hashlib.sha256(body_bytes).hexdigest(), body_bytes=len(body_bytes))
+    (state / "checkpoint.json").write_bytes(json.dumps(header).encode() + b"\n" + body_bytes)
+    refused = start(diode, state, "alpha")
+    assert refused.returncode == 3 and "checkpoint.json" in refused.stderr and "incompatible: python" in refused.stderr, refused.stderr
+    assert "checkpoint.prev.json" not in refused.stderr
+
+
+def test_a_new_worlds_genesis_checkpoint_is_mandatory_and_its_failure_refuses_with_nothing_bound(tmp_path, monkeypatch, capsys):
+    """Addendum B1: a fresh start with `--state-dir` checkpoints tick 0 before its first cycle, or does not start.
+
+    Without it a kill before the first cadence checkpoint left a bound root record and no checkpoint
+    — ADR 0001 choice D, a refused start at every restart. The genesis is written after the windows are
+    prepared and before anything is bound; if it cannot be written the start exits 3 by name, the root
+    record is still unbound, no record segment exists, and the next start (which can write) is a fresh
+    world like any other.
+    """
+    checkpoint, console, _plant, _world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+
+    def refusing(*args, **kwargs):
+        raise checkpoint.CheckpointWriteFailed("write", state / "checkpoint.json", "ENOSPC")
+
+    monkeypatch.setattr(console, "write_checkpoint", refusing)
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    assert console.main(argv) == 3
+    assert "first checkpoint" in capsys.readouterr().err
+    assert json.loads((diode / ".executive.json").read_text())["world_id"] is None
+    assert not list(state.glob("journal.*.jsonl")) and not (state / "checkpoint.json").exists()
+    monkeypatch.undo()
+    assert console.main(argv) == 0
+    assert generation_tick(state) == 1 and generation_tick(state, "checkpoint.prev.json") == 0
+
+
+def test_a_resume_checkpoints_the_recovered_tick_before_it_claims_anything_and_refuses_if_it_cannot(tmp_path, monkeypatch, capsys):
+    """Addendum B3: a checkpoint at the recovered tick `L` before the first resumed cycle.
+
+    It makes the named run inputs durable, bounds the next resume's replay and re-publication to what
+    follows it, and replaces a fallen-back-from generation. When the first resumed cycle starts, the
+    current generation is at `L`; when the write fails, the start exits 3 by name with nothing claimed
+    — the console still holds the command written during the downtime.
+    """
+    checkpoint, console, _plant, _world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    process = subprocess.Popen([*console_entry(diode, state, "alpha"), "--cycles", "0", "--poll", "0"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline and len(all_tick_rows(state)) < 60:
+            time.sleep(0.05)
+    finally:
+        process.kill()
+        process.wait(timeout=30)
+    submit(diode / "alpha", ["zzz_written_while_down"])
+    real = console.write_checkpoint
+
+    def refusing(*args, **kwargs):
+        raise checkpoint.CheckpointWriteFailed("write", state / "checkpoint.json", "ENOSPC")
+
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    monkeypatch.setattr(console, "write_checkpoint", refusing)
+    assert console.main(argv) == 3
+    assert "recovered tick" in capsys.readouterr().err
+    assert json.loads((diode / "alpha" / "console.json").read_text())["commands"] == ["zzz_written_while_down"]
+    monkeypatch.setattr(console, "write_checkpoint", real)
+    seen: list[tuple[int | None, int]] = []
+    real_cycle = console.Executive.cycle
+
+    def watched(self):
+        seen.append((generation_tick(state), self.tick))
+        return real_cycle(self)
+
+    monkeypatch.setattr(console.Executive, "cycle", watched)
+    assert console.main(argv) == 0
+    (current, tick), = seen
+    assert current == tick and tick == all_tick_rows(state)[-2]["tick"], seen
+
+
+def test_a_run_ending_cleanly_checkpoints_its_last_completed_cycle_and_an_interrupt_mid_cycle_does_not(tmp_path, monkeypatch):
+    """Commitment 5: a checkpoint at a clean end — `--cycles` exhausted, or an interrupt between cycles — and never mid-cycle.
+
+    Mid-cycle, a window's receipt counter is drawn before the step, so a capture then would be ahead of
+    the truth. An interrupt that lands in the sleep between cycles checkpoints the last completed
+    cycle; one that lands inside a cycle (here, in a window's claim) leaves the checkpoints as they
+    were and the record — which holds every completed tick — to the next resume.
+    """
+    _checkpoint, console, _plant, _world = checkpoint_tools()
+    argv = lambda d, s, n: ["--diode-dir", str(d), "--state-dir", str(s), "--slug", "alpha", "--cycles", str(n), "--poll", "0"]  # noqa: E731
+    assert console.main(argv(tmp_path / "d1", tmp_path / "s1", 3)) == 0
+    assert generation_tick(tmp_path / "s1") == 3
+
+    sleeps = [0]
+
+    def interrupted_sleep(_seconds):
+        sleeps[0] += 1
+        if sleeps[0] == 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(console.time, "sleep", interrupted_sleep)
+    assert console.main(argv(tmp_path / "d2", tmp_path / "s2", 0)) == 0
+    assert generation_tick(tmp_path / "s2") == 2
+    monkeypatch.undo()
+
+    claims = [0]
+    real_claim = console.Window.claim
+
+    def interrupted_claim(self):
+        claims[0] += 1
+        if claims[0] == 3:
+            raise KeyboardInterrupt
+        return real_claim(self)
+
+    monkeypatch.setattr(console.Window, "claim", interrupted_claim)
+    assert console.main(argv(tmp_path / "d3", tmp_path / "s3", 0)) == 0
+    assert generation_tick(tmp_path / "s3") == 0, "only the genesis: the interrupt came mid-cycle"
+    assert [row["tick"] for row in all_tick_rows(tmp_path / "s3")] == [1, 2]
+
+
+def test_a_fresh_start_on_a_state_directory_that_holds_a_record_and_no_checkpoint_refuses_saying_what_to_move(tmp_path):
+    """Addendum B11 (S11): one state directory is one world's.
+
+    A fresh world over a record with no checkpoint — another world's, or one from before checkpoints —
+    would write its first segment as a second root of the record, and every resume after it would
+    refuse. So the start refuses, naming the files to move aside; a state directory holding only a
+    refused start's startup events is not a record, and starts.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    old = console.Executive(world, tmp_path / "old-diode", phase="translunar_coast", state_dir=state)
+    old.attach("alpha")
+    old.cycle()
+    old.close()
+    refused = start(diode, state, "alpha")
+    assert refused.returncode == 3 and old.journal.name in refused.stderr and "move" in refused.stderr and "no checkpoint" in refused.stderr, refused.stderr
+    old.journal.unlink()
+    console.append_journal_line(state / f"journal.{'e' * 32}.jsonl", {"event": "root_record_rewritten", "boot_id": "e" * 32, "wall": "w"})
+    assert start(diode, state, "alpha").returncode == 0
+
+
+def test_a_resume_reads_and_writes_its_state_only_through_the_one_held_state_directory_handle(tmp_path, monkeypatch):
+    """#20's review note 3: the state directory is walked once per start, and a resume adds no path access.
+
+    `main` canonicalises and walks the state directory once (`walk_open_dir`); the checkpoint's choice,
+    the record's anchored read, the events, the rewrite of what the resume moved aside and every
+    checkpoint the resumed run writes go through the held handle (`dir_fd=`), never the path. Here the
+    walk is counted, `checkpoint`'s path openers fail if they are reached at all, and every `os.open`
+    whose path is absolute and inside the state directory is caught: a resume, a fall-back and a
+    cadence checkpoint later, there are none.
+    """
+    checkpoint, console, _plant, _world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "55", "--poll", "0"]
+    assert console.main(argv) == 0
+    flipped = bytearray((state / "checkpoint.json").read_bytes())
+    flipped[-20] ^= 0x01
+    (state / "checkpoint.json").write_bytes(bytes(flipped))
+    walks: list[str] = []
+    by_path: list[str] = []
+    real_walk, real_open = console.walk_open_dir, os.open
+
+    def counted(canonical, flag, **kwargs):
+        walks.append(flag)
+        return real_walk(canonical, flag, **kwargs)
+
+    def watched_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is None and str(path).startswith(str(state.resolve()) + "/"):
+            by_path.append(str(path))
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the state directory was opened by its path")
+
+    monkeypatch.setattr(console, "walk_open_dir", counted)
+    monkeypatch.setattr(os, "open", watched_open)
+    monkeypatch.setattr(checkpoint, "open_state_dir", forbidden)
+    monkeypatch.setattr(checkpoint, "_open_directory", forbidden)
+    assert console.main(argv) == 0
+    assert walks == ["--state-dir"] and by_path == [], (walks, by_path)
+    assert generation_tick(state) == 110 and list(state.glob("checkpoint.rejected.*.json"))
+
+
+def test_a_resumed_world_whose_boot_tore_at_its_first_append_resumes_again_in_either_journal_layout(tmp_path, monkeypatch):
+    """B12: a resumed boot killed mid-way through its first record append, then a third boot — in both layouts.
+
+    The resumed boot journals its `resumed` event, and its first cycle writes its segment header and
+    first row in one append; a kill half-way through that write leaves a torn header after the event (a
+    segment file of its own in a state directory; a fragment in the middle of an explicit `--journal`
+    shared by every boot). The third boot resumes from the same checkpoint and record — the torn boot
+    published nothing — and its ticks continue the uninterrupted run's.
+    """
+    checkpoint, console, plant, world = checkpoint_tools()
+    expected = quiet_oracle(console, plant, world, tmp_path / "oracle", ("alpha",), 8)
+    for layout in ("state", "journal"):
+        root = tmp_path / layout
+        root.mkdir()
+        diode, state = root / "diode", root / "state"
+        extra = ["--journal", str(root / "journal.jsonl")] if layout == "journal" else []
+        argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--poll", "0", *extra]
+        assert console.main([*argv, "--cycles", "4"]) == 0
+        real_write = console._write_all
+        torn = [False]
+
+        def tearing(fd, data, real_write=real_write, torn=torn):
+            if not torn[0] and b'"event":"segment"' in data:
+                torn[0] = True
+                real_write(fd, data[: len(data) // 3])
+                raise SimulatedKill
+            return real_write(fd, data)
+
+        monkeypatch.setattr(console, "_write_all", tearing)
+        with pytest.raises(SimulatedKill):
+            console.main([*argv, "--cycles", "2"])
+        monkeypatch.undo()
+        assert console.main([*argv, "--cycles", "4"]) == 0, layout
+        record = console.read_record(root / "journal.jsonl") if layout == "journal" else console.read_record(state)
+        segments = console.concatenated(record.segments)
+        assert len(segments) == 2 and segments[-1].last_tick == 8, (layout, [(s.boot_id, s.first_tick, s.last_tick) for s in segments])
+        record.close()
+        rows = all_tick_rows(state if layout == "state" else root / "journal.jsonl")
+        assert {row["tick"]: (row["state_hash"], row["lineage"]) for row in rows} == expected, layout
+
+
+def test_the_linter_refuses_a_flag_the_checkpoint_remembers_whose_default_is_not_none(tmp_path):
+    """Addenda A6 and B10: `--phase`, `--max-batch` and `--closed-interlock` are remembered by the checkpoint.
+
+    A resume takes the phase, the batch cap and the tripped interlocks from the checkpoint's `run`
+    section, so each flag must be able to say "named nothing" — `None` — or a restart could not tell
+    the operator's word from the parser's default. `check_console_flags` now reads the remembered set
+    off the checkpoint's writer too (`capture_state`'s `run` literal, with `tripped_interlocks` mapped
+    to `--closed-interlock`'s `dest`), and refuses each default by name; a `run` section it cannot read
+    is a refusal, not a pass. No flag is exempted to make the corpus pass: the corpus passes because
+    all three default to `None`.
+    """
+    result = run_linter(VEHICLE)
+    assert result.returncode == 0, result.stdout[-1500:]
+    for flag, old, new in (
+        ("--phase", '"--phase",\n        default=None,', '"--phase",\n        default="translunar_coast",'),
+        ("--max-batch", '"--max-batch",\n        type=positive_int,\n        default=None,', '"--max-batch",\n        type=positive_int,\n        default=32,'),
+        ("--closed-interlock", '"--closed-interlock",\n        action="append",\n        default=None,', '"--closed-interlock",\n        action="append",\n        default=[],'),
+    ):
+        copy = copy_definition(fixture_dir(tmp_path, "remembered-flag"))
+        path = copy / "tools" / "console.py"
+        text = path.read_text()
+        assert text.count(old) == 1, f"the fixture no longer matches console.py's {flag}"
+        path.write_text(text.replace(old, new, 1))
+        result = run_linter(copy)
+        assert result.returncode == 1 and f"tools/console.py:{flag}" in result.stdout, (flag, result.stdout[-900:])
+    unreadable = copy_definition(fixture_dir(tmp_path, "checkpoint-run"))
+    path = unreadable / "tools" / "checkpoint.py"
+    text = path.read_text()
+    assert text.count('        "run": {\n') == 1
+    path.write_text(text.replace('        "run": {\n', '        "run": dict(**{\n', 1).replace('            "allowance_ceiling": _allowance_ceiling(executive),\n        },', '            "allowance_ceiling": _allowance_ceiling(executive),\n        }),', 1))
+    result = run_linter(unreadable)
+    assert result.returncode == 1 and "tools/checkpoint.py" in result.stdout and "`run` section" in result.stdout, result.stdout[-900:]
