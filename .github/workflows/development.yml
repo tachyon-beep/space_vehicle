@@ -16,7 +16,10 @@ jobs:
   check:
     name: check (${{ matrix.python }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The full referee on a 2-core hosted runner took 30-45 minutes by October 2026 (406 tests, many
+    # of them subprocess and race probes), and a push run at 770159e was cancelled at the old
+    # 45-minute limit mid-referee. The limit is a guard against a hung job, not a performance target.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
