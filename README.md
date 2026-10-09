@@ -18979,7 +18979,16 @@ The section is gone; `single_cabin` stays declared, because `check_vehicle.py` r
 pairing check. The sixth-file test now holds the generated README to carry nothing from
 `single_cabin`, no fault-catalogue or failure-chain id, and no "diagnosis". `HELP.md`'s verb texts
 carry the same kind of commentary (failure-chain ids, advice on which mode answers a leak) and are a
-larger editorial sweep, tracked separately.
+larger editorial sweep, tracked separately (#35).
+
+Independent review (Claude Opus) found more of the same in the README's other sections, and they
+went in the same round: "Truth is never published" quoted `presentation.yaml#epistemic_layers` with
+citations of files no agent can read; the service-layer paragraphs carried one protocol fact each
+inside the designers' reasoning, including an aside on what a fleet "would go looking for"; "What
+each file owes" published the designers' obligation checklist; the footer named configuration files
+and a tool. The generator now writes the protocol facts in its own words — truth is never published;
+a `service` value is layer A and always `GOOD` — and the test refuses short fault ids (`ECL-13`),
+signature-form chain ids (`F-PWR-01`) and corpus citations as well.
 
 | figure | before | after |
 |---|---:|---:|

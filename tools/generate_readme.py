@@ -130,7 +130,6 @@ def generate(root: Path) -> str:
             else:
                 withheld_categories += 1
 
-    surface = list(presentation.get("surface") or [])
     mirror = presentation.get("mirror") or {}
     steps = [
         ("claim", "the console is read and emptied **before** anything runs"),
@@ -173,14 +172,10 @@ def generate(root: Path) -> str:
     )
     write("")
 
-    if surface:
-        write("## What each file owes")
-        write("")
-        for entry in surface:
-            if not isinstance(entry, dict):
-                continue
-            write(f"- **`{entry.get('file')}`** — {entry.get('direction')}. {entry.get('far_side') or ''}".rstrip())
-        write("")
+    # `presentation.yaml#surface[].far_side` is the designers' obligation checklist ("the voice, the
+    # ordering, the file itself"), not protocol, and the files table above already says what each file
+    # is; it is no longer published (owner's direction, 2026-10-09: the window says how to use the
+    # interface and leaves the analysis to the fleet).
 
     write("## What a reading means")
     write("")
@@ -195,17 +190,20 @@ def generate(root: Path) -> str:
     for key, (letter, name, meaning) in LAYER_NAMES.items():
         write(f"| **{letter}** — {name} | `{key}` | {meaning} |")
     write("")
-    truth = str((presentation.get("epistemic_layers") or {}).get("truth") or "")
-    if truth:
-        write(f"**Truth is never published.** {truth}")
-        write("")
-    service_resolution = str((presentation.get("epistemic_layers") or {}).get("service_resolution") or "")
-    if service_resolution:
-        write(f"**A commanded state is not a sensor.** {service_resolution}")
-        write("")
-    quality = str((presentation.get("epistemic_layers") or {}).get("quality_on_service") or "")
-    if quality:
-        write(quality)
+    # The protocol facts, stated for the fleet. `presentation.yaml#epistemic_layers` carries the same
+    # facts with the designers' reasoning and citations of files no agent can read (the contract's
+    # line numbers, `points.yaml#not_published`, an aside on what a fleet would go looking for); that
+    # prose is the maintainers', and publishing it did part of the fleet's analysis for it.
+    write(
+        "**Truth is never published.** A value is what an instrument reported or what the vehicle "
+        "concluded, never the simulation's own state."
+    )
+    write("")
+    if (presentation.get("epistemic_layers") or {}).get("quality_on_service"):
+        write(
+            "**A commanded state is not a sensor.** A `service` value reports what the vehicle did. "
+            "It is layer A and always carries quality `GOOD`."
+        )
         write("")
 
     write("## The shape of a command cycle")
@@ -255,7 +253,7 @@ def generate(root: Path) -> str:
     write(
         f"Some quantities are deliberately withheld, and saying so is part of the protocol: "
         f"**{withheld_named} named channels** and **{withheld_categories} described categories** are "
-        f"not published. Each one is listed with its reason in the vehicle's own registry, and a "
+        f"not published. A "
         f"quantity that is missing from a frame is either one of those or a channel that could not "
         f"be computed this tick — never a value the vehicle declined to guess."
     )
@@ -277,9 +275,8 @@ def generate(root: Path) -> str:
     write("---")
     write("")
     write(
-        "This file is generated from `presentation.yaml`, `channels.yaml` and the command "
-        "registries by `tools/generate_readme.py`. Editing it by hand changes nothing that "
-        "survives the next cycle."
+        "The vehicle writes this file from its own configuration. Editing it by hand changes "
+        "nothing that survives the next cycle."
     )
     return "\n".join(out) + "\n"
 
