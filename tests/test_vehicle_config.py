@@ -14,6 +14,7 @@ this must not become a reason the suite cannot run.
 from __future__ import annotations
 
 import dataclasses
+import errno
 import hashlib
 import itertools
 import json
@@ -24229,7 +24230,8 @@ def test_beside_a_verified_checkpoint_the_root_record_is_rewritten_and_the_start
     on the pair with the root record in each state the issue names. Missing, garbled, a symlink, or
     disagreeing (the same world, a later tick and an extra prepared slug): the record is rewritten to
     the checkpoint's copy — equal to `root_record_from_checkpoint` of the body but for `updated_at` —
-    the mismatch is journaled into this boot's segment with the superseded record verbatim, and the
+    the mismatch is journaled into this boot's segment with the superseded record's identity keys
+    (bounded, with the file's fingerprint — review F5; the record was copied verbatim at first), and the
     start is **not** refused on the record's account. A readable record naming another world refuses,
     names both worlds and both files, and leaves the record byte-identical. In every case the start
     then refuses with exit 3 because resume is child 3 (#21): starting a fresh world over a checkpoint
@@ -24597,9 +24599,12 @@ def test_the_superseded_record_is_journaled_as_its_identity_and_fingerprint_neve
     # 900 kB `scenario` was a 900 kB sentence in the event; and `updated_at`, the one kept key nothing
     # checked, parsed `1e400` to an infinity that `dumps_json` cannot write, so every restart was the
     # journal's refusal. Each is now garbled at the reader: small, and refused only for want of resume.
+    # (The second review moved the infinity's refusal into `loads_json` itself; a stamp that is a number
+    # at all is still the `updated_at` check's.)
     for planted, expect in (
         ({**expected, "scenario": "x" * 900_000}, "scenario"),
-        ('{"world_id": "' + expected["world_id"] + '", "tick": 8, "updated_at": 1e400}', "updated_at"),
+        ('{"world_id": "' + expected["world_id"] + '", "tick": 8, "updated_at": 1e400}', "not valid JSON"),
+        ('{"world_id": "' + expected["world_id"] + '", "tick": 8, "updated_at": 5}', "updated_at"),
     ):
         record_path.write_text(planted if isinstance(planted, str) else json.dumps(planted))
         raw = record_path.read_bytes()
@@ -24652,3 +24657,157 @@ def test_a_root_record_that_cannot_be_written_mid_run_is_a_recorded_failure_and_
     second.attach("alpha")
     assert second.failure_count == 1 and second.failures[-1]["stage"] == "root_record"
     second.close()
+
+
+# ---- ADR 0002 child 2, second review: the spelling, the loop, and the operator's own writes --------
+
+
+def test_a_state_dir_or_journal_spelled_through_the_diode_dir_is_refused_and_a_retargeted_alias_moves_nothing(tmp_path):
+    """Second review, Codex P1: containment is of the path as spelled, and the path used is the one checked.
+
+    `check_state_dir` and the `--journal` rule compared *resolved* paths, and everything after them
+    used the operator's *spelling*. So `--state-dir diode/alpha/state-alias`, a link an agent made in
+    its own window pointing at a private directory, passed — its target is outside — and the journal
+    was then appended through the link by name every tick: retarget the link after the start and the
+    lineage and the truth hash went into the window. Two rules now hold. A spelled path that passes
+    through the diode directory at any component (`os.path.abspath` would fold `..` away, so each
+    prefix of the spelling is resolved in turn) is refused, for `--state-dir` and `--journal` alike.
+    And after the checks only the resolved path is used: the executive opens its journal's directory
+    once, by that path, and appends relative to the handle, so a link retargeted afterwards — here an
+    operator's alias outside the diode directory, which the spelling rule rightly lets through — is
+    never walked again.
+    """
+    console, _plant, world = console_tools()
+    diode = tmp_path / "diode"
+    (diode / "alpha").mkdir(parents=True)
+    private = tmp_path / "private"
+    private.mkdir()
+    alias = diode / "alpha" / "state-alias"
+    alias.symlink_to(private)
+    before = sorted(p.name for p in (diode / "alpha").iterdir())
+    for state in (alias, diode / "alpha" / ".." / ".." / "private-two"):
+        assert console.check_state_dir(state, diode) is not None, state
+        refused = start(diode, state)
+        assert refused.returncode == 3 and "--state-dir" in refused.stderr and "through" in refused.stderr, (state, refused.stderr)
+        with pytest.raises(ValueError, match="through"):
+            console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    assert list(private.iterdir()) == [] and not (tmp_path / "private-two").exists()
+    assert sorted(p.name for p in (diode / "alpha").iterdir()) == before
+    journal_alias = diode / "alpha" / "journal-alias"
+    journal_alias.symlink_to(private)
+    refused = start(diode, None, extra=["--journal", str(journal_alias / "j.jsonl"), "--cycles", "1", "--poll", "0"])
+    assert refused.returncode == 3 and "--journal" in refused.stderr and "through" in refused.stderr, refused.stderr
+    assert list(private.iterdir()) == []
+
+    # The retarget: an operator's alias outside the diode directory, accepted, then pointed at a window.
+    target = tmp_path / "real-state"
+    target.mkdir()
+    operator_alias = tmp_path / "operator-alias"
+    operator_alias.symlink_to(target)
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=operator_alias)
+    executive.attach("alpha")
+    executive.cycle()
+    stash = diode / "alpha" / "stash"
+    stash.mkdir()
+    operator_alias.unlink()
+    operator_alias.symlink_to(stash)
+    executive.cycle()
+    executive.cycle()
+    executive.close()
+    assert list(stash.iterdir()) == [], "nothing followed the retargeted link into the window"
+    (segment,) = target.glob("journal.*.jsonl")
+    rows = [json.loads(line) for line in segment.read_text().splitlines()]
+    assert [row["tick"] for row in rows] == [1, 2, 3], rows
+    assert hidden_state_hits(diode, {f"lineage[{i}]": row["lineage"] for i, row in enumerate(rows)}) == []
+
+
+def test_a_symlink_loop_at_the_state_dir_the_diode_dir_or_the_journal_is_a_refusal_by_name(tmp_path):
+    """Second review, Codex P2: a path that cannot be resolved is refused, never a traceback.
+
+    `Path.resolve()` raises `RuntimeError` on a symlink loop under Python 3.12 (3.13 returns the path
+    unresolved, and the first `stat` is `ELOOP`), and the checks called it outside any handler: exit 1
+    with a traceback. Each of the three operator paths now goes through one resolver that names the
+    flag, the path and the loop, and the start exits 3 having written nothing.
+    """
+    loop = tmp_path / "loop-a"
+    loop.symlink_to(tmp_path / "loop-b")
+    (tmp_path / "loop-b").symlink_to(loop)
+    diode = tmp_path / "diode"
+    cases = (
+        ("--state-dir", start(diode, loop)),
+        ("--state-dir", start(diode, loop / "below")),
+        ("--diode-dir", start(loop, None)),
+        ("--diode-dir", start(loop, tmp_path / "state")),
+        ("--journal", start(diode, None, extra=["--journal", str(loop / "j.jsonl"), "--cycles", "1", "--poll", "0"])),
+    )
+    for flag, refused in cases:
+        assert refused.returncode == 3, (flag, refused.returncode, refused.stderr)
+        assert "Traceback" not in refused.stderr and flag in refused.stderr and "cannot be resolved" in refused.stderr, (flag, refused.stderr)
+    assert not diode.exists() and not (tmp_path / "state").exists()
+
+
+def test_every_write_the_start_makes_for_itself_is_a_refusal_by_name(tmp_path, monkeypatch, capsys):
+    """Second review, Opus 1: the operator's own files fail by name too, not only the agents'.
+
+    The lock was opened with a bare `os.open`, so a state directory the vehicle could not write (a
+    read-only mount) or a directory where the lock goes ended the start with a traceback, and
+    `write_serves_record` was called unguarded on both the binding path and the checkpoint path:
+    exit 1. Each now refuses with exit 3 naming the file and the errno. The lock is broken by planting
+    a directory at its name, in the state directory and in the root; `serves.json` by making its
+    writer raise `EACCES` in-process, the way a read-only mount would, which the test can do as any
+    user.
+    """
+    console, _plant, _world = console_tools()
+    for diode, state, lock in (
+        (tmp_path / "d1", tmp_path / "s1", tmp_path / "s1" / ".executive.lock"),
+        (tmp_path / "d2", None, tmp_path / "d2" / ".executive.lock"),
+    ):
+        lock.mkdir(parents=True)
+        refused = start(diode, state)
+        assert refused.returncode == 3, (refused.returncode, refused.stderr)
+        assert "Traceback" not in refused.stderr and ".executive.lock" in refused.stderr and "EISDIR" in refused.stderr, refused.stderr
+
+    def denied(*_args, **_kwargs):
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(console, "write_serves_record", denied)
+    diode, state = tmp_path / "fresh-diode", tmp_path / "fresh-state"
+    assert console.main(["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 3
+    err = capsys.readouterr().err
+    assert "serves.json" in err and "EACCES" in err and str(state) in err, err
+    assert not (diode / "alpha").exists(), "refused before a window was prepared"
+
+    monkeypatch.undo()
+    _console, executive, diode, state, _expected = checkpointed_pair(tmp_path / "pair")
+    monkeypatch.setattr(console, "write_serves_record", denied)
+    for record in ("agreeing", "garbled"):
+        if record == "garbled":
+            (diode / ".executive.json").write_text("{not json")
+        assert console.main(["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha"]) == 3, record
+        err = capsys.readouterr().err
+        assert "serves.json" in err and "EACCES" in err, (record, err)
+
+
+def test_a_number_that_overflows_a_double_is_not_json_this_vehicle_reads(tmp_path):
+    """Second review, Opus 3: `1e400` is refused like `Infinity`, because it becomes one.
+
+    `loads_json` refused the literals `NaN`, `Infinity` and `-Infinity` through `parse_constant`, but
+    a decimal too large for a double never reaches that hook: Python's float parser returns `inf`, and
+    the value then travels as if it were a number until something that writes JSON refuses it. A
+    `parse_float` that refuses a non-finite result closes it at the reader, for every file read with
+    `loads_json` — the root record, `serves.json`, the console — and a root record carrying one beside
+    a checkpoint is garbled and rewritten.
+    """
+    console, _plant, _world = console_tools()
+    for text in ('{"x": 1e400}', '{"x": -1e400}', "[1.5e309]"):
+        with pytest.raises(ValueError, match="RFC 8259"):
+            console.loads_json(text)
+    assert console.loads_json('{"x": 1e308, "y": 5e-324, "z": 1e-400}') == {"x": 1e308, "y": 5e-324, "z": 0.0}
+    _console, executive, diode, state, expected = checkpointed_pair(tmp_path)
+    record_path = diode / ".executive.json"
+    record_path.write_text(json.dumps({**expected, "updated_at": "then"})[:-1] + ', "extra": 1e400}')
+    refused = start(diode, state, "alpha")
+    assert refused.returncode == 3 and "#21" in refused.stderr, refused.stderr
+    assert "1e400" not in record_path.read_text()
+    (event,) = startup_events(state, executive)
+    assert event["previous"] is None and "not valid JSON" in event["problem"], event

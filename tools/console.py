@@ -54,7 +54,15 @@ checkpoint generations (`tools/checkpoint.py`), the exclusive lock and the journ
 there, and nothing an agent can reach does. It is refused inside `--diode-dir` by the rule the
 journal uses (`resolve()`, then `is_relative_to`, so `..` and a planted link are the same spelling),
 refused when it is a file or a dangling link (`checkpoint.CheckpointStateDirUnusable`), and a
-`--diode-dir` inside it is refused for the symmetric reason. With it:
+`--diode-dir` inside it is refused for the symmetric reason. **Its spelling is held to the same rule**
+(second review, Codex P1): a path that passes through the diode directory at any component — a link
+an agent made in its window, resolving to somewhere private — is refused, for `--journal` too, and
+after the checks only the resolved path or a directory handle is used, so a link retargeted later is
+never walked. A path that cannot be resolved (a symlink loop) is refused by name, and every write the
+start makes for itself — the diode directory, the lock, `serves.json` — fails as a refusal naming the
+file and the errno, never a traceback (Codex P2, Opus 1). The containment is of resolved paths, so
+one volume bind-mounted at both `/diode` and `/state` would pass it: one private volume, not shared
+with the diode volume, is the chassis's configuration constraint. With it:
 
   - **The lock moves** (H(i)). `.executive.lock` is taken in the state directory and the one in the
     diode root is not opened at all: an exclusive lock on a volume the adversary can write is a lock
@@ -96,13 +104,19 @@ refused when it is a file or a dangling link (`checkpoint.CheckpointStateDirUnus
     unchanged. Both are functions so that child 3 only has to call them.
   - **The record's write is recorded, never raised.** It is rewritten every tick; a failure is a
     `root_record` entry in `failures` and on stderr, like a window's, and the tick goes on.
-  - **Known inconsistency, left to child 3 (#21).** The state directory is opened by path more than
-    once — by `main` for its lock and `serves.json`, by `Executive` to confirm it, by
-    `checkpoint.choose_generation` and `write_checkpoint` (which `realpath()` it first), and the
-    journal segment is appended by path — so the lock's directory and the checkpoint's are the same
-    directory only while nobody renames it. The directory is the operator's and no agent's, so this
-    is a consistency debt rather than an agent's lever; threading one handle through the checkpoint
-    reader and writer changes child 1's interface and is child 3's to do with resume.
+  - **A directory planted at `.executive.json` beside a checkpoint refuses every start** (EISDIR on
+    the rewrite, by name). It is kept (second review, Opus 2): under H the root is the vehicle's, and
+    with the per-slug mounts nothing else can plant there. **Child 3 (#21) must revisit it** if the
+    root is still agent-writable when resume lands, because a refusal at every restart is then a
+    stop button an agent holds.
+  - **Known inconsistency, left to child 3 (#21).** The state directory is still opened by its
+    resolved *path* more than once — by `main` for its lock and `serves.json`, by `Executive` to
+    confirm it and to hold the journal's directory, by `checkpoint.choose_generation` and
+    `write_checkpoint` (which `realpath()` it first) — so the lock's directory and the checkpoint's
+    are the same directory only while the operator renames nothing on the way to it. No component
+    of that path is in the agents' reach (the spelling rule above), so this is a consistency debt
+    rather than an agent's lever; threading one handle through the checkpoint reader and writer
+    changes child 1's interface and is child 3's to do with resume.
 
 `--state-dir` is **not required**: without it the lock, the journal and every refusal are exactly as
 before. Whether the deployed stack must always name one is the chassis's decision when it adds the
@@ -125,6 +139,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -346,9 +361,23 @@ def _no_json_constants(name: str) -> Any:
     raise ValueError(f"{name} is not a JSON value (RFC 8259)")
 
 
+def _finite_float(text: str) -> float:
+    """A JSON number as a double, refused when it is not finite (second review, Opus 3).
+
+    `parse_constant` sees only the literals `NaN`, `Infinity` and `-Infinity`; `1e400` is a decimal
+    the float parser turns into `inf` without asking it, and an infinity read is one no writer here
+    can write back.
+    """
+    value = float(text)
+    if not math.isfinite(value):
+        shown = text if len(text) <= 40 else f"{text[:40]}… ({len(text)} characters)"
+        raise ValueError(f"{shown} overflows a double, and a non-finite number is not a JSON value (RFC 8259)")
+    return value
+
+
 def loads_json(text: str | bytes) -> Any:
     """`json.loads` as a conforming reader on the far side would do it: no non-finite numbers."""
-    return json.loads(text, parse_constant=_no_json_constants)
+    return json.loads(text, parse_constant=_no_json_constants, parse_float=_finite_float)
 
 
 def dumps_json(payload: Any, **kwargs: Any) -> str:
@@ -552,9 +581,10 @@ def read_root_record_bytes(
     tick = loaded.get("tick")
     if tick is not None and (isinstance(tick, bool) or not isinstance(tick, int) or tick < 0):
         return None, f"{label} carries tick {bounded_repr(tick)}, which is not a non-negative integer", raw
-    # The wall stamp is the one key the journal keeps that nothing else here checks, and `1e400`
-    # parses to an infinity without passing through `loads_json`'s `parse_constant`: kept, it made
-    # the rewrite event unencodable, and every restart a refusal an agent could cause.
+    # The wall stamp is the one key the journal keeps that nothing else here checked. `1e400` once
+    # parsed to an infinity past `loads_json`'s `parse_constant` (its `parse_float` refuses it now,
+    # second review); kept, it made the rewrite event unencodable, and every restart a refusal an
+    # agent could cause. A stamp is a string, so anything else is garbled.
     updated_at = loaded.get("updated_at")
     if updated_at is not None and not isinstance(updated_at, str):
         return None, f"{label} carries updated_at {bounded_repr(updated_at)}, which is not a timestamp string", raw
@@ -562,17 +592,66 @@ def read_root_record_bytes(
 
 
 # -- the state directory (ADR 0002 H, child 2) ----------------------------------------------------
+def resolve_operator_path(flag: str, path: str | os.PathLike[str]) -> tuple[Path | None, str | None]:
+    """An operator's path, resolved, or the refusal that names the flag and why it cannot be.
+
+    **A symlink loop was a traceback** (second review, Codex P2): `Path.resolve()` raises
+    `RuntimeError` on one under Python 3.12, outside every handler, and under 3.13 returns the path
+    unresolved, so the first `stat` of it is `ELOOP`. Both are this refusal. A path that does not
+    exist yet resolves as far as it can, which is what a fresh directory needs.
+    """
+    try:
+        resolved = Path(path).resolve()
+    except (RuntimeError, OSError) as exc:
+        return None, f"{flag} {path} cannot be resolved ({type(exc).__name__}: {exc}); a path the executive cannot resolve is not one it can contain"
+    try:
+        os.stat(resolved)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return None, f"{flag} {path} cannot be resolved (ELOOP: {exc.strerror}); a path the executive cannot resolve is not one it can contain"
+    return resolved, None
+
+
+def spelled_through(path: str | os.PathLike[str], diode: Path) -> Path | None:
+    """The first prefix of `path` *as spelled* that resolves into the (resolved) diode directory, or `None`.
+
+    **Containment of the resolved path is not containment of the path used** (second review, Codex
+    P1). A link an agent makes in its own window, pointing at a private directory, resolves outside
+    the diode directory and passed the resolved rule; anything that then walked the spelling walked
+    the agent's link, which it can retarget. So every prefix of the spelling is resolved in turn —
+    `os.path.abspath` would fold a `..` away and with it the component that went through the window —
+    and a spelling that passes through the diode directory at any point is refused.
+    """
+    spelling = Path.cwd() / Path(path)
+    parts = spelling.parts
+    for end in range(1, len(parts) + 1):
+        prefix = Path(*parts[:end])
+        resolved, problem = resolve_operator_path("", prefix)
+        if problem is None and resolved is not None and resolved.is_relative_to(diode):
+            return prefix
+    return None
+
+
 def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
     """The refusal for a `--state-dir` that overlaps `--diode-dir`, or `None`.
 
-    The journal's rule, applied to the whole private directory: both paths are `resolve()`d first, so
+    The journal's rule, applied to the whole private directory: both paths are resolved first, so
     `diode/alpha/../.private` and a link planted outside the diode directory that points into it are
     the same spelling as `diode/.private`, and the directory itself is inside itself. The symmetric
     overlap — the agents' directories inside the executive's private one — is refused too: nothing
-    in H wants the adversary's directory under the thing it must not reach.
+    in H wants the adversary's directory under the thing it must not reach. Then the *spelling* is
+    held to the same rule (`spelled_through`), and a path that cannot be resolved is refused by name.
+
+    The comparison is of resolved paths, so it cannot see one volume mounted twice: a chassis that
+    bind-mounted the diode volume at both `/diode` and `/state` would pass. That one private volume,
+    not shared with the diode volume, is the chassis's configuration constraint (ADR 0002 H1).
     """
-    state = Path(state_dir).resolve()
-    diode = Path(diode_dir).resolve()
+    diode, problem = resolve_operator_path("--diode-dir", diode_dir)
+    if problem is not None or diode is None:
+        return problem
+    state, problem = resolve_operator_path("--state-dir", state_dir)
+    if problem is not None or state is None:
+        return problem
     if state.is_relative_to(diode):
         return (
             f"--state-dir {state_dir} lies inside --diode-dir {diode_dir}: the checkpoint, the lock and "
@@ -582,6 +661,13 @@ def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathL
         return (
             f"--diode-dir {diode_dir} lies inside --state-dir {state_dir}: the agents' directories do "
             "not belong inside the executive's private one (ADR 0002 H)"
+        )
+    through = spelled_through(state_dir, diode)
+    if through is not None:
+        return (
+            f"--state-dir {state_dir} is spelled through --diode-dir {diode_dir} (at {through}): a link "
+            "in the agents' directory is a link an agent can retarget, so the private directory is "
+            "never reached through one (ADR 0002 H)"
         )
     return None
 
@@ -593,10 +679,22 @@ def check_journal(journal: str | os.PathLike[str], diode_dir: str | os.PathLike[
     an executive, so a check made only in `Executive.__init__` let a startup event land in the diode
     directory), and `Executive` asks it again for an in-process caller.
     """
-    if Path(journal).resolve().is_relative_to(Path(diode_dir).resolve()):
+    diode, problem = resolve_operator_path("--diode-dir", diode_dir)
+    if problem is not None or diode is None:
+        return problem
+    resolved, problem = resolve_operator_path("--journal", journal)
+    if problem is not None or resolved is None:
+        return problem
+    if resolved.is_relative_to(diode):
         return (
             f"--journal {journal} lies inside --diode-dir {diode_dir}: the lineage and "
             "the truth hash are the executive's and never go where an agent can read them"
+        )
+    through = spelled_through(journal, diode)
+    if through is not None:
+        return (
+            f"--journal {journal} is spelled through --diode-dir {diode_dir} (at {through}): the lineage "
+            "is never written through a link an agent can retarget"
         )
     return None
 
@@ -632,10 +730,25 @@ def journal_segment_path(state_dir: str | os.PathLike[str], boot_id: str) -> Pat
     return Path(state_dir) / JOURNAL_SEGMENT.format(boot_id=boot_id)
 
 
-def append_journal_line(path: Path, row: dict[str, Any]) -> None:
-    """One JSON line onto the journal. A tick row has no `event` key; a startup event has one."""
-    with Path(path).open("a", encoding="utf-8") as handle:
-        handle.write(dumps_json(row, sort_keys=True) + "\n")
+def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None = None) -> None:
+    """One JSON line onto the journal. A tick row has no `event` key; a startup event has one.
+
+    Relative to `dir_fd`, the journal directory's handle, when the caller holds one; otherwise
+    relative to a handle opened here on the path's parent. Either way the file itself is opened
+    `O_NOFOLLOW`: the lineage is not appended through a link (second review, Codex P1).
+    """
+    opened: int | None = None
+    if dir_fd is None:
+        opened = dir_fd = open_directory(Path(path).parent)
+    try:
+        fd = os.open(
+            Path(path).name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=dir_fd
+        )
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(dumps_json(row, sort_keys=True) + "\n")
+    finally:
+        if opened is not None:
+            os.close(opened)
 
 
 def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
@@ -799,7 +912,8 @@ class Executive:
                 os.close(open_state_dir(Path(state_dir), create=True))
             except CheckpointStateDirUnusable as exc:
                 raise ValueError(str(exc)) from exc
-            self.state_dir = Path(state_dir)
+            # After the checks, only the resolved path: the spelling is never walked again (Codex P1).
+            self.state_dir = Path(os.path.realpath(state_dir))
             if journal is None:
                 journal = journal_segment_path(self.state_dir, self.boot_id)
         self.phase = phase
@@ -838,12 +952,21 @@ class Executive:
         self.failure_count = 0
         self.failures: deque[dict[str, Any]] = deque(maxlen=RECENT_FAILURES)
         self.journal: Path | None = None
+        # The journal's directory, opened once by its resolved path and held: every row is appended
+        # relative to it, so a link on the way to it retargeted after the start moves nothing.
+        self.journal_dir_fd: int | None = None
         if journal is not None:
-            journal = Path(journal)
             problem = check_journal(journal, self.diode_dir)
             if problem is not None:
                 raise ValueError(problem)
-            self.journal = journal
+            self.journal = Path(journal).resolve()
+            try:
+                self.journal_dir_fd = open_directory(self.journal.parent)
+            except OSError as exc:
+                raise ValueError(
+                    f"--journal {journal}: its directory {self.journal.parent} cannot be opened "
+                    f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
+                ) from exc
         # Generated once, because the configuration does not change while an executive runs.
         self.readme_text = generate_readme(world.root)
         self.help_text = generate_help(world.root)
@@ -895,6 +1018,9 @@ class Executive:
         if self.diode_fd is not None:
             os.close(self.diode_fd)
             self.diode_fd = None
+        if self.journal_dir_fd is not None:
+            os.close(self.journal_dir_fd)
+            self.journal_dir_fd = None
 
     def order(self) -> list[Window]:
         """This tick's visiting order: sorted slugs rotated left by `tick % n` (ADR choice A).
@@ -1045,7 +1171,7 @@ class Executive:
             ],
             "failures": self.failure_count,
         }
-        append_journal_line(self.journal, line)
+        append_journal_line(self.journal, line, dir_fd=self.journal_dir_fd)
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
@@ -2259,12 +2385,23 @@ def main(argv: list[str] | None = None) -> int:
     state_fd: int | None = None
     # **Every destination is checked before the first write** (review F3): the diode directory, the
     # lock, `serves.json` and a startup event are all written below, and the `--journal` rule used to
-    # be asked only by `Executive`, which a start on a checkpoint never builds.
+    # be asked only by `Executive`, which a start on a checkpoint never builds. Each path is resolved
+    # by one resolver that refuses a loop by name (second review, Codex P2), and each private path is
+    # held to containment as *spelled* as well as resolved (Codex P1).
+    diode_resolved, problem = resolve_operator_path("--diode-dir", diode_dir)
+    if problem is not None or diode_resolved is None:
+        sys.stderr.write(f"{problem}\n")
+        return 3
+    journal_resolved: Path | None = None
     if args.journal:
         problem = check_journal(args.journal, diode_dir)
         if problem is not None:
             sys.stderr.write(problem + "\n")
             return 3
+        journal_resolved = Path(args.journal).resolve()
+    # The state directory as spelled is the operator's word, kept for the messages; once it is
+    # checked and opened, every access goes through `state_path`, its resolved form, or `state_fd`.
+    state_path: Path | None = None
     if state_dir is not None:
         problem = check_state_dir(state_dir, diode_dir)
         if problem is not None:
@@ -2275,10 +2412,37 @@ def main(argv: list[str] | None = None) -> int:
         except CheckpointStateDirUnusable as exc:
             sys.stderr.write(f"{exc}\n")
             return 3
-    diode_dir.mkdir(parents=True, exist_ok=True)
-    diode_fd = open_directory(diode_dir.resolve())
+        state_path = Path(os.path.realpath(state_dir))
+
+    def errno_name(exc: BaseException) -> str:
+        if isinstance(exc, OSError):
+            return f"{errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}"
+        return f"{type(exc).__name__}: {exc}"
+
+    # **The operator's own writes fail by name too** (second review, Opus 1): a diode directory that
+    # cannot be made or opened, and a lock that cannot be opened — a read-only mount, a directory where
+    # the lock goes — were tracebacks.
+    try:
+        diode_resolved.mkdir(parents=True, exist_ok=True)
+        diode_fd = open_directory(diode_resolved)
+    except OSError as exc:
+        if state_fd is not None:
+            os.close(state_fd)
+        sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({errno_name(exc)})\n")
+        return 3
     lock_in = state_fd if state_fd is not None else diode_fd
-    lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in)
+    lock_where = state_path if state_path is not None else diode_dir
+    try:
+        lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in)
+    except OSError as exc:
+        for fd in (diode_fd, state_fd):
+            if fd is not None:
+                os.close(fd)
+        sys.stderr.write(
+            f"the lock {lock_where / LOCK_FILE} cannot be opened ({errno_name(exc)}). The executive "
+            "does not run without its lock; repair what is at that path, or the directory's permissions\n"
+        )
+        return 3
 
     def close_all() -> None:
         for fd in (lock_fd, diode_fd, state_fd):
@@ -2310,12 +2474,25 @@ def main(argv: list[str] | None = None) -> int:
         close_all()
         return 3
 
+    def serves_refusal() -> str | None:
+        """Write `serves.json`; the refusal sentence if it cannot be written (second review, Opus 1)."""
+        if state_fd is None or state_path is None:
+            return "no state directory is open, so serves.json cannot be written"
+        try:
+            write_serves_record(state_fd, diode_dir)
+        except Exception as exc:  # noqa: BLE001 - the refusal names it
+            return (
+                f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
+                "A state directory that cannot say which diode directory it serves is not one to run"
+            )
+        return None
+
     # This boot's id is drawn here so that a startup event and the ticks that follow share one
     # journal segment; the executive is handed it below.
     boot_id = uuid.uuid4().hex
-    journal = Path(args.journal) if args.journal else None
-    if journal is None and state_dir is not None:
-        journal = journal_segment_path(state_dir, boot_id)
+    journal = journal_resolved
+    if journal is None and state_path is not None:
+        journal = journal_segment_path(state_path, boot_id)
 
     record, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
     checkpoint_found = None
@@ -2336,7 +2513,7 @@ def main(argv: list[str] | None = None) -> int:
         # The checkpoint is authoritative for identity (ADR 0002 H(ii)); K2 chooses the generation and
         # its refusals — corrupt both, incompatible — are the operator's to read (K).
         try:
-            checkpoint_found = choose_generation(state_dir, Compatibility.current(world))
+            checkpoint_found = choose_generation(state_path, Compatibility.current(world))
         except CheckpointRefused as exc:
             return refuse(
                 f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
@@ -2374,6 +2551,9 @@ def main(argv: list[str] | None = None) -> int:
                             "problem": problem,
                             **superseded_record(record, record_bytes),
                         },
+                        # The segment relative to the state directory's handle; an explicit journal
+                        # relative to a handle on its resolved parent.
+                        dir_fd=state_fd if journal_resolved is None else None,
                     )
                 except Exception as exc:  # noqa: BLE001 - the refusal names it
                     return refuse(
@@ -2391,7 +2571,9 @@ def main(argv: list[str] | None = None) -> int:
                         "nothing is lost: remove what is at that path and start again"
                     )
                 sys.stderr.write(f"[console] {diode_dir / RECORD_FILE}: {why}; the mismatch is journaled\n")
-            write_serves_record(state_fd, diode_dir)
+            problem = serves_refusal()
+            if problem is not None:
+                return refuse(problem)
             # Choice D, kept: a verified checkpoint is a world, and this executive does not start a
             # fresh one over it. Resuming it is WP08 child 3.
             return refuse(
@@ -2540,7 +2722,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if state_fd is not None:
-        write_serves_record(state_fd, diode_dir)
+        problem = serves_refusal()
+        if problem is not None:
+            return refuse(problem)
     try:
         executive = Executive(
             world,
@@ -2552,13 +2736,18 @@ def main(argv: list[str] | None = None) -> int:
             max_batch=args.max_batch,
             journal=journal,
             record_slugs=recorded_slugs,
-            state_dir=state_dir,
+            state_dir=state_path,
             boot_id=boot_id,
         )
     except ValueError as exc:
         return refuse(str(exc))
-    os.ftruncate(lock_fd, 0)
-    os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+    # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
+    try:
+        os.ftruncate(lock_fd, 0)
+        os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+    except OSError as exc:
+        executive.close()
+        return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
     for slug in slugs:
         try:
             executive.attach(slug, ring_slots=resolved_slots[slug])

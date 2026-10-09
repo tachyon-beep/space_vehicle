@@ -501,7 +501,11 @@ the ADR 0001 rules stand unchanged. *Amended by WP08 child 2 (2026-10-09):* the 
 readable record naming a different world relies on the per-slug mounts (chassis `adf38d6`): with
 them the root is written only by the vehicle or the operator, so a foreign world there is two
 executives or an operator's error; while the root is agent-writable it is a stop button an agent can
-press at a restart, and the refusal is kept knowing that. (iii) The clarification "the directory's record is
+press at a restart, and the refusal is kept knowing that. *Amended by WP08 child 2, second review
+(2026-10-09):* a directory planted at `.executive.json` beside a verified checkpoint makes the rewrite
+fail (EISDIR) and the start refuses by name, at every restart; that refusal is kept on the same
+ground — under H the root is the vehicle's, and with the per-slug mounts nothing else can plant there
+— and child 3 must revisit it if the root is still agent-writable when resume lands. (iii) The clarification "the directory's record is
 authoritative" is amended to "the checkpoint is authoritative and the record is its copy".
 *Chassis*: one new volume and one new mount on one service (not the ten-edit fleet mount list);
 `serve_vehicle.sh` passes `--state-dir`; `scripts/status.py` may read the checkpoint's header (never
