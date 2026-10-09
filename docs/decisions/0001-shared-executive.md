@@ -213,3 +213,13 @@ the owner's revision. Two items filled gaps the decision text left silent; they 
   clock; the allowance is clamped and reported, not yet enforced.
 - **The mirror carries no roster.** `state.json.executive` is `{world_id, tick}`; which other
   windows exist is the directory's record's.
+
+- **The run's identity is not published to the fleet** (2026-10-09, coordinator under the owner's
+  delegation; the aurora-port spec §8 asked that vehicle-private state stay off the agent-writable
+  window). The mirror carried `vehicle.scenario` and every window's `pending.json` carried
+  `scenario` and `seed`. With the per-slug mounts the directory's `.executive.json` is the
+  operator's alone, so the identity lives there and in the state directory; the windows carry
+  neither. The seed keys the fault plan and the scenario says how hard the run is: publishing them
+  would do part of the fleet's information management for it. `presentation.yaml#mirror` never
+  declared `scenario`, and `check_console_flags` now reads the remembered values off
+  `Executive.root_record` rather than the window's copy.

@@ -2096,8 +2096,6 @@ class Window:
             "pending": [],
             "ticks": 0,
             "seq": 0,
-            "scenario": self.executive.scenario,
-            "seed": self.executive.seed,
             "ring_slots": self.ring_slots,
             "world_id": None,
         }, dir_fd=handles.root)
@@ -2252,12 +2250,11 @@ class Window:
                 "ticks": self.executive.tick,
                 "seq": self.seq,
                 "boot_id": self.boot_id,
-                # The window's identity lives in its own record rather than in the mirror, for the
-                # reason `ticks` does: `state.json` is published state and the contract says it is
-                # never read back as input. Nor is this: the directory's `.executive.json` is the
-                # record the executive reads back, and this copy is for the window's reader.
-                "scenario": self.executive.scenario,
-                "seed": self.executive.seed,
+                # **No scenario and no seed.** The run's identity is the operator's: it lives in the
+                # directory's `.executive.json` and the state directory, which no agent can read under
+                # the per-slug mounts. This file is in the agent's own window, and the seed keys the
+                # fault plan and the scenario names how hard the run is — telling the fleet either
+                # would do part of the diagnosis for it.
                 # The ring's own accounting: what it is bounded to, and what it has lost.
                 "ring_slots": self.ring_slots,
                 "ring_losses": self.ring_losses(),
@@ -2300,12 +2297,12 @@ class Window:
                 "newest_seq": max(0, self.seq - 1),
             },
             # `posture` is the *execution* machine's posture (`mission.yaml#postures`), which the
-            # executive does not drive and which stays empty; `scenario` is the run's difficulty
-            # identity. Two names because they are two things.
+            # executive does not drive and which stays empty. The run's difficulty (`scenario`) is
+            # not published: it is the operator's record of the run, not something the vehicle's
+            # instruments could tell a crew, and `presentation.yaml#mirror` never declared it.
             "vehicle": {
                 "phase": executive.phase,
                 "posture": "",
-                "scenario": executive.scenario,
                 "abort_latched": False,
             },
             # Which world this window is a view of, and how far it has ticked. No truth, no lineage,

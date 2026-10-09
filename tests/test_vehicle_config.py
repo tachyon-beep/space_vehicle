@@ -10911,13 +10911,21 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     window = root / "vehicle"
     published = json.loads((window / "state.json").read_text())
     check = json.loads((root / ".executive.json").read_text())
-    # The mirror says which scenario the vehicle is in, beside the phase.
-    assert published["vehicle"]["scenario"] == "crisis", published["vehicle"]
+    # **The fleet is not told which scenario it is in, nor the seed.** The mirror carried
+    # `vehicle.scenario` and every window's `pending.json` the pair until the per-slug mounts made the
+    # directory's record the operator's alone: the seed keys the fault plan and the scenario says how
+    # hard the run is, and publishing either does part of the agents' diagnosis for them.
+    assert "scenario" not in published["vehicle"], published["vehicle"]
     # And the directory's own record carries the pair, because `state.json` is never read back.
     assert check["scenario"] == "crisis" and check["seed"] == 42, (check.get("scenario"), check.get("seed"))
-    # The window's record repeats it for its reader, and is read for nothing.
+    # And no window file that carries run state names either: the record, the mirror and every frame.
+    # (HELP.md and README.md are generated from the configuration alone and are the same for every
+    # run, so a posture name in their vocabulary is not this run's.)
     mirror_record = json.loads((window / "pending.json").read_text())
-    assert mirror_record["scenario"] == "crisis" and mirror_record["seed"] == 42
+    assert "scenario" not in mirror_record and "seed" not in mirror_record, mirror_record
+    for leaked in sorted(window.rglob("*.json")):
+        body = leaked.read_text(errors="replace")
+        assert '"seed"' not in body and '"scenario"' not in body and '"crisis"' not in body, leaked
 
     # A directory prepared with the pair and run without the flags keeps it: the record describes the
     # run, and a run that reset itself to `nominal` would make a crisis run report itself as nominal.
@@ -10965,9 +10973,9 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert "scenario=crisis seed=7" in ran.stdout, ran.stdout[-400:]
     record = json.loads((renamed / ".executive.json").read_text())
     assert record["scenario"] == "crisis" and record["seed"] == 7, record
-    # The mirror moves with the record, because the mirror is what the fleet reads.
+    # The record moves; the mirror says nothing of it either way.
     mirror = json.loads((renamed / "renamed" / "state.json").read_text())
-    assert mirror["vehicle"]["scenario"] == "crisis", mirror["vehicle"]
+    assert "scenario" not in mirror["vehicle"], mirror["vehicle"]
     # And the plan is asked about the *resolved* pair rather than the flag, so `--plan` on this
     # directory with no `--scenario` describes the crisis it is in and not the default it never had.
     planned = run_console("--diode-dir", str(renamed), "--plan-json")
@@ -10981,7 +10989,7 @@ def test_a_run_can_say_which_scenario_it_is(tmp_path):
     assert run_console("--diode-dir", str(shared), "--slug", "right", "--init").returncode == 0
     record = json.loads((shared / ".executive.json").read_text())
     assert record["slugs"] == ["left", "right"] and record["scenario"] == "crisis" and record["seed"] == 42, record
-    assert json.loads((shared / "right" / "pending.json").read_text())["scenario"] == "crisis"
+    assert "scenario" not in json.loads((shared / "right" / "pending.json").read_text())
     both = run_console("--diode-dir", str(shared), "--slug", "left", "--slug", "right", "--cycles", "1", "--poll", "0")
     assert both.returncode == 0, both.stderr[-400:]
     assert "scenario=crisis seed=42" in both.stdout, both.stdout
