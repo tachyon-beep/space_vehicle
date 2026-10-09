@@ -18687,6 +18687,67 @@ recorded hold with the mirror kept.
 
 No configuration value, debt or state class moved.
 
+## A checkpoint is a format before it is a resume
+
+`docs/decisions/0002-mission-clock-and-continuity.md` (ADR 0002, accepted) decides that a restart
+*resumes* a world from a checkpoint the executive wrote for itself, and splits the work into twelve
+children so each lands as one reviewable outcome. This round is child 1 (#19): the file format, its
+writer, its reader, and the two generations on disk — and deliberately nothing that uses them. No
+resume is wired into `Executive` (child 3), nothing knows where `--state-dir` is (child 2), and the
+per-cycle record is not written (child 4). What is fixed is what a checkpoint *is*, so those children
+land as sections and flags rather than as formats. `tools/checkpoint.py` is the module; it imports
+`plant.corpus_files` and nothing from `console.py` at import time, so the console may import it next.
+
+The two halves the round joined are ADR 0002 G (what the checkpoint contains) and I (how it is written
+and read back), against the state `Executive` and `Window` actually hold today. Capture and restore
+are pure functions over an executive-shaped object: `capture_state` reads the attributes the two
+classes have and, for the fields later children add, the attributes they will add under these names
+(`clock`, `rng`, `segments`, `phase_entry_seq`, `allowance_ceiling`; a window's `spend` and
+`published_tick`), writing `null` or the reserved default where none exists yet; `restore_state` sets
+the same attributes back. The file is one header line — identity plus the body's SHA-256 and length —
+and then the body, sorted compact JSON with `allow_nan=False` and a `default` that raises. The body
+carries a copy of the identity the header states, and the reader holds the two together.
+
+| | ADR 0002 says | `tools/checkpoint.py` does |
+|---|---|---|
+| the body | G's list: truth with every `__delay`, `__residual`, `__shortfall` key; tick; dwell; lineage head; receipt counter; per-window `seq`, `receipts`, `spend`, `deferred`, `arms`, `published_tick`; clock inputs; scenario, seed, `--max-batch`, the allowance ceiling; a reserved `rng`; `segments` | seven sections — `identity`, `run`, `clock`, `executive`, `rng`, `segments`, `windows` — and a structure check that names the first key missing, down to `windows.alpha.spend` |
+| `spend` | "E, opaque and versioned" | an object with an integer `version`, carried and never read; a version-0 section carries today's `accepted` until child 7 |
+| the encoding | sorted compact JSON, no `NaN`, a `default` that raises (the encoder question) | `encode`: also refuses a non-string key, which `json.dumps` would have stringified and the round trip would not have been one |
+| `engine` | the file hash over the corpus plus `plant.py`, `console.py`, `faults.py`, with the commit recorded beside it | `engine_identity`: SHA-256 over each file's path, length and bytes; a README edit leaves it alone and one byte of a domain file moves it; `git_commit` is in the header and never checked |
+| the write | temp → `fsync` → rename current to `checkpoint.prev.json` → rename temp over `checkpoint.json` → `fsync` directory | the same five steps, each named in `STEPS`, every one relative to a directory handle opened without following a link, the temporary `O_CREAT \| O_EXCL \| O_NOFOLLOW` under a random name |
+| corrupt | a flipped byte, a truncation, a link in its place, a missing `rng` | `CheckpointCorrupt` naming `body_sha256`, `body_bytes`, `link`, `rng` — and `header`, `body`, `regular`, `identity`, `size` for the shapes the ADR did not list |
+| incompatible | `format`, `engine`, `python`, `platform`, `tick_hz` | `CheckpointIncompatible` naming the field, the file, what was written and what this engine is |
+| K2 | fall back to the previous generation if it verifies and the identity matches; never from an incompatible current | `choose_generation`: the previous on a corrupt *or absent* current, carrying the refusal it stood in for; a refusal naming both files when both fail; `None` for a fresh directory; an incompatible current raised before the previous is opened |
+
+Three places the record was silent and the round chose. **Absence is a fourth class**, not a
+corruption: a kill between the two renames leaves no `checkpoint.json` and a good
+`checkpoint.prev.json`, and the chooser must fall back on that exactly as on a flipped byte — so
+`CheckpointAbsent` exists, and the fallback test covers both. **A verifying checkpoint of another
+world** is neither corrupt nor incompatible; it is H's "two executives with separate state
+directories on one diode directory", and it is `CheckpointForeign`, raised only when the caller
+names the world it expects. **The header is outside the hash by design** (I: "a SHA-256 of the body
+inside a small header"), so a byte flipped in the header's `engine` would have read as an
+incompatibility and never been fallen back from; the body carries an identity copy the hash does
+cover, and the reader refuses a header that disagrees with it as corrupt. The one field that copy
+cannot protect is `format`, which is read before anything else because it says how to read the
+rest, and the test says so.
+
+Two things the round got wrong on the way. The issue's acceptance reads "a kill at every step leaves
+exactly one verifiable generation", and taken literally that is false in steady state: after the
+final rename there are two, by design. The property the test holds is that the chooser returns
+exactly one generation at every step, that it verifies, and that its tick is the tick before the
+write or the tick of it — never neither, never a damaged file — with the count of verifying files
+per step derived from the sequence and asserted beside it. And the first draft of the spend test
+closed with an assertion that could not fail (`... or twin.tick == 4`); it was removed before the
+tests were first run. The six tests failed first for the one reason they should — no module — and
+passed on the module's first run, with ruff's two findings (`UP012`, `SIM105`) fixed after.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 374 | **380** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 

@@ -13,9 +13,12 @@ this must not become a reason the suite cannot run.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import itertools
 import json
 import math
+import platform
 import re
 import shutil
 import subprocess
@@ -23164,3 +23167,512 @@ def test_a_console_with_a_non_finite_number_is_not_json_and_the_vehicle_writes_n
         console.write_json_atomic(tmp_path / "bad.json", {"x": float("inf")})
     assert not (tmp_path / "bad.json").exists()
     assert not list(tmp_path.glob(".bad.json.*")), "the temporary is cleaned up"
+
+
+# ---- ADR 0002 child 1: the checkpoint format ----------------------------------------------------
+
+
+def checkpoint_tools():
+    """`tools/checkpoint.py` beside the console tools, with the one world this process loaded."""
+    console, plant, world = console_tools()
+    import checkpoint
+
+    return checkpoint, console, plant, world
+
+
+def commanded_executive(console, world, diode: Path):
+    """An executive with two windows, three ticks in, carrying every kind of state G lists.
+
+    `set_rcs_mode mode=manual` from alpha at tick 1 moves a commanded state and so writes a dwell
+    record (`domains/rcs/components.yaml`: `mode` has `min_on_s: 2`); `request_imu_alignment` from
+    bravo in the *last* cycle is `execution_class: deferred` (`domains/gnc/commands.yaml`) and is due
+    the tick after, so the checkpoint is taken while the deferral is still queued; and an arm token
+    is placed in bravo's `arms` directly, because `arm_event` is refused `INTERLOCK UNEVALUATED`
+    until WP05 and G1 says a token survives a restart regardless.
+    """
+    executive = console.Executive(world, diode, phase="translunar_coast", max_batch=7)
+    executive.attach("alpha", ring_slots=5)
+    executive.attach("bravo", ring_slots=9)
+    executive.cycle()
+    submit(diode / "alpha", ["set_rcs_mode mode=manual"])
+    executive.cycle()
+    submit(diode / "bravo", ["request_imu_alignment source=star target=LVLH"])
+    executive.cycle()
+    executive.windows["bravo"].arms["lm_jettison"] = "deadbeefcafef00d"
+    return executive
+
+
+def split_checkpoint(raw: bytes) -> tuple[dict, bytes]:
+    """The layout the test knows on its own: one header line, then the body it hashes."""
+    header_line, body = raw.split(b"\n", 1)
+    return json.loads(header_line), body
+
+
+def test_a_checkpoint_round_trips_an_executive_byte_for_byte(tmp_path):
+    """ADR 0002 G and I: everything the executive is, written once and read back identical.
+
+    The oracle is the live object, not the module under test: every key of `executive.truth` —
+    the `__delay` ring, the `__residual` accumulators and the `__shortfall` records found by suffix
+    — must appear in the body's truth; the tick is the number of cycles run; the receipt counter is
+    the number of verdicts issued (two commands, two receipts); the dwell record's clock is
+    `tick × 20 000 µs` at `mission.yaml#tick_hz: 50`; bravo's deferral is due one tick after it was
+    accepted. The header's integrity fields are recomputed here with `hashlib` over the bytes after
+    the first newline, and its compatibility fields are what `platform` and `mission.yaml` say.
+
+    Byte identity is asserted twice: the body read back re-encodes to the bytes written, and a
+    second executive restored from it captures to the same bytes — which is the property child 3
+    builds on. The restored executive then runs one more cycle beside the original and reaches the
+    same lineage head, a check child 3 will widen; here it only says the restore left nothing out
+    that the next tick reads.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode = tmp_path / "diode"
+    executive = commanded_executive(console, world, diode)
+    assert executive.tick == 3 and executive.receipt == 2, (executive.tick, executive.receipt)
+    assert executive.dwell["mode"]["changed_at_us"] == 1 * 20_000, executive.dwell
+    bravo = executive.windows["bravo"]
+    assert [d["due_tick"] for d in bravo.deferred] == [3], bravo.deferred
+
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat, git_commit="0123abcd")
+    for section in ("identity", "run", "clock", "executive", "rng", "segments", "windows"):
+        assert section in body, section
+    truth = body["executive"]["truth"]
+    assert set(truth) == set(executive.truth)
+    for suffix in ("__delay", "__residual", "__shortfall"):
+        keys = [k for k in executive.truth if k.endswith(suffix)]
+        assert keys and all(truth[k] == executive.truth[k] for k in keys), suffix
+    assert body["executive"]["tick"] == 3 and body["executive"]["receipt"] == 2
+    assert body["executive"]["dwell"] == executive.dwell
+    assert body["executive"]["lineage_head"] == executive.lineage_head
+    assert body["run"] == {
+        "scenario": "nominal",
+        "seed": 0,
+        "phase": "translunar_coast",
+        "phase_entry_seq": 0,
+        "tripped_interlocks": [],
+        "max_batch": 7,
+        "allowance_ceiling": console.DEFAULT_ALLOWANCE,
+    }, body["run"]
+    assert set(body["clock"]) == {"m", "k", "N", "burst_bound", "lag_ceiling_s"}, body["clock"]
+    assert body["rng"]["version"] == 1 and body["rng"]["master_seed"] == 0, body["rng"]
+    assert set(body["windows"]) == {"alpha", "bravo"}
+    for slug, window in executive.windows.items():
+        row = body["windows"][slug]
+        assert set(row) == {"ring_slots", "seq", "receipts", "spend", "deferred", "arms", "published_tick"}, row
+        assert row["ring_slots"] == window.ring_slots and row["seq"] == 3 == window.seq
+        assert row["receipts"] == window.receipts and row["deferred"] == window.deferred
+        assert row["arms"] == window.arms and isinstance(row["spend"]["version"], int)
+    assert body["windows"]["bravo"]["arms"] == {"lm_jettison": "deadbeefcafef00d"}
+    assert body["windows"]["alpha"]["receipts"] == 1 and body["windows"]["bravo"]["receipts"] == 1
+
+    state_dir = tmp_path / "state"
+    written = checkpoint.write_checkpoint(state_dir, body)
+    assert written == state_dir / "checkpoint.json" and not (state_dir / "checkpoint.prev.json").exists()
+    assert not list(state_dir.glob(".*.tmp")), "no temporary survives a clean write"
+    raw = written.read_bytes()
+    header, body_bytes = split_checkpoint(raw)
+    assert header["format"] == "vehicle.checkpoint.v1"
+    assert header["body_sha256"] == hashlib.sha256(body_bytes).hexdigest()
+    assert header["body_bytes"] == len(body_bytes)
+    assert header["python"] == platform.python_version() and header["platform"] == platform.platform()
+    assert header["tick_hz"] == yaml.safe_load((VEHICLE / "mission.yaml").read_text())["tick_hz"] == 50
+    assert header["world_id"] == executive.world_id and header["tick"] == 3
+    assert header["git_commit"] == "0123abcd" and header["engine"] == compat.engine
+    assert re.fullmatch(r"[0-9a-f]{64}", header["engine"]), header["engine"]
+    assert header["segments"] == []
+    # The body carries the identity the header states, so a header the hash does not cover is
+    # still held to something the hash does.
+    assert body["identity"] == {k: v for k, v in header.items() if k not in ("body_sha256", "body_bytes")}
+    # Sorted compact JSON, no NaN: the encoding is one the far side of a restart can reproduce.
+    assert body_bytes == json.dumps(body, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
+
+    loaded = checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    assert loaded.body == body and loaded.header == header and loaded.fell_back is None
+    assert checkpoint.encode(loaded.body) == body_bytes
+
+    # A second executive, restored, captures to the same bytes.
+    twin = console.Executive(world, tmp_path / "twin", phase="translunar_coast", max_batch=7)
+    twin.attach("alpha", ring_slots=5)
+    twin.attach("bravo", ring_slots=9)
+    assert twin.world_id != executive.world_id and twin.tick == 0
+    checkpoint.restore_state(twin, loaded.body)
+    assert twin.world_id == executive.world_id and twin.tick == 3 and twin.receipt == 2
+    assert twin.truth == executive.truth and twin.truth is not executive.truth
+    assert twin.lineage_head == executive.lineage_head and list(twin.lineage) == [executive.lineage_head]
+    assert twin.windows["bravo"].deferred == bravo.deferred and twin.windows["bravo"].arms == bravo.arms
+    again = checkpoint.capture_state(twin, compat, git_commit="0123abcd")
+    assert checkpoint.encode(again) == body_bytes
+    # A restored window the checkpoint does not name, or a named one not attached, is a refusal.
+    stranger = console.Executive(world, tmp_path / "stranger", phase="translunar_coast")
+    stranger.attach("alpha")
+    with pytest.raises(ValueError, match="bravo"):
+        checkpoint.restore_state(stranger, loaded.body)
+    stranger.attach("bravo")
+    stranger.attach("charlie")
+    with pytest.raises(ValueError, match="charlie"):
+        checkpoint.restore_state(stranger, loaded.body)
+
+    executive.cycle()
+    twin.cycle()
+    assert twin.tick == executive.tick == 4 and twin.lineage_head == executive.lineage_head
+    assert twin.windows["bravo"].deferred == [] == executive.windows["bravo"].deferred
+    assert twin.windows["bravo"].receipts == executive.windows["bravo"].receipts == 2
+
+
+def test_each_checkpoint_corruption_is_refused_by_name(tmp_path):
+    """ADR 0002 I and K: a flipped byte, a truncation, a link, a missing `rng`, a malformed file.
+
+    Each is `CheckpointCorrupt` — the class K2 falls back from — and each refusal names the check
+    that failed and the file, because the operator reads the message and the chooser reads the
+    class. The header is outside the body hash by design (I: "a SHA-256 of the body inside a small
+    header"), so a byte flipped *in the header* is caught by a different check: the body carries a
+    copy of the identity and the two must agree. The one header field that check cannot protect is
+    `format`, which is read before anything else because it says how to read the rest.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    state_dir = tmp_path / "state"
+    current = checkpoint.write_checkpoint(state_dir, body)
+    good = current.read_bytes()
+    header, body_bytes = split_checkpoint(good)
+    newline = good.index(b"\n")
+
+    def refused(raw: bytes) -> checkpoint.CheckpointCorrupt:
+        current.write_bytes(raw)
+        with pytest.raises(checkpoint.CheckpointCorrupt) as caught:
+            checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+        assert "checkpoint.json" in str(caught.value) and caught.value.check in str(caught.value)
+        assert caught.value.path.name == "checkpoint.json"
+        return caught.value
+
+    # One flipped body byte: the hash disagrees. The byte is in the truth, far from the header.
+    flipped = bytearray(good)
+    index = newline + len(body_bytes) // 2
+    flipped[index] ^= 0x01
+    assert refused(bytes(flipped)).check == "body_sha256"
+    # Truncated body: the length disagrees before the hash is even computed.
+    assert refused(good[:-100]).check == "body_bytes"
+    # A missing `rng` section, re-hashed so that integrity passes and structure is what refuses.
+    without = dict(body)
+    del without["rng"]
+    without_bytes = checkpoint.encode(without)
+    rehashed = {**header, "body_sha256": hashlib.sha256(without_bytes).hexdigest(), "body_bytes": len(without_bytes)}
+    assert refused(json.dumps(rehashed, sort_keys=True).encode() + b"\n" + without_bytes).check == "rng"
+    # A malformed header, and a header that is not an object.
+    assert refused(b"{not json\n" + body_bytes).check == "header"
+    assert refused(b"[]\n" + body_bytes).check == "header"
+    # A body that is not JSON, with a header whose hash and length vouch for exactly those bytes.
+    junk = b"{\"truth\": [}\n"
+    vouched = {**header, "body_sha256": hashlib.sha256(junk).hexdigest(), "body_bytes": len(junk)}
+    assert refused(json.dumps(vouched).encode() + b"\n" + junk).check == "body"
+    # A flipped byte in the header's `engine`: the body's identity copy disagrees.
+    header_line = good[:newline]
+    position = header_line.index(b'"engine": "') + len(b'"engine": "') if b'"engine": "' in header_line else header_line.index(b'"engine":"') + len(b'"engine":"')
+    bent = bytearray(good)
+    bent[position] = ord("0") if bent[position] != ord("0") else ord("1")
+    assert refused(bytes(bent)).check == "identity"
+    # An empty file, and a file with no newline at all.
+    assert refused(b"").check == "header"
+    assert refused(good[:newline]).check == "header"
+    # A spend that is not a versioned object is a structure the format cannot vouch for.
+    unspent = json.loads(json.dumps(body))
+    unspent["windows"]["alpha"]["spend"] = {"accepted": 1}
+    unspent_bytes = checkpoint.encode(unspent)
+    reheaded = {**header, "body_sha256": hashlib.sha256(unspent_bytes).hexdigest(), "body_bytes": len(unspent_bytes)}
+    assert refused(json.dumps(reheaded).encode() + b"\n" + unspent_bytes).check == "windows.alpha.spend"
+
+    # A symlink in the file's place, to a checkpoint that would verify: refused as a link, unread.
+    current.write_bytes(good)
+    aside = tmp_path / "aside.json"
+    aside.write_bytes(good)
+    current.unlink()
+    current.symlink_to(aside)
+    with pytest.raises(checkpoint.CheckpointCorrupt) as caught:
+        checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    assert caught.value.check == "link" and "checkpoint.json" in str(caught.value)
+    assert current.is_symlink() and aside.read_bytes() == good, "nothing followed, nothing touched"
+    # Not a regular file: a directory where the file should be.
+    current.unlink()
+    current.mkdir()
+    with pytest.raises(checkpoint.CheckpointCorrupt) as caught:
+        checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    assert caught.value.check == "regular"
+    current.rmdir()
+    # Absent is its own class, and the chooser's business, not a corruption.
+    with pytest.raises(checkpoint.CheckpointAbsent):
+        checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    # And the good bytes still verify, so every refusal above was the injected fault's.
+    current.write_bytes(good)
+    assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).body == body
+
+
+def test_each_checkpoint_incompatibility_is_refused_with_no_fallback(tmp_path):
+    """ADR 0002 I and K2: `format`, `engine`, `python`, `platform`, `tick_hz` — refused, never fallen back from.
+
+    The file is intact in every case; what differs is the *engine reading it*, so each case is a
+    `Compatibility` that disagrees in exactly one field, and the refusal must name that field. The
+    previous generation is written by the same build as the current one, so an incompatible current
+    is never a reason to open it: here `checkpoint.prev.json` is a *verifying* checkpoint, and the
+    chooser must still raise the incompatibility rather than return it. Then `prev` is made corrupt
+    too, and the exception must still be the current's incompatibility — proof the previous
+    generation was not consulted.
+
+    `engine` is the file hash I chose over the commit, so the test also derives what moves it: one
+    byte in a domain file does; the README does not; and the commit is recorded beside it without
+    being checked.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    state_dir = tmp_path / "state"
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    executive.cycle()
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    assert checkpoint.read_generation(state_dir, "checkpoint.prev.json", compat).body["executive"]["tick"] == 3
+    assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).body["executive"]["tick"] == 4
+
+    other = {
+        "engine": "f" * 64,
+        "python": "2.7.18",
+        "platform": "Plan9-from-outer-space",
+        "tick_hz": 60,
+    }
+    for field, value in other.items():
+        disagreeing = dataclasses.replace(compat, **{field: value})
+        with pytest.raises(checkpoint.CheckpointIncompatible) as caught:
+            checkpoint.read_generation(state_dir, "checkpoint.json", disagreeing)
+        assert caught.value.check == field and field in str(caught.value), str(caught.value)
+        assert "checkpoint.json" in str(caught.value) and str(value) in str(caught.value)
+        with pytest.raises(checkpoint.CheckpointIncompatible) as chosen:
+            checkpoint.choose_generation(state_dir, disagreeing)
+        assert chosen.value.check == field and chosen.value.path.name == "checkpoint.json"
+
+    # A different format id: refused as the format, before the hash is even looked at.
+    current = state_dir / "checkpoint.json"
+    good = current.read_bytes()
+    header, body_bytes = split_checkpoint(good)
+    foreign = {**header, "format": "vehicle.checkpoint.v0"}
+    current.write_bytes(json.dumps(foreign).encode() + b"\n" + body_bytes)
+    with pytest.raises(checkpoint.CheckpointIncompatible) as caught:
+        checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    assert caught.value.check == "format" and "vehicle.checkpoint.v0" in str(caught.value)
+    with pytest.raises(checkpoint.CheckpointIncompatible):
+        checkpoint.choose_generation(state_dir, compat)
+    current.write_bytes(good)
+
+    # The previous generation corrupt as well: the current's incompatibility is still the answer.
+    previous = state_dir / "checkpoint.prev.json"
+    previous.write_bytes(previous.read_bytes()[:-50])
+    with pytest.raises(checkpoint.CheckpointIncompatible) as caught:
+        checkpoint.choose_generation(state_dir, dataclasses.replace(compat, engine="e" * 64))
+    assert caught.value.check == "engine" and caught.value.path.name == "checkpoint.json"
+
+    # What `engine` is: a hash of what the physics and the executive read, not of the commit.
+    copy = fixture_dir(tmp_path, "engine")
+    copy_definition(copy)
+    for name in ("plant.py", "console.py", "faults.py", "checkpoint.py"):
+        shutil.copy(VEHICLE / "tools" / name, copy / "tools" / name)
+    baseline = checkpoint.engine_identity(copy)
+    assert baseline == compat.engine, "the copy is the vehicle, byte for byte, where it counts"
+    (copy / "README.md").write_text((copy / "README.md").read_text() + "\n\nA docs-only round.\n")
+    assert checkpoint.engine_identity(copy) == baseline, "a README round ends no saved run"
+    policy = copy / "domains" / "rcs" / "components.yaml"
+    policy.write_text(policy.read_text().replace("min_on_s: 2", "min_on_s: 3", 1))
+    assert checkpoint.engine_identity(copy) != baseline, "a physics byte ends every saved run"
+    assert checkpoint.git_commit(VEHICLE) == subprocess.run(
+        ["git", "-C", str(VEHICLE), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    assert checkpoint.git_commit(copy) is None, "a fixture has no commit, and that is not an error"
+
+
+def test_a_corrupt_current_generation_falls_back_to_a_verifying_previous(tmp_path):
+    """ADR 0002 K2: corrupt current, verifying previous, identity matching — the previous is used.
+
+    Two generations are written four ticks apart. With the current flipped, the chooser must return
+    the previous — at the earlier tick, carrying the current's refusal so the caller can journal
+    why — and it must say so rather than silently. Both corrupt is a refusal naming both files. An
+    absent current with a verifying previous is the state a kill between the two renames leaves,
+    and it is a fallback too. A previous that verifies but names another world is not this
+    directory's and is refused, because two state directories on one diode directory is the case
+    H names. Neither file present is `None`: a fresh directory, nothing to resume and nothing to
+    refuse.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    state_dir = tmp_path / "state"
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    for _ in range(4):
+        executive.cycle()
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    current = state_dir / "checkpoint.json"
+    previous = state_dir / "checkpoint.prev.json"
+    intact = current.read_bytes()
+    earlier = previous.read_bytes()
+
+    chosen = checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+    assert chosen.path == current and chosen.body["executive"]["tick"] == 7 and chosen.fell_back is None
+
+    flipped = bytearray(intact)
+    flipped[-10] ^= 0x40
+    current.write_bytes(bytes(flipped))
+    chosen = checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+    assert chosen.path == previous and chosen.body["executive"]["tick"] == 3
+    assert isinstance(chosen.fell_back, checkpoint.CheckpointCorrupt)
+    assert chosen.fell_back.check == "body_sha256" and chosen.fell_back.path == current
+    assert chosen.body["identity"]["world_id"] == executive.world_id
+
+    current.unlink()
+    chosen = checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+    assert chosen.path == previous and isinstance(chosen.fell_back, checkpoint.CheckpointAbsent)
+
+    current.write_bytes(bytes(flipped))
+    previous.write_bytes(earlier[:-7])
+    with pytest.raises(checkpoint.CheckpointCorrupt) as caught:
+        checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+    assert caught.value.path == previous and caught.value.check == "body_bytes"
+    assert "checkpoint.json" in str(caught.value) and "checkpoint.prev.json" in str(caught.value)
+    assert isinstance(caught.value.__cause__, checkpoint.CheckpointCorrupt)
+    assert caught.value.__cause__.path == current
+
+    # Identity: a verifying previous from another world is refused, not resumed.
+    previous.write_bytes(earlier)
+    with pytest.raises(checkpoint.CheckpointForeign) as caught:
+        checkpoint.choose_generation(state_dir, compat, world_id="0" * 32)
+    assert caught.value.check == "world_id" and caught.value.path == previous
+    assert executive.world_id in str(caught.value) and "0" * 32 in str(caught.value)
+    current.write_bytes(intact)
+    with pytest.raises(checkpoint.CheckpointForeign) as caught:
+        checkpoint.choose_generation(state_dir, compat, world_id="0" * 32)
+    assert caught.value.path == current
+    # Without an expectation, any verifying world is the directory's.
+    assert checkpoint.choose_generation(state_dir, compat).path == current
+
+    current.unlink()
+    previous.unlink()
+    assert checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id) is None
+    assert checkpoint.choose_generation(tmp_path / "never-made", compat) is None
+
+
+def test_a_kill_at_every_step_of_the_write_sequence_leaves_one_verifiable_generation(tmp_path, monkeypatch):
+    """ADR 0002 I: write → fsync → rename previous → rename current → fsync directory, killed after each.
+
+    The kill is a raise from the hook the writer calls after every named step, which is what a
+    `SIGKILL` at that instant leaves on disk: the writer cleans nothing up on the way out, so the
+    test observes the files and not a cleanup path. The write is the *third* over a directory that
+    already holds two generations, because a kill before the final rename on a *first* write leaves
+    an empty directory — a fresh start, not a corruption — and the question here is whether an
+    existing world survives.
+
+    What each step leaves is derived from the sequence, not observed: before `rename_previous` the
+    old current stands and the old previous beside it (two verify, the chooser takes the current);
+    after it the old current is the only previous and there is no current (one verifies, by
+    fallback); after `rename_current` the new current stands over the old (two verify, the chooser
+    takes the new). At every step the chooser returns exactly one generation, it verifies, and its
+    tick is either the tick before the write or the tick of it — never neither, never a corrupt file
+    — and the next clean write recovers the directory to two good generations with no temporary left.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    assert checkpoint.STEPS == ("write", "fsync", "rename_previous", "rename_current", "fsync_directory")
+
+    seed_dir = tmp_path / "seed"
+    checkpoint.write_checkpoint(seed_dir, checkpoint.capture_state(executive, compat))
+    executive.cycle()
+    checkpoint.write_checkpoint(seed_dir, checkpoint.capture_state(executive, compat))
+    executive.cycle()
+    newest = checkpoint.capture_state(executive, compat)
+    assert newest["executive"]["tick"] == 5
+    assert checkpoint.read_generation(seed_dir, "checkpoint.json", compat).body["executive"]["tick"] == 4
+    assert checkpoint.read_generation(seed_dir, "checkpoint.prev.json", compat).body["executive"]["tick"] == 3
+
+    class Killed(RuntimeError):
+        pass
+
+    def verifying(state_dir: Path) -> dict[str, int]:
+        ticks = {}
+        for name in ("checkpoint.json", "checkpoint.prev.json"):
+            try:
+                ticks[name] = checkpoint.read_generation(state_dir, name, compat).body["executive"]["tick"]
+            except checkpoint.CheckpointRefused:
+                continue
+        return ticks
+
+    expected_after = {
+        "write": {"checkpoint.json": 4, "checkpoint.prev.json": 3},
+        "fsync": {"checkpoint.json": 4, "checkpoint.prev.json": 3},
+        "rename_previous": {"checkpoint.prev.json": 4},
+        "rename_current": {"checkpoint.json": 5, "checkpoint.prev.json": 4},
+        "fsync_directory": {"checkpoint.json": 5, "checkpoint.prev.json": 4},
+    }
+    for step in checkpoint.STEPS:
+        state_dir = tmp_path / f"killed-after-{step}"
+        shutil.copytree(seed_dir, state_dir)
+
+        def die_after(done: str, _step: str = step) -> None:
+            if done == _step:
+                raise Killed(done)
+
+        monkeypatch.setattr(checkpoint, "_after_step", die_after)
+        with pytest.raises(Killed):
+            checkpoint.write_checkpoint(state_dir, newest)
+        monkeypatch.setattr(checkpoint, "_after_step", lambda done: None)
+
+        assert verifying(state_dir) == expected_after[step], step
+        chosen = checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+        assert chosen is not None, step
+        assert chosen.body["executive"]["tick"] in (4, 5), (step, chosen.body["executive"]["tick"])
+        assert chosen.body["executive"]["tick"] == max(expected_after[step].values()), step
+        assert (chosen.fell_back is not None) == (step == "rename_previous"), step
+        if step in ("write", "fsync"):
+            assert list(state_dir.glob(".checkpoint.*.tmp")), "the kill left the temporary behind"
+
+        # Recovery: the next clean write leaves two good generations and sweeps the temporary.
+        checkpoint.write_checkpoint(state_dir, newest)
+        assert verifying(state_dir)["checkpoint.json"] == 5, step
+        assert set(verifying(state_dir)) == {"checkpoint.json", "checkpoint.prev.json"}, step
+        assert not list(state_dir.glob(".*.tmp")), step
+        assert sorted(p.name for p in state_dir.iterdir()) == ["checkpoint.json", "checkpoint.prev.json"], step
+
+
+def test_spend_is_an_opaque_versioned_subsection_the_format_does_not_read(tmp_path):
+    """ADR 0002 G and E: `spend` is the budget's, and the checkpoint carries it without knowing it.
+
+    E's answer is child 7's; the format commits only to the slot's shape — an object with an integer
+    `version` — so that answer can land as a section and not as a format. The test writes an
+    arbitrary nested payload into a window's `spend` and must get it back byte for byte, with the
+    reader never having looked inside: a `version` the reader has never seen is not a refusal. What
+    today's window counts (`accepted`, the mirror's `used_this_window`) rides in a version-0 section
+    until then, so the one budget figure the window has is not lost across a restart either.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    alpha, bravo = executive.windows["alpha"], executive.windows["bravo"]
+    assert alpha.accepted == 1 and bravo.accepted == 1
+    body = checkpoint.capture_state(executive, compat)
+    assert body["windows"]["alpha"]["spend"] == {"version": 0, "accepted": 1}
+
+    opaque = {"version": 9001, "ledger": [{"tick": 1, "cost": 3}, {"tick": 2, "cost": [1, 2.5, None]}], "note": "E's"}
+    bravo.spend = json.loads(json.dumps(opaque))
+    body = checkpoint.capture_state(executive, compat)
+    assert body["windows"]["bravo"]["spend"] == opaque
+    state_dir = tmp_path / "state"
+    checkpoint.write_checkpoint(state_dir, body)
+    loaded = checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+    assert loaded.body["windows"]["bravo"]["spend"] == opaque
+    assert checkpoint.encode(loaded.body) == (state_dir / "checkpoint.json").read_bytes().split(b"\n", 1)[1]
+
+    twin = console.Executive(world, tmp_path / "twin", phase="translunar_coast", max_batch=7)
+    twin.attach("alpha", ring_slots=5)
+    twin.attach("bravo", ring_slots=9)
+    checkpoint.restore_state(twin, loaded.body)
+    assert twin.windows["bravo"].spend == opaque and twin.windows["bravo"].spend is not loaded.body["windows"]["bravo"]["spend"]
+    assert twin.windows["alpha"].accepted == 1, "the version-0 section restores what the window counted"
+    assert json.loads((tmp_path / "twin" / "alpha" / "state.json").read_text())["budget"]["used_this_window"] == 0
+    twin.cycle()
+    assert json.loads((tmp_path / "twin" / "alpha" / "state.json").read_text())["budget"]["used_this_window"] == 1
