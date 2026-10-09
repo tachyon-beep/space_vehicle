@@ -19,7 +19,7 @@ truth cannot be written into a file nothing can read. The body carries a copy of
 header states, and the reader holds the two together: the hash covers the body (ADR 0002 I), so a
 byte flipped in the header is caught by the copy the hash does cover. The one header field that
 copy cannot protect is `format`, which is read before anything else because it says how to read
-the rest.
+the rest — so a wrong `format` is held to the body too (the refusal rule under "The read" below).
 
 **What the body carries** is ADR 0002 G's list, section by section: `identity`; `run` (scenario,
 seed, phase, `phase_entry_seq`, the tripped interlocks, `--max-batch`, the allowance ceiling);
@@ -52,9 +52,17 @@ under a random name opened `O_CREAT | O_EXCL | O_NOFOLLOW` relative to the direc
 `checkpoint.json`; `fsync` the directory. Every step is relative to a directory handle opened
 without following a link, the discipline `console.py` uses for a window, and the writer cleans
 nothing up on its way out — a process killed mid-write cleans nothing up either, so what the
-tests observe after a simulated kill is what the disk would hold. A temporary a dead process left
-is swept at the start of the next write. `os.replace` over a link replaces the link, not what it
-pointed to.
+tests observe after a simulated kill is what the disk would hold. `os.replace` over a link replaces
+the link, not what it pointed to. **One writer per state directory is a precondition**, held by the
+exclusive lock that moves into `--state-dir` with the checkpoint (ADR 0002 H, child 2) and not by
+this module: the sweep of stale temporaries removes only a temporary this process named or one
+named by a process that no longer exists, and a step that fails with an `OSError` is
+`CheckpointWriteFailed`, naming the step and the file, with the failed write's temporary removed —
+no raw `OSError` leaves `write_checkpoint`. A body the reader would refuse is refused by the writer
+first (`CheckpointInvalid`), before the directory is touched; a value the encoding cannot carry
+(a `NaN`, a non-JSON object) is `encode`'s `ValueError`/`TypeError`, also before the directory is
+touched, because `capture_state` has already refused it once; a `--state-dir` that is a file, a
+dangling link or unwritable is `CheckpointStateDirUnusable`, on both sides.
 
 **The read** distinguishes four refusals by class, each naming the check and the file, because the
 operator reads the message and the chooser reads the class (ADR 0002 K): `CheckpointCorrupt` — a
@@ -63,7 +71,14 @@ body whose length or SHA-256 disagrees with the header, a body that is not JSON 
 above (a missing `rng` is this), or a header that disagrees with the body's identity copy;
 `CheckpointIncompatible` — `format`, `engine`, `python`, `platform` or `tick_hz` is not this
 engine's; `CheckpointForeign` — a verifying checkpoint of another `world_id` than the caller's;
-`CheckpointAbsent` — no file. `choose_generation` is K2: the current generation if it verifies;
+`CheckpointAbsent` — no file. `format` is the one header field the body's identity copy cannot
+protect, so a header whose `format` is missing, not a string or not this engine's is *incompatible*
+only when the body verifies and its own identity names another format — that body was written
+under another format; otherwise the header is damaged and the file is *corrupt*, which falls back.
+`platform` is `platform.system()`, `platform.machine()` and `platform.libc_ver()` — the OS, the
+architecture and the libc, which is what can change float arithmetic — and never
+`platform.platform()`, whose kernel release is the host's inside a container and would end every
+saved run on a host kernel patch (ADR 0002 I, as amended). `choose_generation` is K2: the current generation if it verifies;
 the previous one when the current is corrupt *or absent* (a kill between the two renames leaves
 no current) and the previous verifies and its world matches; a refusal naming both files when both
 fail; `None` when neither exists; and an **incompatible** current is refused at once and the
@@ -185,6 +200,12 @@ def git_commit(root: Path) -> str | None:
     return sha if done.returncode == 0 and re.fullmatch(r"[0-9a-f]{40,64}", sha) else None
 
 
+def platform_identity() -> str:
+    """OS, architecture and libc — what can change float arithmetic — and never the kernel release."""
+    libc, version = platform.libc_ver()
+    return "-".join([platform.system(), platform.machine(), libc, version])
+
+
 @dataclass(frozen=True)
 class Compatibility:
     """What a checkpoint must agree with to be read: ADR 0002 I's five fields."""
@@ -202,7 +223,7 @@ class Compatibility:
         return cls(
             engine=engine_identity(world.root),
             python=platform.python_version(),
-            platform=platform.platform(),
+            platform=platform_identity(),
             tick_hz=tick_hz,
         )
 
@@ -478,6 +499,24 @@ class CheckpointAbsent(CheckpointRefused):
     kind = "absent"
 
 
+class CheckpointInvalid(CheckpointRefused):
+    """A body the reader would refuse: the writer declines it before the directory is touched."""
+
+    kind = "invalid"
+
+
+class CheckpointStateDirUnusable(CheckpointRefused):
+    """The state directory is a file, a dangling link, or cannot be opened or written: the operator's path."""
+
+    kind = "unusable"
+
+
+class CheckpointWriteFailed(CheckpointRefused):
+    """A step of the write sequence failed with an `OSError`; `check` is the step, the cause is chained."""
+
+    kind = "unwritten"
+
+
 @dataclass
 class Loaded:
     """One verified generation: its path, its header, its body, and the refusal it stood in for."""
@@ -506,20 +545,39 @@ def _after_step(step: str) -> None:
     """The seam a test kills the process at: called after every named step of the write."""
 
 
+_TEMPORARY_NAME = re.compile(re.escape(TEMPORARY_PREFIX) + r"(\d+)\.[0-9a-f]{16}" + re.escape(TEMPORARY_SUFFIX))
+
+
+def _process_is_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False  # alive, another user's
+    return False
+
+
 def _sweep_temporaries(dir_fd: int) -> None:
+    """Remove the temporaries a dead write left: this process's, or a process's that no longer exists.
+
+    The first version removed every `.checkpoint.*.tmp`, which is another live writer's too — it
+    would then die at its final rename, after it had rotated the fresh current generation to
+    previous. One writer per directory is the lock's to hold (ADR 0002 H); this only declines to be
+    the thing that makes a second one lose a generation, and leaves any name it did not make alone.
+    """
     with os.scandir(dir_fd) as entries:
-        stale = [
-            entry.name
-            for entry in entries
-            if entry.name.startswith(TEMPORARY_PREFIX)
-            and entry.name.endswith(TEMPORARY_SUFFIX)
-            and entry.is_file(follow_symlinks=False)
-        ]
+        stale: list[str] = []
+        for entry in entries:
+            match = _TEMPORARY_NAME.fullmatch(entry.name)
+            if match is None or not entry.is_file(follow_symlinks=False):
+                continue
+            pid = int(match.group(1))
+            if pid == os.getpid() or _process_is_gone(pid):
+                stale.append(entry.name)
     for name in stale:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(name, dir_fd=dir_fd)
-        except FileNotFoundError:
-            continue
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -529,53 +587,102 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
+def _errno_name(exc: OSError) -> str:
+    return errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+
+
+def _open_state_dir(state_dir: Path, *, create: bool) -> int:
+    """The state directory's handle, or `CheckpointStateDirUnusable`/`CheckpointAbsent` naming the path."""
+    if os.path.lexists(state_dir) and not os.path.isdir(state_dir):
+        what = "a dangling symlink" if os.path.islink(state_dir) else "not a directory"
+        raise CheckpointStateDirUnusable("directory", state_dir, f"the state directory {state_dir} is {what}")
+    if create:
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise CheckpointStateDirUnusable(
+                "directory", state_dir, f"the state directory {state_dir} cannot be created ({_errno_name(exc)}: {exc.strerror})"
+            ) from exc
+    try:
+        return _open_directory(state_dir)
+    except FileNotFoundError as exc:
+        raise CheckpointAbsent("absent", state_dir / CURRENT, f"the state directory {state_dir} does not exist") from exc
+    except OSError as exc:
+        raise CheckpointStateDirUnusable(
+            "directory", state_dir, f"the state directory {state_dir} cannot be opened ({_errno_name(exc)}: {exc.strerror})"
+        ) from exc
+
+
 def write_checkpoint(state_dir: Path, body: dict[str, Any]) -> Path:
-    """ADR 0002 I's durable write: temp → fsync → rename previous → rename current → fsync dir."""
+    """ADR 0002 I's durable write: temp → fsync → rename previous → rename current → fsync dir.
+
+    Refuses before touching the directory what the reader would refuse after (`CheckpointInvalid`);
+    names an unusable directory as the operator's (`CheckpointStateDirUnusable`); and turns an
+    `OSError` in any step into `CheckpointWriteFailed` naming the step, after removing the failed
+    write's temporary — the writer is alive to do that, where a killed one is not. The `_after_step`
+    hook's own exceptions pass through untouched: that is the kill the tests simulate.
+    """
     state_dir = Path(state_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
+    target = state_dir / CURRENT
+    problem = _structure_problem(body)
+    if problem is not None:
+        raise CheckpointInvalid(problem[0], target, f"the body would be refused on reading, so it is not written: {problem[1]}")
     body_bytes = encode(body)
     header_line = encode(make_header(body, body_bytes))
-    dir_fd = _open_directory(state_dir)
+    dir_fd = _open_state_dir(state_dir, create=True)
+    step = "write"
+    temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
     try:
-        _sweep_temporaries(dir_fd)
-        temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
-        fd = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o600,
-            dir_fd=dir_fd,
-        )
         try:
-            _write_all(fd, header_line + body_bytes)
-            _after_step("write")
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        _after_step("fsync")
-        # The first generation has nothing to become previous.
-        with contextlib.suppress(FileNotFoundError):
-            os.replace(CURRENT, PREVIOUS, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        _after_step("rename_previous")
-        os.replace(temporary, CURRENT, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
-        _after_step("rename_current")
-        os.fsync(dir_fd)
-        _after_step("fsync_directory")
+            _sweep_temporaries(dir_fd)
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=dir_fd,
+            )
+        except OSError as exc:
+            raise CheckpointStateDirUnusable(
+                "write", state_dir, f"the state directory {state_dir} cannot be written ({_errno_name(exc)}: {exc.strerror})"
+            ) from exc
+        try:
+            try:
+                _write_all(fd, header_line + body_bytes)
+                _after_step("write")
+                step = "fsync"
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            _after_step("fsync")
+            step = "rename_previous"
+            # The first generation has nothing to become previous.
+            with contextlib.suppress(FileNotFoundError):
+                os.replace(CURRENT, PREVIOUS, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            _after_step("rename_previous")
+            step = "rename_current"
+            os.replace(temporary, CURRENT, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            _after_step("rename_current")
+            step = "fsync_directory"
+            os.fsync(dir_fd)
+            _after_step("fsync_directory")
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary, dir_fd=dir_fd)
+            raise CheckpointWriteFailed(
+                step,
+                target,
+                f"the write failed at step {step!r} ({_errno_name(exc)}: {exc.strerror}; {CURRENT} → {PREVIOUS} → {temporary}); "
+                f"the generation on disk is unchanged",
+            ) from exc
     finally:
         os.close(dir_fd)
-    return state_dir / CURRENT
+    return target
 
 
 def _read_bytes(state_dir: Path, name: str) -> bytes:
     """The file's bytes through a handle that follows no link, or the refusal that says why not."""
     path = state_dir / name
-    try:
-        dir_fd = _open_directory(state_dir)
-    except FileNotFoundError:
-        raise CheckpointAbsent("absent", path, "its directory does not exist") from None
-    except OSError as exc:
-        raise CheckpointCorrupt(
-            "directory", path, f"its directory cannot be opened ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})"
-        ) from None
+    dir_fd = _open_state_dir(state_dir, create=False)
     try:
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
@@ -613,6 +720,36 @@ def _read_bytes(state_dir: Path, name: str) -> bytes:
     return raw
 
 
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+
+
+def _verified_body(header: dict[str, Any], body_bytes: bytes, path: Path) -> Any:
+    """The decoded body once the header's length and hash vouch for its bytes, or `CheckpointCorrupt`.
+
+    The integrity fields are held to their types first: `265826.0 == 265826` and `True == 1`, so a
+    float or a bool in `body_bytes` would have compared equal to a length it does not state, and a
+    `body_sha256` that is not sixty-four hex digits is not a hash this format wrote.
+    """
+    for key in ("body_bytes", "body_sha256"):
+        if key not in header:
+            raise CheckpointCorrupt("header", path, f"the header has no `{key}`")
+    length = header["body_bytes"]
+    if isinstance(length, bool) or not isinstance(length, int):
+        raise CheckpointCorrupt("header", path, f"the header's body_bytes is a JSON {type(length).__name__}, not an integer")
+    stated = header["body_sha256"]
+    if not isinstance(stated, str) or _SHA256_HEX.fullmatch(stated) is None:
+        raise CheckpointCorrupt("header", path, "the header's body_sha256 is not sixty-four lowercase hex digits")
+    if length != len(body_bytes):
+        raise CheckpointCorrupt("body_bytes", path, f"the header says the body is {length} bytes and {len(body_bytes)} follow it")
+    digest = hashlib.sha256(body_bytes).hexdigest()
+    if digest != stated:
+        raise CheckpointCorrupt("body_sha256", path, f"the body hashes to {digest} and the header says {stated}")
+    try:
+        return decode(body_bytes)
+    except Exception as exc:  # noqa: BLE001 - any decoder failure is "not a body"
+        raise CheckpointCorrupt("body", path, f"the body is not JSON ({type(exc).__name__})") from None
+
+
 def verify(raw: bytes, path: Path, expected: Compatibility) -> Loaded:
     """The checks, in the order the file's own structure imposes; the first failure is the answer.
 
@@ -631,22 +768,36 @@ def verify(raw: bytes, path: Path, expected: Compatibility) -> Loaded:
         raise CheckpointCorrupt("header", path, f"the header line is not JSON ({type(exc).__name__})") from None
     if not isinstance(header, dict):
         raise CheckpointCorrupt("header", path, f"the header is a JSON {type(header).__name__}, not an object")
+    body_bytes = raw[newline + 1 :]
     written_as = header.get("format")
     if written_as != expected.format:
-        raise CheckpointIncompatible("format", path, f"was written as format {written_as!r} and this engine reads {expected.format!r}")
-    for key in ("body_bytes", "body_sha256"):
-        if key not in header:
-            raise CheckpointCorrupt("header", path, f"the header has no `{key}`")
-    body_bytes = raw[newline + 1 :]
-    if header["body_bytes"] != len(body_bytes):
-        raise CheckpointCorrupt("body_bytes", path, f"the header says the body is {header['body_bytes']} bytes and {len(body_bytes)} follow it")
-    digest = hashlib.sha256(body_bytes).hexdigest()
-    if digest != header["body_sha256"]:
-        raise CheckpointCorrupt("body_sha256", path, f"the body hashes to {digest} and the header says {header['body_sha256']}")
-    try:
-        body = decode(body_bytes)
-    except Exception as exc:  # noqa: BLE001 - any decoder failure is "not a body"
-        raise CheckpointCorrupt("body", path, f"the body is not JSON ({type(exc).__name__})") from None
+        # The body is verified anyway: only a body that verifies and whose own identity names another
+        # format was written under another format (incompatible, never fallen back from). Anything
+        # else — a flipped value, a missing key, a body that does not vouch for the claim — is a
+        # damaged header (corrupt, falls back), because a crash loop over one flipped byte with a
+        # verifying previous generation beside it is what K2 exists to prevent.
+        other: Any = None
+        try:
+            body = _verified_body(header, body_bytes, path)
+        except CheckpointCorrupt:
+            body = None
+        if isinstance(body, dict) and isinstance(body.get("identity"), dict):
+            other = body["identity"].get("format")
+        if isinstance(other, str) and other != expected.format:
+            raise CheckpointIncompatible("format", path, f"was written as format {other!r} and this engine reads {expected.format!r}")
+        if "format" not in header:
+            claim = "the header names no format"
+        elif not isinstance(written_as, str):
+            claim = f"the header's format is a JSON {type(written_as).__name__}, not a format id"
+        else:
+            claim = f"the header says format {written_as!r}"
+        vouches = (
+            f"the body verifies and was written as {expected.format!r}"
+            if other == expected.format
+            else "the body does not vouch for that"
+        )
+        raise CheckpointCorrupt("header", path, f"{claim}, and {vouches}, so the header is damaged")
+    body = _verified_body(header, body_bytes, path)
     problem = _structure_problem(body)
     if problem is not None:
         raise CheckpointCorrupt(problem[0], path, problem[1])

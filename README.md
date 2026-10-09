@@ -18742,9 +18742,33 @@ closed with an assertion that could not fail (`... or twin.tick == 4`); it was r
 tests were first run. The six tests failed first for the one reason they should — no module — and
 passed on the module's first run, with ruff's two findings (`UP012`, `SIM105`) fixed after.
 
+**Independent review of the slice, and what it found.** Six findings, each a test first and then
+a fix. The sweep of stale temporaries removed *every* `.checkpoint.*.tmp`, another live writer's
+included — that writer would then have died on a raw `FileNotFoundError` at its final rename, after
+rotating the fresh current generation to previous; one writer per directory is the lock's to hold
+(ADR 0002 H, child 2) and the module now says so, sweeps only a temporary this process named or a
+dead process's, and turns any `OSError` in the sequence into `CheckpointWriteFailed` naming the step
+(`rename_previous` against a directory squatting on the previous generation's name is the probe).
+`platform.platform()` embeds the kernel release, which inside a container is the *host's*, so a host
+kernel patch would have made every checkpoint incompatible with no fallback and put
+`restart: unless-stopped` into a crash loop; the `platform` field is now OS, architecture and libc
+(`platform.system()`, `platform.machine()`, `platform.libc_ver()`) — what can change float
+arithmetic — and ADR 0002 §I carries the dated amendment. A header whose `format` was flipped,
+mistyped or missing was *incompatible*, so one byte would have ended a world with a verifying previous
+generation beside it; now only a verified body whose own identity names another format is
+incompatible, and a damaged header is corrupt and falls back — and a missing key is named as missing,
+never as `None`. The writer runs the reader's structure check before touching the directory
+(`CheckpointInvalid`), so a body without `rng` or with a null `tick_hz` is never written over a good
+generation. `body_bytes` is held to `int` and `body_sha256` to sixty-four hex digits before either is
+compared (`265826.0 == 265826`, and `True == 1`). And a `--state-dir` that is a file, a dangling link
+or unwritable is `CheckpointStateDirUnusable` naming the path on both sides, not a raw
+`FileExistsError` from the writer and not `CheckpointCorrupt("directory")` from the reader. The
+`git_commit` assertion also holds outside a git checkout now, where `rev-parse` prints nothing and
+the field is `None`.
+
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 374 | **380** |
+| referee tests | 374 | **385** |
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 

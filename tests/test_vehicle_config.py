@@ -18,6 +18,7 @@ import hashlib
 import itertools
 import json
 import math
+import os
 import platform
 import re
 import shutil
@@ -23275,7 +23276,11 @@ def test_a_checkpoint_round_trips_an_executive_byte_for_byte(tmp_path):
     assert header["format"] == "vehicle.checkpoint.v1"
     assert header["body_sha256"] == hashlib.sha256(body_bytes).hexdigest()
     assert header["body_bytes"] == len(body_bytes)
-    assert header["python"] == platform.python_version() and header["platform"] == platform.platform()
+    assert header["python"] == platform.python_version()
+    # ADR 0002 I as amended: OS, machine and libc — what can change float arithmetic — and never the
+    # kernel release, which in a container is the host's and would end every saved run on a host patch.
+    assert header["platform"] == "-".join([platform.system(), platform.machine(), *platform.libc_ver()])
+    assert platform.release() not in header["platform"] and header["platform"] == compat.platform
     assert header["tick_hz"] == yaml.safe_load((VEHICLE / "mission.yaml").read_text())["tick_hz"] == 50
     assert header["world_id"] == executive.world_id and header["tick"] == 3
     assert header["git_commit"] == "0123abcd" and header["engine"] == compat.engine
@@ -23450,12 +23455,17 @@ def test_each_checkpoint_incompatibility_is_refused_with_no_fallback(tmp_path):
             checkpoint.choose_generation(state_dir, disagreeing)
         assert chosen.value.check == field and chosen.value.path.name == "checkpoint.json"
 
-    # A different format id: refused as the format, before the hash is even looked at.
+    # A checkpoint written under another format: header and body agree it is v0, the body verifies,
+    # and the refusal is the format's. (A header alone saying so is a damaged header; see the test
+    # for a damaged format field.)
     current = state_dir / "checkpoint.json"
     good = current.read_bytes()
     header, body_bytes = split_checkpoint(good)
-    foreign = {**header, "format": "vehicle.checkpoint.v0"}
-    current.write_bytes(json.dumps(foreign).encode() + b"\n" + body_bytes)
+    v0 = json.loads(body_bytes)
+    v0["identity"]["format"] = "vehicle.checkpoint.v0"
+    v0_bytes = checkpoint.encode(v0)
+    foreign = {**header, "format": "vehicle.checkpoint.v0", "body_sha256": hashlib.sha256(v0_bytes).hexdigest(), "body_bytes": len(v0_bytes)}
+    current.write_bytes(json.dumps(foreign).encode() + b"\n" + v0_bytes)
     with pytest.raises(checkpoint.CheckpointIncompatible) as caught:
         checkpoint.read_generation(state_dir, "checkpoint.json", compat)
     assert caught.value.check == "format" and "vehicle.checkpoint.v0" in str(caught.value)
@@ -23482,9 +23492,12 @@ def test_each_checkpoint_incompatibility_is_refused_with_no_fallback(tmp_path):
     policy = copy / "domains" / "rcs" / "components.yaml"
     policy.write_text(policy.read_text().replace("min_on_s: 2", "min_on_s: 3", 1))
     assert checkpoint.engine_identity(copy) != baseline, "a physics byte ends every saved run"
-    assert checkpoint.git_commit(VEHICLE) == subprocess.run(
+    # Outside a git checkout `rev-parse` prints nothing and exits non-zero; the manifest field is then
+    # `None`, not "", and this assertion holds there too rather than skipping.
+    rev_parse = subprocess.run(
         ["git", "-C", str(VEHICLE), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
-    ).stdout.strip()
+    )
+    assert checkpoint.git_commit(VEHICLE) == (rev_parse.stdout.strip() if rev_parse.returncode == 0 else None)
     assert checkpoint.git_commit(copy) is None, "a fixture has no commit, and that is not an error"
 
 
@@ -23676,3 +23689,241 @@ def test_spend_is_an_opaque_versioned_subsection_the_format_does_not_read(tmp_pa
     assert json.loads((tmp_path / "twin" / "alpha" / "state.json").read_text())["budget"]["used_this_window"] == 0
     twin.cycle()
     assert json.loads((tmp_path / "twin" / "alpha" / "state.json").read_text())["budget"]["used_this_window"] == 1
+
+
+def test_a_damaged_format_field_is_corrupt_while_another_format_is_incompatible(tmp_path):
+    """Review finding L1: a header whose `format` is wrong is only *incompatible* if the body agrees.
+
+    `format` is the one header field the body's identity copy cannot protect, because it is read
+    before the hash. The first version refused any unexpected value as `CheckpointIncompatible` —
+    which K2 never falls back from — so one flipped byte in that field, or a dropped key, would have
+    put a healthy world into the crash loop with a verifying previous generation beside it. The rule
+    now: when the header's `format` is not the expected one, the body is verified anyway, and if it
+    verifies and *its* identity says the expected format, the header is damaged (corrupt, falls
+    back); only a verified body whose own identity names another format was written under another
+    format (incompatible, no fallback). A missing key is named as missing, never as `None`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    state_dir = tmp_path / "state"
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    executive.cycle()
+    current = checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    good = current.read_bytes()
+    header, body_bytes = split_checkpoint(good)
+
+    def refusal_for(raw: bytes) -> checkpoint.CheckpointRefused:
+        current.write_bytes(raw)
+        with pytest.raises(checkpoint.CheckpointRefused) as caught:
+            checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+        return caught.value
+
+    damaged = (
+        {**header, "format": "vehicle.checkpoint.v2"},  # value flipped
+        {**header, "format": 1},  # not even a string
+        {("formaT" if key == "format" else key): value for key, value in header.items()},  # key flipped
+        {key: value for key, value in header.items() if key != "format"},  # key missing
+    )
+    for broken in damaged:
+        refusal = refusal_for(json.dumps(broken).encode() + b"\n" + body_bytes)
+        assert isinstance(refusal, checkpoint.CheckpointCorrupt), (broken.get("format"), str(refusal))
+        assert refusal.check == "header" and "None" not in str(refusal), str(refusal)
+        # And K2 falls back from it to the verifying previous generation, at the earlier tick.
+        chosen = checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+        assert chosen.path.name == "checkpoint.prev.json" and chosen.body["executive"]["tick"] == 3
+        assert chosen.fell_back is refusal or chosen.fell_back.check == "header"
+
+    # Written under another format: header and body agree, the body verifies, and this is the one
+    # case that is incompatible — named with both formats, and never fallen back from.
+    v0 = json.loads(body_bytes)
+    v0["identity"]["format"] = "vehicle.checkpoint.v0"
+    v0_bytes = checkpoint.encode(v0)
+    v0_header = {**header, "format": "vehicle.checkpoint.v0", "body_sha256": hashlib.sha256(v0_bytes).hexdigest(), "body_bytes": len(v0_bytes)}
+    refusal = refusal_for(json.dumps(v0_header).encode() + b"\n" + v0_bytes)
+    assert isinstance(refusal, checkpoint.CheckpointIncompatible) and refusal.check == "format"
+    assert "vehicle.checkpoint.v0" in str(refusal) and "vehicle.checkpoint.v1" in str(refusal)
+    with pytest.raises(checkpoint.CheckpointIncompatible):
+        checkpoint.choose_generation(state_dir, compat, world_id=executive.world_id)
+    # A header naming another format over a body that does *not* verify says nothing trustworthy
+    # about what wrote it: corrupt, and the previous generation is the answer.
+    refusal = refusal_for(json.dumps(v0_header).encode() + b"\n" + v0_bytes[:-9])
+    assert isinstance(refusal, checkpoint.CheckpointCorrupt), str(refusal)
+    assert checkpoint.choose_generation(state_dir, compat).body["executive"]["tick"] == 3
+    current.write_bytes(good)
+    assert checkpoint.choose_generation(state_dir, compat).body["executive"]["tick"] == 4
+
+
+def test_the_writer_refuses_a_body_the_reader_would_refuse_before_touching_the_directory(tmp_path):
+    """Review finding L2: a checkpoint the reader would call corrupt is never written.
+
+    The reader's structure check (`_structure_problem`) ran only on the way in, so a body missing
+    its `rng` section, or with a null `tick_hz` in its identity, would have been written durably —
+    rotating a good current generation to previous on the way — and refused at the next start. The
+    writer now runs the same check first and refuses by the same name, before the directory is
+    created or any file in it moves; the refusal is typed (`CheckpointInvalid`) and names the file
+    it declined to write.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+    state_dir = tmp_path / "state"
+
+    def without_rng(copy: dict) -> None:
+        del copy["rng"]
+
+    def null_tick_hz(copy: dict) -> None:
+        copy["identity"]["tick_hz"] = None
+
+    cases = ((without_rng, "rng"), (null_tick_hz, "identity.tick_hz"))
+    for mutate, check in cases:
+        broken = json.loads(json.dumps(body))
+        mutate(broken)
+        with pytest.raises(checkpoint.CheckpointInvalid) as caught:
+            checkpoint.write_checkpoint(state_dir, broken)
+        assert caught.value.check == check and "checkpoint.json" in str(caught.value), str(caught.value)
+        assert isinstance(caught.value, checkpoint.CheckpointRefused)
+        assert not state_dir.exists(), "refused before the directory was made"
+
+    # Over an existing pair of generations, nothing moves either: neither file, nor a temporary.
+    checkpoint.write_checkpoint(state_dir, body)
+    executive.cycle()
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    before = {path.name: path.read_bytes() for path in state_dir.iterdir()}
+    assert set(before) == {"checkpoint.json", "checkpoint.prev.json"}
+    for mutate, _check in cases:
+        broken = json.loads(json.dumps(body))
+        mutate(broken)
+        with pytest.raises(checkpoint.CheckpointInvalid):
+            checkpoint.write_checkpoint(state_dir, broken)
+        assert {path.name: path.read_bytes() for path in state_dir.iterdir()} == before
+
+
+def test_the_header_integrity_fields_are_held_to_their_types(tmp_path):
+    """Review finding L3: `body_bytes` is an int and `body_sha256` is 64 hex digits, or the header is corrupt.
+
+    `header["body_bytes"] != len(body_bytes)` is `False` for `265826.0` and `True` is `1`, so a
+    header whose length field had been rewritten as a float of the right value, or a hash field that
+    was not a hash at all, read as "the header vouches for this body" when it vouched for nothing the
+    format defines. The integrity fields are now held to their types before they are compared, and
+    a wrong type is the header's corruption, by name.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    state_dir = tmp_path / "state"
+    current = checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    good = current.read_bytes()
+    header, body_bytes = split_checkpoint(good)
+    assert isinstance(header["body_bytes"], int) and re.fullmatch(r"[0-9a-f]{64}", header["body_sha256"])
+
+    def refused(broken: dict) -> None:
+        current.write_bytes(json.dumps(broken).encode() + b"\n" + body_bytes)
+        with pytest.raises(checkpoint.CheckpointCorrupt) as caught:
+            checkpoint.read_generation(state_dir, "checkpoint.json", compat)
+        assert caught.value.check == "header", (broken["body_bytes"], broken["body_sha256"], str(caught.value))
+
+    for value in (float(header["body_bytes"]), True, str(header["body_bytes"]), None, [header["body_bytes"]]):
+        refused({**header, "body_bytes": value})
+    for value in (42, None, "abc", "G" * 64, header["body_sha256"][:63], header["body_sha256"].upper(), [header["body_sha256"]]):
+        refused({**header, "body_sha256": value})
+    current.write_bytes(good)
+    assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).header == header
+
+
+def test_an_unusable_state_directory_is_its_own_refusal(tmp_path):
+    """Review finding L4: a `--state-dir` that is a file, a dangling link or unwritable is named as such.
+
+    The writer's `mkdir(exist_ok=True)` raised a raw `FileExistsError` for a file or a dangling link
+    at the path, and the reader called a file where the directory should be `CheckpointCorrupt`
+    ("directory") — a class K2 falls back from, as if a previous generation could live inside a file.
+    Neither is a checkpoint problem; both are the operator's path. `CheckpointStateDirUnusable`
+    names the path and the step on both sides, the chooser raises it rather than answering `None`,
+    and the thing at the path is left exactly as it was. A directory that does not exist at all is
+    still `None` to the chooser: a fresh start, which is a different thing from a broken one.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(executive, compat)
+
+    as_file = tmp_path / "file"
+    as_file.write_text("the operator's typo")
+    dangling = tmp_path / "dangling"
+    dangling.symlink_to(tmp_path / "nowhere")
+    for path in (as_file, dangling, as_file / "below"):
+        with pytest.raises(checkpoint.CheckpointStateDirUnusable) as caught:
+            checkpoint.write_checkpoint(path, body)
+        assert caught.value.path == path and str(path) in str(caught.value), str(caught.value)
+        assert isinstance(caught.value, checkpoint.CheckpointRefused)
+        assert not isinstance(caught.value, (checkpoint.CheckpointCorrupt, checkpoint.CheckpointAbsent))
+        with pytest.raises(checkpoint.CheckpointStateDirUnusable):
+            checkpoint.read_generation(path, "checkpoint.json", compat)
+        with pytest.raises(checkpoint.CheckpointStateDirUnusable):
+            checkpoint.choose_generation(path, compat)
+    assert as_file.read_text() == "the operator's typo" and dangling.is_symlink() and not dangling.exists()
+    assert checkpoint.choose_generation(tmp_path / "absent", compat) is None
+
+    if os.geteuid() != 0:  # root writes anywhere; the case is asserted, not skipped, where it can be
+        locked = tmp_path / "locked"
+        locked.mkdir()
+        locked.chmod(0o500)
+        try:
+            with pytest.raises(checkpoint.CheckpointStateDirUnusable) as caught:
+                checkpoint.write_checkpoint(locked, body)
+            assert caught.value.path == locked and caught.value.check == "write", str(caught.value)
+            assert list(locked.iterdir()) == []
+        finally:
+            locked.chmod(0o700)
+
+
+def test_a_failing_write_step_is_a_typed_refusal_and_a_live_writers_temporary_is_left_alone(tmp_path):
+    """Review finding M1: no raw `OSError` leaves `write_checkpoint`, and the sweep is this writer's only.
+
+    The sweep of stale temporaries unlinked *every* `.checkpoint.*.tmp`, another live writer's
+    included; that writer then died on a raw `FileNotFoundError` at its final rename, after it had
+    already rotated the fresh current generation to previous — one generation of history gone. Two
+    executives on one state directory is excluded by the lock (ADR 0002 H, child 2) and the module
+    now says so; what the sweep removes is only a temporary this process named, or one named by a
+    process that no longer exists. And a step that fails with an `OSError` — here the previous
+    generation's name is occupied by a directory, so the rotation cannot land — is a
+    `CheckpointWriteFailed` naming the step and the file, the current generation is untouched, and
+    the temporary of the failed write is removed, because unlike a kill the writer is alive to do it.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    executive = commanded_executive(console, world, tmp_path / "diode")
+    compat = checkpoint.Compatibility.current(world)
+    state_dir = tmp_path / "state"
+    checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    executive.cycle()
+    newest = checkpoint.capture_state(executive, compat)
+
+    # pid 1 is always alive; a process that has exited is not.
+    theirs = state_dir / f".checkpoint.1.{'ab' * 8}.tmp"
+    theirs.write_bytes(b"another writer, mid-write")
+    exited = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True, check=True).stdout.strip()
+    stale = state_dir / f".checkpoint.{exited}.{'cd' * 8}.tmp"
+    stale.write_bytes(b"a dead writer's leftover")
+    unnamed = state_dir / ".checkpoint.notapid.tmp"
+    unnamed.write_bytes(b"not this format's name")
+    checkpoint.write_checkpoint(state_dir, newest)
+    assert theirs.read_bytes() == b"another writer, mid-write" and not stale.exists()
+    assert unnamed.read_bytes() == b"not this format's name", "a name the writer did not make is not its to remove"
+    theirs.unlink()
+    unnamed.unlink()
+    assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).body["executive"]["tick"] == 4
+
+    previous = state_dir / "checkpoint.prev.json"
+    previous.unlink()
+    previous.mkdir()
+    (previous / "occupant").write_text("x")
+    executive.cycle()
+    with pytest.raises(checkpoint.CheckpointWriteFailed) as caught:
+        checkpoint.write_checkpoint(state_dir, checkpoint.capture_state(executive, compat))
+    assert caught.value.check == "rename_previous" and "rename_previous" in str(caught.value)
+    assert caught.value.path == state_dir / "checkpoint.json" and "checkpoint.prev.json" in str(caught.value)
+    assert isinstance(caught.value, checkpoint.CheckpointRefused) and isinstance(caught.value.__cause__, OSError)
+    assert checkpoint.read_generation(state_dir, "checkpoint.json", compat).body["executive"]["tick"] == 4
+    assert not list(state_dir.glob(".checkpoint.*.tmp")), "the writer was alive to remove its temporary"
+    assert (previous / "occupant").read_text() == "x"

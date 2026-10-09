@@ -513,6 +513,12 @@ no engine may be assumed to read an arbitrary saved world. The mechanics follow:
   checkpoint whose hash or length disagrees is *corrupt* (K).
 - **Compatibility**: `format: vehicle.checkpoint.v1`; `engine`; `python` (`major.minor.micro`);
   `platform` (`platform.platform()`); `tick_hz`. A mismatch on any of them is *incompatible* (K).
+  *Amended 2026-10-09 (coordinator, under the owner's delegation, on child 1's review):* `platform` is
+  `platform.system()`, `platform.machine()` and `platform.libc_ver()` — OS, architecture and libc — and
+  **not** `platform.platform()`, which embeds the kernel release; in a container that release is the
+  host's, so a host kernel patch would have made every checkpoint incompatible with no fallback and
+  put `restart: unless-stopped` into a crash loop, while "same platform" in `plant.md` §6 is about what
+  can change float arithmetic — the architecture and the libm — which the kernel release does not.
   `plant.md` §6's equivalence is "same build, same platform", so a Python or platform change ends a
   saved run exactly as an engine change does. No migration path in v1: release.md's rollback policy
   is "select a previously accepted set", not "convert".
