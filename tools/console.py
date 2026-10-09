@@ -303,6 +303,22 @@ SUPERSEDED_IDENTITY_BYTES = 4096
 RECENT_FAILURES = 64
 RECENT_LINEAGE = 1024
 
+# **Result obligations** (child 3, addendum B4): a result durable in the record and not confirmed on
+# disk — its publication failed live, or a crash came between the record and the result — is owed to
+# its window until it is written. The obligations are checkpointed, so what a window is owed does not
+# depend on which generation a resume chose. A window that can never be written to (a link its agent
+# planted at `output/`) would owe without bound, so a window keeps at most this many: past it the
+# oldest is given up, as a recorded failure naming the window and the receipt.
+OBLIGATIONS_PER_WINDOW = 256
+# The bound on looking for an owed result already on disk (addenda A5, B6). The scan of a window's
+# agent-writable `output/` runs while mission time is frozen for every window, so it is bounded per
+# window as a whole: one pass of `scandir`, at most this many entries examined and this many bytes
+# read (the last `RESULT_TAIL_BYTES` of each candidate). Past either bound the result is written, and
+# the worst case is a duplicate in that window's own `output/`.
+OUTPUT_SCAN_ENTRIES = 4096
+OUTPUT_SCAN_BYTES = 256 * 1024
+RESULT_TAIL_BYTES = 512
+
 
 def resolve_remembered(named: Any, recorded: Any, default: Any) -> Any:
     """The caller's value if the caller named one, else the record's, else the declared default.
@@ -2182,6 +2198,101 @@ def unwritten_results(record: Record) -> list[dict[str, Any]]:
     return unwritten
 
 
+def receipt_line(entry: dict[str, Any]) -> str:
+    """The receipt block a result for a recorded verdict ends with — `Window.receipt`'s line, from the record."""
+    return (
+        f"receipt: world={entry['world_id']} seq={entry['local']} window={entry['window']} "
+        f"tick={entry['tick']} offset_us={entry['offset_us']} state={entry['state']}\n"
+    )
+
+
+def republication(entry: dict[str, Any]) -> tuple[str, str]:
+    """`(command, text)` of the one result an owed verdict gets: the recorded body and its receipt block.
+
+    A body recorded whole is the result the window would have had. One the record cut (past
+    `RECORD_TEXT_BYTES`) says so, with the whole's length and SHA-256; one recorded fingerprint-only
+    (past the window's budget that cycle) cannot be reproduced and says that, with both fingerprints
+    — still one result for one command, as the contract requires.
+    """
+    if entry.get("fingerprint_only"):
+        command = str(entry["verb"])
+        body = (
+            f"{entry['state']}: the vehicle decided this command (window receipt {entry['local']}) at tick {entry['tick']} and "
+            "restarted before its result was written; that cycle this window's results passed the record's budget, so only the "
+            f"fingerprints were kept: the command was {entry['command_bytes']} bytes, SHA-256 {entry['command_sha256']}, and "
+            f"its result {entry['body_bytes']} bytes, SHA-256 {entry['body_sha256']}. The result's text cannot be reproduced; "
+            "this file is its one result.\n"
+        )
+    else:
+        command, body = str(entry["command"]), str(entry["body"])
+        if "body_sha256" in entry:
+            body += (
+                ("" if body.endswith("\n") else "\n")
+                + f"[the vehicle restarted before this result was written; it was recorded to {RECORD_TEXT_BYTES} bytes and is cut "
+                f"here: the whole was {entry['body_bytes']} bytes, SHA-256 {entry['body_sha256']}]\n"
+            )
+    return command, body + receipt_line(entry)
+
+
+@dataclass
+class DiskScan:
+    """What one bounded look at a window's `output/` found: the owed receipts already there, and what it cost."""
+
+    found: set[int]
+    examined: int = 0
+    read: int = 0
+    exhausted: bool = False
+
+
+def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) -> DiskScan:
+    """Which owed results of one window are already in its `output/`: by exact receipt line, bounded (B6).
+
+    One `scandir` pass through the held `output/` handle. A candidate is a name the result itself could
+    have had — `<stamp>_<slug>_<sanitised command>`, the command as recorded (a prefix when it was cut,
+    the verb when fingerprint-only) — and it is opened `O_NOFOLLOW | O_NONBLOCK` through the handle,
+    `fstat`ed regular, and its last `RESULT_TAIL_BYTES` read: it is the result when its last line is the
+    exact receipt line the record says it ends with, which is unique per world, window and receipt. At
+    most `OUTPUT_SCAN_ENTRIES` entries are examined and `OUTPUT_SCAN_BYTES` read; past either the scan
+    stops (`exhausted`) and whatever it did not find is written. An agent can only fool this about its
+    own window: deleting a result before a restart, or planting its receipt line, or flooding the
+    directory — each costs it at most a duplicate or a missing copy of its own result.
+    """
+    wanted = {receipt_line(entry).encode("utf-8"): int(entry["local"]) for entry in entries}
+    prefixes = tuple(
+        f"{slug}_{sanitise(str(entry['verb'] if entry.get('fingerprint_only') else entry['command']))}" for entry in entries
+    )
+    scan = DiskScan(found=set())
+    stamp_length = len(stamp(utc_now()))
+    with os.scandir(output_fd) as listing:
+        for item in listing:
+            if scan.examined >= OUTPUT_SCAN_ENTRIES or scan.read >= OUTPUT_SCAN_BYTES:
+                scan.exhausted = True
+                break
+            scan.examined += 1
+            name = item.name
+            if not name.endswith(".txt") or len(name) <= stamp_length + 1 or not name[stamp_length + 1 :].startswith(prefixes):
+                continue
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=output_fd)
+            except OSError:
+                continue
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    continue
+                length = min(info.st_size, RESULT_TAIL_BYTES, OUTPUT_SCAN_BYTES - scan.read)
+                tail = os.pread(fd, length, info.st_size - length) if length > 0 else b""
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
+            scan.read += len(tail)
+            last = tail[:-1].rpartition(b"\n")[2] + b"\n" if tail.endswith(b"\n") else b""
+            if last in wanted:
+                scan.found.add(wanted[last])
+    return scan
+
+
 def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
     """The diode directory this state directory serves, `(None, None)` for none, or a refusal.
 
@@ -2400,6 +2511,10 @@ class Executive:
         self.segments: list[dict[str, Any]] = []
         # A world restored from its checkpoint (`resume_executive`): it exists at any tick, tick 0 included.
         self.resumed = False
+        # Results owed to windows (`OBLIGATIONS_PER_WINDOW`, addendum B4), each a recorded receipt entry
+        # with its tick, world and boot (`unwritten_results`' shape); checkpointed, written at the
+        # window's next publication, and removed only once written or given up.
+        self.obligations: list[dict[str, Any]] = []
         self._segment: dict[str, Any] | None = None
         self._record_fd: int | None = None
         # The chain value of the last line this boot appended (format v2), `""` before its header.
@@ -2601,6 +2716,7 @@ class Executive:
                     raise
                 except Exception as exc:  # noqa: BLE001 - the window's, not the tick's
                     self._record_failure(window, "publish", exc, tick)
+                    self._owe(window, [v for v in verdicts.get(window.slug, []) if v.local not in window.landed])
                     # The record marked this frame number as written (J (ii)); a publication that failed
                     # before the frame consumes it anyway, as a replay through the mark does, so a live
                     # checkpoint and a replayed one agree on the next frame number (design note S16).
@@ -2610,6 +2726,60 @@ class Executive:
         finally:
             for window in order:
                 window.close_handles()
+
+    def _owe(self, window: Window, verdicts: list[Verdict]) -> None:
+        """Owe a window the results of verdicts whose publication failed (addendum B4), as the record holds them."""
+        for entry in receipt_entries(sorted(verdicts, key=lambda v: v.receipt)):
+            verdict = next(v for v in verdicts if v.local == entry["local"])
+            self.owe({**entry, "tick": verdict.tick, "world_id": self.world_id, "boot_id": self.boot_id})
+
+    def owe(self, entry: dict[str, Any]) -> None:
+        """Add one obligation unless the window is already owed that receipt; past the bound, give up the oldest, recorded."""
+        key = (entry["window"], entry["local"])
+        if any((held["window"], held["local"]) == key for held in self.obligations):
+            return
+        self.obligations.append(entry)
+        mine = [held for held in self.obligations if held["window"] == entry["window"]]
+        if len(mine) > OBLIGATIONS_PER_WINDOW:
+            oldest = mine[0]
+            self.obligations.remove(oldest)
+            self._record_failure_named(
+                oldest["window"],
+                "obligation",
+                RuntimeError(
+                    f"window receipt {oldest['local']} (tick {oldest['tick']}) is given up unwritten: the window is owed more "
+                    f"than {OBLIGATIONS_PER_WINDOW} results it could not be written"
+                ),
+                self.tick,
+            )
+
+    def publish_obligations(self, window: Window) -> list[dict[str, Any]]:
+        """Write what a window is owed, once each: skip a result already on disk (`results_on_disk`), write the rest.
+
+        Each written file is `fsync`ed as a result is (`write_result`) and the directory after them, when
+        there is a record. An obligation leaves the list as it is settled, so a failure part-way leaves
+        the rest owed. Returns what happened to each: `written` (with the file name) or `on disk`.
+        """
+        mine = [entry for entry in self.obligations if entry["window"] == window.slug]
+        if not mine:
+            return []
+        output = window._handles().output
+        scan = results_on_disk(output, window.slug, mine)
+        report: list[dict[str, Any]] = []
+        for entry in mine:
+            outcome: dict[str, Any] = {"window": window.slug, "local": entry["local"], "tick": entry["tick"]}
+            if entry["local"] in scan.found:
+                outcome["result"] = "on disk"
+            else:
+                command, text = republication(entry)
+                outcome["result"], outcome["file"] = "written", window.write_result(command, text).name
+            self.obligations.remove(entry)
+            report.append(outcome)
+        if any(item["result"] == "written" for item in report) and self.journal is not None:
+            os.fsync(output)
+        if scan.exhausted:
+            report.append({"window": window.slug, "scan": f"stopped after {scan.examined} entries and {scan.read} bytes; anything not found was written"})
+        return report
 
     def _record_failure(self, window: Window, stage: str, exc: BaseException, tick: int) -> None:
         """Isolation: the failure is counted and recorded, on stderr and here, and the tick goes on without the window."""
@@ -3776,6 +3946,11 @@ class Window:
         """
         root = self._handles().root
         written = []
+        # What the window is owed from earlier cycles first, so a failure here leaves this cycle's
+        # results owed too rather than written ahead of older ones (addendum B4).
+        for outcome in self.executive.publish_obligations(self):
+            if "file" in outcome:
+                written.append(self.root / self.output / outcome["file"])
         for verdict in sorted(verdicts, key=lambda v: v.receipt):
             written.append(self.write_result(verdict.command, verdict.body + self.receipt(verdict)))
             self.landed.append(verdict.local)
@@ -4085,6 +4260,7 @@ def _resume(
             record = read_record(executive.state_dir or executive.journal.parent, dir_fd=executive.journal_dir_fd, anchor=anchor)
         with record:
             replayed = replay_record(world, body, record)
+            unwritten = unwritten_results(record)
     except RecordRefused as exc:
         raise ResumeRefused(f"the record cannot continue {where}: {exc}") from exc
     recovered = replayed.body
@@ -4099,6 +4275,13 @@ def _resume(
     except ValueError as exc:
         raise ResumeRefused(f"{where} cannot be restored: {exc}") from exc
     executive.resumed = True
+    # What the windows are owed (addendum B4): the checkpoint's obligations, and every verdict after its
+    # tick the record holds with no note — a crash between the record and the results, or a publication
+    # that failed after the checkpoint. Rows at or before the snapshot were published, or are owed in
+    # the checkpoint, because a checkpoint is taken only once every window of its cycle has published.
+    for entry in unwritten:
+        if entry["tick"] >= snapshot_tick:
+            executive.owe(entry)
 
     run_inputs: dict[str, Any] = {}
     if max_batch is not None and int(max_batch) != executive.max_batch:
@@ -4185,6 +4368,7 @@ def _resume(
                 f"({type(exc).__name__}: {exc}); {why}. The events were journaled first: remove what is at that path and start again"
             ) from exc
 
+    republished: list[dict[str, Any]] = []
     for window in executive.windows.values():
         window.variables_known = False
         try:
@@ -4196,10 +4380,17 @@ def _resume(
             payload, _problem = read_ingress(window.console, dir_fd=handles.root)
             if payload is not None and isinstance(payload.get("variables"), dict):
                 window.variables, window.variables_known, window._honoured = payload["variables"], True, None
+            republished.extend(executive.publish_obligations(window))
         except Exception as exc:  # noqa: BLE001 - the window's, recorded; the world resumes
             executive._record_failure(window, "resume", exc, tick)
         finally:
             window.close_handles()
+    if republished:
+        # The operator's account of what was owed and what became of it; the dedupe does not rely on it.
+        event = {"event": "results_republished", "wall": utc_now().isoformat(), "boot_id": executive.boot_id, "world_id": executive.world_id, "results": republished}
+        with contextlib.suppress(Exception):
+            append_journal_line(executive.journal, event, dir_fd=executive.journal_dir_fd)
+            events.append(event)
     return Resumption(
         snapshot_tick=snapshot_tick,
         tick=tick,
@@ -4208,6 +4399,7 @@ def _resume(
         run_inputs=run_inputs,
         advisories=advisories,
         events=events,
+        republished=republished,
     )
 
 

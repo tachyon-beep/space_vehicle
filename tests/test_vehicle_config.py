@@ -23304,7 +23304,7 @@ def test_a_checkpoint_round_trips_an_executive_byte_for_byte(tmp_path):
 
     compat = checkpoint.Compatibility.current(world)
     body = checkpoint.capture_state(executive, compat, git_commit="0123abcd")
-    for section in ("identity", "run", "clock", "executive", "rng", "segments", "windows"):
+    for section in ("identity", "run", "clock", "executive", "rng", "segments", "windows", "obligations"):
         assert section in body, section
     truth = body["executive"]["truth"]
     assert set(truth) == set(executive.truth)
@@ -27614,3 +27614,291 @@ def test_a_journal_file_with_more_startup_events_than_the_bound_before_its_heade
     assert refused.value.check == "startup" and str(console.STARTUP_LINES_BEFORE_HEADER) in str(refused.value)
     (state / f"journal.{'c' * 32}.jsonl").write_text("".join(events.splitlines(keepends=True)[: console.STARTUP_LINES_BEFORE_HEADER]))
     console.read_record(state, anchor=console.record_anchor(snapshot)).close()
+
+
+def owed_run(console, world, root: Path, script: dict, cycles: int, *, snapshot_at=None):
+    """A two-window executive with a state directory, run `cycles` cycles of `script`."""
+    diode, state = root / "diode", root / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, script, cycles, snapshot_at=snapshot_at)
+    return executive, diode, state
+
+
+# A cycle with something to publish in both windows: an accepted command, a refusal, an unknown verb.
+OWED_SCRIPT = {4: {"alpha": ["set_rcs_mode mode=manual", "zzz_alpha"], "bravo": ["zzz_bravo", "ack_alarm alert_id=b"]}}
+
+
+def test_a_kill_after_the_tick_row_and_before_any_result_resumes_at_that_tick_and_publishes_each_recorded_result_exactly_once(tmp_path, monkeypatch):
+    """ADR 0002 J rule 3 and issue #21: every command whose cycle's row is durable has exactly one result.
+
+    The kill is in `Window.write_result` of the cycle that reaches tick 5, after its row is durable and
+    before any result: the record holds four verdicts and no note. The resume recovers tick 5, finds
+    the four with no note after the checkpoint's tick (`unwritten_results`), and writes each once with
+    its recorded body and the receipt block the uninterrupted run gave it — the oracle's ledger, entry
+    for entry. A second restart, with nothing lost in between, writes nothing new: the four are on disk
+    by their exact receipt lines, which `results_written` notes cannot say across a boot.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle, oracle_dir, _ = owed_run(console, world, tmp_path / "oracle", OWED_SCRIPT, 7)
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed_result)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    assert result_ledger(diode) == {}
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert resumption.tick == 5 and sorted((r["window"], r["local"], r["result"]) for r in resumption.republished) == [
+        ("alpha", 1, "written"), ("alpha", 2, "written"), ("bravo", 1, "written"), ("bravo", 2, "written"),
+    ]
+    assert resumed.obligations == []
+    recorded_run(resumed, diode, {}, 2, start=5)
+    resumed.close()
+    assert result_ledger(diode) == result_ledger(oracle_dir)
+    again, resumption = resume_from(console, checkpoint, world, diode, state)
+    # No checkpoint was written in between, so the four are still listed after its tick — and found.
+    assert [r["result"] for r in resumption.republished] == ["on disk"] * 4, resumption.republished
+    again.close()
+    assert result_ledger(diode) == result_ledger(oracle_dir)
+    oracle.close()
+
+
+def test_a_kill_after_a_result_file_and_before_its_note_does_not_publish_that_result_a_second_time(tmp_path, monkeypatch):
+    """ADR 0002 J (iii)'s residual window, closed before child 12: the file exists, the note does not.
+
+    The kill is in `_note_window_results`, after alpha's two result files are written and `fsync`ed and
+    before the note that says so. The record lists them as unwritten, and under wall-stamped names a
+    second write would be a second result. The resume looks for each in alpha's `output/` by its exact
+    receipt line (`results_on_disk`), finds both and writes neither; bravo's, never written, are
+    written. Every result is the oracle's, once.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle, oracle_dir, _ = owed_run(console, world, tmp_path / "oracle", OWED_SCRIPT, 6)
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_note(self, window):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_note_window_results", killed_note)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    on_disk = {key[0] for key in result_ledger(diode)}
+    assert len(on_disk) == 1, "one window's results reached the disk before the kill"
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    outcomes = {(r["window"], r["local"]): r["result"] for r in resumption.republished}
+    (written_window,) = on_disk
+    assert all(result == ("on disk" if window == written_window else "written") for (window, _l), result in outcomes.items()), outcomes
+    recorded_run(resumed, diode, {}, 1, start=5)
+    resumed.close()
+    assert result_ledger(diode) == result_ledger(oracle_dir)
+    assert all(len(entries) == 1 for entries in result_ledger(diode).values())
+    oracle.close()
+
+
+def test_a_second_resume_after_a_republication_cut_short_writes_each_owed_result_exactly_once(tmp_path, monkeypatch):
+    """Addendum B4/B6: a crash during the re-publication itself, then another resume.
+
+    The first resume dies after writing one of the four owed results. The second finds that one on
+    disk by its receipt line and writes the other three: four results, each once, as in the oracle.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle, oracle_dir, _ = owed_run(console, world, tmp_path / "oracle", OWED_SCRIPT, 5)
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+    real = console.Window.write_result
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed_result)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    written = [0]
+
+    def second_dies(self, command, body):
+        if written[0] == 1:
+            raise SimulatedKill
+        written[0] += 1
+        return real(self, command, body)
+
+    monkeypatch.setattr(console.Window, "write_result", second_dies)
+    with pytest.raises(SimulatedKill):
+        resume_from(console, checkpoint, world, diode, state)
+    monkeypatch.undo()
+    assert sum(len(v) for v in result_ledger(diode).values()) == 1
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert sorted(r["result"] for r in resumption.republished) == ["on disk", "written", "written", "written"]
+    resumed.close()
+    assert result_ledger(diode) == result_ledger(oracle_dir)
+    oracle.close()
+
+
+def test_a_window_whose_output_cannot_be_opened_at_a_resume_is_owed_its_results_across_checkpoints_and_gets_them_once_when_it_heals(tmp_path, monkeypatch):
+    """Addendum B4 and B12: what a window is owed is checkpointed, so it does not depend on the generation.
+
+    Alpha's `output/` is a planted link when the vehicle comes back after a kill between the record and
+    the results: alpha cannot be written, so its two results stay owed — in memory, and in the next
+    checkpoint's `obligations`, where they survive a second kill and resume although the record after
+    that checkpoint no longer lists them. When alpha's `output/` is a directory again, its next
+    publication writes both, once, before its own results; bravo had its results at the first resume.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle, oracle_dir, _ = owed_run(console, world, tmp_path / "oracle", OWED_SCRIPT, 5)
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed_result)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    shutil.rmtree(diode / "alpha" / "output")
+    (tmp_path / "trap").mkdir()
+    (diode / "alpha" / "output").symlink_to(tmp_path / "trap")
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    assert sorted((o["window"], o["local"]) for o in resumed.obligations) == [("alpha", 1), ("alpha", 2)]
+    compat = checkpoint.Compatibility.current(world)
+    body = checkpoint.capture_state(resumed, compat)
+    assert [(o["window"], o["local"]) for o in body["obligations"]] == [("alpha", 1), ("alpha", 2)]
+    checkpoint.write_checkpoint(state, body)
+    resumed.close()
+    again, _ = resume_from(console, checkpoint, world, diode, state)
+    assert sorted((o["window"], o["local"]) for o in again.obligations) == [("alpha", 1), ("alpha", 2)]
+    assert not list((tmp_path / "trap").iterdir()), "nothing was written through the link"
+    (diode / "alpha" / "output").unlink()
+    (diode / "alpha" / "output").mkdir()
+    again.cycle()
+    again.cycle()
+    assert again.obligations == []
+    again.close()
+    ledger = result_ledger(diode)
+    assert all(len(entries) == 1 for entries in ledger.values())
+    oracle_ledger = result_ledger(oracle_dir)
+    assert {k: v for k, v in ledger.items() if k in oracle_ledger} == oracle_ledger
+    oracle.close()
+
+
+def test_a_result_whose_publication_fails_mid_run_is_owed_and_written_once_at_the_windows_next_publication(tmp_path, monkeypatch):
+    """Addendum B4: a live publication failure leaves the command owed its result, not without one.
+
+    Alpha's result write fails with a disk error in the cycle that reaches tick 2 — a recorded window
+    failure, the tick goes on. Before, that verdict simply never had a result. Now it is owed, and
+    alpha's next publication writes it, once, before its own new result.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.cycle()
+    real = console.Window.write_result
+
+    def full(self, command, body):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(console.Window, "write_result", full)
+    submit(diode / "alpha", ["zzz_first"])
+    executive.cycle()
+    monkeypatch.setattr(console.Window, "write_result", real)
+    assert [(o["window"], o["local"]) for o in executive.obligations] == [("alpha", 1)]
+    submit(diode / "alpha", ["zzz_second"])
+    executive.cycle()
+    executive.cycle()
+    ledger = result_ledger(diode)
+    assert sorted(ledger) == [("alpha", 1), ("alpha", 2)] and all(len(v) == 1 for v in ledger.values()), ledger
+    assert ledger[("alpha", 1)][0][1] == 1, "the owed result carries the tick it was decided at"
+    assert executive.obligations == []
+    executive.close()
+
+
+def test_the_look_for_an_owed_result_on_disk_is_bounded_however_the_agent_floods_its_output(tmp_path, monkeypatch):
+    """Addenda A5 and B6: the scan of an agent-writable `output/` is bounded as a whole, per window.
+
+    It runs while mission time is frozen for every window, so one window's directory must not be able
+    to stretch it. Here alpha's `output/` holds thousands of files: most with names no result could
+    have, a hundred named like the owed result's file with a receipt line that is not its own, and the
+    real one. `results_on_disk` examines at most `OUTPUT_SCAN_ENTRIES` entries and reads at most
+    `OUTPUT_SCAN_BYTES`, opening only candidates, through the handle and following no link (a planted
+    link named like the result is never read). When the bound stops it before the real file, the
+    result is written again: at most a duplicate, in the flooding window's own `output/`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", {}, 3, snapshot_at=3)
+    submit(diode / "alpha", ["zzz_owed"])
+
+    def killed_note(self, window):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_note_window_results", killed_note)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    output = diode / "alpha" / "output"
+    (real,) = output.glob("*.txt")
+    for index in range(console.OUTPUT_SCAN_ENTRIES + 500):
+        (output / f"junk_{index:05d}.dat").write_text("x")
+    for index in range(100):
+        (output / f"20260101T000000_{index:06d}Z_alpha_zzz_owed.txt").write_text("receipt: world=w seq=1 window=alpha tick=3 offset_us=0 state=refused\n")
+    (output / "20260101T000000_999999Z_alpha_zzz_owed_link.txt").symlink_to(real)
+    opened: list[str] = []
+    real_open = os.open
+
+    def watched(path, flags, *args, **kwargs):
+        if isinstance(path, str) and path.endswith(".txt") and kwargs.get("dir_fd") is not None:
+            opened.append(path)
+            assert flags & os.O_NOFOLLOW and flags & os.O_NONBLOCK, path
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(console.os, "open", watched)
+    output_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        scan = console.results_on_disk(output_fd, "alpha", console.unwritten_results(console.read_record(state)))
+    finally:
+        os.close(output_fd)
+    monkeypatch.undo()
+    assert scan.examined <= console.OUTPUT_SCAN_ENTRIES and scan.read <= console.OUTPUT_SCAN_BYTES, scan
+    assert all("zzz_owed" in name for name in opened), "only candidate names are opened"
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    resumed.close()
+    copies = [p for p in output.glob("*.txt") if not p.is_symlink() and receipt_of(p.read_text()).get("world") == killed.world_id]
+    assert 1 <= len(copies) <= 2, copies
+    assert len(copies) == 1 or any("stopped after" in r.get("scan", "") for r in resumption.republished), resumption.republished
+
+
+def test_a_result_recorded_cut_or_fingerprint_only_is_republished_once_saying_what_it_cannot_reproduce(tmp_path):
+    """The record bounds agent text (child 4's (x)); a re-publication says what the bound took.
+
+    A body past `RECORD_TEXT_BYTES` is recorded as its prefix with the whole's length and SHA-256; a
+    receipt past the window's budget for the cycle is recorded fingerprint-only. Re-publishing either
+    writes one result: the cut body with a sentence saying it was cut, the whole's length and hash; the
+    fingerprint-only one a body that says its text cannot be reproduced, with both fingerprints. Each
+    ends with the receipt block the original would have had.
+    """
+    _checkpoint, console, _plant, world = checkpoint_tools()
+    base = {"seq": 9, "local": 3, "window": "alpha", "state": "refused", "offset_us": 0, "tick": 41, "world_id": "w" * 32, "boot_id": "b" * 32}
+    cut = {**base, "command": "zzz", "body": "refused: " + "y" * 20, "body_sha256": "a" * 64, "body_bytes": 9000}
+    command, text = console.republication(cut)
+    assert command == "zzz" and "y" * 20 in text and "a" * 64 in text and "9000 bytes" in text
+    assert text.endswith(console.receipt_line(cut)) and receipt_of(text)["seq"] == "3"
+    fingerprint = {**base, "fingerprint_only": True, "verb": "zzz", "command_sha256": "c" * 64, "command_bytes": 70, "body_sha256": "d" * 64, "body_bytes": 300}
+    command, text = console.republication(fingerprint)
+    assert command == "zzz" and "cannot be reproduced" in text and "c" * 64 in text and "d" * 64 in text
+    assert text.endswith(console.receipt_line(fingerprint))

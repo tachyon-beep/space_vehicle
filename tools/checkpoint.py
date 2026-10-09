@@ -295,6 +295,8 @@ def capture_state(executive: Any, compat: Compatibility, *, git_commit: str | No
         "rng": rng,
         "segments": segments,
         "windows": {slug: _capture_window(window) for slug, window in executive.windows.items()},
+        # Results durable in the record and not confirmed written (format v2, child 3's addendum B4).
+        "obligations": list(getattr(executive, "obligations", None) or []),
     }
     # Through the encoding and back: the caller gets a copy that shares nothing with the live
     # object, and a value the format cannot carry is refused here, not at the write.
@@ -349,6 +351,7 @@ def restore_state(executive: Any, body: dict[str, Any]) -> None:
     executive.clock = dict(body["clock"])
     executive.rng = body["rng"]
     executive.segments = body["segments"]
+    executive.obligations = list(body["obligations"])
     executive.tick = state["tick"]
     executive.truth = state["truth"]
     executive.dwell = state["dwell"]
@@ -381,6 +384,7 @@ _SECTIONS: dict[str, type] = {
     "rng": dict,
     "segments": list,
     "windows": dict,
+    "obligations": list,
 }
 _KEYS: dict[str, dict[str, Any]] = {
     "identity": {
@@ -418,6 +422,19 @@ _SEGMENT_KEYS: dict[str, Any] = {
     "wall_epoch": str,
     "chain": str,
     "offset": int,
+}
+# A result owed to a window (format v2, child 3's addendum B4): the record's receipt entry for the
+# verdict — its text, cut or fingerprinted as the record holds it — with the tick it was decided at,
+# its world and the boot that decided it.
+_OBLIGATION_KEYS: dict[str, Any] = {
+    "window": str,
+    "local": int,
+    "seq": int,
+    "state": str,
+    "offset_us": int,
+    "tick": int,
+    "world_id": str,
+    "boot_id": str,
 }
 _WINDOW_KEYS: dict[str, Any] = {
     "ring_slots": int,
@@ -472,6 +489,17 @@ def _structure_problem(body: Any) -> tuple[str, str] | None:
                 return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
     if body["identity"]["segments"] != [entry["segment"] for entry in body["segments"]]:
         return "identity.segments", "the identity's segment list is not the body's"
+    for index, entry in enumerate(body["obligations"]):
+        where = f"obligations[{index}]"
+        if not isinstance(entry, dict):
+            return where, f"the obligation is a JSON {type(entry).__name__}, not an object"
+        for key, kind in _OBLIGATION_KEYS.items():
+            if key not in entry:
+                return f"{where}.{key}", f"the obligation has no `{key}`; a field the engine needs is never defaulted"
+            if not _is(entry[key], kind):
+                return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
+        if entry["window"] not in body["windows"]:
+            return f"{where}.window", f"the obligation is owed to window {entry['window']!r}, which the checkpoint does not hold"
     for slug, row in body["windows"].items():
         if not isinstance(row, dict):
             return f"windows.{slug}", f"the window's row is a JSON {type(row).__name__}, not an object"
