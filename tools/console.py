@@ -40,19 +40,98 @@ What this slice substitutes, and says so (ADR 0001 "not established"):
   - **One tick per cycle, multiplier undecided.** The loop inherits one tick per cycle from the old
     console. How many ticks a wall second carries, and the pause, overload and downtime policy, are
     WP08's and are **not** decided here; `--poll` is a wall-clock sleep between cycles and nothing more.
-  - **No persistence, no restart.** The old cross-process resume of ticks, arm tokens, dwell and
+  - **No resume yet.** The old cross-process resume of ticks, arm tokens, dwell and
     deferrals from the agent-writable `pending.json` is withdrawn: it restored authority from a file
     an agent can write. The directory's own record, `<diode-dir>/.executive.json`, written by the
-    executive beside its lock and never by an agent, says which world a directory is; a second
-    executive refuses a bound directory (choice D) until WP08 defines continuity. `--init` prepares
-    the directory's identity without binding it.
+    executive and never by an agent, says which world a directory is; a second
+    executive refuses a bound directory (choice D). Resuming a world from its checkpoint is
+    WP08 child 3 (`tachyon-beep/space_vehicle#21`): until it lands, a start that finds a verified
+    checkpoint in `--state-dir` still refuses, because starting a fresh world over a saved one is
+    the alternative choice D rejected. `--init` prepares the directory's identity without binding it.
+
+**`--state-dir PATH` is the executive's private directory** (ADR 0002 H1, child 2 — `#20`): the
+checkpoint generations (`tools/checkpoint.py`), the exclusive lock and the journal segments live
+there, and nothing an agent can reach does. **It is canonicalised once, by hand, and opened once**
+(third review; `canonicalise`, `walk_open_dir`, `open_private_dir`): each component is `lstat`ed and
+each link read and spliced, and every hop — a link's own location, each directory walked, the final
+target — that lies in `--diode-dir` (by canonical path, or by the diode directory's inode) refuses
+the start. So a link an agent holds refuses wherever it points; `diode/alpha/../.private` and
+`diode/../private` are refused too, conservatively and by design; a `--diode-dir` inside it is
+refused for the symmetric reason; a file, a path below one, or a dangling link is not a directory.
+The open then walks from `/`, `O_DIRECTORY | O_NOFOLLOW` per component, and refuses a component that
+became a link or another inode since the check. **After that only the handle is used** — the lock,
+`serves.json`, the journal segment, the checkpoint reads (`choose_generation(..., dir_fd=)`) — or,
+where only a path is taken, the canonical path, never the spelling. An explicit `--journal` gets the
+same: canonicalised under the hop rule, its directory opened once and rows appended relative to it.
+A symlink loop is refused by name, and every write the start makes for itself — the diode
+directory, the lock, `serves.json` — fails as a refusal naming the file and the errno, never a
+traceback (second review). The containment compares canonical paths and the diode directory's
+inode, so one volume bind-mounted at both `/diode` and `/state` is caught only where the mount point
+itself is walked: one private volume, not shared with the diode volume, is the chassis's
+configuration constraint. With it:
+
+  - **The lock moves** (H(i)). `.executive.lock` is taken in the state directory and the one in the
+    diode root is not opened at all: an exclusive lock on a volume the adversary can write is a lock
+    the adversary can hold — a stop button for the vehicle. *Amended by WP08 child 2 (2026-10-09):*
+    that the agents cannot write the diode root is met by the chassis's per-slug mounts (chassis
+    commit `adf38d6`, on the chassis branch `aurora-port`, not yet on chassis `main`), which give
+    each agent its own `/diode/<slug>` and the root to the vehicle service alone; until the chassis
+    adopts them, treat the root as agent-writable. What the root lock used to guarantee, the record
+    now does: a second executive on the same *state* directory is refused by the lock; a second
+    executive with its own state directory on one diode directory is refused by the root record
+    (ADR 0001's binding rule without a checkpoint; the foreign-world rule below with one).
+    **The race this leaves is not closed here.** Two executives with two *fresh* state directories
+    started together onto one *fresh* diode directory each find no record and no checkpoint, so
+    each starts, and they are separated only by the record each rewrites every tick, where the root
+    lock used to serialise them; neither re-reads the root record after its start, and each
+    checkpoints into its own state directory, so no checkpoint closes it either. A per-tick check
+    that stops on a root record naming a foreign world was weighed and not added: until the per-slug
+    mounts are adopted the root is agent-writable, and such a check is a stop button on a *running*
+    vehicle. What closes the race is the chassis's guarantee of one vehicle service per diode
+    directory. `serves.json` in the state directory records the diode directory it serves, so
+    pointing a state directory at another diode directory refuses from that side too.
+  - **The journal moves** (J). Without `--journal`, the lineage goes to one segment file per boot in
+    the state directory, `journal.<boot_id>.jsonl`; an explicit `--journal PATH` still wins, and is
+    checked against `--diode-dir` before anything at all is written. Every tick row now carries
+    `boot_id`, with or without `--state-dir`. Rows with an `event` key are startup events (a root
+    record rewritten); rows without one are ticks.
+  - **The checkpoint is authoritative for identity and the root record is its copy** (H(ii)). When a
+    verified checkpoint exists, `root_record_from_checkpoint` says what `.executive.json` must hold
+    and `reconcile_root_record` says what to do about what is there: a record that is missing,
+    garbled (`NaN` included: it is read as RFC 8259 JSON), a link, or disagrees with the checkpoint
+    is **rewritten, and the mismatch journaled first** — never a refusal on the record's account,
+    because refusing on a file the agents can write would hand them the stop button. The event
+    carries the superseded record's identity keys and the SHA-256 and length of the whole file, not
+    the file (`superseded_record`). No rewrite goes unjournaled: a journal that cannot take the
+    event refuses the start with nothing rewritten, and a rewrite that fails after the event refuses
+    by name saying the event was journaled. A *readable* record naming a different world refuses,
+    because that is two executives with separate state directories on one diode directory — a
+    refusal that relies on the per-slug mounts above. Without a checkpoint, ADR 0001's rules stand
+    unchanged. Both are functions so that child 3 only has to call them.
+  - **The record's write is recorded, never raised.** It is rewritten every tick; a failure is a
+    `root_record` entry in `failures` and on stderr, like a window's, and the tick goes on.
+  - **A directory planted at `.executive.json` beside a checkpoint refuses every start** (EISDIR on
+    the rewrite, by name). It is kept (second review, Opus 2): under H the root is the vehicle's, and
+    with the per-slug mounts nothing else can plant there. **Child 3 (#21) must revisit it** if the
+    root is still agent-writable when resume lands, because a refusal at every restart is then a
+    stop button an agent holds.
+  - **One handle, for child 3 (#21) to keep.** `main` passes the held state-directory handle and
+    the journal's to `Executive` (`state_fd=`, `journal_dir_fd=`), which keeps duplicates and
+    resolves nothing; an in-process caller that passes paths has them canonicalised and opened once
+    in `__init__`. Resume should read and write its checkpoints through `executive.state_fd`
+    (`choose_generation(..., dir_fd=)`, `write_checkpoint(..., dir_fd=)`); the path forms remain for
+    callers that hold no handle, and they re-resolve the path, as child 1 wrote them.
+
+`--state-dir` is **not required**: without it the lock, the journal and every refusal are exactly as
+before. Whether the deployed stack must always name one is the chassis's decision when it adds the
+private mount (ADR 0002, cross-repository item 1), not this module's.
 
 Lineage and truth are never written into a window file. A truth hash published to agents would be a
-side channel that reveals hidden changes; `--journal PATH` writes them as JSONL for the operator and
-is refused if the path lies inside `--diode-dir`.
+side channel that reveals hidden changes; the journal carries them for the operator, in the state
+directory or at `--journal PATH`, and either is refused if the path lies inside `--diode-dir`.
 
     python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --init
-    python3 tools/console.py --diode-dir .scratch/diode --slug alpha --slug bravo --cycles 60 --poll 1
+    python3 tools/console.py --diode-dir .scratch/diode --state-dir .scratch/state --slug alpha --slug bravo --cycles 60 --poll 1
     python3 contract/diode_probe.py --diode-dir .scratch/diode --slug alpha --poll-seconds 1
 """
 
@@ -64,6 +143,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -80,6 +160,11 @@ from typing import Any
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from checkpoint import (  # noqa: E402
+    CheckpointRefused,
+    Compatibility,
+    choose_generation,
+)
 from faults import load_faults, load_postures, scenario_report  # noqa: E402
 from generate_help import generate as generate_help  # noqa: E402
 from generate_readme import generate as generate_readme  # noqa: E402
@@ -142,11 +227,26 @@ ARGUMENT_LENGTH_BYTES = 128
 # cannot name another directory, climb, or carry a separator.
 SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
-# The exclusive lock that makes a directory one world, and the directory's own record beside it.
-# Both live in the diode root, which the agents' mounts do not reach (`/diode/<slug>/` is theirs);
-# the executive is the only writer of either, and reads the record only under the lock.
+# The exclusive lock that makes a directory one world, and the directory's own record. Without
+# `--state-dir` both live in the diode root, as ADR 0001 wrote them; with it the lock moves into the
+# state directory (ADR 0002 H(i)) and the record stays in the root as the windows' copy of the
+# checkpoint's identity (H(ii)). The executive is the only writer of either.
 LOCK_FILE = ".executive.lock"
 RECORD_FILE = ".executive.json"
+# The state directory's own two files beside the checkpoint generations: which diode directory it
+# serves, and one journal segment per boot (ADR 0002 J: `journal.<segment>.jsonl`, segment = boot).
+SERVES_FILE = "serves.json"
+JOURNAL_SEGMENT = "journal.{boot_id}.jsonl"
+# The keys of the root record that are identity, compared when a checkpoint exists; `updated_at` is
+# a wall stamp and is not one of them.
+ROOT_RECORD_IDENTITY = ("world_id", "slugs", "scenario", "seed", "ring_slots", "tick")
+# What the journal keeps of a superseded root record (review F5): the identity keys and the wall
+# stamp, never the rest — the root is the agents' to write until the chassis's per-slug mounts are
+# adopted, and a record padded just under `MAX_READ_BYTES` was a megabyte row per restart attempt —
+# plus the SHA-256 and length of the whole file. Identity values whose encoding passes this bound
+# are omitted too, and the fingerprint still names the file.
+SUPERSEDED_KEYS = (*ROOT_RECORD_IDENTITY, "updated_at")
+SUPERSEDED_IDENTITY_BYTES = 4096
 
 # What the executive keeps of its own history in memory. The journal holds all of it.
 RECENT_FAILURES = 64
@@ -263,9 +363,23 @@ def _no_json_constants(name: str) -> Any:
     raise ValueError(f"{name} is not a JSON value (RFC 8259)")
 
 
+def _finite_float(text: str) -> float:
+    """A JSON number as a double, refused when it is not finite (second review, Opus 3).
+
+    `parse_constant` sees only the literals `NaN`, `Infinity` and `-Infinity`; `1e400` is a decimal
+    the float parser turns into `inf` without asking it, and an infinity read is one no writer here
+    can write back.
+    """
+    value = float(text)
+    if not math.isfinite(value):
+        shown = text if len(text) <= 40 else f"{text[:40]}… ({len(text)} characters)"
+        raise ValueError(f"{shown} overflows a double, and a non-finite number is not a JSON value (RFC 8259)")
+    return value
+
+
 def loads_json(text: str | bytes) -> Any:
     """`json.loads` as a conforming reader on the far side would do it: no non-finite numbers."""
-    return json.loads(text, parse_constant=_no_json_constants)
+    return json.loads(text, parse_constant=_no_json_constants, parse_float=_finite_float)
 
 
 def dumps_json(payload: Any, **kwargs: Any) -> str:
@@ -387,10 +501,36 @@ def read_json_bounded(path: str | os.PathLike[str], *, dir_fd: int | None = None
     return loaded if isinstance(loaded, dict) else {}
 
 
+def bounded_repr(value: Any, limit: int = 80) -> str:
+    """`repr(value)`, cut at `limit` characters with the full length said, for a refusal's sentence.
+
+    A refusal quotes what it refused, and what it refused may be an agent's: a 900 kB `scenario` in
+    the root record made a 900 kB sentence on stderr and in the journal's rewrite event (review F5's
+    bound, found again in the `problem` text after the record itself was bounded).
+    """
+    text = repr(value)
+    return text if len(text) <= limit else f"{text[:limit]}… ({len(text)} characters)"
+
+
 def read_root_record(
     path: str | os.PathLike[str], *, dir_fd: int | None = None, postures: set[str] | None = None
 ) -> tuple[dict[str, Any] | None, str | None]:
     """`<diode-dir>/.executive.json`, or `(None, None)` for a directory that has none, or a refusal.
+
+    `read_root_record_bytes` with the bytes left out; see it for the rules.
+    """
+    record, problem, _raw = read_root_record_bytes(path, dir_fd=dir_fd, postures=postures)
+    return record, problem
+
+
+def read_root_record_bytes(
+    path: str | os.PathLike[str], *, dir_fd: int | None = None, postures: set[str] | None = None
+) -> tuple[dict[str, Any] | None, str | None, bytes | None]:
+    """`read_root_record`'s answer and the bytes it was made from, whenever there were bytes to read.
+
+    The bytes are for the journal's fingerprint of a record about to be superseded (ADR 0002 H(ii)):
+    a garbled record has no identity but still has a SHA-256 and a length, and taking them from the
+    one read the decision was made on means the fingerprint is of the file that was judged.
 
     The record is the operator's and the executive's, never an agent's, so a record that cannot be
     read is a *problem* and not a fresh directory: an unreadable, oversized or malformed record is
@@ -404,44 +544,429 @@ def read_root_record(
     try:
         os.lstat(path, dir_fd=dir_fd)
     except FileNotFoundError:
-        return None, None
+        return None, None, None
     except OSError as exc:
-        return None, f"{label} cannot be examined ({exc.strerror})"
+        return None, f"{label} cannot be examined ({exc.strerror})", None
     raw, problem = read_regular_bounded(path, dir_fd=dir_fd)
     if raw is None:
-        return None, problem
+        return None, problem, None
+    # RFC 8259, as every other JSON this vehicle reads: `NaN` is not JSON, and the first version's
+    # plain `json.loads` read a record carrying one as *agreeing* with the checkpoint (review F2).
     try:
-        loaded = json.loads(raw.decode("utf-8"))
+        loaded = loads_json(raw.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - the refusal names the shape
-        return None, f"{label} is not valid JSON ({type(exc).__name__})"
+        return None, f"{label} is not valid JSON ({type(exc).__name__})", raw
     if not isinstance(loaded, dict):
-        return None, f"{label} is a JSON {type(loaded).__name__}, not an object"
+        return None, f"{label} is a JSON {type(loaded).__name__}, not an object", raw
     world_id = loaded.get("world_id")
     if world_id is not None and not (isinstance(world_id, str) and world_id):
-        return None, f"{label} carries a world_id that is neither null nor a name"
+        return None, f"{label} carries a world_id that is neither null nor a name", raw
     slugs = loaded.get("slugs", [])
     if not isinstance(slugs, list) or not all(isinstance(s, str) and SLUG_PATTERN.match(s) for s in slugs):
-        return None, f"{label} carries a slugs list that is not a list of slugs"
+        return None, f"{label} carries a slugs list that is not a list of slugs", raw
     rings = loaded.get("ring_slots", {})
     if not isinstance(rings, dict) or not all(
         isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in rings.values()
     ):
-        return None, f"{label} carries ring_slots that are not positive integers per slug"
+        return None, f"{label} carries ring_slots that are not positive integers per slug", raw
     scenario = loaded.get("scenario")
     if scenario is not None and (
         not isinstance(scenario, str) or not scenario or (postures is not None and scenario not in postures)
     ):
         return None, (
-            f"{label} carries scenario {scenario!r}, which is not one of the vehicle's postures"
+            f"{label} carries scenario {bounded_repr(scenario)}, which is not one of the vehicle's postures"
             + (f" {sorted(postures)}" if postures is not None else "")
-        )
+        ), raw
     seed = loaded.get("seed")
     if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int) or seed < 0):
-        return None, f"{label} carries seed {seed!r}, which is not a non-negative integer"
+        return None, f"{label} carries seed {bounded_repr(seed)}, which is not a non-negative integer", raw
     tick = loaded.get("tick")
     if tick is not None and (isinstance(tick, bool) or not isinstance(tick, int) or tick < 0):
-        return None, f"{label} carries tick {tick!r}, which is not a non-negative integer"
-    return loaded, None
+        return None, f"{label} carries tick {bounded_repr(tick)}, which is not a non-negative integer", raw
+    # The wall stamp is the one key the journal keeps that nothing else here checked. `1e400` once
+    # parsed to an infinity past `loads_json`'s `parse_constant` (its `parse_float` refuses it now,
+    # second review); kept, it made the rewrite event unencodable, and every restart a refusal an
+    # agent could cause. A stamp is a string, so anything else is garbled.
+    updated_at = loaded.get("updated_at")
+    if updated_at is not None and not isinstance(updated_at, str):
+        return None, f"{label} carries updated_at {bounded_repr(updated_at)}, which is not a timestamp string", raw
+    return loaded, None, raw
+
+
+# -- the state directory (ADR 0002 H, child 2) ----------------------------------------------------
+# How many symbolic links one canonicalisation follows before it calls the path a loop: Linux's own
+# bound (`MAXSYMLINKS`), so a path the kernel would resolve is a path this resolves.
+MAX_LINK_HOPS = 40
+
+
+@dataclass(frozen=True)
+class Canonical:
+    """An operator's path with every link followed by hand: absolute, link-free, and what was there.
+
+    `stats[i]` is the `lstat` of `path.parts[i + 1]` at the canonicalisation, or `None` for a
+    component that did not exist yet (a fresh state directory). `walk_open_dir` holds the open to it.
+    """
+
+    path: Path
+    stats: tuple[os.stat_result | None, ...]
+
+
+def _same_inode(info: os.stat_result | None, other: os.stat_result | None) -> bool:
+    return info is not None and other is not None and (info.st_dev, info.st_ino) == (other.st_dev, other.st_ino)
+
+
+def canonicalise(
+    flag: str, spelled: str | os.PathLike[str], noun: str, *, diode: Canonical | None = None
+) -> tuple[Canonical | None, str | None]:
+    """`spelled` made canonical one component and one link at a time, or the refusal that says why not.
+
+    **One canonicalisation, done by hand** (ADR 0002 H, child 2, third review). The first version
+    resolved the path to check it and used the spelling; the second held each prefix of the spelling
+    to the diode directory and still resolved the path three times between the check and the open,
+    so `outside/state -> diode/alpha/x -> /private`, with `x` an agent's to flip, handed an agent the
+    state directory in 10 starts of 80. Here each component is `lstat`ed; a link is read and its
+    target spliced in, at most `MAX_LINK_HOPS` times (more is a loop, refused by name); and with
+    `diode` given, **every hop** — a link's own location, each directory walked, the final target —
+    that lies in the diode directory, by its canonical path or by the diode directory's own inode
+    (which catches a bind mount of it under another name, where it can be seen), refuses. So a link
+    in the agents' reach refuses the start whichever way it points, and `diode/../private` is refused
+    too: conservative, by design, because a spelling that walks the agents' directory at all is not
+    a spelling of a private path. A link whose target is missing is a dangling link, refused; a
+    missing component that the spelling itself names is a directory not made yet, and allowed.
+    """
+    absolute = os.path.join(os.getcwd(), os.fspath(spelled))
+    pending: list[tuple[str, bool]] = [(part, False) for part in absolute.split("/")]
+    done: list[str] = []
+    stats: list[os.stat_result | None] = []
+    hops = 0
+
+    def inside(candidate: str, info: os.stat_result | None) -> bool:
+        if diode is None:
+            return False
+        if Path(candidate).is_relative_to(diode.path):
+            return True
+        return bool(diode.stats) and _same_inode(info, diode.stats[-1])
+
+    def refusal(why: str) -> tuple[None, str]:
+        return None, f"{flag} {spelled}: {noun} {why}"
+
+    while pending:
+        part, via_link = pending.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if done:
+                done.pop()
+                stats.pop()
+            continue
+        candidate = "/" + "/".join([*done, part])
+        if any(info is None for info in stats):
+            # Below a component that does not exist yet there is nothing to stat or to follow.
+            if inside(candidate, None):
+                return refusal(f"lies inside --diode-dir, or is reached through it (at {candidate})")
+            done.append(part)
+            stats.append(None)
+            continue
+        try:
+            info: os.stat_result | None = os.lstat(candidate)
+        except FileNotFoundError:
+            if via_link:
+                return refusal(f"is reached through a dangling symlink (at {candidate})")
+            info = None
+        except OSError as exc:
+            what = "not a directory" if exc.errno == errno.ENOTDIR else "cannot be examined"
+            return refusal(f"is {what} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)} at {candidate})")
+        if inside(candidate, info):
+            return refusal(
+                f"lies inside --diode-dir, or is reached through it (at {candidate}): what an agent can reach or "
+                "retarget is never on the way to the executive's private files (ADR 0002 H)"
+            )
+        if info is not None and stat.S_ISLNK(info.st_mode):
+            hops += 1
+            if hops > MAX_LINK_HOPS:
+                return refusal(f"cannot be resolved: more than {MAX_LINK_HOPS} symbolic links (a loop, at {candidate})")
+            try:
+                target = os.readlink(candidate)
+            except OSError as exc:
+                # The link was removed or replaced between its `lstat` and here: only someone who can
+                # write the operator's directories can do that (a hop inside --diode-dir is refused
+                # above, before it is read), and it is a refusal by name, not a traceback.
+                return refusal(
+                    f"changed between its check and its open ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)} "
+                    f"at {candidate})"
+                )
+            if target.startswith("/"):
+                done, stats = [], []
+            pending = [(piece, True) for piece in target.split("/")] + pending
+            continue
+        done.append(part)
+        stats.append(info)
+    return Canonical(Path("/" + "/".join(done)), tuple(stats)), None
+
+
+def walk_open_dir(canonical: Canonical, flag: str, *, create: bool) -> tuple[int | None, str | None]:
+    """Open `canonical` once, from `/`, following nothing, and check that what is opened is what was seen.
+
+    Each component is opened `O_DIRECTORY | O_NOFOLLOW` relative to its parent's handle, so a
+    component that became a link since `canonicalise` is `ELOOP` and one that became a file is
+    `ENOTDIR`; each that existed then must be the same inode now; with `create`, a component that did
+    not exist is made and then opened the same way. The handle is the caller's to hold and to use
+    for every access after this one (ADR 0002 H, child 2, third review).
+    """
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    walked = Path("/")
+    try:
+        for index, part in enumerate(canonical.path.parts[1:]):
+            walked = walked / part
+            seen = canonical.stats[index]
+            try:
+                try:
+                    opened = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                except FileNotFoundError:
+                    if not create or seen is not None:
+                        raise
+                    with contextlib.suppress(FileExistsError):
+                        os.mkdir(part, dir_fd=fd)
+                    opened = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            except OSError as exc:
+                return None, (
+                    f"{flag} {canonical.path} changed between its check and its open, or cannot be opened, at "
+                    f"{walked} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
+                )
+            os.close(fd)
+            fd = opened
+            if seen is not None and not _same_inode(os.fstat(fd), seen):
+                return None, f"{flag} {canonical.path} changed between its check and its open: {walked} is another directory now"
+        held, fd = fd, -1
+        return held, None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _checked_state(
+    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+) -> tuple[Canonical | None, str | None]:
+    """The state directory's one canonicalisation, held to every rule, or the refusal.
+
+    `canonicalise` holds every hop to the diode directory, so `diode/alpha/../.private`, a link planted
+    outside the diode directory that points into it, a link in an agent's window that points outside
+    it, and the diode directory itself are all refused. The symmetric overlap — the agents'
+    directories inside the executive's private one — is refused too: nothing in H wants the
+    adversary's directory under the thing it must not reach. A file, or a path below one, is not a
+    directory. The comparison is of canonical paths and of the diode directory's inode, so one volume
+    bind-mounted at both `/diode` and `/state` is caught only where the mount point itself is walked:
+    one private volume, not shared with the diode volume, is the chassis's configuration constraint.
+    """
+    diode, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+    if problem is not None or diode is None:
+        return None, problem
+    state, problem = canonicalise("--state-dir", state_dir, "the state directory", diode=diode)
+    if problem is not None or state is None:
+        return None, problem
+    if diode.path.is_relative_to(state.path):
+        return None, (
+            f"--diode-dir {diode_dir} lies inside --state-dir {state_dir}: the agents' directories do "
+            "not belong inside the executive's private one (ADR 0002 H)"
+        )
+    final = state.stats[-1] if state.stats else None
+    if final is not None and not stat.S_ISDIR(final.st_mode):
+        return None, f"--state-dir {state_dir}: the state directory {state.path} is not a directory"
+    return state, None
+
+
+def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
+    """The refusal for a `--state-dir` that overlaps `--diode-dir` anywhere on its way, or `None` (`_checked_state`)."""
+    return _checked_state(state_dir, diode_dir)[1]
+
+
+def open_private_dir(
+    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+) -> tuple[int | None, Path | None, str | None]:
+    """The state directory checked, then opened once: `(handle, canonical path, refusal)`.
+
+    One canonicalisation (`_checked_state`) and one open held to it (`walk_open_dir`). Everything
+    after uses the handle, or, where a path is all an API takes, the canonical path — never the
+    spelling, which is resolved here once and not again.
+    """
+    state, problem = _checked_state(state_dir, diode_dir)
+    if problem is not None or state is None:
+        return None, None, problem
+    fd, problem = walk_open_dir(state, "--state-dir", create=True)
+    return fd, (state.path if fd is not None else None), problem
+
+
+def open_journal_dir(
+    journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+) -> tuple[int | None, Path | None, str | None]:
+    """An explicit `--journal` checked, and its directory opened once: `(handle, canonical file path, refusal)`.
+
+    The journal file is canonicalised under the same hop rule as the state directory — the lineage
+    and the truth hash never go where an agent can read them, nor through a link an agent can
+    retarget — and its parent is opened by `walk_open_dir`, so every row is appended relative to
+    that handle. The parent must exist; the file is made on the first append.
+    """
+    diode, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+    if problem is not None or diode is None:
+        return None, None, problem
+    canonical, problem = canonicalise("--journal", journal, "the journal", diode=diode)
+    if problem is not None or canonical is None:
+        return None, None, problem
+    parent = Canonical(canonical.path.parent, canonical.stats[:-1])
+    if any(info is None for info in parent.stats):
+        return None, None, f"--journal {journal}: its directory {parent.path} does not exist; the journal's file is made, its directory is not"
+    last = parent.stats[-1] if parent.stats else None
+    if last is not None and not stat.S_ISDIR(last.st_mode):
+        return None, None, f"--journal {journal}: {parent.path} is not a directory"
+    fd, problem = walk_open_dir(parent, "--journal", create=False)
+    return fd, (canonical.path if fd is not None else None), problem
+
+
+def check_journal(journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
+    """The refusal for a `--journal` that the diode directory reaches, or `None` (`open_journal_dir`, handle closed)."""
+    fd, _path, problem = open_journal_dir(journal, diode_dir)
+    if fd is not None:
+        os.close(fd)
+    return problem
+
+
+def superseded_record(record: dict[str, Any] | None, raw: bytes | None) -> dict[str, Any]:
+    """What a rewrite event says of the record it replaces: identity and fingerprint, bounded (review F5).
+
+    `previous` is the record's `SUPERSEDED_KEYS` that are present, or `None` when it had none to give
+    (missing, garbled) or when they encode past `SUPERSEDED_IDENTITY_BYTES`, which `previous_omitted`
+    then says. `previous_sha256` and `previous_bytes` are of the whole file as it was read, whenever
+    there were bytes — a garbled record is still recognisable by them.
+    """
+    entry: dict[str, Any] = {
+        "previous": None,
+        "previous_sha256": hashlib.sha256(raw).hexdigest() if raw is not None else None,
+        "previous_bytes": len(raw) if raw is not None else None,
+    }
+    if record is not None:
+        identity = {key: record[key] for key in SUPERSEDED_KEYS if key in record}
+        size = len(dumps_json(identity, sort_keys=True).encode("utf-8"))
+        if size > SUPERSEDED_IDENTITY_BYTES:
+            entry["previous_omitted"] = (
+                f"the identity keys encode to {size} bytes, past the {SUPERSEDED_IDENTITY_BYTES} the "
+                "journal keeps of a superseded record, so they are omitted and the fingerprint names it"
+            )
+        else:
+            entry["previous"] = identity
+    return entry
+
+
+def journal_segment_path(state_dir: str | os.PathLike[str], boot_id: str) -> Path:
+    """This boot's journal segment in the state directory (ADR 0002 J: one segment file per boot)."""
+    return Path(state_dir) / JOURNAL_SEGMENT.format(boot_id=boot_id)
+
+
+def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None = None) -> None:
+    """One JSON line onto the journal. A tick row has no `event` key; a startup event has one.
+
+    Relative to `dir_fd`, the journal directory's handle, when the caller holds one; otherwise
+    relative to a handle opened here on the path's parent. Either way the file itself is opened
+    `O_NOFOLLOW`: the lineage is not appended through a link (second review, Codex P1).
+    """
+    opened: int | None = None
+    if dir_fd is None:
+        opened = dir_fd = open_directory(Path(path).parent)
+    try:
+        fd = os.open(
+            Path(path).name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=dir_fd
+        )
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(dumps_json(row, sort_keys=True) + "\n")
+    finally:
+        if opened is not None:
+            os.close(opened)
+
+
+def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
+    """The diode directory this state directory serves, `(None, None)` for none, or a refusal.
+
+    The file is the executive's own, so one that exists and cannot be read is a problem and not an
+    empty answer, like the root record: the one thing a start must not do is serve a directory it
+    could not check it was meant to.
+    """
+    try:
+        os.lstat(SERVES_FILE, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"{SERVES_FILE} cannot be examined ({exc.strerror})"
+    raw, problem = read_regular_bounded(SERVES_FILE, dir_fd=dir_fd)
+    if raw is None:
+        return None, problem
+    try:
+        loaded = loads_json(raw)
+    except Exception as exc:  # noqa: BLE001 - the refusal names the shape
+        return None, f"{SERVES_FILE} is not valid JSON ({type(exc).__name__})"
+    served = loaded.get("diode_dir") if isinstance(loaded, dict) else None
+    if not isinstance(served, str) or not served:
+        return None, f"{SERVES_FILE} names no diode directory"
+    return served, None
+
+
+def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str]) -> None:
+    """Record, in the state directory, the diode directory it serves — resolved, as it is compared."""
+    write_json_atomic(
+        SERVES_FILE,
+        {"diode_dir": str(Path(diode_dir).resolve()), "recorded_at": utc_now().isoformat()},
+        dir_fd=dir_fd,
+    )
+
+
+def root_record_from_checkpoint(body: dict[str, Any]) -> dict[str, Any]:
+    """`.executive.json` as the windows' copy of a verified checkpoint's identity (ADR 0002 H(ii)).
+
+    The same shape `Executive.root_record` writes — the world, the slugs with their ring bounds, the
+    scenario, the seed, the tick — so `read_root_record` reads it unchanged. Nothing else of the
+    checkpoint's header crosses: not `body_sha256` (a hash over the truth is the side channel the
+    journal exists to keep private), not `engine`, `python` or `platform` (the host's), and not the
+    state directory's path. A checkpoint is a world that exists, so its `world_id` is written whether
+    or not the tick is zero; the live record's "bound by the first tick" is about a world that has
+    not yet been saved.
+    """
+    windows = body["windows"]
+    return {
+        "world_id": body["identity"]["world_id"],
+        "slugs": sorted(windows),
+        "scenario": body["run"]["scenario"],
+        "seed": body["run"]["seed"],
+        "ring_slots": {slug: windows[slug]["ring_slots"] for slug in sorted(windows)},
+        "tick": body["identity"]["tick"],
+        "updated_at": utc_now().isoformat(),
+    }
+
+
+def reconcile_root_record(
+    record: dict[str, Any] | None, problem: str | None, expected: dict[str, Any]
+) -> tuple[str, str]:
+    """What to do about the root record beside a verified checkpoint: `("agree" | "rewrite" | "refuse", why)`.
+
+    `record` and `problem` are `read_root_record`'s answer; `expected` is `root_record_from_checkpoint`.
+    A record that cannot be read, is missing, or disagrees with the checkpoint on any identity key is
+    *rewritten* — never a refusal, because the root is agent-writable until the chassis adopts its
+    per-slug mounts (`adf38d6`, chassis branch `aurora-port`) and a refusal there is a stop button in
+    the agents' hands (ADR 0002 H). An unbound record (`world_id: null`) is a
+    disagreement: the checkpoint is a world that exists. A *readable* record naming a different world
+    is the one refusal: two executives with separate state directories on one diode directory.
+    """
+    if problem is not None:
+        return "rewrite", f"the root record cannot be read ({problem}), so it is rewritten from the checkpoint"
+    if record is None:
+        return "rewrite", "there is no root record beside the checkpoint, so it is written from it"
+    bound = record.get("world_id")
+    if isinstance(bound, str) and bound and bound != expected["world_id"]:
+        return "refuse", (
+            f"the root record names world {bounded_repr(bound)} and the checkpoint records {expected['world_id']!r}: "
+            "two executives with separate state directories on one diode directory (ADR 0002 H)"
+        )
+    differing = [key for key in ROOT_RECORD_IDENTITY if record.get(key) != expected[key]]
+    if differing:
+        return "rewrite", f"the root record disagrees with the checkpoint on {differing}, so it is rewritten from it"
+    return "agree", "the root record is the checkpoint's copy"
 
 
 @dataclass
@@ -496,11 +1021,39 @@ class Executive:
         max_batch: int = DEFAULT_MAX_BATCH,
         journal: Path | None = None,
         record_slugs: dict[str, int] | None = None,
+        state_dir: Path | None = None,
+        boot_id: str | None = None,
+        state_fd: int | None = None,
+        journal_dir_fd: int | None = None,
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
         self.world = world
         self.diode_dir = Path(diode_dir)
+        # One boot of this executive (ADR 0002's "segment"): the journal segment's name, and the id
+        # `main` draws first so that a startup event and the ticks that follow share one file. A
+        # window's own `boot_id` stays per window, as `presentation.yaml#frame` publishes it.
+        self.boot_id = boot_id or uuid.uuid4().hex
+        # The private directory (ADR 0002 H1), or `None` for the pre-`--state-dir` layout, and the
+        # handle every access to it goes through. `main` has canonicalised and opened it once and
+        # passes the canonical path with `state_fd`, of which this keeps a duplicate; an in-process
+        # caller that passes a path alone has it checked and opened here, once, by the same helper
+        # (third review) — nothing resolves it again.
+        self.state_dir: Path | None = None
+        self.state_fd: int | None = None
+        # The journal's directory, opened once and held: every row is appended relative to it.
+        self.journal_dir_fd: int | None = None
+        if state_dir is not None:
+            if state_fd is None:
+                opened, canonical, problem = open_private_dir(state_dir, self.diode_dir)
+                if problem is not None or opened is None or canonical is None:
+                    raise ValueError(problem)
+                self.state_fd, self.state_dir = opened, canonical
+            else:
+                self.state_fd, self.state_dir = os.dup(state_fd), Path(state_dir)
+            if journal is None:
+                journal = journal_segment_path(self.state_dir, self.boot_id)
+                self.journal_dir_fd = os.dup(self.state_fd)
         self.phase = phase
         # Live interlock state the *operator* has asserted, and the default is nothing tripped. A
         # declared interlock is a guard evaluated when a command arrives, not a standing condition;
@@ -538,21 +1091,28 @@ class Executive:
         self.failures: deque[dict[str, Any]] = deque(maxlen=RECENT_FAILURES)
         self.journal: Path | None = None
         if journal is not None:
-            journal = Path(journal)
-            if journal.resolve().is_relative_to(self.diode_dir.resolve()):
-                raise ValueError(
-                    f"--journal {journal} lies inside --diode-dir {self.diode_dir}: the lineage and "
-                    "the truth hash are the executive's and never go where an agent can read them"
-                )
-            self.journal = journal
+            if self.journal_dir_fd is not None:
+                self.journal = Path(journal)  # the segment, in the held state directory
+            elif journal_dir_fd is not None:
+                self.journal, self.journal_dir_fd = Path(journal), os.dup(journal_dir_fd)
+            else:
+                opened, canonical, problem = open_journal_dir(journal, self.diode_dir)
+                if problem is not None or opened is None or canonical is None:
+                    self.close()
+                    raise ValueError(problem)
+                self.journal, self.journal_dir_fd = canonical, opened
         # Generated once, because the configuration does not change while an executive runs.
         self.readme_text = generate_readme(world.root)
         self.help_text = generate_help(world.root)
         # The diode directory, as a handle that follows no link: every window is opened relative to
         # it, and the directory's own record is written through it. The operator's path is resolved
         # first because it is the operator's to alias; nothing below it is.
-        self.diode_dir.mkdir(parents=True, exist_ok=True)
-        self.diode_fd = open_directory(self.diode_dir.resolve())
+        try:
+            self.diode_dir.mkdir(parents=True, exist_ok=True)
+            self.diode_fd = open_directory(self.diode_dir.resolve())
+        except BaseException:
+            self.close()
+            raise
         # The names the registry publishes as gate variables, instantiated: the only names an
         # agent's `variables` may carry besides `allowance`.
         self.gate_names: set[str] = {
@@ -588,14 +1148,19 @@ class Executive:
             self._record_failure(window, "prepare", exc, self.tick)
         finally:
             window.close_handles()
-        self._write_root_record()
+        self._write_root_record(self.tick)
         return window
 
     def close(self) -> None:
-        """Release the directory handle. The windows' handles live for one cycle and are closed by it."""
-        if self.diode_fd is not None:
-            os.close(self.diode_fd)
-            self.diode_fd = None
+        """Release the held directory handles. The windows' handles live for one cycle and are closed by it.
+
+        Safe on a partly constructed executive — `__init__` calls it when a later step refuses, so a
+        refused in-process construction leaks no descriptor — and safe to call twice."""
+        for name in ("diode_fd", "journal_dir_fd", "state_fd"):
+            fd = getattr(self, name, None)
+            if fd is not None:
+                os.close(fd)
+                setattr(self, name, None)
 
     def order(self) -> list[Window]:
         """This tick's visiting order: sorted slugs rotated left by `tick % n` (ADR choice A).
@@ -685,7 +1250,7 @@ class Executive:
             self.lineage_head = link
             self.lineage.append(self.lineage_head)
             self._journal(effects, verdicts)
-            self._write_root_record()
+            self._write_root_record(tick)
 
             written: list[Path] = []
             for window in healthy:
@@ -700,17 +1265,20 @@ class Executive:
 
     def _record_failure(self, window: Window, stage: str, exc: BaseException, tick: int) -> None:
         """Isolation: the failure is counted and recorded, on stderr and here, and the tick goes on without the window."""
+        self._record_failure_named(window.slug, stage, exc, tick)
+
+    def _record_failure_named(self, name: str, stage: str, exc: BaseException, tick: int) -> None:
+        """`_record_failure` for a window's slug, or for `.executive.json` at the stage `root_record`."""
         entry = {
             "tick": tick,
-            "window": window.slug,
+            "window": name,
             "stage": stage,
             "error": f"{type(exc).__name__}: {exc}",
         }
         self.failure_count += 1
         self.failures.append(entry)
-        sys.stderr.write(
-            f"[console] tick {tick}: window {window.slug!r} skipped at {stage}: {entry['error']}\n"
-        )
+        what = f"window {name!r} skipped" if stage != "root_record" else f"the directory's record {name} not written"
+        sys.stderr.write(f"[console] tick {tick}: {what} at {stage}: {entry['error']}\n")
 
     def _lineage_link(self, previous: str, truth: dict[str, Any], effects: list[Effect]) -> str:
         digest = hashlib.sha256(
@@ -726,6 +1294,7 @@ class Executive:
         line = {
             "tick": self.tick,
             "world_id": self.world_id,
+            "boot_id": self.boot_id,
             "lineage": self.lineage_head,
             "state_hash": state_hash(self.truth),
             "effects": [[e.offset_us, e.verb, e.arguments] for e in effects],
@@ -742,8 +1311,7 @@ class Executive:
             ],
             "failures": self.failure_count,
         }
-        with self.journal.open("a", encoding="utf-8") as handle:
-            handle.write(dumps_json(line, sort_keys=True) + "\n")
+        append_journal_line(self.journal, line, dir_fd=self.journal_dir_fd)
 
     def root_record(self) -> dict[str, Any]:
         """The directory's record: which world this is, which windows it serves, its identity."""
@@ -760,8 +1328,20 @@ class Executive:
             "updated_at": utc_now().isoformat(),
         }
 
-    def _write_root_record(self) -> None:
-        write_json_atomic(RECORD_FILE, self.root_record(), dir_fd=self.diode_fd)
+    def _write_root_record(self, tick: int) -> None:
+        """Write the directory's record; a failure is recorded like a window's, and the tick goes on.
+
+        **The first version let this raise out of `cycle()`** (review F6): a directory put in place of
+        `.executive.json` while the executive ran ended the run, which is the stop button ADR 0002 H
+        takes away from the agents, moved from the lock to the record. The record is a copy — of the
+        checkpoint with `--state-dir`, and of the executive's own memory without it — so a write that
+        fails is counted, named on stderr and in `failures` under the stage `root_record` with the
+        record's name where a window's slug goes, and the next cycle writes it again.
+        """
+        try:
+            write_json_atomic(RECORD_FILE, self.root_record(), dir_fd=self.diode_fd)
+        except Exception as exc:  # noqa: BLE001 - the record's failure, recorded, not the tick's
+            self._record_failure_named(RECORD_FILE, "root_record", exc, tick)
 
     # -- ingress ------------------------------------------------------------------------------
     def _verdict(self, window: Window, command: str, state: str, body: str, **extra: Any) -> Verdict:
@@ -1858,7 +2438,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="PATH",
         help="append one JSON line per tick — lineage, state hash, effects, receipts — for the "
-        "operator; refused inside --diode-dir",
+        "operator; refused inside --diode-dir. With --state-dir and no --journal, the journal is "
+        "one segment file per boot in the state directory",
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=None,
+        metavar="PATH",
+        help="the executive's private directory (ADR 0002 H): checkpoint generations, the exclusive "
+        "lock and the journal segments. Refused inside --diode-dir. Optional until the chassis mounts "
+        "one; without it the lock and the journal are where ADR 0001 put them",
     )
     parser.add_argument(
         "--plan",
@@ -1920,17 +2509,87 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- one world per directory, and everything the start reads is read under the lock -------
     #
-    # The lock says *a* world is here; the directory's record says *which*, and what identity it
-    # has. Both live in the diode root, which no agent's mount reaches, and the record is read only
-    # while the lock is held so that nothing can change between the reading and the acting. A second
-    # executive on the directory refuses to start; an executive on a directory whose record names a
-    # world refuses too, live or not — starting a fresh world on it would silently reset its physics,
-    # and restart continuity is WP08's (ADR 0001 choice D). A record that cannot be read is a
-    # refusal and never "a fresh directory".
+    # The lock says *an* executive is here; the directory's record says *which* world, and what
+    # identity it has. Without `--state-dir` both live in the diode root and the lock is the root's
+    # (ADR 0001). With `--state-dir` the lock is the state directory's (ADR 0002 H(i)): the root is
+    # agent-writable until the chassis adopts its per-slug mounts (`adf38d6`, chassis branch
+    # `aurora-port`), and a lock an agent can hold is a stop button, so the root lock is not
+    # opened at all and the record alone holds one world per diode directory. Either way the record
+    # is read only while this executive's lock is held. An executive on a directory whose record names
+    # a world refuses, live or not — starting a fresh world on it would silently reset its physics —
+    # until child 3 resumes it (ADR 0001 choice D). A record that cannot be read is a refusal and
+    # never "a fresh directory", except beside a verified checkpoint, where it is the checkpoint's
+    # copy and is rewritten (ADR 0002 H(ii), below).
     diode_dir = Path(args.diode_dir)
-    diode_dir.mkdir(parents=True, exist_ok=True)
-    diode_fd = open_directory(diode_dir.resolve())
-    lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=diode_fd)
+    state_dir = Path(args.state_dir) if args.state_dir else None
+    state_fd: int | None = None
+    # **Every destination is checked before the first write** (review F3): the diode directory, the
+    # lock, `serves.json` and a startup event are all written below, and the `--journal` rule used to
+    # be asked only by `Executive`, which a start on a checkpoint never builds. **Each private path
+    # is canonicalised once, by hand, and opened once, by a walk that follows nothing** (third
+    # review): every hop is held to the diode directory, the open is held to what the hop check saw,
+    # and the handle is all that is used after it. A loop is a refusal by name (second review, P2).
+    diode_canonical, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+    if problem is not None or diode_canonical is None:
+        sys.stderr.write(f"{problem}\n")
+        return 3
+    # An explicit journal: its file canonicalised under the hop rule, its directory opened and held.
+    journal_explicit: Path | None = None
+    journal_fd: int | None = None
+    if args.journal:
+        journal_fd, journal_explicit, problem = open_journal_dir(args.journal, diode_dir)
+        if problem is not None:
+            sys.stderr.write(problem + "\n")
+            return 3
+    # The state directory as spelled is the operator's word, kept for the messages; once it is
+    # checked and opened, every access goes through `state_fd`, or its canonical path `state_path`
+    # where only a path is taken — never the spelling.
+    state_path: Path | None = None
+    if state_dir is not None:
+        state_fd, state_path, problem = open_private_dir(state_dir, diode_dir)
+        if problem is not None:
+            if journal_fd is not None:
+                os.close(journal_fd)
+            sys.stderr.write(problem + "\n")
+            return 3
+    diode_resolved = diode_canonical.path
+
+    def errno_name(exc: BaseException) -> str:
+        if isinstance(exc, OSError):
+            return f"{errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}"
+        return f"{type(exc).__name__}: {exc}"
+
+    # **The operator's own writes fail by name too** (second review, Opus 1): a diode directory that
+    # cannot be made or opened, and a lock that cannot be opened — a read-only mount, a directory where
+    # the lock goes — were tracebacks.
+    try:
+        diode_resolved.mkdir(parents=True, exist_ok=True)
+        diode_fd = open_directory(diode_resolved)
+    except OSError as exc:
+        for fd in (state_fd, journal_fd):
+            if fd is not None:
+                os.close(fd)
+        sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({errno_name(exc)})\n")
+        return 3
+    lock_in = state_fd if state_fd is not None else diode_fd
+    lock_where = state_path if state_path is not None else diode_dir
+    try:
+        lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in)
+    except OSError as exc:
+        for fd in (diode_fd, state_fd, journal_fd):
+            if fd is not None:
+                os.close(fd)
+        sys.stderr.write(
+            f"the lock {lock_where / LOCK_FILE} cannot be opened ({errno_name(exc)}). The executive "
+            "does not run without its lock; repair what is at that path, or the directory's permissions\n"
+        )
+        return 3
+
+    def close_all() -> None:
+        for fd in (lock_fd, diode_fd, state_fd, journal_fd):
+            if fd is not None:
+                os.close(fd)
+
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -1938,21 +2597,136 @@ def main(argv: list[str] | None = None) -> int:
             holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
         except OSError:
             holder = "unknown holder"
-        os.close(lock_fd)
-        os.close(diode_fd)
-        sys.stderr.write(
-            f"another executive holds {diode_dir} ({holder}). One directory is one world "
-            "(ADR 0001); stop it, or point --diode-dir at another directory\n"
-        )
+        close_all()
+        if state_dir is not None:
+            sys.stderr.write(
+                f"another executive holds the state directory {state_dir} ({holder}). One state "
+                "directory is one executive (ADR 0002 H); stop it, or point --state-dir at another directory\n"
+            )
+        else:
+            sys.stderr.write(
+                f"another executive holds {diode_dir} ({holder}). One directory is one world "
+                "(ADR 0001); stop it, or point --diode-dir at another directory\n"
+            )
         return 3
 
     def refuse(message: str) -> int:
         sys.stderr.write(message + "\n")
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
         return 3
 
-    record, problem = read_root_record(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
+    def serves_refusal() -> str | None:
+        """Write `serves.json`; the refusal sentence if it cannot be written (second review, Opus 1)."""
+        if state_fd is None or state_path is None:
+            return "no state directory is open, so serves.json cannot be written"
+        try:
+            write_serves_record(state_fd, diode_dir)
+        except Exception as exc:  # noqa: BLE001 - the refusal names it
+            return (
+                f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
+                "A state directory that cannot say which diode directory it serves is not one to run"
+            )
+        return None
+
+    # This boot's id is drawn here so that a startup event and the ticks that follow share one
+    # journal segment; the executive is handed it below.
+    boot_id = uuid.uuid4().hex
+    journal = journal_explicit
+    if journal is None and state_path is not None:
+        journal = journal_segment_path(state_path, boot_id)
+
+    record, problem, record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
+    checkpoint_found = None
+    if state_fd is not None:
+        # One state directory serves one diode directory, and says which (ADR 0002 H).
+        served, serves_problem = read_serves_record(state_fd)
+        if serves_problem is not None:
+            return refuse(
+                f"the state directory's record at {state_dir / SERVES_FILE} cannot be read: {serves_problem}. "
+                "Repair or clear it; a state directory that cannot say which diode directory it serves is not one to run"
+            )
+        if served is not None and served != str(diode_dir.resolve()):
+            return refuse(
+                f"the state directory {state_dir} serves the diode directory {served}, not {diode_dir.resolve()}. "
+                "One state directory serves one diode directory (ADR 0002 H); point --state-dir at the directory "
+                "that serves this one, or at a fresh one"
+            )
+        # The checkpoint is authoritative for identity (ADR 0002 H(ii)); K2 chooses the generation and
+        # its refusals — corrupt both, incompatible — are the operator's to read (K).
+        try:
+            checkpoint_found = choose_generation(state_path, Compatibility.current(world), dir_fd=state_fd)
+        except CheckpointRefused as exc:
+            return refuse(
+                f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
+                "and the executive does not start a fresh world over one (ADR 0002 K)"
+            )
+    if checkpoint_found is not None:
+        expected = root_record_from_checkpoint(checkpoint_found.body)
+        action, why = reconcile_root_record(record, problem, expected)
+        if action == "refuse":
+            return refuse(
+                f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
+                f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
+                "or point --state-dir at the directory that serves this one"
+            )
+        if not (args.plan or args.plan_json):
+            if action == "rewrite":
+                # **The event first, then the rewrite: no rewrite without its journal event** (review
+                # F2). And every failure of either is a refusal by name, never a traceback (F1): the
+                # first version rewrote first, so a journal that could not take the event left a
+                # rewrite nobody recorded, and a directory planted at the record's path raised
+                # `IsADirectoryError` out of `main`.
+                if journal is None:  # a checkpoint implies a state directory, so a segment at least
+                    return refuse("no journal is named for the root record's rewrite event, so nothing was rewritten")
+                try:
+                    append_journal_line(
+                        journal,
+                        {
+                            "event": "root_record_rewritten",
+                            "wall": utc_now().isoformat(),
+                            "boot_id": boot_id,
+                            "world_id": expected["world_id"],
+                            "tick": expected["tick"],
+                            "checkpoint": checkpoint_found.path.name,
+                            "reason": why,
+                            "problem": problem,
+                            **superseded_record(record, record_bytes),
+                        },
+                        # The segment relative to the state directory's handle; an explicit journal
+                        # relative to a handle on its resolved parent.
+                        dir_fd=state_fd if journal_fd is None else journal_fd,
+                    )
+                except Exception as exc:  # noqa: BLE001 - the refusal names it
+                    return refuse(
+                        f"the journal at {journal} cannot take the event for rewriting the root record at "
+                        f"{diode_dir / RECORD_FILE} ({type(exc).__name__}: {exc}), so nothing was rewritten: "
+                        "no rewrite goes unjournaled (ADR 0002 H). Repair the journal's path and start again"
+                    )
+                try:
+                    write_json_atomic(RECORD_FILE, expected, dir_fd=diode_fd)
+                except Exception as exc:  # noqa: BLE001 - the refusal names it
+                    return refuse(
+                        f"the root record at {diode_dir / RECORD_FILE} cannot be rewritten from the checkpoint "
+                        f"at {checkpoint_found.path} ({type(exc).__name__}: {exc}); {why}. The mismatch was "
+                        f"journaled to {journal} before the attempt. The record is the checkpoint's copy, so "
+                        "nothing is lost: remove what is at that path and start again"
+                    )
+                sys.stderr.write(f"[console] {diode_dir / RECORD_FILE}: {why}; the mismatch is journaled\n")
+            problem = serves_refusal()
+            if problem is not None:
+                return refuse(problem)
+            # Choice D, kept: a verified checkpoint is a world, and this executive does not start a
+            # fresh one over it. Resuming it is WP08 child 3.
+            return refuse(
+                f"the state directory {state_dir} holds a verified checkpoint ({checkpoint_found.path.name}, "
+                f"world {expected['world_id']}, tick {expected['tick']}), and resuming a world from its "
+                "checkpoint is WP08 child 3 (tachyon-beep/space_vehicle#21), not yet landed. The executive does "
+                "not start a fresh world over a saved one (ADR 0001 choice D, as amended by ADR 0002); the root "
+                "record is the checkpoint's copy, and the diode directory is not to be touched"
+            )
+        # `--plan` answers from the checkpoint's identity and writes nothing in the diode directory
+        # (the state directory and its lock were made above, as for any start).
+        record, problem = expected, None
     if problem is not None:
         return refuse(
             f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
@@ -1989,7 +2763,9 @@ def main(argv: list[str] | None = None) -> int:
     seed = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
     # **`--plan` answers "what will this run be" before it is run**, and it takes the *resolved*
     # pair, so `--plan` on a directory recorded as `crisis` describes the crisis it is in. It binds
-    # nothing and writes nothing, so a bound directory may be asked — under the lock, like every read.
+    # nothing and writes nothing in the diode directory (its lock aside, and with `--state-dir` the state
+    # directory and its lock are made as for any start), so a bound directory may be asked — under the
+    # lock, like every read.
     if args.plan or args.plan_json:
         faults = load_faults(Path(args.dir))
         if not faults:
@@ -2006,9 +2782,8 @@ def main(argv: list[str] | None = None) -> int:
             plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
         except Exception as exc:  # noqa: BLE001 - the refusal is the answer
             return refuse(f"the scenario cannot be planned: {exc}")
-        os.close(lock_fd)
         plan.pop("_armed_faults", None)
-        os.close(diode_fd)
+        close_all()
         if args.plan_json:
             json.dump(plan, sys.stdout, indent=2)
             sys.stdout.write("\n")
@@ -2087,7 +2862,10 @@ def main(argv: list[str] | None = None) -> int:
             "choice D)"
         )
 
-    journal = Path(args.journal) if args.journal else None
+    if state_fd is not None:
+        problem = serves_refusal()
+        if problem is not None:
+            return refuse(problem)
     try:
         executive = Executive(
             world,
@@ -2099,19 +2877,32 @@ def main(argv: list[str] | None = None) -> int:
             max_batch=args.max_batch,
             journal=journal,
             record_slugs=recorded_slugs,
+            state_dir=state_path,
+            boot_id=boot_id,
+            state_fd=state_fd,
+            # The default segment lives in the held state directory, so its handle is that one: a
+            # path alone would have `Executive` walk the state directory a second time.
+            journal_dir_fd=journal_fd if journal_fd is not None else state_fd,
         )
     except ValueError as exc:
         return refuse(str(exc))
-    os.ftruncate(lock_fd, 0)
-    os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+    # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
+    try:
+        os.ftruncate(lock_fd, 0)
+        os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+    except OSError as exc:
+        executive.close()
+        return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
     for slug in slugs:
         try:
             executive.attach(slug, ring_slots=resolved_slots[slug])
         except ValueError as exc:
+            executive.close()
             return refuse(str(exc))
     if executive.failure_count:
+        executive.close()
         return refuse(
-            "a window could not be prepared: "
+            "a window or the directory's record could not be prepared: "
             + "; ".join(f"{f['window']}: {f['error']}" for f in executive.failures)
             + ". Repair or clear it; a window is a directory of regular files and nothing else"
         )
@@ -2120,8 +2911,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {args.phase!r}")
         # `--init` binds nothing: the lock is released and the records say `world_id: null`.
         executive.close()
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
         return 0
 
     rings = sorted(set(resolved_slots.values()))
@@ -2129,7 +2919,8 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"[console] {diode_dir} slugs={','.join(slugs)} phase={args.phase} "
         f"scenario={executive.scenario} seed={executive.seed} ring={ring} "
-        f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}",
+        f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}"
+        + (f" state-dir={state_dir}" if state_dir is not None else ""),
         flush=True,
     )
     # `--cycles` counts the cycles **this invocation** runs; an executive always starts at tick 0.
@@ -2151,8 +2942,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     finally:
         executive.close()
-        os.close(lock_fd)
-        os.close(diode_fd)
+        close_all()
     return 0
 
 
