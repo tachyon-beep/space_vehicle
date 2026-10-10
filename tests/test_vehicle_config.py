@@ -29390,3 +29390,73 @@ def test_the_confinement_checks_use_the_one_resolution_of_the_diode_directory_ma
         assert resolutions == [str(alias)], (case, resolutions)
         assert not (served / "private-state").exists() and not (served / "journal.jsonl").exists(), case
         assert not (served / "alpha").exists() and not (elsewhere / "alpha").exists(), case
+
+
+def test_the_line_at_the_anchor_must_verify_as_a_record_line_whose_chain_recomputes_not_only_carry_its_fields(tmp_path):
+    """Confirmation G2 (Codex): the anchor's line must be a real record line, not an object copying four fields.
+
+    Review F16 held the line ending at the anchor's offset to the anchor's chain, boot, world and tick —
+    four fields any object can copy. A replacement journal padded to exactly the offset, ending in an
+    object that copies them, still resumed at the snapshot's tick with nothing read. The line must now
+    pass the record's own schema for its kind (a row, a note or a header) and its chain must recompute
+    from the chained line before it, read backwards past any startup events. The forgery is refused by
+    the anchored read (`anchor`), and the whole-record read refuses the same file; the real journal
+    still reads, whether its anchor line is a row, a note, or a header that never reached a row.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state, journal = tmp_path / "diode", tmp_path / "state", tmp_path / "journal.jsonl"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal)
+    executive.attach("alpha")
+    _p, _c, snapshot = recorded_run(executive, diode, {3: {"alpha": ["zzz_noted"]}}, 4, snapshot_at=4)
+    executive.close()
+    anchor = console.record_anchor(snapshot)
+    raw = journal.read_bytes()
+    assert json.loads(raw.splitlines()[-1]).get("event") == "results_written", "the anchor line is a note"
+    console.read_record(journal, anchor=anchor).close()
+
+    entry = anchor["entry"]
+    copied = (json.dumps({"boot_id": entry["boot_id"], "chain": entry["chain"], "tick": 4, "world_id": anchor["world_id"]}) + "\n").encode()
+    filler = len(raw) - len(copied)
+    pad = (json.dumps({"event": "padding", "x": "y" * max(0, filler - 30)}) + "\n").encode()
+    pad = pad[: filler - 1] + b"\n" if len(pad) >= filler else pad + b" " * (filler - len(pad) - 1) + b"\n"
+    forged = pad + copied
+    assert len(forged) == len(raw)
+    journal.write_bytes(forged)
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(journal, anchor=anchor)
+    assert refused.value.check == "anchor", refused.value
+    with pytest.raises(console.RecordRefused):
+        console.read_record(journal)
+    journal.write_bytes(raw)
+
+    # A row as the anchor line, and a header-only segment's header: both verify by their own rules.
+    diode2, state2 = tmp_path / "diode2", tmp_path / "state2"
+    quiet = console.Executive(world, diode2, phase="translunar_coast", state_dir=state2)
+    quiet.attach("alpha")
+    _p, _c, row_snapshot = recorded_run(quiet, diode2, {}, 3, snapshot_at=3)
+    quiet.close()
+    assert "event" not in record_lines(quiet.journal)[-1]
+    console.read_record(state2, anchor=console.record_anchor(row_snapshot)).close()
+    torn_boot, _ = resume_from(console, checkpoint, world, diode2, state2)
+    real = console._write_all
+
+    def header_only(fd, data, real=real):
+        if b'"event":"segment"' in data:
+            real(fd, data[: data.index(b"\n") + 1])  # the header, whole; the first row, lost
+            raise SimulatedKill
+        return real(fd, data)
+
+    console._write_all = header_only
+    try:
+        with pytest.raises(SimulatedKill):
+            torn_boot.cycle()
+    finally:
+        console._write_all = real
+    torn_boot.close()
+    third, _ = resume_from(console, checkpoint, world, diode2, state2)
+    third.checkpoint()
+    third.close()
+    body = checkpoint.read_generation(state2, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    header_anchor = console.record_anchor(body)
+    assert header_anchor["entry"]["segment"] == torn_boot.boot_id and header_anchor["tick"] == 3, header_anchor
+    console.read_record(state2, anchor=header_anchor).close()

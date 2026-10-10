@@ -1871,8 +1871,8 @@ def _summarise(held: int, name: str, segments: list[SegmentInfo], *, offset: int
                 current.last_tick, current.rows = row["tick"], current.rows + 1
 
 
-def _line_ending_at(fd: int, offset: int) -> bytes | None:
-    """The line whose newline is the byte before `offset`, without it; `None` past `MAX_RECORD_LINE_BYTES`."""
+def _line_ending_at(fd: int, offset: int) -> tuple[int, bytes] | None:
+    """`(start, line)` for the line whose newline is the byte before `offset`, without it; `None` past `MAX_RECORD_LINE_BYTES`."""
     position = offset - 1
     start = 0
     while position > 0:
@@ -1884,20 +1884,51 @@ def _line_ending_at(fd: int, offset: int) -> bytes | None:
         position = low
         if offset - position > MAX_RECORD_LINE_BYTES:
             return None
-    return os.pread(fd, offset - 1 - start, start)
+    return start, os.pread(fd, offset - 1 - start, start)
 
 
-def _anchor_line_problem(line: bytes | None, anchor: dict[str, Any]) -> str | None:
-    """Why the line ending at the anchor is not the one the checkpoint was taken after (review F16), or `None`.
+def _chain_before(fd: int, start: int) -> str | None:
+    """The chain value of the record line before the one beginning at `start`, read backwards past startup events.
+
+    `None` when there is none to be found within `STARTUP_LINES_BEFORE_HEADER` startup events — the start
+    of the file, an unparseable line, or a line that is not part of the trace — which a row or a note at
+    the anchor cannot follow.
+    """
+    for _ in range(STARTUP_LINES_BEFORE_HEADER + 1):
+        if start <= 0:
+            return None
+        found = _line_ending_at(fd, start)
+        if found is None:
+            return None
+        start, line = found
+        try:
+            row = loads_json(line.decode("utf-8"))
+        except Exception:  # noqa: BLE001 - a fragment cannot precede a complete record line (R1)
+            return None
+        if not isinstance(row, dict):
+            return None
+        if _startup_event(row):
+            continue
+        chain = row.get("chain")
+        return chain if _hex(chain) else None
+    return None
+
+
+def _anchor_line_problem(fd: int, found: tuple[int, bytes] | None, anchor: dict[str, Any]) -> str | None:
+    """Why the line ending at the anchor is not the one the checkpoint was taken after (review F16, G2), or `None`.
 
     It must be a record line of the anchor's boot and world whose `chain` is the anchor's: a row or a
     note of the snapshot's tick, or — for a boot whose first cycle never reached its row — that boot's
-    header, beginning at the snapshot's tick. A newline in the right place is not enough: a different
-    file of exactly that length would have resumed at the snapshot's tick with nothing read.
+    header, beginning at the snapshot's tick. And it must *be* one (confirmation G2): it passes the
+    record's own schema for its kind, and its chain recomputes — a header's from its `previous_chain`,
+    a row's or a note's from the chained line before it, read backwards past any startup events. A
+    newline in the right place is not enough, nor an object copying the four fields: a different file
+    of exactly that length would have resumed at the snapshot's tick with nothing read.
     """
     entry, tick = anchor["entry"], anchor["tick"]
-    if line is None:
+    if found is None:
         return f"the line ending there is longer than the {MAX_RECORD_LINE_BYTES} bytes a record line may be"
+    start, line = found
     try:
         row = loads_json(line.decode("utf-8"))
     except Exception:  # noqa: BLE001 - any decoder failure is "not a line"
@@ -1912,6 +1943,23 @@ def _anchor_line_problem(line: bytes | None, anchor: dict[str, Any]) -> str | No
     at = row.get("first_tick") if event == "segment" else row.get("tick") if event in (None, "results_written") else None
     if at != tick:
         return f"the line ending there is not one of the snapshot's tick {tick}"
+    if event == "segment":
+        problem = (
+            f"its format is {bounded_repr(row.get('format'))}, not {RECORD_FORMAT!r}" if row.get("format") != RECORD_FORMAT else _header_problem(row)
+        )
+        if problem is None and row["chain"] != record_chain(row["previous_chain"], row):
+            problem = "its chain value is not its own"
+    else:
+        found_problem = _note_problem(row) if event == "results_written" else _row_problem(row)
+        problem = found_problem if isinstance(found_problem, str) or found_problem is None else found_problem[1]
+        if problem is None:
+            previous = _chain_before(fd, start)
+            if previous is None:
+                problem = "no chained record line precedes it"
+            elif row["chain"] != record_chain(previous, row):
+                problem = "its chain does not follow from the record line before it"
+    if problem is not None:
+        return f"the line ending there is not a record line this vehicle wrote: {problem}"
     return None
 
 
@@ -1940,7 +1988,7 @@ def _anchored_segment(held: int, name: str, anchor: dict[str, Any]) -> SegmentIn
                 "anchor", f"byte {offset} of {name} does not follow the end of a line, so it is not where the checkpoint's last line ended",
                 tick=anchor["tick"], segment=entry.get("segment"),
             )
-        problem = _anchor_line_problem(_line_ending_at(fd, offset), anchor)
+        problem = _anchor_line_problem(fd, _line_ending_at(fd, offset), anchor)
         if problem is not None:
             raise RecordRefused(
                 "anchor", f"byte {offset} of {name} is not where the checkpoint's last line ended: {problem}",
