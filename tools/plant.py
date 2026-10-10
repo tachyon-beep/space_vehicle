@@ -384,7 +384,9 @@ def corpus_files(root: Path) -> list[Path]:
     a `domains/` that does not exist (or is not a directory) has no domain files. The set and its order
     are glob's: every entry of `domains/` that is a directory (a link to one included, a dotted name
     included), every entry of one named exactly as `CORPUS_DOMAIN_FILES` says, each name's paths sorted
-    as paths, then only those that exist (`Path.exists`, which raises on anything but absence).
+    as paths, then only those that exist (`_present`). No pathlib predicate decides any of it: from
+    Python 3.14 `Path.exists` and `Path.is_file` are `os.path`'s, which answer `False` for *any*
+    `OSError`, so an `EIO` on `vehicle.yaml` would drop it as quietly as the glob did (J1a).
     """
     files = [root / name for name in CORPUS_TOP_LEVEL]
     found: dict[str, list[Path]] = {name: [] for name in CORPUS_DOMAIN_FILES}
@@ -395,7 +397,16 @@ def corpus_files(root: Path) -> list[Path]:
                     found[entry.name].append(Path(entry.path))
     for name in CORPUS_DOMAIN_FILES:
         files.extend(sorted(found[name]))
-    return [path for path in files if path.exists()]
+    return [path for path in files if _present(path)]
+
+
+def _present(path: Path) -> bool:
+    """Whether `path` exists, following links: `False` only for its absence; any other error raises, naming it (`corpus_files`)."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
 
 
 def _listed(directory: Path) -> list[os.DirEntry[str]]:

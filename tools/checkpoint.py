@@ -173,14 +173,19 @@ def decode(raw: bytes) -> Any:
 
 # -- identity -----------------------------------------------------------------------------------
 def engine_identity(root: Path) -> str:
-    """SHA-256 over the corpus and the three engine tools, each framed by its path and length."""
+    """SHA-256 over the corpus and the three engine tools, each framed by its path and length.
+
+    Every file is examined with `os.stat`, so an error — its absence included — raises naming it; not
+    with `Path.is_file`, which from Python 3.14 answers `False` for any `OSError` and made an `EIO`
+    read as "missing" (WP08 child 3, fourth round, J1a).
+    """
     root = Path(root)
     digest = hashlib.sha256()
     names = [path.relative_to(root).as_posix() for path in corpus_files(root)] + list(ENGINE_TOOLS)
     for name in names:
         path = root / name
-        if not path.is_file():
-            raise FileNotFoundError(f"{path} is part of the engine identity and is missing")
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise OSError(errno.EINVAL, "part of the engine identity, and not a regular file", str(path))
         data = path.read_bytes()
         digest.update(f"{name}\n{len(data)}\n".encode())
         digest.update(data)

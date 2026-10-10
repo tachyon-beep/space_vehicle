@@ -911,7 +911,8 @@ a window directory goes through the held diode handle, never through `--diode-di
 *Amended by #21's fourth round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `f12e522`;
 decided by the coordinator under the owner's delegation.* (xlii) **The engine identity is computed whole
 or not at all.** The corpus it hashes (I) is listed explicitly, directory by directory; an error listing
-a directory or examining an entry raises with its path, and only absence is quiet. A short list was the
+a directory or examining an entry or a file raises with its path, and only absence is quiet — by
+`os.stat`, never a pathlib predicate, which from Python 3.14 answers `False` for any error. A short list was the
 defect: a listing that swallowed an `EIO` made the identity a hash of the top-level files, which a world's
 genesis or a resume's first checkpoint wrote and the executive kept, so one transient error made every
 later checkpoint another engine's. An identity that cannot be computed at a start is a refusal naming the

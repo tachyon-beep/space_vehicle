@@ -30355,3 +30355,33 @@ def test_a_close_that_fails_on_the_way_out_is_named_and_exit_3_with_every_other_
     err = capsys.readouterr().err
     assert failed and open_descriptors() == before, (which, failed)
     assert code == 3 and "EIO" in err and failing in err and "could not be closed" in err, (which, code, err)
+
+
+@pytest.mark.parametrize("which", ["vehicle.yaml", "domains/gnc/components.yaml", "tools/plant.py"])
+def test_an_unreadable_file_of_the_engine_identity_raises_naming_it_on_every_python(monkeypatch, which):
+    """Round 4, J1a (coordinator): no pathlib predicate decides what the engine identity hashes.
+
+    `corpus_files` kept a file if `Path.exists()`, and `engine_identity` hashed one if `Path.is_file()`.
+    On Python 3.12 and 3.13 those raise on an error that is not absence; from 3.14 they are `os.path`'s,
+    which answer `False` for any `OSError` — so an `EIO` examining `vehicle.yaml` would drop it from the
+    corpus and shorten the identity again, and one examining an engine tool read as "missing". Both are
+    `os.stat` now, which raises naming the file. On 3.12 and 3.13 this test is a guard: their pathlib
+    raised too, so it fails before the fix only on 3.14 or later.
+    """
+    checkpoint, _console, plant, world = checkpoint_tools()
+    target = str(world.root / which)
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if isinstance(path, (str, bytes, os.PathLike)) and os.fsdecode(path) == target:
+            raise OSError(errno.EIO, os.strerror(errno.EIO), os.fsdecode(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    with pytest.raises(OSError) as failed:
+        checkpoint.engine_identity(world.root)
+    assert failed.value.errno == errno.EIO and failed.value.filename == target, (which, failed.value)
+    if which != "tools/plant.py":
+        with pytest.raises(OSError) as listed:
+            plant.corpus_files(world.root)
+        assert listed.value.errno == errno.EIO and listed.value.filename == target, (which, listed.value)

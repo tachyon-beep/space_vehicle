@@ -19374,11 +19374,15 @@ A fourth round (Codex's confirmation of `f12e522`, which confirmed H1, H2 and H3
 | J4 close errors (Codex, P3) | a failing `close` of a walk's parent leaked the child; one on the way out escaped `main` and left the executive's other handles open | every `close` runs; the first failure, when nothing failed before it, is named and exit 3 | `EBADF` for `EIO` and a descriptor left; `OSError` out of `main` |
 
 The start path's injection test now reaches the vehicle's configuration and every `close` as well, and
-its error carries the path the call was given, as the kernel's does.
+its error carries the path the call was given, as the kernel's does. And (J1a, the coordinator's) no
+pathlib predicate decides what the identity hashes: from Python 3.14 `Path.exists` and `Path.is_file`
+answer `False` for any `OSError`, which would have shortened it again; each file is `os.stat`ed, and an
+error other than absence raises naming it — a test that fails before the fix on 3.14, and guards 3.12
+and 3.13, whose pathlib raised.
 
 | figure | before | after |
 |---|---:|---:|
-| referee tests | 513 | **521** |
+| referee tests | 513 | **522** |
 
 ## The invariants, and which of them are enforced
 
