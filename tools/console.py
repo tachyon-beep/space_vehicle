@@ -1015,8 +1015,7 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
             # this event is a line of its own and not the tail of a fragment (addendum B8).
             size = os.fstat(fd).st_size
             ending = TORN_TAIL_TERMINATOR if size > 0 and os.pread(fd, 1, size - 1) != b"\n" else b""
-            _write_all(fd, ending + (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
-            os.fsync(fd)
+            append_or_restore(fd, ending + (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"), str(path))
         finally:
             os.close(fd)
         # The line is durable; the name, when this append made the file, is durable with its directory.
@@ -1051,6 +1050,39 @@ def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
         view = view[os.write(fd, view):]
+
+
+def append_or_restore(fd: int, data: bytes, name: str) -> None:
+    """Append `data` to a record file and `fsync` it — or leave the file as it was, or stop (round 4, J2).
+
+    **The one discipline for every append to a record file**, chained row or advisory event: the
+    file's size is noted first; a write that fails part-way, or an `fsync` that fails, is undone by
+    cutting the file back to that size and `fsync`ing the cut, and the error is raised. A partial
+    append left in place was the defect: `checkpoint_or_record` suppressed its advisory event's
+    failure, and the executive's held handle then appended the next cycle's row straight after the
+    fragment — one line, ending in a plain newline, that does not parse, which recovery rightly refuses
+    as corruption (H1). Ending the fragment with a terminator before the row instead would break H1's
+    rule that a marked fragment is followed by no chained row; the cut restores what was there. One
+    writer appends (`O_APPEND`, under the lock), so the size noted is where this append began. A cut
+    that itself fails leaves a fragment no later append may follow: `RecordUnwritable`, and the run
+    stops before another cycle.
+    """
+    before = os.fstat(fd).st_size
+    try:
+        _write_all(fd, data)
+        os.fsync(fd)
+    except OSError as exc:
+        try:
+            os.ftruncate(fd, before)
+            os.fsync(fd)
+        except OSError as again:
+            raise RecordUnwritable(
+                f"an append to the record {name} failed ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: "
+                f"{exc.strerror}) and could not be cut back to byte {before}, where it began "
+                f"({errno.errorcode.get(again.errno or 0, type(again).__name__)}: {again.strerror}), so the file may end "
+                "in a fragment no row may follow"
+            ) from again
+        raise
 
 
 # -- the record (ADR 0002 J, child 4) ------------------------------------------------------------
@@ -3129,7 +3161,10 @@ class Executive:
                 CURRENT, "checkpoint", RuntimeError(f"{exc} ({occasion}; {self.checkpoint_failures} consecutive)"), self.tick
             )
             if self.journal is not None and self.journal_dir_fd is not None:
-                with contextlib.suppress(Exception):
+                # The event is advisory, and a failure to append it is the record left as it was
+                # (`append_or_restore`) — unless the record could not be restored, which stops the run
+                # (J2): the next cycle's row would follow a fragment.
+                try:
                     append_journal_line(
                         self.journal,
                         {
@@ -3139,6 +3174,10 @@ class Executive:
                         },
                         dir_fd=self.journal_dir_fd,
                     )
+                except RecordUnwritable:
+                    raise
+                except Exception:  # noqa: BLE001 - advisory, and the append left the record as it was
+                    pass
             return False
         self.checkpoint_failures = 0
         return True
@@ -3341,7 +3380,7 @@ class Executive:
             private_record_file(fd, str(self.journal))
             info = os.fstat(fd)
             if info.st_size > 0 and os.pread(fd, 1, info.st_size - 1) != b"\n":
-                _write_all(fd, TORN_TAIL_TERMINATOR)
+                append_or_restore(fd, TORN_TAIL_TERMINATOR, str(self.journal))
             os.fsync(self.journal_dir_fd)
         except BaseException:
             os.close(fd)
@@ -3393,11 +3432,17 @@ class Executive:
                 )
         try:
             fd = self._record_handle()
-            _write_all(fd, b"".join(lines))
-            os.fsync(fd)
+            # A failed append is cut back to where it began (`append_or_restore`, J2), so the segment
+            # ends at its last whole line whatever the next boot finds; one that cannot be cut is
+            # `RecordUnwritable` by itself, said with what of the cycle was published.
+            append_or_restore(fd, b"".join(lines), str(self.journal))
             # One writer appends to the segment (`O_APPEND`, under the lock), so the file's size is the
             # byte offset just after this append's last line: the anchor a checkpoint records (B5).
             reached = os.fstat(fd).st_size
+        except RecordUnwritable as exc:
+            raise RecordUnwritable(
+                f"the record at {self.journal} cannot be written or made durable: {exc}; the vehicle stops, and {after} (ADR 0002 J)"
+            ) from exc
         except OSError as exc:
             raise RecordUnwritable(
                 f"the record at {self.journal} cannot be written or made durable "
@@ -4944,9 +4989,14 @@ def _resume(
     if republished:
         # The operator's account of what was owed and what became of it; the dedupe does not rely on it.
         event = {"event": "results_republished", "wall": utc_now().isoformat(), "boot_id": executive.boot_id, "world_id": executive.world_id, "results": republished}
-        with contextlib.suppress(Exception):
+        try:
             append_journal_line(executive.journal, event, dir_fd=executive.journal_dir_fd)
             events.append(event)
+        except RecordUnwritable as exc:
+            # The record could not be restored after a failed append (J2): nothing may follow it this boot.
+            raise ResumeRefused(f"the journal at {executive.journal} cannot take the resume's events ({exc})") from exc
+        except Exception:  # noqa: BLE001 - advisory, and the append left the record as it was
+            pass
     return Resumption(
         snapshot_tick=snapshot_tick,
         tick=tick,
@@ -5321,7 +5371,12 @@ def main(argv: list[str] | None = None) -> int:
                 # recorded and journaled as a cadence failure is, and not a changed exit, because the record
                 # already holds every tick.
                 if clean and executive.state_fd is not None and executive.last_checkpoint_tick != executive.tick:
-                    executive.checkpoint_or_record("clean end")
+                    try:
+                        executive.checkpoint_or_record("clean end")
+                    except RecordUnwritable as exc:
+                        # Its event's failed append could not be cut back (J2): the record is unwritable.
+                        sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
+                        return 3
                 return 0
             finally:
                 executive.close()
