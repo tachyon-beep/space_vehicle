@@ -29838,3 +29838,118 @@ def test_a_window_published_past_the_last_durable_tick_is_a_named_refusal_not_a_
     with pytest.raises(console.ResumeRefused) as refused:
         resume_from(console, checkpoint, world, diode, state)
     assert "'alpha'" in str(refused.value) and "99" in str(refused.value) and "tick 3" in str(refused.value), refused.value
+
+
+# The OS calls a start makes on its own path, each of which round 3's H2 injects `EIO` into in turn.
+START_PATH_CALLS = ("open", "fstat", "lstat", "listdir", "scandir", "read", "pread", "write", "fsync", "ftruncate", "rename", "replace", "mkdir", "dup")
+
+
+class StartPathInjection:
+    """Fail the `index`-th call to `os.<name>` with `EIO` — on the main thread, during a start, before the first cycle.
+
+    With `index` `None` it only counts, per name, the calls a start makes, so the test can walk every one.
+    The world is loaded once and handed to `main` (`load_world` and `load_postures` stubbed), so what is
+    counted is the start's own path: a call on a descriptor, on a name relative to one, on `/` (where every
+    private walk begins) or on a path under `root`, the run's own directories — not a read of the
+    vehicle's own configuration (the engine identity's file list, whose `glob` swallows an `OSError`). The
+    first cycle turns injection off, because from there an `OSError` is the cycle's to handle.
+    """
+
+    def __init__(self, monkeypatch, console, world, postures, root, name=None, index=None):
+        self.counts: dict[str, int] = dict.fromkeys(START_PATH_CALLS, 0)
+        self.active, self.fired = True, None
+        self.name, self.index = name, index
+        main_thread = threading.main_thread()
+        for call in START_PATH_CALLS:
+            real = getattr(os, call)
+
+            def wrapped(*args, _call=call, _real=real, **kwargs):
+                first = args[0] if args else kwargs.get("path", ".")
+                ours = not isinstance(first, (str, bytes, os.PathLike)) or not os.path.isabs(os.fsdecode(first))
+                ours = ours or os.fsdecode(first) == "/" or os.fsdecode(first).startswith(str(root) + os.sep)
+                if self.active and ours and threading.current_thread() is main_thread:
+                    seen = self.counts[_call]
+                    self.counts[_call] += 1
+                    if _call == self.name and seen == self.index:
+                        self.fired = (_call, seen, args[:1])
+                        raise OSError(errno.EIO, "Input/output error")
+                return _real(*args, **kwargs)
+
+            monkeypatch.setattr(os, call, wrapped)
+        real_cycle = console.Executive.cycle
+
+        def cycle(executive):
+            self.active = False
+            return real_cycle(executive)
+
+        monkeypatch.setattr(console.Executive, "cycle", cycle)
+        monkeypatch.setattr(console, "load_world", lambda _root: world)
+        monkeypatch.setattr(console, "load_postures", lambda _root: postures)
+
+
+def start_path_scenario(tmp_path: Path, scenario: str) -> tuple[Path, list[str]]:
+    """A directory pair ready for one kind of start, and the argument list that starts it."""
+    root = tmp_path / scenario
+    diode, state = root / "diode", root / "state"
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--slug", "bravo", "--poll", "0"]
+    if scenario == "resume":
+        assert start(diode, state, "alpha", "bravo", extra=["--cycles", "2", "--poll", "0"]).returncode == 0
+        return root, [*argv, "--cycles", "1"]
+    root.mkdir(parents=True)
+    return root, [*argv, *(["--init"] if scenario == "init" else ["--cycles", "1"])]
+
+
+@pytest.mark.parametrize("scenario", ["fresh", "resume", "init"])
+def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_descriptor_left_open(tmp_path, monkeypatch, capsys, scenario):
+    """Round 3, H2 (Codex P2): close the class, not the call — one boundary for every `OSError` a start meets.
+
+    Round 2 turned the `OSError`s the reviews found into refusals one call at a time, and more were
+    left: the walk that opens the state directory, an `fstat` of what it opened, could still raise past
+    `main` holding the journal's handle. Every descriptor the start path holds is now registered, with the
+    path it was opened for, in one `ExitStack` the moment it is opened, and one `except OSError` at the
+    start path's boundary turns anything left into exit 3 naming the file (`exc.filename`, or the path
+    of the descriptor in use) and the errno, after every descriptor is closed. Here `EIO` is injected
+    into each call of each kind the start path makes — every `os.open`, `fstat`, `lstat`, listing,
+    read, write, `fsync`, truncation, rename, `mkdir` and `dup` — for a fresh start, a resume and
+    `--init`, one at a time: `main` always returns, 0 where the failure is one a start tolerates (a
+    window's file, an advisory) and otherwise 3 with the errno and a path on stderr, and no descriptor
+    outlives it.
+    """
+    console, _plant, world = console_tools()
+    postures = console.load_postures(VEHICLE)
+    template, argv = start_path_scenario(tmp_path / "template", scenario)
+
+    def copy(work: Path) -> list[str]:
+        """The template copied to `work`, its `serves.json` naming the copy's diode directory; the copy's argv."""
+        shutil.copytree(template, work, symlinks=True)
+        serves = work / "state" / "serves.json"
+        if serves.exists():
+            serves.write_text(serves.read_text().replace(str(template), str(work)))
+        return [a.replace(str(template), str(work)) for a in argv]
+
+    with monkeypatch.context() as patch:
+        counting = StartPathInjection(patch, console, world, postures, tmp_path / "count")
+        assert console.main(copy(tmp_path / "count")) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    reached = {name: count for name, count in counting.counts.items() if count}
+    assert {"open", "fstat"} <= set(reached), reached
+    refused = 0
+    for name, count in sorted(reached.items()):
+        for index in range(count):
+            work = tmp_path / f"{name}-{index}"
+            arguments = copy(work)
+            before = open_descriptors()
+            with monkeypatch.context() as patch:
+                injection = StartPathInjection(patch, console, world, postures, work, name, index)
+                try:
+                    code = console.main(arguments)
+                except BaseException as exc:  # noqa: BLE001 - the property under test is that nothing escapes
+                    pytest.fail(f"{scenario}: EIO in os.{name} call {index} escaped main: {type(exc).__name__}: {exc}")
+            err = capsys.readouterr().err
+            assert open_descriptors() == before, (scenario, name, index, injection.fired)
+            assert code in (0, 3), (scenario, name, index, code, err)
+            if code == 3:
+                refused += 1
+                assert ("EIO" in err or "Input/output error" in err) and str(work) in err, (scenario, name, index, injection.fired, err)
+            shutil.rmtree(work)
+    assert refused, "some failure on the start path refuses"

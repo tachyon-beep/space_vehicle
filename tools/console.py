@@ -189,6 +189,7 @@ import argparse
 import contextlib
 import errno
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -200,7 +201,7 @@ import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -4950,6 +4951,36 @@ def positive_int(text: str) -> int:
     return value
 
 
+class _StartPath(contextlib.ExitStack):
+    """`main`'s start path: the descriptors it holds, each with its path, closed once; and its one `OSError` boundary (H2)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: dict[int, Path] = {}
+        self.where: Path | None = None
+
+    def hold(self, fd: int, path: str | os.PathLike[str]) -> int:
+        """Register a descriptor the moment it is opened, with the path it was opened for; it is closed on the way out."""
+        self.callback(os.close, fd)
+        self.paths[fd] = self.where = Path(path)
+        return fd
+
+    def at(self, path: str | os.PathLike[str] | None) -> None:
+        """Say what the start is working on, for a refusal from a call that names no file (`fsync`, `fstat`)."""
+        self.where = Path(path) if path is not None else None
+
+    def refusal(self, exc: OSError) -> str:
+        code = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+        named = os.fsdecode(exc.filename) if isinstance(exc.filename, (str, bytes, os.PathLike)) else None
+        if named is None:
+            where = str(self.where) if self.where is not None else "a file the start was using"
+        elif not os.path.isabs(named) and self.where is not None:
+            where = f"{named} in {self.where}"
+        else:
+            where = named
+        return f"the start could not read or write {where} ({code}: {exc.strerror}); every handle it held is closed, and nothing was started"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dir", default=str(Path(__file__).resolve().parent.parent))
@@ -5070,508 +5101,533 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"the scenario postures cannot be loaded: {exc}\n")
         return 3
 
-    # ---- one world per directory, and everything the start reads is read under the lock -------
-    #
-    # The lock says *an* executive is here; the directory's record says *which* world, and what
-    # identity it has. Without `--state-dir` both live in the diode root and the lock is the root's
-    # (ADR 0001). With `--state-dir` the lock is the state directory's (ADR 0002 H(i)): the root is
-    # agent-writable until the chassis adopts its per-slug mounts (`adf38d6`, chassis branch
-    # `aurora-port`), and a lock an agent can hold is a stop button, so the root lock is not
-    # opened at all and the record alone holds one world per diode directory. Either way the record
-    # is read only while this executive's lock is held. An executive on a directory whose record names
-    # a world refuses, live or not — starting a fresh world on it would silently reset its physics —
-    # until child 3 resumes it (ADR 0001 choice D). A record that cannot be read is a refusal and
-    # never "a fresh directory", except beside a verified checkpoint, where it is the checkpoint's
-    # copy and is rewritten (ADR 0002 H(ii), below).
-    diode_dir = Path(args.diode_dir)
-    state_dir = Path(args.state_dir) if args.state_dir else None
-    state_fd: int | None = None
-    # **Every destination is checked before the first write** (review F3): the diode directory, the
-    # lock, `serves.json` and a startup event are all written below, and the `--journal` rule used to
-    # be asked only by `Executive`, which a start on a checkpoint never builds. **Each private path
-    # is canonicalised once, by hand, and opened once, by a walk that follows nothing** (third
-    # review): every hop is held to the diode directory, the open is held to what the hop check saw,
-    # and the handle is all that is used after it. A loop is a refusal by name (second review, P2).
-    diode_canonical, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
-    if problem is not None or diode_canonical is None:
-        sys.stderr.write(f"{problem}\n")
-        return 3
-    # An explicit journal: its file canonicalised under the hop rule, its directory opened and held.
-    journal_explicit: Path | None = None
-    journal_fd: int | None = None
-    if args.journal:
-        journal_fd, journal_explicit, problem = open_journal_dir(args.journal, diode_canonical)
-        if problem is not None:
-            sys.stderr.write(problem + "\n")
+    def start(starting: _StartPath) -> int | Callable[[], int]:
+        """The start path: everything up to the first cycle, inside `main`'s one `OSError` boundary (round 3, H2).
+
+        Returns an exit code, or the run itself — which `main` calls outside the boundary, because once the
+        first cycle claims, an `OSError` is the cycle's to handle (per window, or `RecordUnwritable`).
+        """
+        # ---- one world per directory, and everything the start reads is read under the lock -------
+        #
+        # The lock says *an* executive is here; the directory's record says *which* world, and what
+        # identity it has. Without `--state-dir` both live in the diode root and the lock is the root's
+        # (ADR 0001). With `--state-dir` the lock is the state directory's (ADR 0002 H(i)): the root is
+        # agent-writable until the chassis adopts its per-slug mounts (`adf38d6`, chassis branch
+        # `aurora-port`), and a lock an agent can hold is a stop button, so the root lock is not
+        # opened at all and the record alone holds one world per diode directory. Either way the record
+        # is read only while this executive's lock is held. An executive on a directory whose record names
+        # a world refuses, live or not — starting a fresh world on it would silently reset its physics —
+        # until child 3 resumes it (ADR 0001 choice D). A record that cannot be read is a refusal and
+        # never "a fresh directory", except beside a verified checkpoint, where it is the checkpoint's
+        # copy and is rewritten (ADR 0002 H(ii), below).
+        diode_dir = Path(args.diode_dir)
+        state_dir = Path(args.state_dir) if args.state_dir else None
+        state_fd: int | None = None
+        # **Every destination is checked before the first write** (review F3): the diode directory, the
+        # lock, `serves.json` and a startup event are all written below, and the `--journal` rule used to
+        # be asked only by `Executive`, which a start on a checkpoint never builds. **Each private path
+        # is canonicalised once, by hand, and opened once, by a walk that follows nothing** (third
+        # review): every hop is held to the diode directory, the open is held to what the hop check saw,
+        # and the handle is all that is used after it. A loop is a refusal by name (second review, P2).
+        diode_canonical, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+        if problem is not None or diode_canonical is None:
+            sys.stderr.write(f"{problem}\n")
             return 3
-    # The state directory as spelled is the operator's word, kept for the messages; once it is
-    # checked and opened, every access goes through `state_fd`, or its canonical path `state_path`
-    # where only a path is taken — never the spelling.
-    state_path: Path | None = None
-    if state_dir is not None:
-        state_fd, state_path, problem = open_private_dir(state_dir, diode_canonical)
-        if problem is not None:
-            if journal_fd is not None:
-                os.close(journal_fd)
-            sys.stderr.write(problem + "\n")
-            return 3
-
-    def errno_name(exc: BaseException) -> str:
-        if isinstance(exc, OSError):
-            return f"{errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}"
-        return f"{type(exc).__name__}: {exc}"
-
-    # **The operator's own writes fail by name too** (second review, Opus 1): a diode directory that
-    # cannot be made or opened, and a lock that cannot be opened — a read-only mount, a directory where
-    # the lock goes — were tracebacks.
-    # Opened from its one resolution by a walk that follows nothing and holds each component to what the
-    # resolution saw (confirmation G1): the directory served is the one the confinement checks were
-    # made against, and nothing resolves the spelling again.
-    try:
-        opened_diode, why = walk_open_dir(diode_canonical, "--diode-dir", create=True)
-    except OSError as exc:
-        opened_diode, why = None, errno_name(exc)
-    if opened_diode is None:
-        for fd in (state_fd, journal_fd):
-            if fd is not None:
-                os.close(fd)
-        sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({why})\n")
-        return 3
-    diode_fd = opened_diode
-    lock_in = state_fd if state_fd is not None else diode_fd
-    lock_where = state_path if state_path is not None else diode_dir
-    try:
-        lock_fd = os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in)
-    except OSError as exc:
-        for fd in (diode_fd, state_fd, journal_fd):
-            if fd is not None:
-                os.close(fd)
-        sys.stderr.write(
-            f"the lock {lock_where / LOCK_FILE} cannot be opened ({errno_name(exc)}). The executive "
-            "does not run without its lock; repair what is at that path, or the directory's permissions\n"
-        )
-        return 3
-
-    def close_all() -> None:
-        for fd in (lock_fd, diode_fd, state_fd, journal_fd):
-            if fd is not None:
-                os.close(fd)
-
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        try:
-            holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
-        except OSError:
-            holder = "unknown holder"
-        close_all()
+        # An explicit journal: its file canonicalised under the hop rule, its directory opened and held.
+        journal_explicit: Path | None = None
+        journal_fd: int | None = None
+        if args.journal:
+            starting.at(Path(args.journal))
+            journal_fd, journal_explicit, problem = open_journal_dir(args.journal, diode_canonical)
+            if problem is not None:
+                sys.stderr.write(problem + "\n")
+                return 3
+            if journal_fd is not None and journal_explicit is not None:
+                starting.hold(journal_fd, journal_explicit.parent)
+        # The state directory as spelled is the operator's word, kept for the messages; once it is
+        # checked and opened, every access goes through `state_fd`, or its canonical path `state_path`
+        # where only a path is taken — never the spelling.
+        state_path: Path | None = None
         if state_dir is not None:
-            sys.stderr.write(
-                f"another executive holds the state directory {state_dir} ({holder}). One state "
-                "directory is one executive (ADR 0002 H); stop it, or point --state-dir at another directory\n"
-            )
-        else:
-            sys.stderr.write(
-                f"another executive holds {diode_dir} ({holder}). One directory is one world "
-                "(ADR 0001); stop it, or point --diode-dir at another directory\n"
-            )
-        return 3
+            starting.at(state_dir)
+            state_fd, state_path, problem = open_private_dir(state_dir, diode_canonical)
+            if problem is not None:
+                sys.stderr.write(problem + "\n")
+                return 3
+            if state_fd is not None and state_path is not None:
+                starting.hold(state_fd, state_path)
 
-    def refuse(message: str) -> int:
-        sys.stderr.write(message + "\n")
-        close_all()
-        return 3
+        def errno_name(exc: BaseException) -> str:
+            if isinstance(exc, OSError):
+                return f"{errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}"
+            return f"{type(exc).__name__}: {exc}"
 
-    def serves_refusal() -> str | None:
-        """Write `serves.json`; the refusal sentence if it cannot be written (second review, Opus 1)."""
-        if state_fd is None or state_path is None:
-            return "no state directory is open, so serves.json cannot be written"
+        # **The operator's own writes fail by name too** (second review, Opus 1): a diode directory that
+        # cannot be made or opened, and a lock that cannot be opened — a read-only mount, a directory where
+        # the lock goes — were tracebacks.
+        # Opened from its one resolution by a walk that follows nothing and holds each component to what the
+        # resolution saw (confirmation G1): the directory served is the one the confinement checks were
+        # made against, and nothing resolves the spelling again.
+        starting.at(diode_canonical.path)
         try:
-            write_serves_record(state_fd, diode_canonical.path, journal_explicit)
-        except Exception as exc:  # noqa: BLE001 - the refusal names it
-            return (
-                f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
-                "A state directory that cannot say which diode directory it serves is not one to run"
-            )
-        return None
-
-    # This boot's id is drawn here so that a startup event and the ticks that follow share one
-    # journal segment; the executive is handed it below.
-    boot_id = uuid.uuid4().hex
-    journal = journal_explicit
-    if journal is None and state_path is not None:
-        journal = journal_segment_path(state_path, boot_id)
-
-    record, problem, _record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
-    checkpoint_found = None
-    if state_fd is not None:
-        # One state directory serves one diode directory, and says which (ADR 0002 H).
-        served, serves_problem = read_serves_record(state_fd)
-        if serves_problem is not None:
-            return refuse(
-                f"the state directory's record at {state_dir / SERVES_FILE} cannot be read: {serves_problem}. "
-                "Repair or clear it; a state directory that cannot say which diode directory it serves is not one to run"
-            )
-        if served is not None and served != str(diode_canonical.path):
-            return refuse(
-                f"the state directory {state_dir} serves the diode directory {served}, not {diode_canonical.path}. "
-                "One state directory serves one diode directory (ADR 0002 H); point --state-dir at the directory "
-                "that serves this one, or at a fresh one"
-            )
-        # The checkpoint is authoritative for identity (ADR 0002 H(ii)); K2 chooses the generation and
-        # its refusals — corrupt both, incompatible — are the operator's to read (K).
-        try:
-            checkpoint_found = choose_generation(state_path, Compatibility.current(world), dir_fd=state_fd)
-        except CheckpointRefused as exc:
-            return refuse(
-                f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
-                "and the executive does not start a fresh world over one (ADR 0002 K)"
-            )
-
-    def run(executive: Executive, banner: str) -> int:
-        """The loop, for a fresh world and a resumed one alike: the lock's holder line, the banner, the cycles, a clean end."""
-        # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
-        try:
-            os.ftruncate(lock_fd, 0)
-            os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+            opened_diode, why = walk_open_dir(diode_canonical, "--diode-dir", create=True)
         except OSError as exc:
-            executive.close()
-            return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
-        print(banner, flush=True)
-        # `--cycles` counts the cycles **this invocation** runs; a resumed world continues its tick.
-        ran = 0
-        clean = False
+            opened_diode, why = None, errno_name(exc)
+        if opened_diode is None:
+            sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({why})\n")
+            return 3
+        diode_fd = starting.hold(opened_diode, diode_canonical.path)
+        lock_in = state_fd if state_fd is not None else diode_fd
+        lock_where = state_path if state_path is not None else diode_canonical.path
+        starting.at(lock_where / LOCK_FILE)
         try:
+            lock_fd = starting.hold(
+                os.open(LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=lock_in), lock_where / LOCK_FILE
+            )
+        except OSError as exc:
+            sys.stderr.write(
+                f"the lock {lock_where / LOCK_FILE} cannot be opened ({errno_name(exc)}). The executive "
+                "does not run without its lock; repair what is at that path, or the directory's permissions\n"
+            )
+            return 3
+
+        def close_all() -> None:
+            """Nothing to do by hand: every descriptor the start holds is in `starting`, closed once on the way out (H2)."""
+
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
             try:
-                while args.cycles == 0 or ran < args.cycles:
-                    ran += 1
-                    written = executive.cycle()
-                    if written:
-                        print(f"[console] tick {executive.tick}: {len(written)} result(s)", flush=True)
-                    time.sleep(args.poll)
-                clean = True
-            except KeyboardInterrupt:
-                print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
-                # A checkpoint only at a cycle's boundary: mid-cycle the window counters can be ahead of the truth.
-                clean = not executive.in_cycle
-            except UncomparableState as exc:
+                holder = os.read(lock_fd, 256).decode("utf-8", "replace").strip() or "unknown holder"
+            except OSError:
+                holder = "unknown holder"
+            close_all()
+            if state_dir is not None:
                 sys.stderr.write(
-                    f"[console] stopped at tick {executive.tick}: the next tick's state cannot be compared "
-                    f"({exc}). The executive did not commit it; the lineage ends at tick {executive.tick}\n"
+                    f"another executive holds the state directory {state_dir} ({holder}). One state "
+                    "directory is one executive (ADR 0002 H); stop it, or point --state-dir at another directory\n"
                 )
-                return 3
-            except RecordUnwritable as exc:
-                sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
-                return 3
-            # A clean end checkpoints the last completed cycle, unless the cadence just did; a failure is
-            # recorded and journaled as a cadence failure is, and not a changed exit, because the record
-            # already holds every tick.
-            if clean and executive.state_fd is not None and executive.last_checkpoint_tick != executive.tick:
-                executive.checkpoint_or_record("clean end")
+            else:
+                sys.stderr.write(
+                    f"another executive holds {diode_dir} ({holder}). One directory is one world "
+                    "(ADR 0001); stop it, or point --diode-dir at another directory\n"
+                )
+            return 3
+
+        def refuse(message: str) -> int:
+            sys.stderr.write(message + "\n")
+            close_all()
+            return 3
+
+        def serves_refusal() -> str | None:
+            """Write `serves.json`; the refusal sentence if it cannot be written (second review, Opus 1)."""
+            if state_fd is None or state_path is None:
+                return "no state directory is open, so serves.json cannot be written"
+            try:
+                write_serves_record(state_fd, diode_canonical.path, journal_explicit)
+            except Exception as exc:  # noqa: BLE001 - the refusal names it
+                return (
+                    f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
+                    "A state directory that cannot say which diode directory it serves is not one to run"
+                )
+            return None
+
+        # This boot's id is drawn here so that a startup event and the ticks that follow share one
+        # journal segment; the executive is handed it below.
+        boot_id = uuid.uuid4().hex
+        journal = journal_explicit
+        if journal is None and state_path is not None:
+            journal = journal_segment_path(state_path, boot_id)
+
+        starting.at(diode_canonical.path / RECORD_FILE)
+        record, problem, _record_bytes = read_root_record_bytes(RECORD_FILE, dir_fd=diode_fd, postures=set(postures))
+        checkpoint_found = None
+        if state_fd is not None:
+            starting.at(state_path)
+            # One state directory serves one diode directory, and says which (ADR 0002 H).
+            served, serves_problem = read_serves_record(state_fd)
+            if serves_problem is not None:
+                return refuse(
+                    f"the state directory's record at {state_dir / SERVES_FILE} cannot be read: {serves_problem}. "
+                    "Repair or clear it; a state directory that cannot say which diode directory it serves is not one to run"
+                )
+            if served is not None and served != str(diode_canonical.path):
+                return refuse(
+                    f"the state directory {state_dir} serves the diode directory {served}, not {diode_canonical.path}. "
+                    "One state directory serves one diode directory (ADR 0002 H); point --state-dir at the directory "
+                    "that serves this one, or at a fresh one"
+                )
+            # The checkpoint is authoritative for identity (ADR 0002 H(ii)); K2 chooses the generation and
+            # its refusals — corrupt both, incompatible — are the operator's to read (K).
+            try:
+                checkpoint_found = choose_generation(state_path, Compatibility.current(world), dir_fd=state_fd)
+            except CheckpointRefused as exc:
+                return refuse(
+                    f"{exc}. The state directory {state_dir} holds a checkpoint this engine will not resume from "
+                    "and the executive does not start a fresh world over one (ADR 0002 K)"
+                )
+
+        def run(executive: Executive, banner: str) -> int:
+            """The loop, for a fresh world and a resumed one alike: the lock's holder line, the banner, the cycles, a clean end."""
+            # The holder's line in the lock, for the next start's refusal to name; a failure is named too.
+            try:
+                os.ftruncate(lock_fd, 0)
+                os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
+            except OSError as exc:
+                executive.close()
+                return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
+            print(banner, flush=True)
+            # `--cycles` counts the cycles **this invocation** runs; a resumed world continues its tick.
+            ran = 0
+            clean = False
+            try:
+                try:
+                    while args.cycles == 0 or ran < args.cycles:
+                        ran += 1
+                        written = executive.cycle()
+                        if written:
+                            print(f"[console] tick {executive.tick}: {len(written)} result(s)", flush=True)
+                        time.sleep(args.poll)
+                    clean = True
+                except KeyboardInterrupt:
+                    print(f"\n[console] stopped after {executive.tick} tick(s)", flush=True)
+                    # A checkpoint only at a cycle's boundary: mid-cycle the window counters can be ahead of the truth.
+                    clean = not executive.in_cycle
+                except UncomparableState as exc:
+                    sys.stderr.write(
+                        f"[console] stopped at tick {executive.tick}: the next tick's state cannot be compared "
+                        f"({exc}). The executive did not commit it; the lineage ends at tick {executive.tick}\n"
+                    )
+                    return 3
+                except RecordUnwritable as exc:
+                    sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
+                    return 3
+                # A clean end checkpoints the last completed cycle, unless the cadence just did; a failure is
+                # recorded and journaled as a cadence failure is, and not a changed exit, because the record
+                # already holds every tick.
+                if clean and executive.state_fd is not None and executive.last_checkpoint_tick != executive.tick:
+                    executive.checkpoint_or_record("clean end")
+                return 0
+            finally:
+                executive.close()
+                close_all()
+
+        if checkpoint_found is not None:
+            body = checkpoint_found.body
+            # **A restart names the world it resumes, or names nothing** (commitment 2): a named scenario, seed,
+            # phase, ring bound or slug set the checkpoint does not record is refused by one sentence.
+            named_other = identity_refusal(args, body, checkpoint_found.path)
+            if named_other is not None:
+                return refuse(named_other)
+            if args.init:
+                return refuse(
+                    f"--init prepares an unbound directory, and the state directory {state_dir} holds world "
+                    f"{body['identity']['world_id']} at tick {body['identity']['tick']}, which a start without --init resumes "
+                    "(ADR 0001: a bound directory refuses every --init)"
+                )
+            expected = root_record_from_checkpoint(body)
+            if not (args.plan or args.plan_json):
+                action, why = reconcile_root_record(record, problem, expected)
+                if action == "refuse":
+                    return refuse(
+                        f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
+                        f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
+                        "or point --state-dir at the directory that serves this one"
+                    )
+                starting.at(state_path)
+                # Review F11: the record is read where it was written, and a restart naming another journal is
+                # told where that is, before anything is written.
+                recorded, previous = served_journal(state_fd)
+                current = str(journal_explicit) if journal_explicit is not None else None
+                if recorded and previous != current:
+                    own = "the state directory's own segments"
+                    return refuse(
+                        f"--journal names {current or 'none, which means ' + own} and this state directory's record was written to "
+                        f"{previous or own} (its serves.json): a restart reads the record where it was written, so name the same "
+                        "--journal, or none"
+                    )
+                unserved = serves_refusal()
+                if unserved is not None:
+                    return refuse(unserved)
+                # **Resume** (ADR 0002 F1, G, J, L; child 3): the checkpoint and the record after it.
+                try:
+                    executive, resumption = resume_executive(
+                        world,
+                        diode_dir,
+                        checkpoint_found,
+                        boot_id=boot_id,
+                        state_dir=state_path,
+                        state_fd=state_fd,
+                        journal=journal_explicit,
+                        journal_dir_fd=journal_fd,
+                        max_batch=args.max_batch,
+                        closed_interlocks=set(args.closed_interlock or []),
+                        diode_fd=diode_fd,
+                    )
+                except ResumeRefused as exc:
+                    return refuse(f"{exc}. The executive does not start a fresh world over a saved one (ADR 0002 K)")
+                starting.callback(executive.close)
+                # Addendum B3: a checkpoint at the recovered tick before anything is claimed — it makes the
+                # named run inputs durable and bounds the next resume's replay and re-publication.
+                try:
+                    executive.checkpoint()
+                except Exception as exc:  # noqa: BLE001 - the refusal names it
+                    executive.close()
+                    return refuse(
+                        f"the checkpoint at the recovered tick {resumption.tick} cannot be written into {state_path} ({exc}); nothing has been "
+                        "claimed this boot, and the world resumes from the record at the next start"
+                    )
+                rings = sorted({w.ring_slots for w in executive.windows.values()})
+                return functools.partial(
+                    run,
+                    executive,
+                    f"[console] {diode_dir} resumed world {executive.world_id} at tick {executive.tick} "
+                    f"(checkpoint {checkpoint_found.path.name} at tick {resumption.snapshot_tick}"
+                    + (", fell back" if resumption.fell_back else "")
+                    + f", replayed {resumption.replayed}, republished {sum(1 for r in resumption.republished if r.get('result') == 'written')}) "
+                    f"slugs={','.join(sorted(executive.windows))} phase={executive.phase} scenario={executive.scenario} "
+                    f"seed={executive.seed} ring={','.join(map(str, rings))} poll={args.poll}s "
+                    f"cycles={args.cycles or 'until interrupted'} state-dir={state_dir}",
+                )
+            # `--plan` answers from the checkpoint's identity and writes nothing in the diode directory
+            # (the state directory and its lock were made above, as for any start).
+            record, problem = expected, None
+        if checkpoint_found is None and state_fd is not None and not (args.init or args.plan or args.plan_json):
+            # Addendum B11 (S11): a fresh world over a record with no checkpoint. Its first segment would be a
+            # second root of the record, and every resume after it would refuse; one state directory is one
+            # world's (ADR 0002 H). Only the first header of each journal file is read. It is the first thing
+            # said (review F9): the state directory is the problem, whatever the diode directory holds.
+            try:
+                holding = state_record_files(state_fd, journal_fd, journal_explicit)
+            except OSError as exc:
+                # Confirmation G4: every `OSError` on a start's path is a refusal by name, with every handle closed.
+                return refuse(f"the state directory {state_dir} cannot be read for a record ({errno_name(exc)}); nothing was started")
+            if holding:
+                return refuse(
+                    f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
+                    "or one that died before its first checkpoint was written. One state directory is one world's "
+                    f"(ADR 0002 H): move {', '.join(holding)} out of {state_dir}, or point --state-dir at an empty directory"
+                )
+        if problem is not None:
+            return refuse(
+                f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
+                "that cannot be read is not a fresh directory; repair or clear it"
+            )
+        record = record or {}
+        recorded_slugs: dict[str, int] = {
+            str(slug): int((record.get("ring_slots") or {}).get(slug, DEFAULT_RING_SLOTS))
+            for slug in record.get("slugs") or []
+        }
+
+        # ---- the run's identity, resolved once against the directory's record --------------------
+        #
+        # A caller who names a value gets it. A caller who names nothing inherits whatever the
+        # directory's own record holds. A directory with no record gets the declared default. One
+        # directory is one world, so the identity is the directory's and not a window's.
+        recorded_scenario = record.get("scenario")
+        if not isinstance(recorded_scenario, str) or not recorded_scenario:
+            recorded_scenario = None
+        scenario = resolve_remembered(args.scenario, recorded_scenario, DEFAULT_SCENARIO)
+        if scenario not in postures:
+            if args.scenario is not None:
+                return refuse(
+                    f"scenario {scenario!r} is not one of the vehicle's {len(postures)}: {sorted(postures)}"
+                )
+            return refuse(
+                f"the directory {diode_dir} records scenario {scenario!r}, which is not one of the "
+                f"vehicle's {len(postures)}: {sorted(postures)}. Name one that is, or point `--diode-dir` "
+                "at another directory"
+            )
+        recorded_seed = record.get("seed")
+        if isinstance(recorded_seed, bool) or not isinstance(recorded_seed, int) or recorded_seed < 0:
+            recorded_seed = None
+        seed = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
+        # **`--plan` answers "what will this run be" before it is run**, and it takes the *resolved*
+        # pair, so `--plan` on a directory recorded as `crisis` describes the crisis it is in. It binds
+        # nothing and writes nothing in the diode directory (its lock aside, and with `--state-dir` the state
+        # directory and its lock are made as for any start), so a bound directory may be asked — under the
+        # lock, like every read.
+        if args.plan or args.plan_json:
+            faults = load_faults(Path(args.dir))
+            if not faults:
+                return refuse(f"no faults under {Path(args.dir) / 'domains'}")
+            phases = [
+                float(row.get("duration_h", 0))
+                for row in (yaml.safe_load((Path(args.dir) / "mission.yaml").read_text()) or {}).get(
+                    "phases"
+                )
+                or []
+            ]
+            hours = sum(phases)
+            try:
+                plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
+            except Exception as exc:  # noqa: BLE001 - the refusal is the answer
+                return refuse(f"the scenario cannot be planned: {exc}")
+            plan.pop("_armed_faults", None)
+            close_all()
+            if args.plan_json:
+                json.dump(plan, sys.stdout, indent=2)
+                sys.stdout.write("\n")
+                return 0
+            print(
+                f"scenario {plan['posture']!r} at seed {plan['master_seed']}, over {plan['hours']:g} h"
+            )
+            print(
+                f"  hazard x{plan['hazard_factor']:g}, demand x{plan['on_demand_factor']:g}"
+                f"  ·  seeded: {plan['seeded_faults']}"
+            )
+            print(f"  {len(plan['events'])} scheduled event(s), {len(plan['armed'])} armed fault(s)")
+            for event in plan["events"][:10]:
+                print(
+                    f"    MET {event['met_h']:8.3f} h  {event['fault']:38} {event['kind']:22} "
+                    f"-> {', '.join(event['perturbs'][:2])}"
+                )
+            if len(plan["events"]) > 10:
+                print(f"    … and {len(plan['events']) - 10} more")
             return 0
-        finally:
+
+        resolved_slots: dict[str, int] = {}
+        for slug in slugs:
+            # **The ring is the one remembered value a restart may not re-bound.** Whatever bound the
+            # frames on disk were written under is the bound the window keeps; a caller who names a
+            # *different* one is told, instead of being handed the old one with no remark.
+            recorded_slots = recorded_slugs.get(slug)
+            if args.ring_slots is not None and recorded_slots is not None and args.ring_slots != recorded_slots:
+                return refuse(
+                    f"--ring-slots {args.ring_slots} names a bound the window at {diode_dir / slug} does "
+                    f"not have: its record holds {recorded_slots}, and the frames on disk were written "
+                    "under it. A restart keeps the bound the ring already has — re-bounding it would make "
+                    "the frames held, the losses accounted and the declared slot count three answers to "
+                    "one question. Point `--slug` at a new window to run a differently bounded ring"
+                )
+            resolved_slots[slug] = resolve_remembered(args.ring_slots, recorded_slots, DEFAULT_RING_SLOTS)
+            # **The legacy check, and it is the only read of a window's `pending.json`: refuse-only.** A
+            # window the old console ticked records `ticks` and no `world_id`; a window another executive
+            # ticked records a `world_id`. Either, on a slug the directory's record does not name, is a
+            # window whose frames came from a world this executive cannot continue. Where the record
+            # names the slug, the record governs, and whatever an agent wrote there is not read.
+            if slug not in recorded_slugs:
+                try:
+                    window_fd = open_directory(slug, dir_fd=diode_fd)
+                except FileNotFoundError:
+                    legacy: dict[str, Any] = {}
+                except OSError as exc:
+                    return refuse(
+                        f"the window at {diode_dir / slug} is not a directory this executive can open "
+                        f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}); a "
+                        "window is a directory, never a link"
+                    )
+                else:
+                    try:
+                        legacy = read_json_bounded("pending.json", dir_fd=window_fd) or {}
+                    finally:
+                        os.close(window_fd)
+                ticks = legacy.get("ticks")
+                named = legacy.get("world_id")
+                if (isinstance(ticks, int) and not isinstance(ticks, bool) and ticks > 0) or (
+                    isinstance(named, str) and named
+                ):
+                    return refuse(
+                        f"the window at {diode_dir / slug} is a legacy window: its pending.json records "
+                        f"{ticks if isinstance(ticks, int) else 0} tick(s) and world_id {named!r} while "
+                        "the directory's record does not name it, so its frames came from a world this "
+                        "executive cannot continue. Clear or rename it (ADR 0001 choice D)"
+                    )
+
+        bound = record.get("world_id")
+        if isinstance(bound, str) and bound:
+            return refuse(
+                f"the directory {diode_dir} is bound to world {bound} (tick {record.get('tick')}), which "
+                "is not this executive's. Starting a fresh world on it would silently reset its physics, "
+                "and restart continuity is WP08's to define — clear or rename the directory (ADR 0001 "
+                "choice D)"
+            )
+
+        if state_fd is not None:
+            problem = serves_refusal()
+            if problem is not None:
+                return refuse(problem)
+        phase = args.phase if args.phase is not None else DEFAULT_PHASE
+        starting.at(diode_canonical.path)
+        try:
+            executive = Executive(
+                world,
+                diode_dir,
+                phase=phase,
+                tripped_interlocks=set(args.closed_interlock or []),
+                scenario=scenario,
+                seed=seed,
+                max_batch=args.max_batch if args.max_batch is not None else DEFAULT_MAX_BATCH,
+                journal=journal,
+                record_slugs=recorded_slugs,
+                state_dir=state_path,
+                boot_id=boot_id,
+                state_fd=state_fd,
+                # The default segment lives in the held state directory, so its handle is that one: a
+                # path alone would have `Executive` walk the state directory a second time.
+                journal_dir_fd=journal_fd if journal_fd is not None else state_fd,
+                diode_fd=diode_fd,
+            )
+        except ValueError as exc:
+            return refuse(str(exc))
+        starting.callback(executive.close)
+        for slug in slugs:
+            try:
+                executive.attach(slug, ring_slots=resolved_slots[slug])
+            except ValueError as exc:
+                executive.close()
+                return refuse(str(exc))
+        if executive.failure_count:
+            executive.close()
+            return refuse(
+                "a window or the directory's record could not be prepared: "
+                + "; ".join(f"{diode_canonical.path / f['window']}: {f['error']}" for f in executive.failures)
+                + ". Repair or clear it; a window is a directory of regular files and nothing else"
+            )
+        if args.init:
+            for slug in slugs:
+                print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {phase!r}")
+            # `--init` binds nothing: the lock is released and the records say `world_id: null`.
             executive.close()
             close_all()
-
-    if checkpoint_found is not None:
-        body = checkpoint_found.body
-        # **A restart names the world it resumes, or names nothing** (commitment 2): a named scenario, seed,
-        # phase, ring bound or slug set the checkpoint does not record is refused by one sentence.
-        named_other = identity_refusal(args, body, checkpoint_found.path)
-        if named_other is not None:
-            return refuse(named_other)
-        if args.init:
-            return refuse(
-                f"--init prepares an unbound directory, and the state directory {state_dir} holds world "
-                f"{body['identity']['world_id']} at tick {body['identity']['tick']}, which a start without --init resumes "
-                "(ADR 0001: a bound directory refuses every --init)"
-            )
-        expected = root_record_from_checkpoint(body)
-        if not (args.plan or args.plan_json):
-            action, why = reconcile_root_record(record, problem, expected)
-            if action == "refuse":
-                return refuse(
-                    f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
-                    f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
-                    "or point --state-dir at the directory that serves this one"
-                )
-            # Review F11: the record is read where it was written, and a restart naming another journal is
-            # told where that is, before anything is written.
-            recorded, previous = served_journal(state_fd)
-            current = str(journal_explicit) if journal_explicit is not None else None
-            if recorded and previous != current:
-                own = "the state directory's own segments"
-                return refuse(
-                    f"--journal names {current or 'none, which means ' + own} and this state directory's record was written to "
-                    f"{previous or own} (its serves.json): a restart reads the record where it was written, so name the same "
-                    "--journal, or none"
-                )
-            unserved = serves_refusal()
-            if unserved is not None:
-                return refuse(unserved)
-            # **Resume** (ADR 0002 F1, G, J, L; child 3): the checkpoint and the record after it.
-            try:
-                executive, resumption = resume_executive(
-                    world,
-                    diode_dir,
-                    checkpoint_found,
-                    boot_id=boot_id,
-                    state_dir=state_path,
-                    state_fd=state_fd,
-                    journal=journal_explicit,
-                    journal_dir_fd=journal_fd,
-                    max_batch=args.max_batch,
-                    closed_interlocks=set(args.closed_interlock or []),
-                    diode_fd=diode_fd,
-                )
-            except ResumeRefused as exc:
-                return refuse(f"{exc}. The executive does not start a fresh world over a saved one (ADR 0002 K)")
-            # Addendum B3: a checkpoint at the recovered tick before anything is claimed — it makes the
-            # named run inputs durable and bounds the next resume's replay and re-publication.
+            return 0
+        if state_fd is not None:
+            starting.at(state_path)
+            # Addendum B1: a world's genesis checkpoint, at tick 0, before its first cycle — so a kill before
+            # the first cadence checkpoint resumes rather than finding a bound root record and no checkpoint.
+            # It is mandatory: nothing is bound yet, so a failure refuses with nothing lost.
             try:
                 executive.checkpoint()
             except Exception as exc:  # noqa: BLE001 - the refusal names it
                 executive.close()
                 return refuse(
-                    f"the checkpoint at the recovered tick {resumption.tick} cannot be written ({exc}); nothing has been "
-                    "claimed this boot, and the world resumes from the record at the next start"
+                    f"the world's first checkpoint cannot be written into {state_dir} ({exc}); nothing is bound yet, and a "
+                    "world without a checkpoint cannot be resumed (ADR 0002 H)"
                 )
-            rings = sorted({w.ring_slots for w in executive.windows.values()})
-            return run(
-                executive,
-                f"[console] {diode_dir} resumed world {executive.world_id} at tick {executive.tick} "
-                f"(checkpoint {checkpoint_found.path.name} at tick {resumption.snapshot_tick}"
-                + (", fell back" if resumption.fell_back else "")
-                + f", replayed {resumption.replayed}, republished {sum(1 for r in resumption.republished if r.get('result') == 'written')}) "
-                f"slugs={','.join(sorted(executive.windows))} phase={executive.phase} scenario={executive.scenario} "
-                f"seed={executive.seed} ring={','.join(map(str, rings))} poll={args.poll}s "
-                f"cycles={args.cycles or 'until interrupted'} state-dir={state_dir}",
-            )
-        # `--plan` answers from the checkpoint's identity and writes nothing in the diode directory
-        # (the state directory and its lock were made above, as for any start).
-        record, problem = expected, None
-    if checkpoint_found is None and state_fd is not None and not (args.init or args.plan or args.plan_json):
-        # Addendum B11 (S11): a fresh world over a record with no checkpoint. Its first segment would be a
-        # second root of the record, and every resume after it would refuse; one state directory is one
-        # world's (ADR 0002 H). Only the first header of each journal file is read. It is the first thing
-        # said (review F9): the state directory is the problem, whatever the diode directory holds.
+
+        rings = sorted(set(resolved_slots.values()))
+        ring = str(rings[0]) if len(rings) == 1 else ",".join(f"{s}:{resolved_slots[s]}" for s in slugs)
+        return functools.partial(
+            run,
+            executive,
+            f"[console] {diode_dir} slugs={','.join(slugs)} phase={phase} "
+            f"scenario={executive.scenario} seed={executive.seed} ring={ring} "
+            f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}"
+            + (f" state-dir={state_dir}" if state_dir is not None else ""),
+        )
+
+
+    # **One boundary for the start path** (round 3, H2): every descriptor it holds is registered in
+    # `starting` the moment it is opened, with the path it was opened for, and is closed once on the way
+    # out whatever happens; an `OSError` nothing on the path turned into a refusal of its own is exit 3
+    # naming the file (`exc.filename`, or the path of what was in use) and the errno.
+    with _StartPath() as starting:
         try:
-            holding = state_record_files(state_fd, journal_fd, journal_explicit)
+            outcome = start(starting)
         except OSError as exc:
-            # Confirmation G4: every `OSError` on a start's path is a refusal by name, with every handle closed.
-            return refuse(f"the state directory {state_dir} cannot be read for a record ({errno_name(exc)}); nothing was started")
-        if holding:
-            return refuse(
-                f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
-                "or one that died before its first checkpoint was written. One state directory is one world's "
-                f"(ADR 0002 H): move {', '.join(holding)} out of {state_dir}, or point --state-dir at an empty directory"
-            )
-    if problem is not None:
-        return refuse(
-            f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
-            "that cannot be read is not a fresh directory; repair or clear it"
-        )
-    record = record or {}
-    recorded_slugs: dict[str, int] = {
-        str(slug): int((record.get("ring_slots") or {}).get(slug, DEFAULT_RING_SLOTS))
-        for slug in record.get("slugs") or []
-    }
-
-    # ---- the run's identity, resolved once against the directory's record --------------------
-    #
-    # A caller who names a value gets it. A caller who names nothing inherits whatever the
-    # directory's own record holds. A directory with no record gets the declared default. One
-    # directory is one world, so the identity is the directory's and not a window's.
-    recorded_scenario = record.get("scenario")
-    if not isinstance(recorded_scenario, str) or not recorded_scenario:
-        recorded_scenario = None
-    scenario = resolve_remembered(args.scenario, recorded_scenario, DEFAULT_SCENARIO)
-    if scenario not in postures:
-        if args.scenario is not None:
-            return refuse(
-                f"scenario {scenario!r} is not one of the vehicle's {len(postures)}: {sorted(postures)}"
-            )
-        return refuse(
-            f"the directory {diode_dir} records scenario {scenario!r}, which is not one of the "
-            f"vehicle's {len(postures)}: {sorted(postures)}. Name one that is, or point `--diode-dir` "
-            "at another directory"
-        )
-    recorded_seed = record.get("seed")
-    if isinstance(recorded_seed, bool) or not isinstance(recorded_seed, int) or recorded_seed < 0:
-        recorded_seed = None
-    seed = resolve_remembered(args.seed, recorded_seed, DEFAULT_SEED)
-    # **`--plan` answers "what will this run be" before it is run**, and it takes the *resolved*
-    # pair, so `--plan` on a directory recorded as `crisis` describes the crisis it is in. It binds
-    # nothing and writes nothing in the diode directory (its lock aside, and with `--state-dir` the state
-    # directory and its lock are made as for any start), so a bound directory may be asked — under the
-    # lock, like every read.
-    if args.plan or args.plan_json:
-        faults = load_faults(Path(args.dir))
-        if not faults:
-            return refuse(f"no faults under {Path(args.dir) / 'domains'}")
-        phases = [
-            float(row.get("duration_h", 0))
-            for row in (yaml.safe_load((Path(args.dir) / "mission.yaml").read_text()) or {}).get(
-                "phases"
-            )
-            or []
-        ]
-        hours = sum(phases)
-        try:
-            plan = scenario_report(Path(args.dir), faults, postures, scenario, seed, hours)
-        except Exception as exc:  # noqa: BLE001 - the refusal is the answer
-            return refuse(f"the scenario cannot be planned: {exc}")
-        plan.pop("_armed_faults", None)
-        close_all()
-        if args.plan_json:
-            json.dump(plan, sys.stdout, indent=2)
-            sys.stdout.write("\n")
-            return 0
-        print(
-            f"scenario {plan['posture']!r} at seed {plan['master_seed']}, over {plan['hours']:g} h"
-        )
-        print(
-            f"  hazard x{plan['hazard_factor']:g}, demand x{plan['on_demand_factor']:g}"
-            f"  ·  seeded: {plan['seeded_faults']}"
-        )
-        print(f"  {len(plan['events'])} scheduled event(s), {len(plan['armed'])} armed fault(s)")
-        for event in plan["events"][:10]:
-            print(
-                f"    MET {event['met_h']:8.3f} h  {event['fault']:38} {event['kind']:22} "
-                f"-> {', '.join(event['perturbs'][:2])}"
-            )
-        if len(plan["events"]) > 10:
-            print(f"    … and {len(plan['events']) - 10} more")
-        return 0
-
-    resolved_slots: dict[str, int] = {}
-    for slug in slugs:
-        # **The ring is the one remembered value a restart may not re-bound.** Whatever bound the
-        # frames on disk were written under is the bound the window keeps; a caller who names a
-        # *different* one is told, instead of being handed the old one with no remark.
-        recorded_slots = recorded_slugs.get(slug)
-        if args.ring_slots is not None and recorded_slots is not None and args.ring_slots != recorded_slots:
-            return refuse(
-                f"--ring-slots {args.ring_slots} names a bound the window at {diode_dir / slug} does "
-                f"not have: its record holds {recorded_slots}, and the frames on disk were written "
-                "under it. A restart keeps the bound the ring already has — re-bounding it would make "
-                "the frames held, the losses accounted and the declared slot count three answers to "
-                "one question. Point `--slug` at a new window to run a differently bounded ring"
-            )
-        resolved_slots[slug] = resolve_remembered(args.ring_slots, recorded_slots, DEFAULT_RING_SLOTS)
-        # **The legacy check, and it is the only read of a window's `pending.json`: refuse-only.** A
-        # window the old console ticked records `ticks` and no `world_id`; a window another executive
-        # ticked records a `world_id`. Either, on a slug the directory's record does not name, is a
-        # window whose frames came from a world this executive cannot continue. Where the record
-        # names the slug, the record governs, and whatever an agent wrote there is not read.
-        if slug not in recorded_slugs:
-            try:
-                window_fd = open_directory(slug, dir_fd=diode_fd)
-            except FileNotFoundError:
-                legacy: dict[str, Any] = {}
-            except OSError as exc:
-                return refuse(
-                    f"the window at {diode_dir / slug} is not a directory this executive can open "
-                    f"({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror}); a "
-                    "window is a directory, never a link"
-                )
-            else:
-                try:
-                    legacy = read_json_bounded("pending.json", dir_fd=window_fd) or {}
-                finally:
-                    os.close(window_fd)
-            ticks = legacy.get("ticks")
-            named = legacy.get("world_id")
-            if (isinstance(ticks, int) and not isinstance(ticks, bool) and ticks > 0) or (
-                isinstance(named, str) and named
-            ):
-                return refuse(
-                    f"the window at {diode_dir / slug} is a legacy window: its pending.json records "
-                    f"{ticks if isinstance(ticks, int) else 0} tick(s) and world_id {named!r} while "
-                    "the directory's record does not name it, so its frames came from a world this "
-                    "executive cannot continue. Clear or rename it (ADR 0001 choice D)"
-                )
-
-    bound = record.get("world_id")
-    if isinstance(bound, str) and bound:
-        return refuse(
-            f"the directory {diode_dir} is bound to world {bound} (tick {record.get('tick')}), which "
-            "is not this executive's. Starting a fresh world on it would silently reset its physics, "
-            "and restart continuity is WP08's to define — clear or rename the directory (ADR 0001 "
-            "choice D)"
-        )
-
-    if state_fd is not None:
-        problem = serves_refusal()
-        if problem is not None:
-            return refuse(problem)
-    phase = args.phase if args.phase is not None else DEFAULT_PHASE
-    try:
-        executive = Executive(
-            world,
-            diode_dir,
-            phase=phase,
-            tripped_interlocks=set(args.closed_interlock or []),
-            scenario=scenario,
-            seed=seed,
-            max_batch=args.max_batch if args.max_batch is not None else DEFAULT_MAX_BATCH,
-            journal=journal,
-            record_slugs=recorded_slugs,
-            state_dir=state_path,
-            boot_id=boot_id,
-            state_fd=state_fd,
-            # The default segment lives in the held state directory, so its handle is that one: a
-            # path alone would have `Executive` walk the state directory a second time.
-            journal_dir_fd=journal_fd if journal_fd is not None else state_fd,
-            diode_fd=diode_fd,
-        )
-    except ValueError as exc:
-        return refuse(str(exc))
-    except OSError as exc:
-        return refuse(f"the executive cannot be started ({errno_name(exc)}); nothing was started")
-    for slug in slugs:
-        try:
-            executive.attach(slug, ring_slots=resolved_slots[slug])
-        except ValueError as exc:
-            executive.close()
-            return refuse(str(exc))
-    if executive.failure_count:
-        executive.close()
-        return refuse(
-            "a window or the directory's record could not be prepared: "
-            + "; ".join(f"{f['window']}: {f['error']}" for f in executive.failures)
-            + ". Repair or clear it; a window is a directory of regular files and nothing else"
-        )
-    if args.init:
-        for slug in slugs:
-            print(f"initialised {diode_dir / slug} for slug {slug!r} at phase {phase!r}")
-        # `--init` binds nothing: the lock is released and the records say `world_id: null`.
-        executive.close()
-        close_all()
-        return 0
-    if state_fd is not None:
-        # Addendum B1: a world's genesis checkpoint, at tick 0, before its first cycle — so a kill before
-        # the first cadence checkpoint resumes rather than finding a bound root record and no checkpoint.
-        # It is mandatory: nothing is bound yet, so a failure refuses with nothing lost.
-        try:
-            executive.checkpoint()
-        except Exception as exc:  # noqa: BLE001 - the refusal names it
-            executive.close()
-            return refuse(
-                f"the world's first checkpoint cannot be written into {state_dir} ({exc}); nothing is bound yet, and a "
-                "world without a checkpoint cannot be resumed (ADR 0002 H)"
-            )
-
-    rings = sorted(set(resolved_slots.values()))
-    ring = str(rings[0]) if len(rings) == 1 else ",".join(f"{s}:{resolved_slots[s]}" for s in slugs)
-    return run(
-        executive,
-        f"[console] {diode_dir} slugs={','.join(slugs)} phase={phase} "
-        f"scenario={executive.scenario} seed={executive.seed} ring={ring} "
-        f"poll={args.poll}s cycles={args.cycles or 'until interrupted'} world={executive.world_id}"
-        + (f" state-dir={state_dir}" if state_dir is not None else ""),
-    )
-
+            sys.stderr.write(starting.refusal(exc) + "\n")
+            return 3
+        return outcome if isinstance(outcome, int) else outcome()
 
 if __name__ == "__main__":
     raise SystemExit(main())
