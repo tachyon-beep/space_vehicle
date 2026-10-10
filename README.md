@@ -19215,6 +19215,192 @@ the two rows the documentation now cites (the full-batch flood, and the record's
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+## A saved world was a refusal, and a restart now resumes it
+
+`docs/decisions/0002-mission-clock-and-continuity.md` (ADR 0002) decided that a restart *resumes* a
+world from the executive's own checkpoint and the durable record after it, losing no mission time
+(F1) and running no command twice. Children 1, 2 and 4 landed the format, the private directory and
+the record; until this round (#21) a start that found a verified checkpoint refused with exit 3 —
+and nothing wrote a checkpoint during a run anyway, so every restart of a bound directory was ADR
+0001's choice-D refusal: a vehicle container under `restart: unless-stopped` stayed dark. A design
+note went through two independent reviews (Codex `gpt-6-astra` high; Claude Opus) before any code,
+and their addenda bound it; ADR 0002 J (xxi)–(xxix) and ADR 0001 choice D carry the dated decisions.
+
+The two halves the round joined are the checkpoint (child 1) and the record (child 4), against the
+command line the chassis already runs (`--state-dir`, the slugs, scenario, seed, ring, `--cycles 0`):
+
+| | before | now |
+|---|---|---|
+| a start beside a verified checkpoint | exit 3 naming #21 | `resume_executive`: the checkpoint, the record after it to the last durable tick `L`, the windows restored; the world, its tick, `seq` and receipts continue, every `boot_id` changes |
+| checkpoints during a run | none | a genesis at tick 0 (mandatory), every `N = tick_hz` ticks at the end of a cycle, one at the recovered tick before a resume claims anything (mandatory), one at a clean end |
+| what a resume reads | — | from the checkpoint's anchor (a byte offset per segment entry, format v2): `O(L − T)` lines, not the boot's whole segment |
+| a result the record holds and the disk does not | listed by `unwritten_results`, written by nothing | owed (`obligations`, checkpointed) and written once, after a bounded look for it on disk by its exact receipt line |
+| a restart naming another world's identity | `--ring-slots` alone refused | `--scenario`, `--seed`, `--phase`, `--ring-slots`, the slug set: exit 3, one sentence, the flag and both values |
+| `--max-batch`, `--closed-interlock` named anew | the parser's default was indistinguishable from the operator's word | `None` by default; a cap replaces the saved one, interlocks join the saved trips; journaled |
+| the root record on an ordinary restart | always "disagrees on tick", a mismatch event every boot | compared with the recovered state: routine within `[T, L]`, a mismatch otherwise |
+
+What the round found on the way, each a test that failed first:
+
+- **`attach` showed every window tick zero before a restore could run** (design note F1). Preparing a
+  window rewrote its mirror and `pending.json` at tick 0 and the root record unbound; the probe caught
+  it. A resume attaches without preparing, and before its first cycle writes nothing in a window but
+  owed results. The same fault lived in the live repair of a lost directory, which re-ran `prepare`;
+  repair now re-makes directories and nothing else (B7).
+- **A kill tearing a boot's first append crash-looped** (F2). Header and first row are one `write`; a
+  fragment with no header before it in its file was "corrupt", at every later restart. It is a torn
+  append — nothing was published from it — and a shared `--journal`'s startup events now begin their
+  own line after a torn tail (B8).
+- **A restart read the whole boot** (A1, B5). One boot is one segment, so the record a restart follows
+  is that boot's whole segment: ADR 0002 (xx)'s 30–45 minutes at mission end. Measured here after a
+  5,007-tick boot (5,008 lines): the anchored resume read **21** lines and took 0.70 s end to end
+  (executive construction included); the whole-record check, replay and listing read 15,025 lines
+  (0.37 s at this size, growing with the boot). The unread prefix is attested by the verified
+  checkpoint, not re-verified — a stated limitation; the whole-record read remains for offline replay.
+- **A fall-back could rotate the corrupt generation over the good one** (B2). The resume moves the
+  refused current generation aside to `checkpoint.rejected.<boot>.json` before anything writes.
+- **What a window was owed depended on the generation chosen** (B4): a result whose publication failed
+  live was never written at all. Obligations are checkpointed and written at the window's next
+  publication; the look on disk is bounded per window (4,096 entries, 256 KiB), so an agent flooding
+  its own `output/` costs at most a duplicate in its own window (B6).
+- **Two flag defaults could not be told from the operator** (A6, B10): `--max-batch` defaulted to 32
+  and `--closed-interlock` to `[]`, and `--phase` to its value. The linter now reads the checkpoint's
+  `run` section too and refuses each by name; the linter fixtures copy `tools/checkpoint.py`.
+- **A publication that failed before its frame kept a frame number a replay had consumed** (S16): live
+  state and replayed state disagreed on the next frame. The mark now consumes it in both.
+
+**Commitment 1, as the contract allows.** Every command whose cycle's row became durable has exactly
+one result; a batch claimed in a cycle that died before its row is lost with no result
+(`docs/diode-contract.md` §2.2: "a crash mid-batch loses the rest of that batch; it never replays it").
+**Preconditions and residuals**: the kept refusals on the root record assume the chassis's per-slug
+mounts (`aurora-port`); the budget's wall clock restarts with the process (child 7); a scheduled-event
+or phase-boundary restart point is not exercised until faults are scheduled and the phase moves
+(child 11); retention, graceful `SIGTERM` and `--new-world` are child 10's.
+
+Costs (this machine, idle, p50): a checkpoint is 5.5 ms to capture and 7.0 ms to write on the warmed
+ring, 19.5 + 14.2 ms on the full ring (268 KB / 470 KB), once per `N = 50` ticks — the same with one
+window or ten. A run under load measured 29 / 59 ms for the two together. The oracle in every resume
+test is an uninterrupted run's own per-tick compare-points and lineage, never the resume's output.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 433 | **482** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
+### The review round
+
+Four independent code reviews read `06f08a3` — Codex (`gpt-6-astra`, high) in two sessions, Claude
+Opus and Fable — beside a clean gate and a chassis dry run; the resume held up end to end (a SIGKILL
+stress run found contiguous ticks and exactly one result per recorded command), and the defects below
+were fixed on top, each with a test that failed first (ADR 0002 J (xxx)–(xxxv) records the decisions):
+
+| finding (who) | what `06f08a3` did | what it does now | the test failed at `06f08a3` with |
+|---|---|---|---|
+| F1 a damaged successor header (Codex ×2) | the anchored read took a damaged header with rows after it for "a boot torn before its header" and skipped the file: a resume came back short of published ticks | one rule for an unparseable line, for every reader (R1); a successor that is not verifiable refuses by name, as does a file holding another boot's header | the anchored read returned without refusing |
+| F13 a tail torn just before its newline (Opus) | the next boot ended it with `\n`, turning the fragment into a valid line behind the resumed segment: every later read refused (`overlap`) | `#\n` ends a cut tail, so the fragment stays one | `overlap` at the second resume |
+| F16 the anchor's line (Opus) | only the byte before the offset was checked: another file of that length resumed with nothing read | the line ending there must carry the anchor's boot, world, tick and chain | no refusal |
+| F2 results settled before their names were durable (Codex ×2) | obligations left, and live results were landed, before the `output/` `fsync`; a found result was never `fsync`ed | one barrier (R2): landed, noted and settled only after file and directory are durable | no obligation in the next checkpoint |
+| F3 a checkpoint a resume cannot use (Codex) | an obligation without `command`, or `clock.N = []`, verified, and the resume raised `KeyError`/`TypeError` | corrupt by name, saying the body verified (R4); K2 falls back | the reader accepted it |
+| F4 tracebacks and leaked descriptors (Codex) | an `EIO` listing the state directory escaped `main` and leaked a handle; the constructor leaked two when it refused | exit 3 naming the errno; no descriptor outlives a refusal | `OSError` out of `main` |
+| F5 fingerprint-only results with leading whitespace (Codex) | the look on disk named candidates from the parsed verb; the files were named from the raw command | candidates are named as the writer names files | three results published twice |
+| F6 the interrupt test (gate, chassis) | a `KeyboardInterrupt` from a `time.sleep` patched process-wide took the xdist worker down | a real `SIGINT` to a real console process at a known point (R3) | `KeyboardInterrupt` out of pytest |
+| F7 the compare-point cost ratio (gate 3.4×, chassis 6.0×) | two medians taken one after the other: load between them moved one | interleaved, best of twenty; the bound stays 3× | (the gate's and the dry run's failures) |
+| F8 a genesis-crash root record (Fable) | an unbound record at tick 0 with `T = 0`, `L = 1` was journaled as tampering | routine whenever `T = 0` | `rewrite` |
+| F9 the S11 sentence (Fable) | refused first by choice D, naming the diode directory | the state directory's refusal comes first | "clear or rename the directory" |
+| F10 a clean-end checkpoint failure (Codex) | stderr only, where the ADR said journaled | journaled with its occasion and count | no `checkpoint_failed` event |
+| F11 a changed `--journal` (Fable) | refused naming the file the record is not in | `serves.json` records the journal; the refusal names both | the anchor file's `ENOENT` |
+| F14 a resume's anomalies (Opus) | journaled privately; "fell back" on stdout only | one stderr line each | no stderr line |
+| F15 two path resolutions (Opus) | the executive re-resolved `--diode-dir`; `serves.json` held `Path.resolve()`'s answer | one resolution, `main`'s; its handle is duplicated | windows made through a retargeted link |
+| F12, F18 test gaps (Codex, Opus) | the flood test never reached the byte bound; B2 untested through the resume's own checkpoint; no give-up test; one-point oracles; `os.open` only | each covered; the one-handle test catches builtin `open()` through an audit hook | (tests added) |
+
+Two notes on wording (F17): `wall_up` is stamped after the replay, so `wall_down → wall_up` includes the
+vehicle's own start-up; and a tick row's `failures` count is the boot's own, starting at zero after
+every restart. `--ring-slots`' refusal now reads "records 40 for window 'alpha' (world …)".
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 482 | **499** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
+### The confirmation round
+
+Codex (`gpt-6-astra`, high) and Claude Opus confirmed `0647ee2`. Opus approved — every one of its
+findings closed, and its SIGKILL stress run clean in both journal layouts (its "recorded twice" cases
+were its own harness writing a claimed command back into `console.json`); Codex found four fixes
+incomplete, and Opus one gap the new torn-line rule opened. ADR 0002 J (xxxvi)–(xxxix) records them:
+
+| finding (who) | what `0647ee2` did | what it does now | the test failed at `0647ee2` with |
+|---|---|---|---|
+| G1 `--diode-dir` re-resolved (Codex, P1) | the confinement checks for `--state-dir` and `--journal` resolved the spelling again: an alias retargeted in between passed private state inside the served directory | one resolution, `main`'s, for every check and for the diode directory's own open | exit 0 with the state directory inside the served one |
+| G2 the anchor's line (Codex) | any object copying the anchor's chain, boot, world and tick was accepted | it must verify as a record line, its chain recomputing | no refusal for a padded forgery |
+| G3 the obligation flag (Codex) | validated with `is True`, read with truthiness | a non-bool flag is corrupt by name; one predicate everywhere | the reader accepted `"yes"` |
+| G4 the record scan (Codex) | an `EIO` listing a fresh state directory escaped `main` | exit 3 naming the errno, no descriptor held | `OSError` out of `main` |
+| G5 a wholly damaged file (Opus) | read as a run of fragments, empty, and skipped | two fragments with no complete line between them refuse | no refusal |
+| G6 the rewrite line (Opus) | "was rewritten" printed before the write | printed after it succeeds | the line before a failed rewrite |
+| G7 routine at genesis (Opus) | an unbound tick-0 record routine for any `L` beside `T = 0` | only for `L ≤ 1` | `routine` at `L = 2` |
+| G8 wording (Opus) | "window 'a''s pending.json" | "window 'a': its pending.json" | the old wording |
+
+Two repeated-kill cases have tests of their own now (Codex's note): two resumed boots in a row torn at
+their first append in a shared journal, read and resumed past.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 499 | **507** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
+A third round (Codex's confirmation of `d0a20dc`, which confirmed G2, G3, G6, G7 and G8; ADR 0002 J
+(xl)–(xli)):
+
+| finding (who) | what `d0a20dc` did | what it does now | the test failed at `d0a20dc` with |
+|---|---|---|---|
+| H1 G5 refused a crash loop (Codex) | two resumes killed in their `resumed` event left two marked fragments in a row, and every later resume refused as corrupt | the terminator rule: a line is torn iff it is the final unterminated line or ends with `#\n`; a plain-newline unparseable line is corruption anywhere | `corrupt: lines … are both not JSON objects` |
+| H2 the start path's `OSError`s (Codex) | refused one call at a time; the state directory's walk could still raise past `main` holding a handle | one `ExitStack` registering every descriptor with its path, and one boundary `except OSError` naming the file and the errno | `EIO in os.dup … escaped main` |
+| H3 `attach` by spelling (Codex) | `root.is_symlink()` through `--diode-dir`'s spelling | `lstat` through the held diode handle | a refusal on the retargeted alias's link |
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 507 | **513** |
+
+A fourth round (Codex's confirmation of `f12e522`, which confirmed H1, H2 and H3; ADR 0002 J
+(xlii)–(xliii)):
+
+| finding (who) | what `f12e522` did | what it does now | the test failed at `f12e522` with |
+|---|---|---|---|
+| J1 a transient configuration read error (Codex, P2) | `corpus_files` listed the corpus with `glob`, which swallows an `OSError`: an `EIO` on `domains/` made the engine identity a hash of the five top-level files, which a genesis or a resume's first checkpoint wrote and the executive kept for every checkpoint after | the corpus is listed explicitly and an error raises with its path: a start refuses naming it, a cadence checkpoint fails recorded and journaled, and nothing is kept | exit 0 and a five-file identity in the checkpoint; at a start, "incompatible" |
+| J2 a partial advisory append (Codex, P2) | a `checkpoint_failed` event cut by `EIO` was suppressed, and the next tick row was appended after its fragment — one plain-newline line that does not parse | every append to the record is cut back to where it began when it fails; a cut that fails stops the run, exit 3 | the merged line did not parse; no `RecordUnwritable` |
+| J3 the line bound's edge (Codex, P3) | the longest line, cut before its newline and marked, was one byte past the reader's bound | a marked line is allowed its terminator past the bound | a `line` refusal for a torn tail |
+| J4 close errors (Codex, P3) | a failing `close` of a walk's parent leaked the child; one on the way out escaped `main` and left the executive's other handles open | every `close` runs; the first failure, when nothing failed before it, is named and exit 3 | `EBADF` for `EIO` and a descriptor left; `OSError` out of `main` |
+
+The start path's injection test now reaches the vehicle's configuration and every `close` as well, and
+its error carries the path the call was given, as the kernel's does. And (J1a, the coordinator's) no
+pathlib predicate decides what the identity hashes: from Python 3.14 `Path.exists` and `Path.is_file`
+answer `False` for any `OSError`, which would have shortened it again; each file is `os.stat`ed, and an
+error other than absence raises naming it — a test that fails before the fix on 3.14, and guards 3.12
+and 3.13, whose pathlib raised.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 513 | **522** |
+
+A fifth round (Codex's confirmation of `a38cee1`, which confirmed J1, J1a, J2's routing, J3's bounds
+and J4's stack; ADR 0002 J (xliv)):
+
+| finding (who) | what `a38cee1` did | what it does now | the test failed at `a38cee1` with |
+|---|---|---|---|
+| K1 a close replaced the rollback's failure (Codex, P2) | when a torn event's cut failed and its file then failed to close — how a failing disk reports a writeback error — the close's `OSError` replaced `RecordUnwritable`, the advisory handler swallowed it, and the run went on after the fragment | a close in cleanup never replaces an exception already on its way out (`checkpoint.releasing`), on the record's event writer, the segment opener and the checkpoint writer | no `RecordUnwritable`; the clean end exited 0; the resume was not refused |
+| K2 the identity's read (Codex, P3) | a read error of a corpus file carried no path, so the start named its state directory | the read error carries the file's path | `filename` `None`; the refusal named the state directory |
+| J4's leftovers (Codex) | a refusal made with the executive open closed it by hand first, and a failing close replaced the refusal — or, for the lock, escaped `main` | the refusal is what is reported, exit 3 | `OSError` out of `main`; the boundary's generic sentence |
+
+Left as residuals, each refused by name rather than lost: a maximum-length row cut to one byte short
+and then cut twice more inside its terminator, and any other combination of close failures on paths
+that write neither the record nor a checkpoint.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 522 | **525** |
+
 ## The invariants, and which of them are enforced
 
 

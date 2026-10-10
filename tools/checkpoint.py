@@ -3,10 +3,13 @@
 
 `docs/decisions/0002-mission-clock-and-continuity.md` (ADR 0002) decides that a restart *resumes*
 a world from a checkpoint the executive wrote for itself, never from anything an agent can write.
-This module is child 1 of that record: the file format and nothing else. It does not wire a
-resume into the executive (child 3), does not know where `--state-dir` is (child 2), and does not
-write the per-cycle record (child 4). What it fixes is what a checkpoint *is*, so those children
-can land as sections and flags rather than as formats.
+This module is child 1 of that record: the file format and nothing else. The resume that reads it
+is `tools/console.py`'s (`resume_executive`, child 3), the directory is `--state-dir` (child 2), and
+the per-cycle record is child 4's. What it fixes is what a checkpoint *is*, so those children land
+as sections and flags rather than as formats. **Format v2** (child 3, no v1 ever written by a
+deployed vehicle): every `segments` entry carries `offset`, the byte offset just after the last line
+of the record the checkpoint covers in that segment's file — the anchor a resume reads on from — and
+the body carries `obligations`, the results durable in the record and not confirmed written.
 
 **The file.** One header line, then the body. The header is a small JSON object — `format`,
 `engine`, `git_commit`, `python`, `platform`, `tick_hz`, `world_id`, `tick`, `segments`, and the
@@ -24,7 +27,7 @@ the rest — so a wrong `format` is held to the body too (the refusal rule under
 **What the body carries** is ADR 0002 G's list, section by section: `identity`; `run` (scenario,
 seed, phase, `phase_entry_seq`, the tripped interlocks, `--max-batch`, the allowance ceiling);
 `clock` (`m`, `k`, `N`, the burst bound, the lag ceiling — the keys exist from this version, and
-hold `null` until child 5 gives the executive the inputs, because a checkpoint missing a field the
+hold `null` until child 5 gives the executive the inputs, `N` excepted since child 3, because a checkpoint missing a field the
 engine needs is refused rather than defaulted, and a field that exists can be required later
 without a format change); `executive` (the tick, every key of the truth — `__delay` rings,
 `__residual` accumulators and `__shortfall` records included — the dwell, the lineage head, the
@@ -107,6 +110,7 @@ import secrets
 import stat
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -114,7 +118,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plant import corpus_files, load_world  # noqa: E402
 
-FORMAT = "vehicle.checkpoint.v1"
+FORMAT = "vehicle.checkpoint.v2"
 CURRENT = "checkpoint.json"
 PREVIOUS = "checkpoint.prev.json"
 # The tools whose bytes are part of the engine identity, beside the corpus (ADR 0002 I).
@@ -170,15 +174,26 @@ def decode(raw: bytes) -> Any:
 
 # -- identity -----------------------------------------------------------------------------------
 def engine_identity(root: Path) -> str:
-    """SHA-256 over the corpus and the three engine tools, each framed by its path and length."""
+    """SHA-256 over the corpus and the three engine tools, each framed by its path and length.
+
+    Every file is examined with `os.stat`, so an error — its absence included — raises naming it; not
+    with `Path.is_file`, which from Python 3.14 answers `False` for any `OSError` and made an `EIO`
+    read as "missing" (WP08 child 3, fourth round, J1a). A read error names its file too (K2).
+    """
     root = Path(root)
     digest = hashlib.sha256()
     names = [path.relative_to(root).as_posix() for path in corpus_files(root)] + list(ENGINE_TOOLS)
     for name in names:
         path = root / name
-        if not path.is_file():
-            raise FileNotFoundError(f"{path} is part of the engine identity and is missing")
-        data = path.read_bytes()
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise OSError(errno.EINVAL, "part of the engine identity, and not a regular file", str(path))
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            # A read error names its file, as the `stat` before it does (fifth round, K2).
+            if exc.filename is None:
+                exc.filename = str(path)
+            raise
         digest.update(f"{name}\n{len(data)}\n".encode())
         digest.update(data)
     return digest.hexdigest()
@@ -295,6 +310,8 @@ def capture_state(executive: Any, compat: Compatibility, *, git_commit: str | No
         "rng": rng,
         "segments": segments,
         "windows": {slug: _capture_window(window) for slug, window in executive.windows.items()},
+        # Results durable in the record and not confirmed written (format v2, child 3's addendum B4).
+        "obligations": list(getattr(executive, "obligations", None) or []),
     }
     # Through the encoding and back: the caller gets a copy that shares nothing with the live
     # object, and a value the format cannot carry is refused here, not at the write.
@@ -349,6 +366,7 @@ def restore_state(executive: Any, body: dict[str, Any]) -> None:
     executive.clock = dict(body["clock"])
     executive.rng = body["rng"]
     executive.segments = body["segments"]
+    executive.obligations = list(body["obligations"])
     executive.tick = state["tick"]
     executive.truth = state["truth"]
     executive.dwell = state["dwell"]
@@ -381,6 +399,7 @@ _SECTIONS: dict[str, type] = {
     "rng": dict,
     "segments": list,
     "windows": dict,
+    "obligations": list,
 }
 _KEYS: dict[str, dict[str, Any]] = {
     "identity": {
@@ -406,6 +425,41 @@ _KEYS: dict[str, dict[str, Any]] = {
     "clock": dict.fromkeys(CLOCK_INPUTS, object),
     "executive": {"tick": int, "truth": dict, "dwell": dict, "lineage_head": str, "receipt": int},
     "rng": {"version": int},
+}
+# One boot's entry in `segments` (ADR 0002 G; the record's segment header, child 4), with the chain
+# value and the byte offset just after the last line of the record this checkpoint covers in that
+# segment's file — the anchor a resume reads on from (format v2, child 3's addendum B5).
+_SEGMENT_KEYS: dict[str, Any] = {
+    "segment": str,
+    "boot_id": str,
+    "first_tick": int,
+    "previous": (str, _NULL),
+    "wall_epoch": str,
+    "chain": str,
+    "offset": int,
+}
+# A result owed to a window (format v2, child 3's addendum B4): the record's receipt entry for the
+# verdict — its text, cut or fingerprinted as the record holds it — with the tick it was decided at,
+# its world and the boot that decided it.
+_OBLIGATION_KEYS: dict[str, Any] = {
+    "window": str,
+    "local": int,
+    "seq": int,
+    "state": str,
+    "offset_us": int,
+    "tick": int,
+    "world_id": str,
+    "boot_id": str,
+}
+# What a re-publication reads of an obligation besides those (review F3): the recorded text, or — for a
+# receipt the record kept fingerprint-only — the fingerprints, each typed.
+_OBLIGATION_TEXT: dict[str, Any] = {"command": str, "body": str}
+_OBLIGATION_FINGERPRINT: dict[str, Any] = {
+    "verb": str,
+    "command_sha256": str,
+    "command_bytes": int,
+    "body_sha256": str,
+    "body_bytes": int,
 }
 _WINDOW_KEYS: dict[str, Any] = {
     "ring_slots": int,
@@ -449,6 +503,42 @@ def _structure_problem(body: Any) -> tuple[str, str] | None:
                 return f"{section}.{key}", f"`{section}.{key}` is a JSON {type(body[section][key]).__name__}, not {_kind_name(kind)}"
     if body["identity"]["tick"] != body["executive"]["tick"]:
         return "executive.tick", "the identity and the executive disagree about the tick"
+    for index, entry in enumerate(body["segments"]):
+        where = f"segments[{index}]"
+        if not isinstance(entry, dict):
+            return where, f"the segment entry is a JSON {type(entry).__name__}, not an object"
+        if set(entry) != set(_SEGMENT_KEYS):
+            return where, f"the segment entry's keys are not a segment's ({sorted(set(entry) ^ set(_SEGMENT_KEYS))}); a field the engine needs is never defaulted"
+        for key, kind in _SEGMENT_KEYS.items():
+            if not _is(entry[key], kind):
+                return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
+    if body["identity"]["segments"] != [entry["segment"] for entry in body["segments"]]:
+        return "identity.segments", "the identity's segment list is not the body's"
+    count = body["clock"].get("N")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        return "clock.N", f"`clock.N` is {count!r}, not the positive tick count the cadence is"
+    for index, entry in enumerate(body["obligations"]):
+        where = f"obligations[{index}]"
+        if not isinstance(entry, dict):
+            return where, f"the obligation is a JSON {type(entry).__name__}, not an object"
+        required = dict(_OBLIGATION_KEYS)
+        if "fingerprint_only" in entry and not isinstance(entry["fingerprint_only"], bool):
+            # Every reader branches on this flag (`is True`), so it is a bool or the body is not one this
+            # engine wrote (confirmation G3): `"yes"` validated as one kind and was re-published as the other.
+            return f"{where}.fingerprint_only", f"`{where}.fingerprint_only` is a JSON {type(entry['fingerprint_only']).__name__}, not a bool"
+        if entry.get("fingerprint_only") is True:
+            required.update(_OBLIGATION_FINGERPRINT)
+        else:
+            required.update(_OBLIGATION_TEXT)
+            if "body_sha256" in entry or "body_bytes" in entry:
+                required.update(body_sha256=str, body_bytes=int)
+        for key, kind in required.items():
+            if key not in entry:
+                return f"{where}.{key}", f"`{where}` lacks `{key}`, which its re-publication reads; a field the engine needs is never defaulted"
+            if not _is(entry[key], kind):
+                return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
+        if entry["window"] not in body["windows"]:
+            return f"{where}.window", f"the obligation is owed to window {entry['window']!r}, which the checkpoint does not hold"
     for slug, row in body["windows"].items():
         if not isinstance(row, dict):
             return f"windows.{slug}", f"the window's row is a JSON {type(row).__name__}, not an object"
@@ -580,6 +670,27 @@ def _sweep_temporaries(dir_fd: int) -> None:
             os.unlink(name, dir_fd=dir_fd)
 
 
+@contextlib.contextmanager
+def releasing(fd: int) -> Iterator[int]:
+    """`fd`, closed on the way out — and **a close in cleanup never replaces an exception already propagating**.
+
+    WP08 child 3, fifth round (K1). A failing disk reports a writeback error at `close`, so the close a
+    writer makes in its cleanup is likeliest to fail exactly when the write before it already has: a
+    plain `finally: os.close(fd)` then raised the close's `OSError` in place of what was on its way out —
+    the record writer's `RecordUnwritable`, which the advisory handlers stop on, became an `OSError`
+    they treat as an advisory's failure, and the run went on after a fragment. On the exception path
+    the close's error is dropped and the original raised; on the clean path a failing close raises.
+    Every path that writes the record or a checkpoint closes through this.
+    """
+    try:
+        yield fd
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    os.close(fd)
+
+
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
@@ -665,7 +776,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
     dir_fd = _held_or_opened(state_dir, dir_fd, create=True)
     step = "write"
     temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
-    try:
+    with releasing(dir_fd):
         try:
             _sweep_temporaries(dir_fd)
             fd = os.open(
@@ -679,13 +790,11 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
                 "write", state_dir, f"the state directory {state_dir} cannot be written ({_errno_name(exc)}: {exc.strerror})"
             ) from exc
         try:
-            try:
+            with releasing(fd):
                 _write_all(fd, header_line + body_bytes)
                 _after_step("write")
                 step = "fsync"
                 os.fsync(fd)
-            finally:
-                os.close(fd)
             _after_step("fsync")
             step = "rename_previous"
             # The first generation has nothing to become previous.
@@ -707,8 +816,6 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
                 f"the write failed at step {step!r} ({_errno_name(exc)}: {exc.strerror}; {CURRENT} → {PREVIOUS} → {temporary}); "
                 + _ON_DISK_AFTER.get(step, "what is on disk is unknown; read it before trusting it"),
             ) from exc
-    finally:
-        os.close(dir_fd)
     return target
 
 
@@ -833,7 +940,8 @@ def verify(raw: bytes, path: Path, expected: Compatibility) -> Loaded:
     body = _verified_body(header, body_bytes, path)
     problem = _structure_problem(body)
     if problem is not None:
-        raise CheckpointCorrupt(problem[0], path, problem[1])
+        # Said so, because the hash agreed: what failed is the body's shape, not the disk (ruling R4).
+        raise CheckpointCorrupt(problem[0], path, f"the body verifies against its hash and length, but {problem[1]}")
     stated = {key: value for key, value in header.items() if key not in ("body_bytes", "body_sha256")}
     if stated != body["identity"]:
         differing = sorted(set(stated) ^ set(body["identity"]) | {k for k in stated if k in body["identity"] and stated[k] != body["identity"][k]})

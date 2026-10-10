@@ -579,7 +579,7 @@ no engine may be assumed to read an arbitrary saved world. The mechanics follow:
   `checkpoint.json`; `fsync` the directory. A kill at any point leaves one verifiable generation.
 - **Integrity**: a SHA-256 of the body inside a small header, and the body's byte length; a
   checkpoint whose hash or length disagrees is *corrupt* (K).
-- **Compatibility**: `format: vehicle.checkpoint.v1`; `engine`; `python` (`major.minor.micro`);
+- **Compatibility**: `format: vehicle.checkpoint.v1` (*v2 since WP08 child 3, 2026-10-10: J (xxiii), (xxiv)*); `engine`; `python` (`major.minor.micro`);
   `platform` (`platform.platform()`); `tick_hz`. A mismatch on any of them is *incompatible* (K).
   *Amended 2026-10-09 (coordinator, under the owner's delegation, on child 1's review):* `platform` is
   `platform.system()`, `platform.machine()` and `platform.libc_ver()` — OS, architecture and libc — and
@@ -761,6 +761,182 @@ retention (child 3) matter. (xii)'s "detects corruption and truncation" is **cor
 truncation**: deleting complete rows at the *end* of the last segment is accepted, because there is no
 end anchor — a correct filesystem cannot lose an `fsync`ed row, so a missing tail is what a crash
 before the `fsync` leaves, and nothing was published from it.
+
+*Amended by WP08 child 3 (`#21`, 2026-10-10), the resume; its design note and two independent design
+reviews (Codex `gpt-6-astra` high; Claude Opus), decided by the coordinator under the owner's
+delegation.* (xxi) **Rule 2's effect-free tail is empty.** Since (i) every cycle writes a row, and a
+window's published tick is set only after its row is durable, so no published tick is past the last
+durable row `L`: a resume replays the record from the checkpoint's tick `T` to `L` and steps nothing
+more, and mission time resumes at `L` (F1). (xxii) **`N` is `tick_hz`**, recorded in the checkpoint's
+clock inputs (`clock.N`) and taken from there by a resume, until child 5 makes it a run input. The
+executive checkpoints at the end of every cycle whose tick is a multiple of `N` — after every window
+has published, so the checkpoint's anchor is past the cycle's notes and what it owes is exact — and
+also at a world's genesis (tick 0, before its first cycle), at the recovered tick before a resumed run
+claims anything, and at a clean end (cycles exhausted, or an interrupt between cycles; never
+mid-cycle). The genesis and the resume's checkpoint are mandatory — a failure refuses the start with
+nothing bound or claimed; a cadence or clean-end failure is recorded, journaled (`checkpoint_failed`,
+with the consecutive count) and on stderr, and the run goes on, because the record is what is durable.
+(xxiii) **Restart cost is `O(L − T)`.** A checkpoint's segment entries carry the byte offset just after
+the last line it covers (checkpoint format `vehicle.checkpoint.v2`; no v1 was ever written by a
+deployed vehicle), and a resume reads the record from that anchor: the seek point is held to the file
+(a regular file through the held handle, within its size, just after a newline), other segment files
+are read to their first header only (past at most 64 startup events, or refused), a boot continuing
+the anchor is read whole, one the checkpoint lists is skipped, and any other refuses. **What this
+trusts**: the record before the anchor is attested by the checkpoint, which is verified (I) and lives
+in the same private directory; it is not re-verified, so an edit below the anchor that keeps the
+anchor's line boundary and everything after it is not detected by a resume, by design. The
+whole-record read still verifies end to end, offline. (xxiv) **Commitment 1, as the contract
+allows.** Every command whose cycle's row became durable has exactly one result; a batch claimed in a
+cycle that died before its row is lost with no result (contract §2.2, "a crash mid-batch loses the
+rest of that batch; it never replays it"; (viii)). A result durable in the record and not on disk — a
+crash between the row and the results, or a publication that failed live — is an *obligation*,
+carried by the checkpoint (`obligations`), so what a window is owed does not depend on which
+generation a resume chose; a resume adds every unnoted verdict after `T`, and the window's next
+publication writes each once, before its own results, after looking for it in its `output/` by its
+exact receipt line. That look is bounded per window as a whole (4,096 entries examined, 256 KiB read,
+candidates by name, each opened without following a link and `fstat`ed regular); past the bound the
+result is written. So exactly one result per recorded command holds except in a window's own
+pathological cases — its agent deleting or forging files in its own `output/`, or flooding it past the
+bound — which cost at most a duplicate or a missing copy in that window alone. This closes (iii)'s
+residual window under wall-stamped names, before child 12. A window owed more than 256 results gives up
+the oldest, as a recorded failure. (xxv) **The root record against the recovered state** (#20's review
+note 1): a record of this world agreeing on every identity key but the tick, at a tick in `[T, L]`,
+is *routine* — rewritten and journaled inside the `resumed` event, with no `root_record_rewritten`
+event — as is an unbound record at tick 0 beside a world with `T = L = 0`; anything else keeps H's
+rules. Beside a verified checkpoint a window's legacy `pending.json` is advisory: noted in the
+`resumed` event, never a refusal. (xxvi) **What the `resumed` event says**: the downtime gap — `wall_down`
+(the newest journal file's last write: rows carry no wall stamp, so this is a proxy, labelled; child 10
+may refine it), `wall_up`, the tick — the generation and whether it fell back, the root record's class,
+the run-input changes and the advisories. (xxvii) **A fall-back never rotates a corrupt generation over
+the good one**: when K2 chose the previous generation, the resume renames the refused current one to
+`checkpoint.rejected.<boot>.json` before anything writes a checkpoint. (xxviii) **What the restart may
+name** (G, "remembered versus named"): `--scenario`, `--seed`, `--phase`, `--ring-slots` and the slug
+set either name nothing (`None`: the checkpoint's) or the checkpoint's own, else exit 3 with one
+sentence naming the flag, both values and the file — a world's slug set is fixed, and adding an agent
+is a new world; `--max-batch` named anew replaces the saved cap and `--closed-interlock` is *added* to
+the saved trips (a restart that omits it cannot un-trip one; clearing one is a new world until WP05),
+each journaled. `check_console_flags` holds `--phase`, `--max-batch` and `--closed-interlock` to the
+`None` default by reading the checkpoint's `run` section (`tripped_interlocks` ↔ `--closed-interlock`).
+A fresh start over a state directory that holds a record and no checkpoint refuses, naming the files to
+move aside. (xxix) **Not applicable yet, and residual.** A restart at a scheduled-event tick or a phase
+boundary is not exercised: `advance` applies no fault schedule and the phase is constant until child
+11. The budget's wall clock (`Window.started`) restarts with the process — child 7's (E2). The agents'
+`variables` are read back from their consoles without claiming them (G keeps them out of the
+checkpoint); a console unreadable at a resume leaves them unknown, the gates at their defaults, and the
+claim rewrites it without a `variables` key, never `{}`. The kept refusals on the root record (a
+directory planted there; a readable record of another world) assume the chassis's per-slug mounts
+(`adf38d6`, branch `aurora-port`); on a stack where agents mount the whole diode root they are stop
+buttons an agent holds at every restart.
+
+*Amended by #21's review round (2026-10-10): four code reviews of `06f08a3` (Codex `gpt-6-astra` high
+twice; Claude Opus; Fable), its clean gate and a chassis dry run; decided by the coordinator under the
+owner's delegation (rulings R1–R5).* (xxx) **One rule for an unparseable line** (R1). A line of a
+record file that does not parse is a torn fragment — a write a kill cut, from which nothing was
+published — only if it is the last line of its file, or it is followed only by a new boot's startup
+events and then that boot's segment header (itself possibly a fragment by the same rule: a kill at the
+same point of a start, repeated); anywhere else, and in particular before a complete row, it is
+corruption and refuses by name. The whole-record read, the anchored read, the successor discovery and
+the replay all read through one helper. Before a later boot appends to a file whose last line was cut,
+it ends that tail with `#\n` rather than `\n`: a fragment that was complete JSON short of its newline
+became a valid line behind the resumed boot, a permanent refusal. (xxxi) **Nothing after the anchor is
+skipped.** A segment file in the state directory that is neither a verifiable continuation of the
+anchor nor provably irrelevant — only startup events, a boot torn before its header (its last line),
+or a segment the checkpoint lists — refuses: a damaged successor header with its rows intact was read
+as "torn" and the file skipped, so a resume came back short of ticks the fleet had seen. A file holding
+another boot's header than its name refuses too. And the anchor's offset is held to the line that ends
+there: a record line of the anchor's boot, world and tick whose chain is the anchor's, not only a
+newline in the right place. (xxxii) **One durability barrier for a result.** A result is landed — named
+in its window's `results_written` note, and not owed — and an obligation leaves the list, only once the
+result's file and its `output/` directory have both been `fsync`ed; a result found already on disk is
+`fsync`ed, file and directory, before it counts (R2). A failure before that leaves every one of them
+owed and unnoted. (xxxiii) **A checkpoint a resume cannot use is corrupt, said so.** The reader checks
+every field a re-publication reads of an obligation (its text, or a fingerprint-only receipt's
+fingerprints, typed) and that `clock.N` is a positive tick count; a body that fails is refused as
+corrupt (so K2 falls back) by a sentence that says the body verified against its hash and what it
+lacks (R4). Every `OSError` on the resume's path is a refusal by name and errno, and no handle outlives
+it. (xxxiv) **The operator's view.** An unbound root record at tick 0 beside a genesis checkpoint
+(`T = 0`) is routine whatever `L` is (it is what a kill after the first row and before the first
+root-record write leaves); a state directory holding a record and no checkpoint is refused before
+anything is said about the diode directory; a fall-back, a rewritten root record and each `pending.json`
+advisory are each a line on stderr as well as in the journal; a clean-end checkpoint that cannot be
+written is journaled (`checkpoint_failed`, with its occasion and the consecutive count) as (xxii) said;
+`serves.json` records where the world's record is written (`journal`), and a restart naming another
+journal is refused naming both; and the diode directory is resolved once, by `main`, whose handle the
+executive keeps and whose canonical path `serves.json` holds. (xxxv) **Wording.** The `resumed` event's
+`wall_up` is stamped after the replay, inside the new process, so `wall_down → wall_up` includes the
+vehicle's own start-up and replay, not only the downtime. The agents' `variables` are lost at a resume
+not only for a console that cannot be read but for one that carries no `variables` object (a
+contract-legal `{"commands": [...]}`): either way the window honours the defaults until a console that
+carries one arrives. A tick row's `failures` count is this boot's: it starts at zero after every
+restart.
+
+*Amended by #21's confirmation round (2026-10-10): Codex (`gpt-6-astra` high) and Claude Opus
+confirmations of `0647ee2`; decided by the coordinator under the owner's delegation.* (xxxvi) **(xxx)
+refined: two fragments with no complete line between them are corruption.** A boot journals its
+startup events before its header, so repeated kills at a start leave complete events between their
+fragments; a fragment directly followed by another is not what a kill leaves, and a file whose every
+line is damaged — which (xxx) read as a run of fragments, empty, and skipped — refuses by name.
+(xxxvii) **(xxxi) strengthened: the anchor's line is a record line.** It must pass the record's own
+schema for its kind (a row, a note, or the header of a boot that never reached a row) and its chain
+must recompute — a header's from its `previous_chain`, a row's or a note's from the chained line
+before it, read backwards past startup events, bounded by `MAX_RECORD_LINE_BYTES` — not only carry the
+anchor's chain, boot, world and tick. (xxxviii) **(xxxiv) bounded: a genesis root record is routine
+only as far as a kill can leave it** — an unbound record at tick 0 beside `T = 0` and `L ≤ 1`; beside a
+later tick it is a mismatch, with its event. And the operator's line that the record "was rewritten"
+is printed once the rewrite succeeded. (xxxix) **One resolution of `--diode-dir`, everywhere.** The
+checks that keep `--state-dir` and `--journal` out of the agents' directory are made against `main`'s
+one resolution, which is also what the diode directory is opened from — by the walk that follows
+nothing and holds each component to what the resolution saw. An obligation's `fingerprint_only`, which
+every reader branches on, must be a bool; and the fresh start's scan for a record without a checkpoint
+refuses an I/O error by name, as every other start path does.
+
+*Amended by #21's third round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `d0a20dc`;
+decided by the coordinator under the owner's delegation.* (xl) **The terminator rule, which supersedes
+(xxx)'s position test and (xxxvi)'s adjacency rule.** An unparseable line of a record file is a torn
+fragment if and only if it is its file's final, unterminated line, or it ends with `#\n` — the mark
+every writer (`append_journal_line`, the executive's own record writer) puts on a cut tail before it
+appends anything after it. A marked fragment may be followed only by a new boot's unchained startup
+event, a segment header, another fragment, or the end of the file, never by a chained row or note; an
+unparseable line ending in a plain newline is corruption wherever it is. (xxxvi)'s rule refused a real
+crash loop — two resumes in a row killed half-way through their `resumed` event leave two marked
+fragments with nothing complete between them — while the plain-newline rule still keeps a wholly
+damaged file from reading as empty. One predicate serves every reader. A resume checkpoint's anchor
+sits after the last intact line, before any marked fragment; and a window published past the last
+durable tick is a refusal by name. (xli) **One boundary for the start path.** Every descriptor `main`'s
+start path holds is registered, with its path, in one `ExitStack` and closed once on the way out; an
+`OSError` the path did not refuse by name of its own is exit 3 naming the file (or the path in use) and
+the errno. Once the first cycle claims, an `OSError` keeps its per-cycle handling. And every check about
+a window directory goes through the held diode handle, never through `--diode-dir`'s spelling.
+
+*Amended by #21's fourth round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `f12e522`;
+decided by the coordinator under the owner's delegation.* (xlii) **The engine identity is computed whole
+or not at all.** The corpus it hashes (I) is listed explicitly, directory by directory; an error listing
+a directory or examining an entry or a file raises with its path, and only absence is quiet — by
+`os.stat`, never a pathlib predicate, which from Python 3.14 answers `False` for any error. A short list was the
+defect: a listing that swallowed an `EIO` made the identity a hash of the top-level files, which a world's
+genesis or a resume's first checkpoint wrote and the executive kept, so one transient error made every
+later checkpoint another engine's. An identity that cannot be computed at a start is a refusal naming the
+file (B1, B3, (xli)); at the cadence it is a failed checkpoint, recorded and journaled, and nothing is kept.
+(xliii) **Every append to a record file is whole or undone.** The writer notes the file's size, appends
+and `fsync`s; on any failure it cuts the file back to that size and `fsync`s the cut, so the file ends at
+its last whole line — an advisory event's failure, still not the run's, can no longer leave a fragment
+for the next chained row to follow (which (xl) rightly refuses), and no terminator is written before a
+chained row. A cut that fails is `RecordUnwritable`: the run stops before another cycle, from the cadence
+or the clean end alike, and a resume's advisory refuses. Two consequences at the edges: a marked fragment
+is allowed `len(#\n)` bytes past `MAX_RECORD_LINE_BYTES`, since the longest line cut before its newline
+and marked is one byte past it; and every `close` on the start path runs whatever the others do — a
+failure after another is dropped, the first when nothing else failed is named, exit 3 — and a walk holds
+the child it opened before it closes the parent.
+
+*Amended by #21's fifth round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `a38cee1`;
+decided by the coordinator under the owner's delegation.* (xliv) **A close in cleanup never replaces the
+failure already on its way out.** On every path that writes the record or a checkpoint — the event
+writer, the segment opener, the checkpoint writer — a handle closed in cleanup while an exception is
+propagating has its own close error dropped, and the original raised; on the clean path a failing close
+still raises. A failing disk reports a writeback error at `close`, so this is the case (xliii)'s
+`RecordUnwritable` meets: replaced by the close's `OSError`, it read as an advisory's failure and the run
+went on after a fragment. The same holds where the start path refuses with the executive open: the
+refusal is what is reported. And the engine identity's read of a file names it, as its `stat` does.
 
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
