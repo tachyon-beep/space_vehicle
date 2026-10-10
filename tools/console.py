@@ -2918,7 +2918,13 @@ class Executive:
             window = Window(self, root, slug, ring_slots=ring_slots)
             self.windows[slug] = window
             return window
-        if root.is_symlink():
+        # Asked of the held diode handle, never of a path built from `--diode-dir`'s spelling (round 3, H3):
+        # an alias retargeted after the open would otherwise have the check look at another directory.
+        try:
+            planted = stat.S_ISLNK(os.lstat(slug, dir_fd=self.diode_fd).st_mode)
+        except FileNotFoundError:
+            planted = False
+        if planted:
             raise ValueError(f"the window directory {root} is a symlink, and a window is a directory")
         window = Window(self, root, slug, ring_slots=ring_slots)
         self.windows[slug] = window

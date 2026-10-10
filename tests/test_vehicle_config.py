@@ -29953,3 +29953,41 @@ def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_de
                 assert ("EIO" in err or "Input/output error" in err) and str(work) in err, (scenario, name, index, injection.fired, err)
             shutil.rmtree(work)
     assert refused, "some failure on the start path refuses"
+
+
+def test_a_window_directory_is_checked_through_the_held_diode_handle_not_by_its_spelling(tmp_path, monkeypatch, capsys):
+    """Round 3, H3 (Codex P3): `attach` checked `root.is_symlink()` by a path built from `--diode-dir`'s spelling.
+
+    Every other check about a window goes through the diode directory's held handle; this one resolved
+    the operator's spelling again, so with the alias retargeted after the handle was opened, `attach`
+    looked at another directory — and refused because *that* directory's `alpha` was a link. It now asks
+    the held handle (`lstat` relative to it): retargeting the alias changes nothing, the windows are made
+    in the directory `main` opened, and a link planted at `alpha` inside that directory still refuses.
+    """
+    console, _plant, _world = console_tools()
+    served, other, outside = tmp_path / "served", tmp_path / "other", tmp_path / "outside"
+    for directory in (served, other, outside):
+        directory.mkdir()
+    (other / "alpha").symlink_to(outside)
+    alias = tmp_path / "alias"
+    alias.symlink_to(served)
+    real = console.Executive.attach
+
+    def retargeted(self, *args, **kwargs):
+        if alias.resolve() != other:
+            alias.unlink()
+            alias.symlink_to(other)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(console.Executive, "attach", retargeted)
+    argv = ["--diode-dir", str(alias), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    assert console.main(argv) == 0, capsys.readouterr().err
+    monkeypatch.undo()
+    assert (served / "alpha" / "state.json").exists() and not list(outside.iterdir())
+
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    (planted / "alpha").symlink_to(outside)
+    assert console.main(["--diode-dir", str(planted), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 3
+    err = capsys.readouterr().err
+    assert "link" in err and str(planted / "alpha") in err and not list(outside.iterdir()), err
