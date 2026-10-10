@@ -908,6 +908,25 @@ start path holds is registered, with its path, in one `ExitStack` and closed onc
 the errno. Once the first cycle claims, an `OSError` keeps its per-cycle handling. And every check about
 a window directory goes through the held diode handle, never through `--diode-dir`'s spelling.
 
+*Amended by #21's fourth round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `f12e522`;
+decided by the coordinator under the owner's delegation.* (xlii) **The engine identity is computed whole
+or not at all.** The corpus it hashes (I) is listed explicitly, directory by directory; an error listing
+a directory or examining an entry raises with its path, and only absence is quiet. A short list was the
+defect: a listing that swallowed an `EIO` made the identity a hash of the top-level files, which a world's
+genesis or a resume's first checkpoint wrote and the executive kept, so one transient error made every
+later checkpoint another engine's. An identity that cannot be computed at a start is a refusal naming the
+file (B1, B3, (xli)); at the cadence it is a failed checkpoint, recorded and journaled, and nothing is kept.
+(xliii) **Every append to a record file is whole or undone.** The writer notes the file's size, appends
+and `fsync`s; on any failure it cuts the file back to that size and `fsync`s the cut, so the file ends at
+its last whole line — an advisory event's failure, still not the run's, can no longer leave a fragment
+for the next chained row to follow (which (xl) rightly refuses), and no terminator is written before a
+chained row. A cut that fails is `RecordUnwritable`: the run stops before another cycle, from the cadence
+or the clean end alike, and a resume's advisory refuses. Two consequences at the edges: a marked fragment
+is allowed `len(#\n)` bytes past `MAX_RECORD_LINE_BYTES`, since the longest line cut before its newline
+and marked is one byte past it; and every `close` on the start path runs whatever the others do — a
+failure after another is dropped, the first when nothing else failed is named, exit 3 — and a walk holds
+the child it opened before it closes the parent.
+
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
 Fixed by WP08's acceptance: "corrupt/incompatible checkpoints fail explicitly". The question is what

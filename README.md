@@ -19363,6 +19363,23 @@ A third round (Codex's confirmation of `d0a20dc`, which confirmed G2, G3, G6, G7
 |---|---:|---:|
 | referee tests | 507 | **513** |
 
+A fourth round (Codex's confirmation of `f12e522`, which confirmed H1, H2 and H3; ADR 0002 J
+(xlii)–(xliii)):
+
+| finding (who) | what `f12e522` did | what it does now | the test failed at `f12e522` with |
+|---|---|---|---|
+| J1 a transient configuration read error (Codex, P2) | `corpus_files` listed the corpus with `glob`, which swallows an `OSError`: an `EIO` on `domains/` made the engine identity a hash of the five top-level files, which a genesis or a resume's first checkpoint wrote and the executive kept for every checkpoint after | the corpus is listed explicitly and an error raises with its path: a start refuses naming it, a cadence checkpoint fails recorded and journaled, and nothing is kept | exit 0 and a five-file identity in the checkpoint; at a start, "incompatible" |
+| J2 a partial advisory append (Codex, P2) | a `checkpoint_failed` event cut by `EIO` was suppressed, and the next tick row was appended after its fragment — one plain-newline line that does not parse | every append to the record is cut back to where it began when it fails; a cut that fails stops the run, exit 3 | the merged line did not parse; no `RecordUnwritable` |
+| J3 the line bound's edge (Codex, P3) | the longest line, cut before its newline and marked, was one byte past the reader's bound | a marked line is allowed its terminator past the bound | a `line` refusal for a torn tail |
+| J4 close errors (Codex, P3) | a failing `close` of a walk's parent leaked the child; one on the way out escaped `main` and left the executive's other handles open | every `close` runs; the first failure, when nothing failed before it, is named and exit 3 | `EBADF` for `EIO` and a descriptor left; `OSError` out of `main` |
+
+The start path's injection test now reaches the vehicle's configuration and every `close` as well, and
+its error carries the path the call was given, as the kernel's does.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 513 | **521** |
+
 ## The invariants, and which of them are enforced
 
 
