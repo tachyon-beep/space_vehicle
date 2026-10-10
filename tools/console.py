@@ -222,6 +222,7 @@ from checkpoint import (  # noqa: E402
     decode,
     encode,
     git_commit,
+    releasing,
     restore_state,
     write_checkpoint,
 )
@@ -1011,27 +1012,24 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
     executive's own record writer does: an event the rewrite relies on is only journaled once its bytes
     and its name are on the disk, and the record is the operator's, not the host's other users'.
     """
-    opened: int | None = None
-    if dir_fd is None:
-        opened = dir_fd = open_directory(Path(path).parent)
-    try:
+    # Both handles close through `releasing` (fifth round, K1): a close that fails while the append's
+    # own failure is on its way out — `RecordUnwritable` above all, which stops the run — is dropped,
+    # never raised in its place.
+    with contextlib.ExitStack() as handles:
+        if dir_fd is None:
+            dir_fd = handles.enter_context(releasing(open_directory(Path(path).parent)))
         fd = os.open(
             Path(path).name, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=dir_fd
         )
-        try:
+        with releasing(fd):
             private_record_file(fd, str(path))
             # A previous boot's append torn by a kill, in a journal every boot shares, is ended first, so
             # this event is a line of its own and not the tail of a fragment (addendum B8).
             size = os.fstat(fd).st_size
             ending = TORN_TAIL_TERMINATOR if size > 0 and os.pread(fd, 1, size - 1) != b"\n" else b""
             append_or_restore(fd, ending + (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"), str(path))
-        finally:
-            os.close(fd)
         # The line is durable; the name, when this append made the file, is durable with its directory.
         os.fsync(dir_fd)
-    finally:
-        if opened is not None:
-            os.close(opened)
 
 
 def private_record_file(fd: int, name: str) -> None:
@@ -3421,7 +3419,9 @@ class Executive:
                 append_or_restore(fd, TORN_TAIL_TERMINATOR, str(self.journal))
             os.fsync(self.journal_dir_fd)
         except BaseException:
-            os.close(fd)
+            # A failing close never replaces the failure on its way out (fifth round, K1).
+            with contextlib.suppress(OSError):
+                os.close(fd)
             raise
         self._record_fd = fd
         return fd

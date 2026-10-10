@@ -30111,16 +30111,23 @@ def test_a_cadence_checkpoint_whose_corpus_cannot_be_listed_is_a_journaled_failu
 
 
 class EventAppendTorn:
-    """The `checkpoint_failed` event's append written in part, then `EIO`; with `cut_fails`, `EIO` from the cut that would undo it too."""
+    """An advisory event's append written in part, then `EIO`; with `cut_fails`, `EIO` from the cut that would undo it too.
 
-    def __init__(self, monkeypatch, *, cut_fails: bool = False) -> None:
+    With `close_fails` (fifth round, K1) the event's file then fails to close as well — after releasing
+    the descriptor, as Linux's `close` does — which is how a failing disk reports a writeback error.
+    `event` names the event whose append is torn: `checkpoint_failed` by default.
+    """
+
+    def __init__(self, monkeypatch, *, cut_fails: bool = False, close_fails: bool = False, event: str = "checkpoint_failed") -> None:
         self.fd: int | None = None
         self.torn = False
         self.cuts: list[int] = []
-        real_write, real_ftruncate = os.write, os.ftruncate
+        self.closes: list[int] = []
+        marker = f'"{event}"'.encode()
+        real_write, real_ftruncate, real_close = os.write, os.ftruncate, os.close
 
         def write(fd, data):
-            if self.fd is None and b'"checkpoint_failed"' in bytes(data):
+            if self.fd is None and marker in bytes(data):
                 self.fd = fd
                 return real_write(fd, bytes(data)[: len(data) // 2])
             if fd == self.fd and not self.torn:
@@ -30135,11 +30142,22 @@ class EventAppendTorn:
                     raise OSError(errno.EIO, os.strerror(errno.EIO))
             return real_ftruncate(fd, length)
 
+        def close(fd):
+            if fd == self.fd and self.torn and not self.closes:
+                self.closes.append(fd)
+                real_close(fd)
+                if close_fails:
+                    raise OSError(errno.EIO, os.strerror(errno.EIO))
+                return None
+            return real_close(fd)
+
         monkeypatch.setattr(os, "write", write)
         monkeypatch.setattr(os, "ftruncate", ftruncate)
+        monkeypatch.setattr(os, "close", close)
 
 
-def test_a_checkpoint_failed_event_written_in_part_is_cut_back_so_the_next_row_begins_a_line_and_a_resume_reads_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_a_checkpoint_failed_event_written_in_part_is_cut_back_so_the_next_row_begins_a_line_and_a_resume_reads_it(tmp_path, monkeypatch, close_fails):
     """Round 4, J2 (Codex P2): a partial advisory append corrupted the next durable row.
 
     A cadence checkpoint fails, and the `checkpoint_failed` event it journals is written half-way when
@@ -30148,7 +30166,8 @@ def test_a_checkpoint_failed_event_written_in_part_is_cut_back_so_the_next_row_b
     line, ending in a plain newline, that does not parse, which the next start refused as corruption
     (H1). Every append to the record now notes where it began and, on any failure, cuts the file back
     to there: the fragment is gone, the next row begins a line, and a resume replays through it to the
-    tick the live executive reached, with its compare-point and lineage link.
+    tick the live executive reached, with its compare-point and lineage link. With the event's file failing
+    to close as well (K1), the cut has still been made, and the same holds.
     """
     checkpoint, console, plant, world = checkpoint_tools()
     diode, state = tmp_path / "diode", tmp_path / "state"
@@ -30163,10 +30182,10 @@ def test_a_checkpoint_failed_event_written_in_part_is_cut_back_so_the_next_row_b
 
     with monkeypatch.context() as patch:
         patch.setattr(console, "write_checkpoint", full)
-        torn = EventAppendTorn(patch)
+        torn = EventAppendTorn(patch, close_fails=close_fails)
         for _ in range(2):
             executive.cycle()
-    assert torn.torn and executive.checkpoint_failures == 1
+    assert torn.torn and executive.checkpoint_failures == 1 and len(torn.closes) == 1
     executive.cycle()
     live = (plant.state_hash(executive.truth), executive.lineage_head)
     segment = executive.journal
@@ -30180,12 +30199,18 @@ def test_a_checkpoint_failed_event_written_in_part_is_cut_back_so_the_next_row_b
     assert len(torn.cuts) == 1, torn.cuts
 
 
-def test_a_failed_append_that_cannot_be_cut_back_stops_the_run_before_another_cycle(tmp_path, monkeypatch):
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_a_failed_append_that_cannot_be_cut_back_stops_the_run_before_another_cycle(tmp_path, monkeypatch, close_fails):
     """Round 4, J2 (Codex P2): when the cut that undoes a partial append fails too, the record is unwritable.
 
     The record may now end in a fragment, and a row appended after it would be the corruption J2 is
     about; so the advisory's failure is not suppressed then. At the cadence the cycle raises
     `RecordUnwritable` — the run loop's stop, exit 3 — naming the record and both errors.
+
+    Round 5, K1 (Codex P2): when the event's file then fails to close too — a failing disk reports a
+    writeback error at `close` — the close's `OSError` replaced `RecordUnwritable`, the advisory handler
+    took it for an advisory's failure, and the run went on after the fragment. A close in cleanup never
+    replaces an exception already on its way out, so the run stops the same.
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     diode, state = tmp_path / "diode", tmp_path / "state"
@@ -30198,22 +30223,23 @@ def test_a_failed_append_that_cannot_be_cut_back_stops_the_run_before_another_cy
 
     with monkeypatch.context() as patch:
         patch.setattr(console, "write_checkpoint", full)
-        torn = EventAppendTorn(patch, cut_fails=True)
+        torn = EventAppendTorn(patch, cut_fails=True, close_fails=close_fails)
         with pytest.raises(console.RecordUnwritable) as stopped:
             executive.cycle()
     executive.close()
-    assert torn.torn and torn.cuts and executive.tick == 2
+    assert torn.torn and torn.cuts and torn.closes and executive.tick == 2
     assert str(executive.journal) in str(stopped.value) and "cut back" in str(stopped.value), stopped.value
 
 
-@pytest.mark.parametrize("cut_fails", [False, True])
-def test_a_clean_ends_checkpoint_event_written_in_part_is_cut_back_or_the_run_ends_by_name(tmp_path, monkeypatch, capsys, cut_fails):
+@pytest.mark.parametrize(("cut_fails", "close_fails"), [(False, False), (True, False), (True, True)])
+def test_a_clean_ends_checkpoint_event_written_in_part_is_cut_back_or_the_run_ends_by_name(tmp_path, monkeypatch, capsys, cut_fails, close_fails):
     """Round 4, J2: the clean end's `checkpoint_failed` event obeys the same discipline as the cadence's.
 
     `main` runs two cycles and its checkpoint at the clean end cannot be written; its event is written
     in part and then `EIO`. Cut back, the run exits 0 as a clean end with a failed checkpoint does, and
     the next start resumes from the record. When the cut fails too, `RecordUnwritable` came out of the
     clean end — outside the run loop's handler — and is now exit 3 with the record named on stderr.
+    And when the event's file then fails to close (round 5, K1), the close does not replace it: still 3.
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     diode, state = tmp_path / "diode", tmp_path / "state"
@@ -30229,7 +30255,7 @@ def test_a_clean_ends_checkpoint_event_written_in_part_is_cut_back_or_the_run_en
     monkeypatch.setattr(console, "load_world", lambda _root: world)
     with monkeypatch.context() as patch:
         patch.setattr(console, "write_checkpoint", genesis_only)
-        torn = EventAppendTorn(patch, cut_fails=cut_fails)
+        torn = EventAppendTorn(patch, cut_fails=cut_fails, close_fails=close_fails)
         code = console.main([*argv, "--cycles", "2"])
     err = capsys.readouterr().err
     assert torn.torn, err
@@ -30385,3 +30411,35 @@ def test_an_unreadable_file_of_the_engine_identity_raises_naming_it_on_every_pyt
         with pytest.raises(OSError) as listed:
             plant.corpus_files(world.root)
         assert listed.value.errno == errno.EIO and listed.value.filename == target, (which, listed.value)
+
+
+@pytest.mark.parametrize("close_fails", [False, True])
+def test_a_resumes_republished_event_that_cannot_be_cut_back_refuses_the_resume_even_when_its_close_fails_too(tmp_path, monkeypatch, close_fails):
+    """Round 5, K1 (Codex P2): the resume's `results_republished` advisory holds to the cleanup rule too.
+
+    A kill between a cycle's row and its results leaves four results owed; the resume writes them and
+    journals a `results_republished` event. That event's append is written in part, then `EIO`, and the
+    cut that would undo it fails: the record may end in a fragment, so the resume is refused (J2). When
+    the event's file also fails to close, its `OSError` replaced `RecordUnwritable`, the handler took it
+    for an advisory's failure, and the resume went on to append after the fragment; it is refused now.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    with monkeypatch.context() as patch:
+        patch.setattr(console.Window, "write_result", killed_result)
+        with pytest.raises(SimulatedKill):
+            killed.cycle()
+    killed.close()
+    with monkeypatch.context() as patch:
+        torn = EventAppendTorn(patch, cut_fails=True, close_fails=close_fails, event="results_republished")
+        with pytest.raises(console.ResumeRefused) as refused:
+            resume_from(console, checkpoint, world, diode, state)
+    assert torn.torn and torn.cuts and torn.closes, (torn.torn, torn.cuts, torn.closes)
+    assert "cut back" in str(refused.value), refused.value
+

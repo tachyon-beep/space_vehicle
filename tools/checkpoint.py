@@ -110,6 +110,7 @@ import secrets
 import stat
 import subprocess
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -663,6 +664,27 @@ def _sweep_temporaries(dir_fd: int) -> None:
             os.unlink(name, dir_fd=dir_fd)
 
 
+@contextlib.contextmanager
+def releasing(fd: int) -> Iterator[int]:
+    """`fd`, closed on the way out — and **a close in cleanup never replaces an exception already propagating**.
+
+    WP08 child 3, fifth round (K1). A failing disk reports a writeback error at `close`, so the close a
+    writer makes in its cleanup is likeliest to fail exactly when the write before it already has: a
+    plain `finally: os.close(fd)` then raised the close's `OSError` in place of what was on its way out —
+    the record writer's `RecordUnwritable`, which the advisory handlers stop on, became an `OSError`
+    they treat as an advisory's failure, and the run went on after a fragment. On the exception path
+    the close's error is dropped and the original raised; on the clean path a failing close raises.
+    Every path that writes the record or a checkpoint closes through this.
+    """
+    try:
+        yield fd
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+    os.close(fd)
+
+
 def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
@@ -748,7 +770,7 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
     dir_fd = _held_or_opened(state_dir, dir_fd, create=True)
     step = "write"
     temporary = f"{TEMPORARY_PREFIX}{os.getpid()}.{secrets.token_hex(8)}{TEMPORARY_SUFFIX}"
-    try:
+    with releasing(dir_fd):
         try:
             _sweep_temporaries(dir_fd)
             fd = os.open(
@@ -762,13 +784,11 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
                 "write", state_dir, f"the state directory {state_dir} cannot be written ({_errno_name(exc)}: {exc.strerror})"
             ) from exc
         try:
-            try:
+            with releasing(fd):
                 _write_all(fd, header_line + body_bytes)
                 _after_step("write")
                 step = "fsync"
                 os.fsync(fd)
-            finally:
-                os.close(fd)
             _after_step("fsync")
             step = "rename_previous"
             # The first generation has nothing to become previous.
@@ -790,8 +810,6 @@ def write_checkpoint(state_dir: Path, body: dict[str, Any], *, dir_fd: int | Non
                 f"the write failed at step {step!r} ({_errno_name(exc)}: {exc.strerror}; {CURRENT} → {PREVIOUS} → {temporary}); "
                 + _ON_DISK_AFTER.get(step, "what is on disk is unknown; read it before trusting it"),
             ) from exc
-    finally:
-        os.close(dir_fd)
     return target
 
 
