@@ -29460,3 +29460,94 @@ def test_the_line_at_the_anchor_must_verify_as_a_record_line_whose_chain_recompu
     header_anchor = console.record_anchor(body)
     assert header_anchor["entry"]["segment"] == torn_boot.boot_id and header_anchor["tick"] == 3, header_anchor
     console.read_record(state2, anchor=header_anchor).close()
+
+
+def damage_every_line(path: Path, *, after: int = 0) -> None:
+    """Make every line of a file from byte `after` unparseable, keeping each line and its newline."""
+    raw = path.read_bytes()
+    head, tail = raw[:after], raw[after:]
+    path.write_bytes(head + b"".join(b"X" + line[1:] for line in tail.splitlines(keepends=True)))
+
+
+def test_two_fragments_with_no_complete_line_between_them_are_corruption_so_a_wholly_damaged_file_is_never_skipped(tmp_path):
+    """Confirmation G5 (Opus N1), refining R1: a fragment directly followed by another is corruption.
+
+    R1 let a fragment be followed by another fragment, so that a kill at the same point of a start,
+    repeated, would read. It also let a file whose *every* line is damaged read as a run of fragments —
+    empty — and successor discovery skipped it, so a resume came back short of published ticks, which
+    ADR 0002 J (xxxi) forbids. Now two fragments with no complete line between them refuse by name; a
+    fragment followed by complete startup events and then another fragment — what repeated kills at a
+    start in a shared journal actually leave, each boot journaling its events before its header —
+    still reads. Every line of a successor damaged, and every line after an anchor damaged: each is
+    refused by the anchored read and by the whole-record read.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    first.attach("alpha")
+    _p, _c, snapshot = recorded_run(first, diode, {}, 3, snapshot_at=3)
+    recorded_run(first, diode, {}, 3, start=3)
+    first.close()
+    anchor = console.record_anchor(snapshot)
+    original = first.journal.read_bytes()
+
+    damage_every_line(first.journal, after=anchor["entry"]["offset"])
+    for read in (lambda: console.read_record(state, anchor=anchor), lambda: console.read_record(state)):
+        with pytest.raises(console.RecordRefused) as refused:
+            read()
+        assert refused.value.check == "corrupt" and first.journal.name in str(refused.value), refused.value
+    first.journal.write_bytes(original[: anchor["entry"]["offset"]])  # back to the anchor, for the successor case
+
+    second, _ = resume_from(console, checkpoint, world, diode, state)
+    recorded_run(second, diode, {}, 3, start=3)
+    second.close()
+    damage_every_line(second.journal)
+    for read in (lambda: console.read_record(state, anchor=anchor), lambda: console.read_record(state)):
+        with pytest.raises(console.RecordRefused) as refused:
+            read()
+        assert refused.value.check == "corrupt" and second.journal.name in str(refused.value), refused.value
+
+
+def test_repeated_kills_at_a_resumed_boots_first_append_in_a_shared_journal_are_read_and_resumed_past(tmp_path):
+    """Confirmation note (Codex): R1's repeated-fragment allowance gets a test of its own, through real resumes.
+
+    One explicit `--journal` for every boot. Two resumed boots in a row die half-way through their first
+    append; each had journaled its `resumed` event first, so the file reads: rows, fragment (ended `#`),
+    event, fragment (ended `#`), event, and then a third resumed boot's header and rows. That reads as
+    one trace of two segments, and a fourth resume continues it at the tick the third reached.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state, journal = tmp_path / "diode", tmp_path / "state", tmp_path / "shared.jsonl"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 3, snapshot_at=3)
+    executive.close()
+    real = console._write_all
+    for _ in range(2):
+        boot, _r = resume_from(console, checkpoint, world, diode, state, journal=journal)
+
+        def tear(fd, data, real=real):
+            if b'"event":"segment"' in data:
+                real(fd, data[: len(data) // 3])
+                raise SimulatedKill
+            return real(fd, data)
+
+        console._write_all = tear
+        try:
+            with pytest.raises(SimulatedKill):
+                boot.cycle()
+        finally:
+            console._write_all = real
+        boot.close()
+    third, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+    assert resumption.tick == 3
+    lines = journal.read_bytes().splitlines()
+    assert sum(1 for line in lines if line.endswith(b"#")) == 2, "two fragments, each ended by the terminator"
+    recorded_run(third, diode, {}, 2, start=3)
+    third.close()
+    record = console.read_record(journal)
+    assert [s.last_tick for s in console.concatenated(record.segments)] == [3, 5]
+    record.close()
+    fourth, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+    assert resumption.tick == 5
+    fourth.close()

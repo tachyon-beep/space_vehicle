@@ -1584,18 +1584,28 @@ def _torn_aware_lines(
     An unparseable line is a torn fragment — a write a kill cut, from which nothing was published — only
     if it is the last line of its file, or it is followed only by a new boot's unchained startup events
     and then that boot's segment header (which may itself be a fragment, by the same rule: a kill at the
-    same point of a start, repeated). Anywhere else — in particular before a complete row or note — it is
-    corruption, and refuses (`corrupt`) by name. The startup events that follow a fragment are not
+    same point of a start, repeated — the boot journals its events before its header, so at least one
+    complete startup event stands between the two fragments). Anywhere else — before a complete row or
+    note, or directly before another fragment (confirmation G5: otherwise a file whose every line is
+    damaged reads as empty and is skipped) — it is corruption, and refuses (`corrupt`) by name. The startup events that follow a fragment are not
     yielded: they are the operator's and not part of the trace. Every reader of the record — the
     whole-record read, the anchored read, a successor's first header, the replay — reads through this.
     """
     pending: tuple[int, int, int] | None = None
+    events_since = 0
     for number, at, end, row in _file_lines(dir_fd, name, offset, first):
         if pending is not None:
+            if row is None and events_since == 0:
+                raise RecordRefused(
+                    "corrupt",
+                    f"lines {pending[0]} and {number} of {name} are both not JSON objects with no complete line between them: "
+                    "a kill leaves one fragment per boot, and a boot journals its startup events before its header",
+                )
             if row is None or row.get("event") == "segment":
                 yield "torn", *pending, None
                 pending = None
             elif _startup_event(row):
+                events_since += 1
                 continue
             else:
                 raise RecordRefused(
@@ -1604,7 +1614,7 @@ def _torn_aware_lines(
                     "append: only a file's last line, or one followed by a new boot's startup events and its header, can be",
                 )
         if row is None:
-            pending = (number, at, end)
+            pending, events_since = (number, at, end), 0
             continue
         yield "line", number, at, end, row
     if pending is not None:
