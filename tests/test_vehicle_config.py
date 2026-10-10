@@ -29848,15 +29848,17 @@ class StartPathInjection:
     """Fail the `index`-th call to `os.<name>` with `EIO` — on the main thread, during a start, before the first cycle.
 
     With `index` `None` it only counts, per name, the calls a start makes, so the test can walk every one.
-    The world is loaded once and handed to `main` (`load_world` and `load_postures` stubbed), so what is
-    counted is the start's own path: a call on a descriptor, on a name relative to one, on `/` (where every
-    private walk begins) or on a path under `root`, the run's own directories — not a read of the
-    vehicle's own configuration (the engine identity's file list, whose `glob` swallows an `OSError`). The
+    The world is loaded once and handed to `main` (`load_world` and `load_postures` stubbed). Every call
+    the start makes is counted — on a descriptor, on a name relative to one, on `/` where every private
+    walk begins, on the run's own directories, and on the vehicle's configuration, which the engine
+    identity lists (round 4, J1: its listing was a `glob` that swallowed the error, and was left out).
+    The error is the kernel's as Python reports it: for a call given a path it carries that path. The
     first cycle turns injection off, because from there an `OSError` is the cycle's to handle.
     """
 
     def __init__(self, monkeypatch, console, world, postures, root, name=None, index=None):
         self.counts: dict[str, int] = dict.fromkeys(START_PATH_CALLS, 0)
+        self.given: set[tuple[str, str]] = set()
         self.active, self.fired = True, None
         self.name, self.index = name, index
         main_thread = threading.main_thread()
@@ -29864,15 +29866,15 @@ class StartPathInjection:
             real = getattr(os, call)
 
             def wrapped(*args, _call=call, _real=real, **kwargs):
-                first = args[0] if args else kwargs.get("path", ".")
-                ours = not isinstance(first, (str, bytes, os.PathLike)) or not os.path.isabs(os.fsdecode(first))
-                ours = ours or os.fsdecode(first) == "/" or os.fsdecode(first).startswith(str(root) + os.sep)
-                if self.active and ours and threading.current_thread() is main_thread:
+                if self.active and threading.current_thread() is main_thread:
+                    first = args[0] if args else kwargs.get("path", ".")
+                    named = [os.fsdecode(first)] if isinstance(first, (str, bytes, os.PathLike)) else []
+                    self.given.update((_call, path) for path in named)
                     seen = self.counts[_call]
                     self.counts[_call] += 1
                     if _call == self.name and seen == self.index:
                         self.fired = (_call, seen, args[:1])
-                        raise OSError(errno.EIO, "Input/output error")
+                        raise OSError(errno.EIO, os.strerror(errno.EIO), *named)
                 return _real(*args, **kwargs)
 
             monkeypatch.setattr(os, call, wrapped)
@@ -29914,6 +29916,11 @@ def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_de
     `--init`, one at a time: `main` always returns, 0 where the failure is one a start tolerates (a
     window's file, an advisory) and otherwise 3 with the errno and a path on stderr, and no descriptor
     outlives it.
+
+    Round 4 (J1): the calls on the vehicle's configuration are on the path too — the engine identity's
+    listing of the corpus, once a `glob` that swallowed the error — and the error carries the path a
+    call was given, as the kernel's does, so a refusal is held to naming that path: the corpus directory
+    for a listing of it, the walked directory (not `/`) for the first open of a private walk.
     """
     console, _plant, world = console_tools()
     postures = console.load_postures(VEHICLE)
@@ -29933,6 +29940,7 @@ def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_de
     capsys.readouterr()
     reached = {name: count for name, count in counting.counts.items() if count}
     assert {"open", "fstat"} <= set(reached), reached
+    assert ("scandir", str(world.root / "domains")) in counting.given, "the corpus's listing is on the start path"
     refused = 0
     for name, count in sorted(reached.items()):
         for index in range(count):
@@ -29950,7 +29958,12 @@ def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_de
             assert code in (0, 3), (scenario, name, index, code, err)
             if code == 3:
                 refused += 1
-                assert ("EIO" in err or "Input/output error" in err) and str(work) in err, (scenario, name, index, injection.fired, err)
+                # The refusal names the path the failed call was given, when it was given an absolute one (a
+                # corpus directory is the vehicle's, not the run's), and otherwise a path of the run's own.
+                given = injection.fired[2][0] if injection.fired and injection.fired[2] else None
+                given = os.fsdecode(given) if isinstance(given, (str, bytes, os.PathLike)) else None
+                named = given if given is not None and os.path.isabs(given) and given != "/" else str(work)
+                assert ("EIO" in err or "Input/output error" in err) and named in err, (scenario, name, index, injection.fired, err)
             shutil.rmtree(work)
     assert refused, "some failure on the start path refuses"
 
@@ -29991,3 +30004,103 @@ def test_a_window_directory_is_checked_through_the_held_diode_handle_not_by_its_
     assert console.main(["--diode-dir", str(planted), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 3
     err = capsys.readouterr().err
     assert "link" in err and str(planted / "alpha") in err and not list(outside.iterdir()), err
+
+
+class CorpusListingFails:
+    """`EIO`, as the kernel reports it (with the path), from `os.scandir` of the corpus's `domains/` during the `index`-th engine identity.
+
+    Counting identities rather than listings keeps the target exact whatever else lists `domains/`
+    (`Path.iterdir` is a `scandir` on 3.13): a start computes one before it chooses a generation
+    (`index` 0), and an executive one at its first checkpoint (`index` 1) — a new world's genesis, the
+    checkpoint a resume takes before it serves (B3), or an in-process executive's first cadence.
+    """
+
+    def __init__(self, monkeypatch, checkpoint, index: int) -> None:
+        self.fired: list[str] = []
+        self.target: str | None = None
+        self.calls = 0
+        real_identity, real_scandir = checkpoint.engine_identity, os.scandir
+
+        def identity(root):
+            self.target = os.path.join(os.fspath(root), "domains") if self.calls == index else None
+            self.calls += 1
+            try:
+                return real_identity(root)
+            finally:
+                self.target = None
+
+        def scandir(path="."):
+            if self.target is not None and isinstance(path, (str, bytes, os.PathLike)) and os.fsdecode(path) == self.target:
+                self.fired.append(self.target)
+                raise OSError(errno.EIO, os.strerror(errno.EIO), os.fsdecode(path))
+            return real_scandir(path)
+
+        monkeypatch.setattr(checkpoint, "engine_identity", identity)
+        monkeypatch.setattr(os, "scandir", scandir)
+
+
+def checkpoint_engines(state: Path) -> dict[str, str]:
+    """The engine identity each checkpoint generation in a state directory is stamped with, by file name."""
+    return {path.name: json.loads(path.read_bytes().split(b"\n", 1)[0])["engine"] for path in sorted(state.glob("checkpoint*.json"))}
+
+
+@pytest.mark.parametrize("during", ["the start's identity", "a world's genesis", "a resume's first checkpoint"])
+def test_a_corpus_directory_that_cannot_be_listed_refuses_the_start_by_name_and_no_checkpoint_carries_a_shorter_identity(tmp_path, monkeypatch, capsys, during):
+    """Round 4, J1 (Codex P2): a transient error reading the configuration poisoned every later checkpoint's identity.
+
+    `plant.corpus_files` listed the corpus with pathlib's `glob`, which swallows an `OSError`: an `EIO`
+    listing `domains/` made the corpus its five top-level files, and the engine identity a hash of those.
+    At a start that made a good checkpoint look incompatible; at a world's genesis or a resume's first
+    checkpoint (B1, B3) it *wrote* the short identity, the executive kept it for every checkpoint after,
+    and the next start refused them all as another engine's. The listing is now explicit and an error
+    raises with its path: at each of the three a start that cannot list `domains/` is refused, naming it
+    and the errno, with no checkpoint written or changed; when the directory reads again, the next start
+    runs — a resume reaches the tick the record holds — and its checkpoint carries the whole identity.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    resumes = during != "a world's genesis"
+    if resumes:
+        assert start(diode, state, "alpha", extra=["--cycles", "2", "--poll", "0"]).returncode == 0
+    saved = {path.name: path.read_bytes() for path in state.glob("checkpoint*.json")}
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    monkeypatch.setattr(console, "load_world", lambda _root: world)
+    with monkeypatch.context() as patch:
+        failing = CorpusListingFails(patch, checkpoint, 0 if during == "the start's identity" else 1)
+        code = console.main(argv)
+    err = capsys.readouterr().err
+    assert code == 3 and str(world.root / "domains") in err and ("EIO" in err or "Input/output error" in err), (during, code, err)
+    assert {path.name: path.read_bytes() for path in state.glob("checkpoint*.json")} == saved, during
+    assert failing.fired and set(failing.fired) == {str(world.root / "domains")}, (during, failing.fired)
+
+    assert console.main(argv) == 0, capsys.readouterr().err
+    whole = checkpoint.Compatibility.current(world).engine
+    assert set(checkpoint_engines(state).values()) == {whole}, (during, checkpoint_engines(state), whole)
+    assert generation_tick(state) == (3 if resumes else 1), during
+
+
+def test_a_cadence_checkpoint_whose_corpus_cannot_be_listed_is_a_journaled_failure_and_the_next_carries_the_whole_identity(tmp_path, monkeypatch):
+    """Round 4, J1 (Codex P2): at the cadence an identity that cannot be computed is a failed checkpoint, never a kept one.
+
+    The executive computes the engine identity at its first checkpoint and keeps it. When `domains/`
+    could not be listed that first identity was the short one, and every checkpoint the run wrote after
+    carried it. Now the cadence's checkpoint fails — recorded, and a `checkpoint_failed` event naming
+    the directory — the ticks go on, nothing is kept, and the next cadence computes the identity whole.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=2)
+    executive.attach("alpha")
+    with monkeypatch.context() as patch:
+        failing = CorpusListingFails(patch, checkpoint, 0)
+        for _ in range(2):
+            executive.cycle()
+    assert executive.tick == 2 and checkpoint_engines(state) == {}, checkpoint_engines(state)
+    assert failing.fired and executive.checkpoint_failures == 1
+    (event,) = journal_events(state, "checkpoint_failed")
+    assert event["occasion"] == "cadence" and str(world.root / "domains") in event["error"], event
+    for _ in range(2):
+        executive.cycle()
+    executive.close()
+    assert executive.checkpoint_failures == 0 and generation_tick(state) == 4
+    assert checkpoint_engines(state) == {"checkpoint.json": checkpoint.Compatibility.current(world).engine}

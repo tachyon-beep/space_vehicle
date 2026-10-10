@@ -824,9 +824,14 @@ def walk_open_dir(canonical: Canonical, flag: str, *, create: bool) -> tuple[int
     component that became a link since `canonicalise` is `ELOOP` and one that became a file is
     `ENOTDIR`; each that existed then must be the same inode now; with `create`, a component that did
     not exist is made and then opened the same way. The handle is the caller's to hold and to use
-    for every access after this one (ADR 0002 H, child 2, third review).
+    for every access after this one (ADR 0002 H, child 2, third review). The walk's first open, of
+    `/`, is refused as any component's is, naming the directory being walked rather than `/` alone
+    (round 4: the start path's injection now reaches it with the path the kernel names).
     """
-    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except OSError as exc:
+        return None, f"{flag} {canonical.path} cannot be opened at / ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
     walked = Path("/")
     try:
         for index, part in enumerate(canonical.path.parts[1:]):
@@ -3085,10 +3090,13 @@ class Executive:
         """Capture this executive and write it, ADR 0002 I's sequence, through the held state-directory handle.
 
         The engine identity and the commit are computed once per executive, not once per checkpoint
-        (`Compatibility.current` hashes the corpus). Raises what `capture_state` and `write_checkpoint`
-        raise; the callers decide what a failure means — a refused start for a world's genesis and for
-        the checkpoint a resume takes before it serves (addenda B1, B3), a recorded failure for the
-        cadence and for a clean end.
+        (`Compatibility.current` hashes the corpus) — and kept only once the identity is computed whole:
+        an error listing or reading the corpus raises out of `Compatibility.current` with its path
+        (`plant.corpus_files`, fourth round J1), nothing is kept, and the next checkpoint computes it
+        again. Raises what `Compatibility.current`, `capture_state` and `write_checkpoint` raise; the
+        callers decide what a failure means — a refused start for a world's genesis and for the
+        checkpoint a resume takes before it serves (addenda B1, B3), a recorded failure for the cadence
+        and for a clean end.
         """
         if self.state_dir is None or self.state_fd is None:
             raise RuntimeError("an executive without a state directory has nowhere to write a checkpoint")

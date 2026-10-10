@@ -56,6 +56,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -373,11 +374,37 @@ def corpus_files(root: Path) -> list[Path]:
     silent because a fixture with one field changed is still valid YAML; it became loud only when
     round 81 planted one that does not parse at all. A set of files a test has to *infer* is a set
     that will be inferred differently, so the vehicle's own tool says what it is.
+
+    **The listing is explicit, and an error is never a shorter list** (WP08 child 3, fourth round, J1).
+    It was `(root / "domains").glob(f"*/{name}")`, and pathlib's `glob` swallows every `OSError` from
+    the directories it lists: an `EIO` reading `domains/` made the corpus five files, and the engine
+    identity a checkpoint is stamped with (`checkpoint.engine_identity`) a hash of those five, cached by
+    the executive for every checkpoint after. So each directory is listed here with `os.scandir`, and an
+    error listing one — or examining an entry — raises with its path. Only absence is quiet, as it was:
+    a `domains/` that does not exist (or is not a directory) has no domain files. The set and its order
+    are glob's: every entry of `domains/` that is a directory (a link to one included, a dotted name
+    included), every entry of one named exactly as `CORPUS_DOMAIN_FILES` says, each name's paths sorted
+    as paths, then only those that exist (`Path.exists`, which raises on anything but absence).
     """
     files = [root / name for name in CORPUS_TOP_LEVEL]
+    found: dict[str, list[Path]] = {name: [] for name in CORPUS_DOMAIN_FILES}
+    for domain in _listed(root / "domains"):
+        if domain.is_dir():
+            for entry in _listed(Path(domain.path)):
+                if entry.name in found:
+                    found[entry.name].append(Path(entry.path))
     for name in CORPUS_DOMAIN_FILES:
-        files.extend(sorted((root / "domains").glob(f"*/{name}")))
+        files.extend(sorted(found[name]))
     return [path for path in files if path.exists()]
+
+
+def _listed(directory: Path) -> list[os.DirEntry[str]]:
+    """Every entry of `directory`, or none if it is absent; any other error raises, naming the directory (`corpus_files`)."""
+    try:
+        with os.scandir(directory) as listing:
+            return list(listing)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
 
 
 def load_world(root: Path) -> World:
