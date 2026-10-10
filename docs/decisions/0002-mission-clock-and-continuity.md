@@ -928,6 +928,16 @@ and marked is one byte past it; and every `close` on the start path runs whateve
 failure after another is dropped, the first when nothing else failed is named, exit 3 — and a walk holds
 the child it opened before it closes the parent.
 
+*Amended by #21's fifth round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `a38cee1`;
+decided by the coordinator under the owner's delegation.* (xliv) **A close in cleanup never replaces the
+failure already on its way out.** On every path that writes the record or a checkpoint — the event
+writer, the segment opener, the checkpoint writer — a handle closed in cleanup while an exception is
+propagating has its own close error dropped, and the original raised; on the clean path a failing close
+still raises. A failing disk reports a writeback error at `close`, so this is the case (xliii)'s
+`RecordUnwritable` meets: replaced by the close's `OSError`, it read as an advisory's failure and the run
+went on after a fragment. The same holds where the start path refuses with the executive open: the
+refusal is what is reported. And the engine identity's read of a file names it, as its `stat` does.
+
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
 Fixed by WP08's acceptance: "corrupt/incompatible checkpoints fail explicitly". The question is what

@@ -19384,6 +19384,23 @@ and 3.13, whose pathlib raised.
 |---|---:|---:|
 | referee tests | 513 | **522** |
 
+A fifth round (Codex's confirmation of `a38cee1`, which confirmed J1, J1a, J2's routing, J3's bounds
+and J4's stack; ADR 0002 J (xliv)):
+
+| finding (who) | what `a38cee1` did | what it does now | the test failed at `a38cee1` with |
+|---|---|---|---|
+| K1 a close replaced the rollback's failure (Codex, P2) | when a torn event's cut failed and its file then failed to close — how a failing disk reports a writeback error — the close's `OSError` replaced `RecordUnwritable`, the advisory handler swallowed it, and the run went on after the fragment | a close in cleanup never replaces an exception already on its way out (`checkpoint.releasing`), on the record's event writer, the segment opener and the checkpoint writer | no `RecordUnwritable`; the clean end exited 0; the resume was not refused |
+| K2 the identity's read (Codex, P3) | a read error of a corpus file carried no path, so the start named its state directory | the read error carries the file's path | `filename` `None`; the refusal named the state directory |
+| J4's leftovers (Codex) | a refusal made with the executive open closed it by hand first, and a failing close replaced the refusal — or, for the lock, escaped `main` | the refusal is what is reported, exit 3 | `OSError` out of `main`; the boundary's generic sentence |
+
+Left as residuals, each refused by name rather than lost: a maximum-length row cut to one byte short
+and then cut twice more inside its terminator, and any other combination of close failures on paths
+that write neither the record nor a checkpoint.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 522 | **525** |
+
 ## The invariants, and which of them are enforced
 
 
