@@ -30496,3 +30496,30 @@ def test_a_refusal_is_reported_when_the_executive_then_fails_to_close(tmp_path, 
     assert closes, refusal
     assert code == 3 and sentence in err, (refusal, code, err)
 
+
+def test_a_corpus_file_that_cannot_be_read_refuses_the_start_naming_it(tmp_path, monkeypatch, capsys):
+    """Round 5, K2 (Codex P3): the engine identity's read of a file names it, as its `stat` does.
+
+    `engine_identity` reads each file with `Path.read_bytes`, whose error on an `EIO` need not carry the
+    path; the start's boundary then named the state directory it was working in, not the file. The read
+    error now carries the file's path, so the refusal names `vehicle.yaml`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    target = world.root / "vehicle.yaml"
+    real_read = Path.read_bytes
+
+    def read_bytes(self):
+        if self == target:
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_read(self)
+
+    monkeypatch.setattr(console, "load_world", lambda _root: world)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", read_bytes)
+        with pytest.raises(OSError) as failed:
+            checkpoint.engine_identity(world.root)
+        code = console.main(["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"])
+    err = capsys.readouterr().err
+    assert failed.value.errno == errno.EIO and failed.value.filename == str(target), failed.value
+    assert code == 3 and str(target) in err and "EIO" in err, (code, err)

@@ -178,7 +178,7 @@ def engine_identity(root: Path) -> str:
 
     Every file is examined with `os.stat`, so an error — its absence included — raises naming it; not
     with `Path.is_file`, which from Python 3.14 answers `False` for any `OSError` and made an `EIO`
-    read as "missing" (WP08 child 3, fourth round, J1a).
+    read as "missing" (WP08 child 3, fourth round, J1a). A read error names its file too (K2).
     """
     root = Path(root)
     digest = hashlib.sha256()
@@ -187,7 +187,13 @@ def engine_identity(root: Path) -> str:
         path = root / name
         if not stat.S_ISREG(os.stat(path).st_mode):
             raise OSError(errno.EINVAL, "part of the engine identity, and not a regular file", str(path))
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            # A read error names its file, as the `stat` before it does (fifth round, K2).
+            if exc.filename is None:
+                exc.filename = str(path)
+            raise
         digest.update(f"{name}\n{len(data)}\n".encode())
         digest.update(data)
     return digest.hexdigest()
