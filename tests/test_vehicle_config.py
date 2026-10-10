@@ -28783,3 +28783,92 @@ def test_an_anchor_whose_line_is_not_the_checkpoints_own_is_refused_whatever_the
     with pytest.raises(console.RecordRefused) as refused:
         read()
     assert refused.value.check == "anchor" and "chain" in refused.value.why, refused.value
+
+
+def failing_directory_fsync(monkeypatch, *directories: Path) -> list[str]:
+    """Make `os.fsync` of these directories fail with `EIO`; returns the list each failure is appended to."""
+    inodes = {(d.stat().st_dev, d.stat().st_ino): d.name for d in directories}
+    failed: list[str] = []
+    real = os.fsync
+
+    def fsync(fd):
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) in inodes:
+            failed.append(str(fd))
+            raise OSError(errno.EIO, "Input/output error")
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    return failed
+
+
+def test_an_owed_result_stays_owed_until_its_file_and_its_directory_are_durable_on_republication(tmp_path, monkeypatch):
+    """Review F2 (Codex, both sessions) and ruling R2: an obligation leaves only behind the durability barrier.
+
+    A kill in the first window's `results_written` note leaves that window's results on disk without a
+    note and the other window's unwritten. At the resume, `fsync` of both windows' `output/` directories
+    fails with `EIO`. Re-publication removed each obligation as it wrote or found the file, before the
+    directory `fsync` — and a result found on disk was never `fsync`ed at all — so the checkpoint the
+    resume then took (B3) owed nothing, and a power loss could lose a name nobody owed any more. Now a
+    result leaves the list only once its file and its directory are durable: all four are still owed in
+    the checkpoint, and with the disk healthy again they are each published once.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    oracle, oracle_dir, _ = owed_run(console, world, tmp_path / "oracle", OWED_SCRIPT, 6)
+    killed, diode, state = owed_run(console, world, tmp_path / "killed", OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_note(self, window):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_note_window_results", killed_note)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    assert len(result_ledger(diode)) == 2, "one window's two results reached the disk before the kill"
+    failed = failing_directory_fsync(monkeypatch, diode / "alpha" / "output", diode / "bravo" / "output")
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    assert failed, "the directory fsync was attempted"
+    owed = sorted((o["window"], o["local"]) for o in resumed.obligations)
+    assert owed == [("alpha", 1), ("alpha", 2), ("bravo", 1), ("bravo", 2)], owed
+    resumed.checkpoint()
+    body = checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    assert sorted((o["window"], o["local"]) for o in body["obligations"]) == owed
+    monkeypatch.undo()
+    resumed.close()
+    again, _ = resume_from(console, checkpoint, world, diode, state)
+    assert again.obligations == []
+    recorded_run(again, diode, {}, 1, start=5)
+    again.close()
+    assert result_ledger(diode) == result_ledger(oracle_dir) and all(len(v) == 1 for v in result_ledger(diode).values())
+    oracle.close()
+
+
+def test_a_live_result_whose_directory_fsync_fails_is_owed_not_noted_and_survives_the_next_checkpoint(tmp_path, monkeypatch):
+    """Review F2 and ruling R2 on the live path: `landed`, the note and the obligations follow one barrier.
+
+    A window's result file was counted `landed` as soon as it existed, before the `output/` directory was
+    `fsync`ed, so when that `fsync` failed the publication failed with every result already counted: no
+    note (correctly), but nothing owed either, and the result could be lost to a power cut with nobody
+    owing it. Now a result is landed — noted, and not owed — only once its file and its directory are
+    durable. With `EIO` on alpha's directory `fsync`, alpha's result is owed, not noted, and in the next
+    checkpoint; once the disk heals it is written exactly once.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=2)
+    executive.attach("alpha")
+    executive.cycle()
+    failing_directory_fsync(monkeypatch, diode / "alpha" / "output")
+    submit(diode / "alpha", ["zzz_unsynced"])
+    executive.cycle()
+    assert [(o["window"], o["local"]) for o in executive.obligations] == [("alpha", 1)], executive.obligations
+    assert not [r for r in record_lines(executive.journal) if r.get("event") == "results_written"], "nothing is noted"
+    body = checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body
+    assert [(o["window"], o["local"]) for o in body["obligations"]] == [("alpha", 1)]
+    monkeypatch.undo()
+    executive.cycle()
+    assert executive.obligations == [] and [len(v) for v in result_ledger(diode).values()] == [1]
+    executive.close()

@@ -2356,6 +2356,19 @@ class DiskScan:
     examined: int = 0
     read: int = 0
     exhausted: bool = False
+    # The file each found receipt is in, so it can be made durable before it counts (review F2).
+    names: dict[int, str] = field(default_factory=dict)
+
+
+def _fsync_file(dir_fd: int, name: str) -> None:
+    """`fsync` one regular file by name through a held directory, following no link."""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, f"{name} is not a regular file")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) -> DiskScan:
@@ -2404,6 +2417,7 @@ def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) ->
             last = tail[:-1].rpartition(b"\n")[2] + b"\n" if tail.endswith(b"\n") else b""
             if last in wanted:
                 scan.found.add(wanted[last])
+                scan.names[wanted[last]] = name
     return scan
 
 
@@ -2938,27 +2952,35 @@ class Executive:
     def publish_obligations(self, window: Window) -> list[dict[str, Any]]:
         """Write what a window is owed, once each: skip a result already on disk (`results_on_disk`), write the rest.
 
-        Each written file is `fsync`ed as a result is (`write_result`) and the directory after them, when
-        there is a record. An obligation leaves the list as it is settled, so a failure part-way leaves
-        the rest owed. Returns what happened to each: `written` (with the file name) or `on disk`.
+        **An obligation leaves the list only behind the durability barrier** (review F2, ruling R2): with a
+        record, every result it settles — written now (`write_result` `fsync`s the file) or found already
+        on disk (whose file is `fsync`ed here) — is settled only once the `output/` directory has been
+        `fsync`ed after them all. A failure anywhere before that leaves every one of them owed, and the
+        next attempt finds what did reach the disk by its receipt line. Without a record nothing is made
+        durable and nothing waits. Returns what happened to each: `written` (with the file name) or
+        `on disk`.
         """
         mine = [entry for entry in self.obligations if entry["window"] == window.slug]
         if not mine:
             return []
         output = window._handles().output
+        durable = self.journal is not None
         scan = results_on_disk(output, window.slug, mine)
         report: list[dict[str, Any]] = []
         for entry in mine:
             outcome: dict[str, Any] = {"window": window.slug, "local": entry["local"], "tick": entry["tick"]}
             if entry["local"] in scan.found:
                 outcome["result"] = "on disk"
+                if durable:
+                    _fsync_file(output, scan.names[entry["local"]])
             else:
                 command, text = republication(entry)
                 outcome["result"], outcome["file"] = "written", window.write_result(command, text).name
-            self.obligations.remove(entry)
             report.append(outcome)
-        if any(item["result"] == "written" for item in report) and self.journal is not None:
+        if durable:
             os.fsync(output)
+        for entry in mine:
+            self.obligations.remove(entry)
         if scan.exhausted:
             report.append({"window": window.slug, "scan": f"stopped after {scan.examined} entries and {scan.read} bytes; anything not found was written"})
         return report
@@ -4126,10 +4148,11 @@ class Window:
 
         `state.json` is rewritten "whether or not anything was submitted", which is what makes the
         probe's `check_state_is_a_mirror` meaningful. The generated files are rewritten from the
-        cached text for the same reason: a hand-edit lasts until the next cycle. Each result's
-        window-local receipt is appended to `landed` as soon as its file exists, so a publication that
-        fails part-way still says which of its results reached the disk (the record's
-        `results_written` note, ADR 0002 J rule 3).
+        cached text for the same reason: a hand-edit lasts until the next cycle. The window-local
+        receipts of its results are appended to `landed` — and named in the record's `results_written`
+        note (ADR 0002 J rule 3) — only once their files and `output/` are durable; a publication that
+        fails before that leaves them owed (review F2), and the window's next publication finds what did
+        reach the disk by its receipt line.
         """
         root = self._handles().root
         written = []
@@ -4138,15 +4161,20 @@ class Window:
         for outcome in self.executive.publish_obligations(self):
             if "file" in outcome:
                 written.append(self.root / self.output / outcome["file"])
+        made: list[int] = []
         for verdict in sorted(verdicts, key=lambda v: v.receipt):
             written.append(self.write_result(verdict.command, verdict.body + self.receipt(verdict)))
-            self.landed.append(verdict.local)
-        if self.landed and self.executive.journal is not None:
-            # Each result file was `fsync`ed as it was made; the directory makes their names durable,
-            # and only then does the record say they were written (child 4's review finding 6). With no
-            # record nothing relies on it, and nothing is `fsync`ed.
+            made.append(verdict.local)
+        if made and self.executive.journal is not None:
+            # Each result file was `fsync`ed as it was made; the directory makes their names durable, and
+            # only then are they landed — noted, and not owed (child 4's review finding 6; review F2 and
+            # ruling R2: a directory `fsync` that fails leaves every one of them owed and none noted).
+            # With no record nothing relies on it, and nothing is `fsync`ed.
             os.fsync(self._handles().output)
+            self.landed.extend(made)
             self.executive._note_window_results(self)
+        else:
+            self.landed.extend(made)
         # The frame first, so the mirror's ring accounting describes the directory as it is: the old
         # console wrote the mirror before the frame and its `newest_seq` ran one behind the ring.
         self.write_frame()
