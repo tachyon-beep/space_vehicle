@@ -29669,3 +29669,172 @@ def test_an_unbound_root_record_beside_a_genesis_checkpoint_is_routine_only_as_f
     resumed.close()
     assert (resumption.snapshot_tick, resumption.tick) == (0, 2) and resumption.root_record.startswith("rewrite"), resumption.root_record
     assert len(journal_events(state, "root_record_rewritten")) == 1
+
+
+# ---- #21's third round (d0a20dc): H1–H3 -------------------------------------------------------------
+
+
+def torn_resumed_event(console, real):
+    """`append_journal_line` that cuts a `resumed` event half-way, as a kill there would, and ends the boot."""
+
+    def append(path, row, *, dir_fd=None):
+        if row.get("event") != "resumed":
+            return real(path, row, dir_fd=dir_fd)
+        fd = os.open(Path(path).name, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600, dir_fd=dir_fd)
+        try:
+            size = os.fstat(fd).st_size
+            ending = console.TORN_TAIL_TERMINATOR if size and os.pread(fd, 1, size - 1) != b"\n" else b""
+            line = json.dumps(row, sort_keys=True, separators=(",", ":"))
+            os.write(fd, ending + line[: len(line) // 2].encode())
+        finally:
+            os.close(fd)
+        raise SimulatedKill
+
+    return append
+
+
+def test_a_crash_loop_of_resumes_killed_in_their_resumed_event_in_a_shared_journal_reads_and_resumes(tmp_path, monkeypatch):
+    """Round 3, H1 (Codex P2): the terminator rule replaces G5's adjacency rule.
+
+    Two, then three, successive resumes on a shared `--journal` are killed half-way through their
+    `resumed` event. Each later boot ends the cut tail before it with `#\\n`, so the file holds two (or
+    three) marked fragments in a row, with no complete line between them — which G5's adjacency rule
+    refused as corrupt, so the next resume, and every one after it, refused: a legitimate crash loop
+    turned into a permanent one. Under the terminator rule a marked fragment is a torn append wherever
+    the next line is a startup event, a header, another marked fragment, or the end; the next resume
+    succeeds at the tick the record reached, takes its own checkpoint (B3), runs on, and the whole
+    record reads as one trace.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    real = console.append_journal_line
+    for kills in (2, 3):
+        root = tmp_path / f"kills{kills}"
+        root.mkdir()
+        diode, state, journal = root / "diode", root / "state", root / "shared.jsonl"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 3, snapshot_at=3)
+        recorded_run(executive, diode, {}, 2, start=3)
+        executive.close()
+        for _ in range(kills):
+            monkeypatch.setattr(console, "append_journal_line", torn_resumed_event(console, real))
+            with pytest.raises(SimulatedKill):
+                resume_from(console, checkpoint, world, diode, state, journal=journal)
+            monkeypatch.undo()
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+        assert resumption.tick == 5, (kills, resumption)
+        resumed.checkpoint()
+        recorded_run(resumed, diode, {}, 2, start=5)
+        resumed.close()
+        assert sum(1 for line in journal.read_bytes().splitlines() if line.endswith(b"#")) == kills
+        record = console.read_record(journal)
+        assert [s.last_tick for s in console.concatenated(record.segments)] == [5, 7], kills
+        record.close()
+        again, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+        assert resumption.tick == 7, (kills, resumption)
+        again.close()
+
+
+def test_resumes_killed_mid_header_and_mid_first_row_with_their_checkpoints_between_resume_from_the_last_intact_line(tmp_path):
+    """Round 3, H1 with real resumes and their B3 checkpoints between the kills (coordinator refinement).
+
+    A shared `--journal`. Boot 2 resumes, takes its resume checkpoint (B3) and is killed half-way
+    through its header; boot 3 resumes, takes its checkpoint and is killed half-way through its first
+    row (its header whole); boot 4 resumes. Each resume checkpoint's anchor must sit after the last
+    intact line — before the marked fragment and the startup events that follow it — or G2's anchor
+    check would refuse every resume after a start-up kill. Boot 4 resumes at the tick the record
+    reached, past boot 3's header-only segment, and the whole record reads as one trace.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state, journal = tmp_path / "diode", tmp_path / "state", tmp_path / "shared.jsonl"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 3, snapshot_at=3)
+    executive.close()
+    real = console._write_all
+    for cut in ("header", "row"):
+        boot, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+        assert resumption.tick == 3
+        boot.checkpoint()
+        anchor = console.record_anchor(checkpoint.read_generation(state, "checkpoint.json", checkpoint.Compatibility.current(world)).body)
+        line_end = journal.read_bytes()[: anchor["entry"]["offset"]]
+        assert line_end.endswith(b"\n") and not line_end.rstrip(b"\n").endswith(b"#"), "the anchor is after an intact line"
+
+        def tear(fd, data, real=real, cut=cut):
+            if b'"event":"segment"' in data:
+                stop = data.index(b"\n") // 2 if cut == "header" else data.index(b"\n") + 1 + (len(data) - data.index(b"\n") - 1) // 2
+                real(fd, data[:stop])
+                raise SimulatedKill
+            return real(fd, data)
+
+        console._write_all = tear
+        try:
+            with pytest.raises(SimulatedKill):
+                boot.cycle()
+        finally:
+            console._write_all = real
+        boot.close()
+    final, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+    assert resumption.tick == 3
+    final.checkpoint()
+    recorded_run(final, diode, {}, 2, start=3)
+    final.close()
+    record = console.read_record(journal)
+    assert [(s.first_tick, s.last_tick) for s in console.concatenated(record.segments)] == [(0, 3), (3, 3), (3, 5)]
+    record.close()
+
+
+def test_an_unparseable_line_ending_in_a_plain_newline_is_corruption_wherever_it_is(tmp_path):
+    """Round 3, H1: a kill leaves a cut tail unterminated, and a later writer marks it; nothing else is torn.
+
+    A line that does not parse and ends in a plain newline was not cut by a kill and marked by a writer:
+    it is corruption, in the middle of a segment, as the last line of a file, or before a startup event.
+    A marked fragment followed by a chained row is corruption too. The state directory's own-file cut
+    tail — an unterminated last line — still reads as torn.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 4)
+    executive.close()
+    segment = executive.journal
+    lines = segment.read_bytes().splitlines(keepends=True)
+    original = segment.read_bytes()
+    event = (json.dumps({"event": "resumed", "boot_id": "e" * 32, "wall": "w"}) + "\n").encode()
+    cases = {
+        "middle": [*lines[:2], b"X" + lines[2][1:], *lines[3:]],
+        "last": [*lines[:-1], b"X" + lines[-1][1:]],
+        "before an event": [*lines[:-1], b"X" + lines[-1][1:], event],
+        "marked before a row": [*lines[:2], lines[2][: len(lines[2]) // 2] + b"#\n", *lines[3:]],
+    }
+    for case, body in cases.items():
+        segment.write_bytes(b"".join(body))
+        with pytest.raises(console.RecordRefused) as refused:
+            console.read_record(state)
+        assert refused.value.check == "corrupt", (case, refused.value)
+    segment.write_bytes(original[:-10])  # the boot's own cut tail: unterminated, the file's last line
+    record = console.read_record(state)
+    assert record.segments[0].torn and record.segments[0].last_tick == 3
+    record.close()
+
+
+def test_a_window_published_past_the_last_durable_tick_is_a_named_refusal_not_a_resume_short_of_it(tmp_path):
+    """Round 3 (coordinator refinement): the design's `max(published_tick) ≤ L` is a refusal by name.
+
+    The terminator rule decides which line is the last durable one, and so `L`; a window that was shown
+    a tick past it — which no correct record allows, because a mark is made durable before a frame —
+    would resume short of what the fleet saw. Here a checkpoint says a window was published at tick 99
+    while the record ends at tick 3: the resume refuses, naming the window and both ticks.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 3, snapshot_at=3)
+    executive.close()
+    good = (state / "checkpoint.json").read_bytes()
+    (state / "checkpoint.json").write_bytes(rehashed_checkpoint(checkpoint, good, lambda body: body["windows"]["alpha"].update(published_tick=99)))
+    with pytest.raises(console.ResumeRefused) as refused:
+        resume_from(console, checkpoint, world, diode, state)
+    assert "'alpha'" in str(refused.value) and "99" in str(refused.value) and "tick 3" in str(refused.value), refused.value

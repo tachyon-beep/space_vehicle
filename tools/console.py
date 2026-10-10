@@ -1518,8 +1518,10 @@ class SegmentInfo:
 
 def _file_lines(
     dir_fd: int, name: str, offset: int = 0, first: int = 1
-) -> Iterator[tuple[int, int, int, dict[str, Any] | None]]:
-    """`(line number, byte offset, end offset, object or None)` for each line of one journal file from `offset`, bounded.
+) -> Iterator[tuple[int, int, int, dict[str, Any] | None, str]]:
+    """`(line number, byte offset, end offset, object or None, ending)` for each line of one journal file from `offset`, bounded.
+
+    `ending` is `line` for an object, else `_fragment_kind`'s: `unterminated`, `marked` or `plain`.
 
     `offset` and `first` start the read at a line the first pass found (a segment's header), so a
     second pass over one segment of a shared `--journal` does not re-read the boots before it
@@ -1566,7 +1568,8 @@ def _file_lines(
                     row = loads_json(raw[:-1].decode("utf-8"))
                 except Exception:  # noqa: BLE001 - any decoder failure is "not an object"
                     row = None
-            yield number, at, handle.tell(), row if isinstance(row, dict) else None
+            parsed = row if isinstance(row, dict) else None
+            yield number, at, handle.tell(), parsed, ("line" if parsed is not None else _fragment_kind(raw))
 
 
 # What ends an unterminated tail before anything else is appended to a journal file (review F13). A write
@@ -1576,50 +1579,61 @@ def _file_lines(
 TORN_TAIL_TERMINATOR = b"#\n"
 
 
+def _fragment_kind(raw: bytes) -> str:
+    """How an unparseable line ends: `unterminated` (a kill cut it, and it is its file's last line),
+    `marked` (a later writer ended that cut tail with `TORN_TAIL_TERMINATOR`), or `plain` (corruption)."""
+    if not raw.endswith(b"\n"):
+        return "unterminated"
+    return "marked" if raw.endswith(TORN_TAIL_TERMINATOR) else "plain"
+
+
 def _torn_aware_lines(
     dir_fd: int, name: str, offset: int = 0, first: int = 1
 ) -> Iterator[tuple[str, int, int, int, dict[str, Any] | None]]:
-    """`(kind, line, offset, end, row)` for each line of one journal file, with the one rule for an unparseable line (R1).
+    """`(kind, line, offset, end, row)` for each line of one journal file, with the one rule for an unparseable line.
 
     `kind` is `line` (a JSON object: a header, a row, a note or a startup event) or `torn` (row `None`).
-    An unparseable line is a torn fragment — a write a kill cut, from which nothing was published — only
-    if it is the last line of its file, or it is followed only by a new boot's unchained startup events
-    and then that boot's segment header (which may itself be a fragment, by the same rule: a kill at the
-    same point of a start, repeated — the boot journals its events before its header, so at least one
-    complete startup event stands between the two fragments). Anywhere else — before a complete row or
-    note, or directly before another fragment (confirmation G5: otherwise a file whose every line is
-    damaged reads as empty and is skipped) — it is corruption, and refuses (`corrupt`) by name. The startup events that follow a fragment are not
-    yielded: they are the operator's and not part of the trace. Every reader of the record — the
-    whole-record read, the anchored read, a successor's first header, the replay — reads through this.
+    **The terminator rule** (round 3, H1; it supersedes R1's position test and G5's adjacency rule): an
+    unparseable line is a torn fragment — a write a kill cut, from which nothing was published — if and
+    only if it is its file's final, unterminated line, or it ends with `TORN_TAIL_TERMINATOR`, the mark
+    every writer puts on a cut tail before it appends anything after it. A marked fragment may be
+    followed only by a new boot's unchained startup event, a segment header, another fragment, or the
+    end of the file — what repeated kills at a start leave, a boot's cut `resumed` event marked by the
+    next boot's included — never by a chained row or note. An unparseable line ending in a plain newline
+    was neither cut by a kill nor marked by a writer: it is corruption wherever it is, which is also
+    what keeps a file whose every line is damaged from reading as empty (G5). Every reader of the record
+    — the whole-record read, the anchored read, a successor's first header, the replay — reads through
+    this one predicate.
     """
-    pending: tuple[int, int, int] | None = None
-    events_since = 0
-    for number, at, end, row in _file_lines(dir_fd, name, offset, first):
-        if pending is not None:
-            if row is None and events_since == 0:
-                raise RecordRefused(
-                    "corrupt",
-                    f"lines {pending[0]} and {number} of {name} are both not JSON objects with no complete line between them: "
-                    "a kill leaves one fragment per boot, and a boot journals its startup events before its header",
-                )
-            if row is None or row.get("event") == "segment":
-                yield "torn", *pending, None
-                pending = None
-            elif _startup_event(row):
-                events_since += 1
-                continue
-            else:
-                raise RecordRefused(
-                    "corrupt",
-                    f"line {pending[0]} of {name} is not a JSON object and a complete record line follows it, so it is not a torn "
-                    "append: only a file's last line, or one followed by a new boot's startup events and its header, can be",
-                )
+    marked: tuple[int, int, int] | None = None
+    for number, at, end, row, ending in _file_lines(dir_fd, name, offset, first):
         if row is None:
-            pending, events_since = (number, at, end), 0
+            if ending == "plain":
+                raise RecordRefused(
+                    "corrupt",
+                    f"line {number} of {name} is not a JSON object and ends in a plain newline: a kill leaves a cut tail "
+                    f"unterminated, and the next writer marks it ({TORN_TAIL_TERMINATOR!r}), so this was neither",
+                )
+            if marked is not None:
+                yield "torn", *marked, None
+                marked = None
+            if ending == "unterminated":
+                yield "torn", number, at, end, None  # the file's last line: nothing follows it
+                continue
+            marked = (number, at, end)
             continue
+        if marked is not None:
+            if row.get("event") != "segment" and not _startup_event(row):
+                raise RecordRefused(
+                    "corrupt",
+                    f"line {marked[0]} of {name} is a marked fragment and a chained record line follows it: a writer marks a cut "
+                    "tail only to append a startup event or a new boot's header after it",
+                )
+            yield "torn", *marked, None
+            marked = None
         yield "line", number, at, end, row
-    if pending is not None:
-        yield "torn", *pending, None
+    if marked is not None:
+        yield "torn", *marked, None
 
 
 def _verified_lines(
@@ -1845,14 +1859,14 @@ def _first_header(dir_fd: int, name: str) -> dict[str, Any] | None:
     """The first segment header in one journal file, past at most `STARTUP_LINES_BEFORE_HEADER` startup events.
 
     `None` for a file that holds no header: only startup events (a refused start), or a boot torn before
-    its header — an unparseable line that is the file's last (R1). Anything else before the first header
-    — a tick row, a note, an unparseable line with complete lines after it (a damaged header, review F1)
-    — is not a file this vehicle wrote, and refuses; so do more startup events than the bound. Only
+    its header — a torn fragment by `_torn_aware_lines`' terminator rule. Anything else before the first
+    header — a tick row, a note, an unparseable line ending in a plain newline (a damaged header, review
+    F1) — is not a file this vehicle wrote, and refuses; so do more startup events than the bound. Only
     those lines are read.
     """
     for kind, number, _at, _end, row in _torn_aware_lines(dir_fd, name):
         if kind == "torn" or row is None:
-            continue  # R1 accepted it: the file's last line, or one a later boot's header follows
+            continue  # the terminator rule accepted it: a cut tail, unterminated or marked
         if row.get("event") == "segment":
             problem = _header_problem(row)
             if problem is not None:
