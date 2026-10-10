@@ -1567,7 +1567,8 @@ def _file_lines(
     (confirmation review P2).
 
     `None` is a line that is not a complete JSON object (a torn append, or worse — the caller decides
-    which). A line past `MAX_RECORD_LINE_BYTES` refuses. Nothing is kept: memory is one line.
+    which). A line past `MAX_RECORD_LINE_BYTES` refuses, but for a marked fragment's terminator. Nothing
+    is kept: memory is one line.
     """
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
@@ -1582,6 +1583,11 @@ def _file_lines(
         if not regular:
             raise RecordRefused("file", f"{name} is not a regular file")
         limit = MAX_RECORD_LINE_BYTES
+        # A marked fragment may be longer than any line the writer writes: the longest line cut just
+        # before its newline is `limit - 1` bytes, and its terminator makes it `limit + 1` (fourth round,
+        # J3) — or `limit + 2` where a cut fell inside an earlier terminator. A line ending in the
+        # terminator is allowed `len(TORN_TAIL_TERMINATOR)` bytes past the bound; any other is not.
+        marked_limit = limit + len(TORN_TAIL_TERMINATOR)
         number = first - 1
         try:
             handle.seek(offset)
@@ -1590,7 +1596,7 @@ def _file_lines(
         while True:
             try:
                 at = handle.tell()
-                raw = handle.readline(limit + 1)
+                raw = handle.readline(marked_limit + 1)
             except OSError as exc:
                 raise RecordRefused(
                     "file", f"{name} cannot be read after line {number} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})"
@@ -1598,8 +1604,9 @@ def _file_lines(
             if not raw:
                 return
             number += 1
-            # The bound counts the newline, as the writer's does: a line it would not write is refused.
-            if len(raw) > limit:
+            # The bound counts the newline, as the writer's does: a line it would not write is refused,
+            # and a marked fragment is allowed its terminator past it.
+            if len(raw) > limit and not (len(raw) <= marked_limit and raw.endswith(TORN_TAIL_TERMINATOR)):
                 raise RecordRefused("line", f"line {number} of {name} is longer than the {limit} bytes a record line may be")
             row = None
             if raw.endswith(b"\n"):

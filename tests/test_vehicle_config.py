@@ -30236,3 +30236,45 @@ def test_a_clean_ends_checkpoint_event_written_in_part_is_cut_back_or_the_run_en
         assert console.main([*argv, "--cycles", "1"]) == 0, capsys.readouterr().err
         assert generation_tick(state) == 3
     assert len(torn.cuts) == 1, torn.cuts
+
+
+def test_the_longest_row_cut_before_its_newline_and_marked_is_a_torn_tail_and_one_byte_more_is_refused(tmp_path, monkeypatch):
+    """Round 4, J3 (Codex P3): the line bound at its edge — a marked fragment is allowed its terminator.
+
+    The writer refuses a line past `MAX_RECORD_LINE_BYTES`, newline included, and the reader refused
+    the same; but the longest line the writer may write, cut by a kill just before its newline, is one
+    byte short of the bound, and the terminator the next opener adds makes it one byte past it — so a
+    record whose last append was its longest line was refused as too long instead of read as torn. The
+    bound is set here to the longest line a short run wrote. That line cut before its newline and
+    marked is a torn tail; so is one whose cut fell inside an earlier terminator (`##\\n`, the bound plus
+    two); one byte more is refused, and so is an unmarked line one byte past the bound.
+    """
+    _checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    for _ in range(2):
+        executive.cycle()
+    segment = executive.journal
+    executive.close()
+    original = segment.read_bytes()
+    longest = max(original.splitlines(keepends=True), key=len)
+    monkeypatch.setattr(console, "MAX_RECORD_LINE_BYTES", len(longest))
+    record = console.read_record(state)
+    assert not record.segments[0].torn and record.segments[0].last_tick == 2
+    record.close()
+    for tail, refused in (
+        (longest[:-1] + b"#\n", False),
+        (longest[:-1] + b"##\n", False),
+        (longest[:-1] + b"x##\n", True),
+        (longest[:-1] + b"xy\n", True),
+    ):
+        segment.write_bytes(original + tail)
+        if refused:
+            with pytest.raises(console.RecordRefused) as refusal:
+                console.read_record(state)
+            assert refusal.value.check == "line", (len(tail) - len(longest), refusal.value)
+            continue
+        record = console.read_record(state)
+        assert record.segments[0].torn and record.segments[0].last_tick == 2, len(tail) - len(longest)
+        record.close()
