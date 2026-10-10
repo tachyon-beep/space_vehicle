@@ -29256,3 +29256,40 @@ def test_a_resumes_anomalies_each_reach_stderr_where_the_operator_reads(tmp_path
     assert any("fell back" in line and "checkpoint.json" in line and rejected in line for line in err), err
     assert any("root record" in line and "not valid JSON" in line for line in err), err
     assert any("'bravo'" in line and "pending.json" in line and "99" in line for line in err), err
+
+
+def test_the_diode_directory_is_resolved_once_and_serves_json_records_the_path_main_compares(tmp_path, monkeypatch):
+    """Review F15 (Claude Opus): two path re-resolutions the design note said would go, gone.
+
+    `main` canonicalises `--diode-dir` once and opens it, but `Executive` opened `diode_dir.resolve()`
+    again — a second resolution of the operator's spelling — and `serves.json` was written from
+    `Path.resolve()` while `main` compared it with its own canonical path: two canonicalisations, and a
+    restart that disagreed with the last would refuse "serves another diode directory". Here the
+    `--diode-dir` is spelled through a link the test retargets between `main`'s open and the
+    executive's construction: the windows are still made in the directory `main` opened (the executive
+    holds a duplicate of `main`'s handle), and `serves.json` holds exactly the canonical path `main`
+    compares, so the next start resumes.
+    """
+    console, _plant, _world = console_tools()
+    first, other = tmp_path / "first", tmp_path / "other"
+    first.mkdir()
+    other.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(first)
+    real = console.Executive.__init__
+
+    def retargeted(self, *args, **kwargs):
+        alias.unlink()
+        alias.symlink_to(other)
+        real(self, *args, **kwargs)
+
+    monkeypatch.setattr(console.Executive, "__init__", retargeted)
+    state = tmp_path / "state"
+    assert console.main(["--diode-dir", str(alias), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 0
+    monkeypatch.undo()
+    assert (first / "alpha" / "state.json").exists() and not (other / "alpha").exists(), sorted(p.name for p in other.iterdir())
+    canonical, problem = console.canonicalise("--diode-dir", first, "the diode directory")
+    assert problem is None and json.loads((state / "serves.json").read_text())["diode_dir"] == str(canonical.path)
+    alias.unlink()
+    alias.symlink_to(first)
+    assert console.main(["--diode-dir", str(alias), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 0

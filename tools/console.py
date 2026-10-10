@@ -2494,10 +2494,15 @@ def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
 
 
 def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str]) -> None:
-    """Record, in the state directory, the diode directory it serves — resolved, as it is compared."""
+    """Record, in the state directory, the diode directory it serves — the canonical path `main` compares.
+
+    The caller passes `canonicalise`'s path, which is what `main` compares the record with at the next
+    start; this resolves nothing itself (review F15: `Path.resolve()` here and the hand canonicalisation
+    there were two answers to one question).
+    """
     write_json_atomic(
         SERVES_FILE,
-        {"diode_dir": str(Path(diode_dir).resolve()), "recorded_at": utc_now().isoformat()},
+        {"diode_dir": str(Path(diode_dir)), "recorded_at": utc_now().isoformat()},
         dir_fd=dir_fd,
     )
 
@@ -2612,6 +2617,7 @@ class Executive:
         state_fd: int | None = None,
         journal_dir_fd: int | None = None,
         checkpoint_every: int | None = None,
+        diode_fd: int | None = None,
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
@@ -2630,7 +2636,7 @@ class Executive:
             self._construct(
                 world, diode_dir, phase=phase, tripped_interlocks=tripped_interlocks, scenario=scenario, seed=seed,
                 max_batch=max_batch, journal=journal, record_slugs=record_slugs, state_dir=state_dir, boot_id=boot_id,
-                state_fd=state_fd, journal_dir_fd=journal_dir_fd, cadence=cadence,
+                state_fd=state_fd, journal_dir_fd=journal_dir_fd, cadence=cadence, diode_fd=diode_fd,
             )
         except BaseException:
             self.close()
@@ -2653,6 +2659,7 @@ class Executive:
         state_fd: int | None,
         journal_dir_fd: int | None,
         cadence: int,
+        diode_fd: int | None,
     ) -> None:
         self.world = world
         self.diode_dir = Path(diode_dir)
@@ -2755,14 +2762,15 @@ class Executive:
         self.readme_text = generate_readme(world.root)
         self.help_text = generate_help(world.root)
         # The diode directory, as a handle that follows no link: every window is opened relative to
-        # it, and the directory's own record is written through it. The operator's path is resolved
-        # first because it is the operator's to alias; nothing below it is.
-        try:
+        # it, and the directory's own record is written through it. `main` has canonicalised and opened
+        # it once and passes the handle, of which this keeps a duplicate — nothing resolves the operator's
+        # spelling a second time (review F15); an in-process caller without one has the path resolved
+        # here, the operator's to alias, and nothing below it is.
+        if diode_fd is not None:
+            self.diode_fd = os.dup(diode_fd)
+        else:
             self.diode_dir.mkdir(parents=True, exist_ok=True)
             self.diode_fd = open_directory(self.diode_dir.resolve())
-        except BaseException:
-            self.close()
-            raise
         # The names the registry publishes as gate variables, instantiated: the only names an
         # agent's `variables` may carry besides `allowance`.
         self.gate_names: set[str] = {
@@ -4541,6 +4549,7 @@ def resume_executive(
     max_batch: int | None = None,
     closed_interlocks: set[str] | None = None,
     checkpoint_every: int | None = None,
+    diode_fd: int | None = None,
 ) -> tuple[Executive, Resumption]:
     """An executive resumed from a verified checkpoint (`checkpoint.choose_generation`) and the record after it.
 
@@ -4587,6 +4596,7 @@ def resume_executive(
             state_fd=state_fd,
             journal_dir_fd=journal_dir_fd,
             checkpoint_every=checkpoint_every if checkpoint_every is not None else (body.get("clock") or {}).get("N"),
+            diode_fd=diode_fd,
         )
     except ValueError as exc:
         raise ResumeRefused(str(exc)) from exc
@@ -5051,7 +5061,7 @@ def main(argv: list[str] | None = None) -> int:
         if state_fd is None or state_path is None:
             return "no state directory is open, so serves.json cannot be written"
         try:
-            write_serves_record(state_fd, diode_dir)
+            write_serves_record(state_fd, diode_canonical.path)
         except Exception as exc:  # noqa: BLE001 - the refusal names it
             return (
                 f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
@@ -5177,6 +5187,7 @@ def main(argv: list[str] | None = None) -> int:
                     journal_dir_fd=journal_fd,
                     max_batch=args.max_batch,
                     closed_interlocks=set(args.closed_interlock or []),
+                    diode_fd=diode_fd,
                 )
             except ResumeRefused as exc:
                 return refuse(f"{exc}. The executive does not start a fresh world over a saved one (ADR 0002 K)")
@@ -5373,6 +5384,7 @@ def main(argv: list[str] | None = None) -> int:
             # The default segment lives in the held state directory, so its handle is that one: a
             # path alone would have `Executive` walk the state directory a second time.
             journal_dir_fd=journal_fd if journal_fd is not None else state_fd,
+            diode_fd=diode_fd,
         )
     except ValueError as exc:
         return refuse(str(exc))
