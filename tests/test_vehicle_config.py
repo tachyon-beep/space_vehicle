@@ -28872,3 +28872,107 @@ def test_a_live_result_whose_directory_fsync_fails_is_owed_not_noted_and_survive
     executive.cycle()
     assert executive.obligations == [] and [len(v) for v in result_ledger(diode).values()] == [1]
     executive.close()
+
+
+def rehashed_checkpoint(checkpoint, raw: bytes, change) -> bytes:
+    """A checkpoint whose body is changed by `change` and re-hashed, so integrity passes and structure is what is judged."""
+    header, body_bytes = split_checkpoint(raw)
+    body = json.loads(body_bytes)
+    change(body)
+    body_bytes = checkpoint.encode(body)
+    header.update(body_sha256=hashlib.sha256(body_bytes).hexdigest(), body_bytes=len(body_bytes))
+    return json.dumps(header).encode() + b"\n" + body_bytes
+
+
+def test_a_checkpoint_whose_body_verifies_but_cannot_be_resumed_is_corrupt_by_name_and_falls_back(tmp_path, monkeypatch):
+    """Review F3 (Codex) and ruling R4: v2 accepted values a resume cannot use, and then failed as a traceback.
+
+    A correctly hashed checkpoint whose owed result lacks the `command` a re-publication writes, or whose
+    `clock.N` is not a positive tick count, verified — and the resume then raised `KeyError` or
+    `TypeError` out of `main`. Each is now refused by the reader as corrupt (so K2 falls back to the
+    previous generation when that one verifies), and the sentence says what failed and that the body
+    itself verified, so the operator does not go looking for a bad disk.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    killed, diode, state = owed_run(console, world, tmp_path, OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed_result)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    failing_directory_fsync(monkeypatch, diode / "alpha" / "output")
+    owing, _ = resume_from(console, checkpoint, world, diode, state)
+    monkeypatch.undo()
+    assert any(o["window"] == "alpha" for o in owing.obligations), "alpha's results are still owed"
+    owing.checkpoint()
+    owing.close()
+    good = (state / "checkpoint.json").read_bytes()
+
+    def without_command(body):
+        index = next(i for i, o in enumerate(body["obligations"]) if "command" in o)
+        del body["obligations"][index]["command"]
+
+    for change, check, said in (
+        (without_command, "command", "obligations["),
+        (lambda body: body["clock"].update(N=[]), "clock.N", "clock.N"),
+        (lambda body: body["clock"].update(N=0), "clock.N", "clock.N"),
+    ):
+        (state / "checkpoint.json").write_bytes(rehashed_checkpoint(checkpoint, good, change))
+        with pytest.raises(checkpoint.CheckpointCorrupt) as refused:
+            checkpoint.read_generation(state, "checkpoint.json", compat)
+        assert refused.value.check.endswith(check) and said in str(refused.value), refused.value
+        assert "the body verifies" in refused.value.why, refused.value.why
+        assert checkpoint.choose_generation(state, compat).path.name == "checkpoint.prev.json"
+
+
+def open_descriptors() -> int:
+    return len(os.listdir("/proc/self/fd"))
+
+
+def test_an_io_error_on_the_resume_path_is_a_refusal_naming_the_errno_and_leaks_no_descriptor(tmp_path, monkeypatch, capsys):
+    """Review F4 (Codex): every `OSError` on the resume's path is an exit-3 refusal, and every duplicate is closed.
+
+    `read_record` duplicated the state directory's handle and then listed it outside its cleanup, and
+    `_resume` caught only `RecordRefused`: an `EIO` from the listing escaped `main` as a traceback and
+    leaked the duplicate. Now the start exits 3 naming the errno, and the process holds as many
+    descriptors after the refused start as before it. The executive's constructor duplicated the state
+    and journal handles before validating its cadence, and leaked both when it refused; now nothing is
+    duplicated until it validates, and a refusal anywhere in it closes what it opened.
+    """
+    _checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "2", "--poll", "0"]
+    assert console.main(argv) == 0
+    capsys.readouterr()
+    real = os.listdir
+
+    def failing(path="."):
+        if isinstance(path, int):
+            raise OSError(errno.EIO, "Input/output error")
+        return real(path)
+
+    before = open_descriptors()
+    monkeypatch.setattr(os, "listdir", failing)
+    assert console.main(argv) == 3
+    monkeypatch.undo()
+    err = capsys.readouterr().err
+    assert "EIO" in err and "Traceback" not in err, err
+    assert open_descriptors() == before
+
+    fd, _canonical, problem = console.open_private_dir(state, diode)
+    assert problem is None
+    try:
+        before = open_descriptors()
+        for kwargs in ({"checkpoint_every": 0}, {"phase": "translunar_coast", "max_batch": 0}):
+            with pytest.raises(ValueError):
+                console.Executive(world, diode, **{"phase": "translunar_coast", **kwargs}, state_dir=state, state_fd=fd, journal_dir_fd=fd)
+            assert open_descriptors() == before, kwargs
+    finally:
+        os.close(fd)

@@ -1518,14 +1518,26 @@ def _file_lines(
         why = "is a symlink" if exc.errno == errno.ELOOP else f"cannot be opened ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})"
         raise RecordRefused("file", f"{name} {why}") from None
     with os.fdopen(fd, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        try:
+            regular = stat.S_ISREG(os.fstat(fd).st_mode)
+        except OSError as exc:
+            raise RecordRefused("file", f"{name} cannot be examined ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})") from None
+        if not regular:
             raise RecordRefused("file", f"{name} is not a regular file")
         limit = MAX_RECORD_LINE_BYTES
-        handle.seek(offset)
         number = first - 1
+        try:
+            handle.seek(offset)
+        except OSError as exc:
+            raise RecordRefused("file", f"{name} cannot be read ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})") from None
         while True:
-            at = handle.tell()
-            raw = handle.readline(limit + 1)
+            try:
+                at = handle.tell()
+                raw = handle.readline(limit + 1)
+            except OSError as exc:
+                raise RecordRefused(
+                    "file", f"{name} cannot be read after line {number} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})"
+                ) from None
             if not raw:
                 return
             number += 1
@@ -1972,9 +1984,18 @@ def read_record(
     where = Path(where)
     explicit = names is not None
     if dir_fd is not None:
-        held = os.dup(dir_fd)
-        if names is None:
-            names = sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+        try:
+            held = os.dup(dir_fd)
+        except OSError as exc:
+            raise RecordRefused("directory", f"{where} cannot be held ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})") from None
+        try:
+            if names is None:
+                names = sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+        except OSError as exc:
+            os.close(held)
+            raise RecordRefused(
+                "directory", f"{where} cannot be listed ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
+            ) from None
     else:
         if where.is_symlink():
             raise RecordRefused(
@@ -1990,7 +2011,13 @@ def read_record(
             ) from None
         if names is None:
             explicit = directory != where
-            names = [where.name] if explicit else sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+            try:
+                names = [where.name] if explicit else sorted(name for name in os.listdir(held) if JOURNAL_SEGMENT_NAME.fullmatch(name))
+            except OSError as exc:
+                os.close(held)
+                raise RecordRefused(
+                    "directory", f"{where} cannot be listed ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
+                ) from None
     try:
         segments: list[SegmentInfo] = []
         if anchor is None:
@@ -2569,6 +2596,45 @@ class Executive:
     ) -> None:
         if int(max_batch) < 1:
             raise ValueError(f"max_batch must be at least 1, not {max_batch!r}")
+        # The checkpoint cadence `N` (ADR 0002 J: `N = tick_hz`, one mission second). It is not a flag
+        # until child 5 makes it a required run input; it is recorded in the checkpoint's clock inputs,
+        # and a resume takes it from there. `checkpoint_every` is for in-process callers (the tests).
+        # Validated before any handle is duplicated: a refusal here holds nothing (review F4).
+        tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
+        cadence = checkpoint_every if checkpoint_every is not None else tick_hz
+        if isinstance(cadence, bool) or not isinstance(cadence, int) or cadence < 1:
+            raise ValueError(f"the checkpoint cadence must be a positive number of ticks, not {cadence!r}")
+        # Every handle this executive may hold, `None` until it holds it, so that `close` — which a refusal
+        # anywhere below calls — releases exactly what was opened (review F4).
+        self.state_fd = self.journal_dir_fd = self.diode_fd = self._record_fd = None
+        try:
+            self._construct(
+                world, diode_dir, phase=phase, tripped_interlocks=tripped_interlocks, scenario=scenario, seed=seed,
+                max_batch=max_batch, journal=journal, record_slugs=record_slugs, state_dir=state_dir, boot_id=boot_id,
+                state_fd=state_fd, journal_dir_fd=journal_dir_fd, cadence=cadence,
+            )
+        except BaseException:
+            self.close()
+            raise
+
+    def _construct(
+        self,
+        world: World,
+        diode_dir: Path,
+        *,
+        phase: str,
+        tripped_interlocks: set[str] | None,
+        scenario: str,
+        seed: int,
+        max_batch: int,
+        journal: Path | None,
+        record_slugs: dict[str, int] | None,
+        state_dir: Path | None,
+        boot_id: str | None,
+        state_fd: int | None,
+        journal_dir_fd: int | None,
+        cadence: int,
+    ) -> None:
         self.world = world
         self.diode_dir = Path(diode_dir)
         # An explicit `--journal` every boot appends to, rather than one segment file per boot in the
@@ -2606,13 +2672,7 @@ class Executive:
         self.scenario = scenario
         self.seed = int(seed)
         self.max_batch = int(max_batch)
-        # The checkpoint cadence `N` (ADR 0002 J: `N = tick_hz`, one mission second). It is not a flag
-        # until child 5 makes it a required run input; it is recorded in the checkpoint's clock inputs,
-        # and a resume takes it from there. `checkpoint_every` is for in-process callers (the tests).
-        tick_hz = (world.documents.get("mission.yaml") or {}).get("tick_hz")
-        self.checkpoint_every = int(checkpoint_every if checkpoint_every is not None else tick_hz)
-        if self.checkpoint_every < 1:
-            raise ValueError(f"the checkpoint cadence must be at least one tick, not {self.checkpoint_every!r}")
+        self.checkpoint_every = cadence
         self.clock: dict[str, Any] = {"N": self.checkpoint_every}
         self.in_cycle = False
         self.checkpoint_failures = 0
@@ -4508,11 +4568,24 @@ def resume_executive(
         )
     except ValueError as exc:
         raise ResumeRefused(str(exc)) from exc
+    except OSError as exc:
+        raise ResumeRefused(_io_refusal(exc, Path(state_dir) if state_dir is not None else Path(diode_dir))) from exc
     try:
         return executive, _resume(executive, world, loaded, snapshot_tick, max_batch, closed_interlocks)
+    except OSError as exc:
+        # Every I/O failure on the resume's path is a refusal by name, never a traceback (review F4).
+        executive.close()
+        raise ResumeRefused(_io_refusal(exc, executive.state_dir or executive.journal or Path(diode_dir))) from exc
     except BaseException:
         executive.close()
         raise
+
+
+def _io_refusal(exc: OSError, where: Path) -> str:
+    """The sentence for an `OSError` on the resume's path: the file (or the directory it was under) and the errno."""
+    named = exc.filename if isinstance(exc.filename, (str, bytes, os.PathLike)) else where
+    code = errno.errorcode.get(exc.errno or 0, type(exc).__name__)
+    return f"the resume could not read or write {os.fsdecode(named)} ({code}: {exc.strerror}); nothing was claimed"
 
 
 def _resume(

@@ -439,6 +439,16 @@ _OBLIGATION_KEYS: dict[str, Any] = {
     "world_id": str,
     "boot_id": str,
 }
+# What a re-publication reads of an obligation besides those (review F3): the recorded text, or — for a
+# receipt the record kept fingerprint-only — the fingerprints, each typed.
+_OBLIGATION_TEXT: dict[str, Any] = {"command": str, "body": str}
+_OBLIGATION_FINGERPRINT: dict[str, Any] = {
+    "verb": str,
+    "command_sha256": str,
+    "command_bytes": int,
+    "body_sha256": str,
+    "body_bytes": int,
+}
 _WINDOW_KEYS: dict[str, Any] = {
     "ring_slots": int,
     "seq": int,
@@ -492,13 +502,23 @@ def _structure_problem(body: Any) -> tuple[str, str] | None:
                 return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
     if body["identity"]["segments"] != [entry["segment"] for entry in body["segments"]]:
         return "identity.segments", "the identity's segment list is not the body's"
+    count = body["clock"].get("N")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        return "clock.N", f"`clock.N` is {count!r}, not the positive tick count the cadence is"
     for index, entry in enumerate(body["obligations"]):
         where = f"obligations[{index}]"
         if not isinstance(entry, dict):
             return where, f"the obligation is a JSON {type(entry).__name__}, not an object"
-        for key, kind in _OBLIGATION_KEYS.items():
+        required = dict(_OBLIGATION_KEYS)
+        if entry.get("fingerprint_only") is True:
+            required.update(_OBLIGATION_FINGERPRINT)
+        else:
+            required.update(_OBLIGATION_TEXT)
+            if "body_sha256" in entry or "body_bytes" in entry:
+                required.update(body_sha256=str, body_bytes=int)
+        for key, kind in required.items():
             if key not in entry:
-                return f"{where}.{key}", f"the obligation has no `{key}`; a field the engine needs is never defaulted"
+                return f"{where}.{key}", f"`{where}` lacks `{key}`, which its re-publication reads; a field the engine needs is never defaulted"
             if not _is(entry[key], kind):
                 return f"{where}.{key}", f"`{key}` is a JSON {type(entry[key]).__name__}, not {_kind_name(kind)}"
         if entry["window"] not in body["windows"]:
@@ -887,7 +907,8 @@ def verify(raw: bytes, path: Path, expected: Compatibility) -> Loaded:
     body = _verified_body(header, body_bytes, path)
     problem = _structure_problem(body)
     if problem is not None:
-        raise CheckpointCorrupt(problem[0], path, problem[1])
+        # Said so, because the hash agreed: what failed is the body's shape, not the disk (ruling R4).
+        raise CheckpointCorrupt(problem[0], path, f"the body verifies against its hash and length, but {problem[1]}")
     stated = {key: value for key, value in header.items() if key not in ("body_bytes", "body_sha256")}
     if stated != body["identity"]:
         differing = sorted(set(stated) ^ set(body["identity"]) | {k for k in stated if k in body["identity"] and stated[k] != body["identity"][k]})
