@@ -30443,3 +30443,56 @@ def test_a_resumes_republished_event_that_cannot_be_cut_back_refuses_the_resume_
     assert torn.torn and torn.cuts and torn.closes, (torn.torn, torn.cuts, torn.closes)
     assert "cut back" in str(refused.value), refused.value
 
+
+@pytest.mark.parametrize("refusal", ["the lock", "a world's genesis", "a resume's first checkpoint"])
+def test_a_refusal_is_reported_when_the_executive_then_fails_to_close(tmp_path, monkeypatch, capsys, refusal):
+    """Round 5 (Codex, J4's leftovers): an early `close` after a refusal replaced the refusal, or escaped `main`.
+
+    Where the start path refuses with an executive open, it closed the executive by hand first; a close
+    that failed then raised in place of the refusal — the generic boundary sentence for a genesis or a
+    resume's first checkpoint, and, for the lock that cannot be written, an `OSError` out of `main`,
+    because the run loop is called outside the start path's boundary. The refusal is what is reported
+    now: exit 3 with its own sentence on stderr, and nothing raised past `main`.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    monkeypatch.setattr(console, "load_world", lambda _root: world)
+    if refusal == "a resume's first checkpoint":
+        assert console.main(argv) == 0, capsys.readouterr().err
+        capsys.readouterr()
+    real_close, closes = console.Executive.close, []
+
+    def failing_close(self):
+        real_close(self)
+        closes.append(self)
+        if len(closes) == 1:
+            raise OSError(errno.EIO, os.strerror(errno.EIO), str(state))
+
+    def unwritable(*args, **kwargs):
+        raise checkpoint.CheckpointWriteFailed("write", state / "checkpoint.json", "ENOSPC")
+
+    real_ftruncate = os.ftruncate
+    lock = str(state / console.LOCK_FILE)
+
+    def lock_unwritable(fd, length):
+        if os.path.realpath(f"/proc/self/fd/{fd}") == lock:
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+        return real_ftruncate(fd, length)
+
+    sentence = {
+        "the lock": "cannot be written",
+        "a world's genesis": "the world's first checkpoint cannot be written",
+        "a resume's first checkpoint": "the checkpoint at the recovered tick",
+    }[refusal]
+    with monkeypatch.context() as patch:
+        patch.setattr(console.Executive, "close", failing_close)
+        if refusal == "the lock":
+            patch.setattr(os, "ftruncate", lock_unwritable)
+        else:
+            patch.setattr(console, "write_checkpoint", unwritable)
+        code = console.main(argv)
+    err = capsys.readouterr().err
+    assert closes, refusal
+    assert code == 3 and sentence in err, (refusal, code, err)
+

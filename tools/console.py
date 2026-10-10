@@ -5407,7 +5407,8 @@ def main(argv: list[str] | None = None) -> int:
                 os.ftruncate(lock_fd, 0)
                 os.write(lock_fd, f"pid={os.getpid()} world={executive.world_id}\n".encode())
             except OSError as exc:
-                executive.close()
+                with contextlib.suppress(OSError):  # the refusal is what is reported (fifth round)
+                    executive.close()
                 return refuse(f"the lock {lock_where / LOCK_FILE} cannot be written ({errno_name(exc)})")
             print(banner, flush=True)
             # `--cycles` counts the cycles **this invocation** runs; a resumed world continues its tick.
@@ -5511,7 +5512,8 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     executive.checkpoint()
                 except Exception as exc:  # noqa: BLE001 - the refusal names it
-                    executive.close()
+                    with contextlib.suppress(OSError):  # the refusal is what is reported (fifth round)
+                        executive.close()
                     return refuse(
                         f"the checkpoint at the recovered tick {resumption.tick} cannot be written into {state_path} ({exc}); nothing has been "
                         "claimed this boot, and the world resumes from the record at the next start"
@@ -5714,10 +5716,12 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 executive.attach(slug, ring_slots=resolved_slots[slug])
             except ValueError as exc:
-                executive.close()
+                with contextlib.suppress(OSError):  # the refusal is what is reported (fifth round)
+                    executive.close()
                 return refuse(str(exc))
         if executive.failure_count:
-            executive.close()
+            with contextlib.suppress(OSError):  # the refusal is what is reported (fifth round)
+                executive.close()
             return refuse(
                 "a window or the directory's record could not be prepared: "
                 + "; ".join(f"{diode_canonical.path / f['window']}: {f['error']}" for f in executive.failures)
@@ -5738,7 +5742,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 executive.checkpoint()
             except Exception as exc:  # noqa: BLE001 - the refusal names it
-                executive.close()
+                with contextlib.suppress(OSError):  # the refusal is what is reported (fifth round)
+                    executive.close()
                 return refuse(
                     f"the world's first checkpoint cannot be written into {state_dir} ({exc}); nothing is bound yet, and a "
                     "world without a checkpoint cannot be resumed (ADR 0002 H)"
