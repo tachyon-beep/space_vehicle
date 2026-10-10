@@ -890,6 +890,24 @@ nothing and holds each component to what the resolution saw. An obligation's `fi
 every reader branches on, must be a bool; and the fresh start's scan for a record without a checkpoint
 refuses an I/O error by name, as every other start path does.
 
+*Amended by #21's third round (2026-10-10): Codex (`gpt-6-astra` high) confirmation of `d0a20dc`;
+decided by the coordinator under the owner's delegation.* (xl) **The terminator rule, which supersedes
+(xxx)'s position test and (xxxvi)'s adjacency rule.** An unparseable line of a record file is a torn
+fragment if and only if it is its file's final, unterminated line, or it ends with `#\n` — the mark
+every writer (`append_journal_line`, the executive's own record writer) puts on a cut tail before it
+appends anything after it. A marked fragment may be followed only by a new boot's unchained startup
+event, a segment header, another fragment, or the end of the file, never by a chained row or note; an
+unparseable line ending in a plain newline is corruption wherever it is. (xxxvi)'s rule refused a real
+crash loop — two resumes in a row killed half-way through their `resumed` event leave two marked
+fragments with nothing complete between them — while the plain-newline rule still keeps a wholly
+damaged file from reading as empty. One predicate serves every reader. A resume checkpoint's anchor
+sits after the last intact line, before any marked fragment; and a window published past the last
+durable tick is a refusal by name. (xli) **One boundary for the start path.** Every descriptor `main`'s
+start path holds is registered, with its path, in one `ExitStack` and closed once on the way out; an
+`OSError` the path did not refuse by name of its own is exit 3 naming the file (or the path in use) and
+the errno. Once the first cycle claims, an `OSError` keeps its per-cycle handling. And every check about
+a window directory goes through the held diode handle, never through `--diode-dir`'s spelling.
+
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
 Fixed by WP08's acceptance: "corrupt/incompatible checkpoints fail explicitly". The question is what

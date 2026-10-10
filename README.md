@@ -19350,6 +19350,19 @@ their first append in a shared journal, read and resumed past.
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+A third round (Codex's confirmation of `d0a20dc`, which confirmed G2, G3, G6, G7 and G8; ADR 0002 J
+(xl)–(xli)):
+
+| finding (who) | what `d0a20dc` did | what it does now | the test failed at `d0a20dc` with |
+|---|---|---|---|
+| H1 G5 refused a crash loop (Codex) | two resumes killed in their `resumed` event left two marked fragments in a row, and every later resume refused as corrupt | the terminator rule: a line is torn iff it is the final unterminated line or ends with `#\n`; a plain-newline unparseable line is corruption anywhere | `corrupt: lines … are both not JSON objects` |
+| H2 the start path's `OSError`s (Codex) | refused one call at a time; the state directory's walk could still raise past `main` holding a handle | one `ExitStack` registering every descriptor with its path, and one boundary `except OSError` naming the file and the errno | `EIO in os.dup … escaped main` |
+| H3 `attach` by spelling (Codex) | `root.is_symlink()` through `--diode-dir`'s spelling | `lstat` through the held diode handle | a refusal on the retargeted alias's link |
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 507 | **513** |
+
 ## The invariants, and which of them are enforced
 
 
