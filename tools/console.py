@@ -4602,8 +4602,9 @@ def classify_root_record(
     record is compared with the state the replay recovered: a record that agrees on every identity key
     but the tick, naming this world at a tick in `[T, L]`, is **routine** — journaled inside the
     `resumed` event and rewritten without a mismatch event. So is an unbound record at tick 0 beside a
-    world whose checkpoint is its genesis (`T = 0`, addendum B9 as widened by review F8: a kill after
-    the first row and before the first root-record write leaves it whatever `L` is). Everything else is
+    world whose checkpoint is its genesis and that recovered at most one tick (`T = 0`, `L ≤ 1`: addendum
+    B9 as widened by review F8 and bounded by confirmation G7 — a kill after the first row and before the
+    first root-record write leaves it, and nothing later does). Everything else is
     `reconcile_root_record`'s: agree, rewrite with its event, or — a readable record of another world —
     refuse. A record ahead of `L` is a disagreement: an `fsync`ed row does not vanish.
     """
@@ -4616,9 +4617,10 @@ def classify_root_record(
     recovered = expected["tick"]
     if bound == expected["world_id"] and isinstance(tick, int) and not isinstance(tick, bool) and snapshot_tick <= tick <= recovered:
         return "routine", f"the root record is at tick {tick}, within the checkpoint's tick {snapshot_tick} and the recovered tick {recovered}: routine"
-    if bound is None and tick == 0 and snapshot_tick == 0:
+    if bound is None and tick == 0 and snapshot_tick == 0 and recovered <= 1:
         # The genesis checkpoint precedes every row, so a kill after the first row and before the first
-        # cycle's root-record write leaves exactly this (review F8): routine whatever `L` was reached.
+        # cycle's root-record write leaves exactly this (review F8) — and only up to `L = 1`: every later
+        # cycle rewrites the record, so an unbound one beside more is not what a kill leaves (confirmation G7).
         return "routine", f"the root record is unbound at tick 0 beside a world saved at tick 0 and recovered to tick {recovered}: routine"
     return action, why
 
@@ -4870,15 +4872,13 @@ def _resume(
             f"[console] resume: fell back to {Path(loaded.path).name} at tick {snapshot_tick}: {CURRENT} was refused "
             f"({resumed_event['checkpoint']['fell_back']}), and the refused file is kept as {rejected}\n"
         )
-    if action == "rewrite":
-        sys.stderr.write(f"[console] resume: the root record at {executive.diode_dir / RECORD_FILE} was rewritten: {why}; the mismatch is journaled\n")
     for advisory in advisories:
         said = (
             f"names world {advisory['pending_world_id']}" if "pending_world_id" in advisory
             else f"says tick {advisory['pending_ticks']}, past the recovered tick {tick}"
         )
         sys.stderr.write(
-            f"[console] resume: window {advisory['window']!r}'s pending.json {said}; advisory only (ADR 0002 H), and its next "
+            f"[console] resume: window {advisory['window']!r}: its pending.json {said}; advisory only (ADR 0002 H), and its next "
             "publication rewrites it\n"
         )
     if action != "agree":
@@ -4889,6 +4889,9 @@ def _resume(
                 f"the root record at {executive.diode_dir / RECORD_FILE} cannot be rewritten from the recovered world "
                 f"({type(exc).__name__}: {exc}); {why}. The events were journaled first: remove what is at that path and start again"
             ) from exc
+        if action == "rewrite":
+            # Said once it is so (confirmation G6): a failed rewrite says only that it failed, above.
+            sys.stderr.write(f"[console] resume: the root record at {executive.diode_dir / RECORD_FILE} was rewritten: {why}; the mismatch is journaled\n")
 
     republished: list[dict[str, Any]] = []
     for window in executive.windows.values():

@@ -29257,7 +29257,7 @@ def test_a_resumes_anomalies_each_reach_stderr_where_the_operator_reads(tmp_path
     assert len(err) == 3, err
     assert any("fell back" in line and "checkpoint.json" in line and rejected in line for line in err), err
     assert any("root record" in line and "not valid JSON" in line for line in err), err
-    assert any("'bravo'" in line and "pending.json" in line and "99" in line for line in err), err
+    assert any("window 'bravo': its pending.json" in line and "99" in line for line in err), err  # confirmation G8's wording
 
 
 def test_the_diode_directory_is_resolved_once_and_serves_json_records_the_path_main_compares(tmp_path, monkeypatch):
@@ -29617,3 +29617,55 @@ def test_an_io_error_scanning_a_fresh_state_directory_for_a_record_is_a_refusal_
     err = capsys.readouterr().err
     assert code == 3 and "EIO" in err and "Traceback" not in err, (code, err)
     assert open_descriptors() == before
+
+
+def test_a_rewrite_line_is_printed_only_once_the_rewrite_succeeds(tmp_path, capsys):
+    """Confirmation G6 (Opus): the stderr line saying the root record "was rewritten" came before the write.
+
+    When the rewrite then failed — a directory planted where the record goes — the operator read that it
+    had been rewritten, and then that it could not be. The line is now printed after the write succeeds;
+    a failed rewrite says only that it failed.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    recorded_run(executive, diode, {}, 2, snapshot_at=2)
+    executive.close()
+    record = diode / ".executive.json"
+    record.unlink()
+    record.mkdir()
+    capsys.readouterr()
+    with pytest.raises(console.ResumeRefused) as refused:
+        resume_from(console, checkpoint, world, diode, state)
+    err = capsys.readouterr().err
+    assert "was rewritten" not in err and "cannot be rewritten" in str(refused.value), (err, refused.value)
+    record.rmdir()
+    record.write_text("{not json")
+    resumed, _ = resume_from(console, checkpoint, world, diode, state)
+    resumed.close()
+    assert "was rewritten" in capsys.readouterr().err
+
+
+def test_an_unbound_root_record_beside_a_genesis_checkpoint_is_routine_only_as_far_as_a_kill_can_leave_it(tmp_path):
+    """Confirmation G7 (Opus): review F8 widened "routine" past what a kill produces.
+
+    F8 made an unbound record at tick 0 routine whenever the checkpoint is the genesis (`T = 0`), for any
+    recovered tick. A kill after the first row and before the first root-record write leaves `L = 1`;
+    every later cycle rewrites the record, so an unbound record beside `L = 2` is not something a kill
+    leaves. Routine now needs `T = 0` and `L ≤ 1`; at `L = 2` it is the mismatch it is — rewritten, with
+    its `root_record_rewritten` event.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.checkpoint()
+    recorded_run(executive, diode, {}, 2)
+    executive.close()
+    record = diode / ".executive.json"
+    record.write_text(json.dumps({**json.loads(record.read_text()), "world_id": None, "tick": 0}))
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    resumed.close()
+    assert (resumption.snapshot_tick, resumption.tick) == (0, 2) and resumption.root_record.startswith("rewrite"), resumption.root_record
+    assert len(journal_events(state, "root_record_rewritten")) == 1
