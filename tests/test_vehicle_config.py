@@ -21157,12 +21157,15 @@ def test_the_compare_point_is_plain_sorted_json_at_the_c_encoder_s_cost():
         `json.dumps(values, sort_keys=True, separators=(",", ":"))`, so the only Python-level work
         left in the encoder is the key check, which recurses into containers and scans a scalar-only
         list once with `set(map(type, …))` rather than visiting each slot;
-      - **and it costs no more than a small multiple of that floor**: the medians of twenty samples
-        each, taken in the same process on the same truth, must sit within 3×. The tagged encoder
-        sat at about 23× on this machine; the adopted one at about 1.6× on the warmed ring, the
-        difference being the key check. A bound stated as a ratio measured in one process is what
-        makes this not flaky: a slow or loaded machine slows both alike, and 3× still separates the
-        two encoders by a factor of eight.
+      - **and it costs no more than a small multiple of that floor**: the best of twenty samples
+        each, taken interleaved — floor, cost, floor, cost — in the same process on the same truth,
+        must sit within 3×. The tagged encoder sat at about 23× on this machine; the adopted one at
+        about 1.6× on the warmed ring, the difference being the key check. The first version took two
+        medians one after the other, and a load that arrived between them moved one and not the other:
+        the clean gate at 06f08a3 measured 3.4× and the chassis dry run 6.0× (#21's review, F7).
+        Interleaved, both series see the same machine; the minimum of each is its unloaded cost, which
+        load can only raise, never lower. The bound stays 3×, still a factor of eight from the tagged
+        encoder.
 
     `plant.md` §6's coverage — the whole state, ring included — is unchanged; the test after the
     pairs table holds that half.
@@ -21178,17 +21181,23 @@ def test_the_compare_point_is_plain_sorted_json_at_the_c_encoder_s_cost():
     assert plant.state_hash(truth) == hashlib.sha256(plain.encode("utf-8")).hexdigest()[:16]
     assert not hasattr(plant, "_canonical"), "the tagging walker is the cost this round removed"
 
-    def median_ms(fn, samples: int = 20) -> float:
-        xs = []
-        for _ in range(samples):
-            started = time.perf_counter()
-            fn()
-            xs.append((time.perf_counter() - started) * 1e3)
-        return statistics.median(xs)
+    def timed_ms(fn) -> float:
+        started = time.perf_counter()
+        fn()
+        return (time.perf_counter() - started) * 1e3
 
-    floor = median_ms(lambda: hashlib.sha256(json.dumps(truth, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest())
-    cost = median_ms(lambda: plant.state_hash(truth))
-    assert cost <= 3.0 * floor, f"state_hash {cost:.2f} ms is {cost / floor:.1f}× the plain-JSON floor {floor:.2f} ms"
+    def floor_fn():
+        return hashlib.sha256(json.dumps(truth, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    floors, costs = [], []
+    for _ in range(20):
+        floors.append(timed_ms(floor_fn))
+        costs.append(timed_ms(lambda: plant.state_hash(truth)))
+    floor, cost = min(floors), min(costs)
+    assert cost <= 3.0 * floor, (
+        f"state_hash {cost:.2f} ms is {cost / floor:.1f}× the plain-JSON floor {floor:.2f} ms "
+        f"(best of {len(costs)} interleaved; medians {statistics.median(costs):.2f} / {statistics.median(floors):.2f} ms)"
+    )
 
 
 def test_the_compare_point_still_separates_every_pair_the_tags_kept_apart():
