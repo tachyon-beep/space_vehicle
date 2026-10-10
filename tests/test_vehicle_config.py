@@ -25125,8 +25125,9 @@ def test_a_start_opens_its_state_dir_and_its_journal_directory_once_each(tmp_pat
     version of that fix passed `Executive` the default journal segment as a path with no handle, so
     `Executive` canonicalised and walked the state directory a second time — the canonical path,
     checked by inode, so no agent's lever, but a second resolution the docstring said did not
-    happen. `walk_open_dir` is counted: one walk with `--state-dir` alone, two with an explicit
-    `--journal` beside it, and none at all after the start.
+    happen. `walk_open_dir` is counted: one walk of the state directory, one of an explicit `--journal`'s
+    directory when there is one, one of the diode directory (since #21's confirmation G1, which opens
+    it from its one resolution by the same walk), and none at all after the start.
     """
     console, _plant, _world = console_tools()
     calls: list[str] = []
@@ -25139,11 +25140,12 @@ def test_a_start_opens_its_state_dir_and_its_journal_directory_once_each(tmp_pat
     monkeypatch.setattr(console, "walk_open_dir", counted)
     base = ["--slug", "alpha", "--cycles", "2", "--poll", "0"]
     assert console.main(["--diode-dir", str(tmp_path / "d1"), "--state-dir", str(tmp_path / "s1"), *base]) == 0
-    assert calls == ["--state-dir"], calls
+    # And the diode directory once (confirmation G1): opened by the same walk from its one resolution.
+    assert sorted(calls) == ["--diode-dir", "--state-dir"], calls
     calls.clear()
     journal = tmp_path / "j.jsonl"
     assert console.main(["--diode-dir", str(tmp_path / "d2"), "--state-dir", str(tmp_path / "s2"), "--journal", str(journal), *base]) == 0
-    assert sorted(calls) == ["--journal", "--state-dir"], calls
+    assert sorted(calls) == ["--diode-dir", "--journal", "--state-dir"], calls
     assert len(tick_rows(journal)) == 2
 
 
@@ -28618,7 +28620,7 @@ def test_a_resume_reads_and_writes_its_state_only_through_the_one_held_state_dir
         seen = list(audited)
         audited.clear()
         AUDIT["prefix"] = None
-    assert walks == ["--state-dir"] and by_path == [] and seen == [], (walks, by_path, seen)
+    assert sorted(walks) == ["--diode-dir", "--state-dir"] and by_path == [] and seen == [], (walks, by_path, seen)
     assert generation_tick(state) == 110 and list(state.glob("checkpoint.rejected.*.json"))
 
 
@@ -29340,3 +29342,51 @@ def test_a_restart_naming_another_journal_than_its_record_was_written_to_refuses
         assert str(journal) in lines[0] and named in lines[0] and "--journal" in lines[0], lines[0]
     resumed = start(diode, state, "alpha", extra=["--journal", str(journal), "--cycles", "1", "--poll", "0"])
     assert resumed.returncode == 0 and "resumed world" in resumed.stdout, resumed.stderr
+
+
+# ---- #21's confirmation round (0647ee2): G1–G8 ------------------------------------------------------
+
+
+def test_the_confinement_checks_use_the_one_resolution_of_the_diode_directory_main_serves(tmp_path, monkeypatch, capsys):
+    """Confirmation G1 (Codex, P1): `--diode-dir` was still re-resolved by name in the confinement checks.
+
+    `main` resolves `--diode-dir` once and serves what it found, but the checks that keep `--state-dir`
+    and `--journal` out of the agents' directory resolved the operator's spelling again. Retargeting
+    the alias between the two let a state directory, or a journal, inside the directory `main` then
+    served pass a check made against another directory: the executive's private state in the agents'
+    reach. Here the alias is retargeted right after `main`'s first resolution; both are refused, and
+    nothing is made under the served directory. `--diode-dir` is resolved exactly once.
+    """
+    console, _plant, _world = console_tools()
+    served, elsewhere = tmp_path / "served", tmp_path / "elsewhere"
+    served.mkdir()
+    elsewhere.mkdir()
+    alias = tmp_path / "alias"
+    real = console.canonicalise
+
+    for case, extra in (
+        ("state", ["--state-dir", str(served / "private-state")]),
+        ("journal", ["--journal", str(served / "journal.jsonl")]),
+    ):
+        if alias.is_symlink():
+            alias.unlink()
+        alias.symlink_to(served)
+        resolutions: list[str] = []
+
+        def retargeting(flag, spelled, noun, resolutions=resolutions, **kwargs):
+            result = real(flag, spelled, noun, **kwargs)
+            if flag == "--diode-dir":
+                resolutions.append(str(spelled))
+                if len(resolutions) == 1:
+                    alias.unlink()
+                    alias.symlink_to(elsewhere)
+            return result
+
+        monkeypatch.setattr(console, "canonicalise", retargeting)
+        code = console.main(["--diode-dir", str(alias), *extra, "--slug", "alpha", "--cycles", "1", "--poll", "0"])
+        monkeypatch.undo()
+        err = capsys.readouterr().err
+        assert code == 3 and "--diode-dir" in err, (case, code, err)
+        assert resolutions == [str(alias)], (case, resolutions)
+        assert not (served / "private-state").exists() and not (served / "journal.jsonl").exists(), case
+        assert not (served / "alpha").exists() and not (elsewhere / "alpha").exists(), case

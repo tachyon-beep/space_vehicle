@@ -854,8 +854,20 @@ def walk_open_dir(canonical: Canonical, flag: str, *, create: bool) -> tuple[int
             os.close(fd)
 
 
+def _diode_canonical(diode_dir: str | os.PathLike[str] | Canonical) -> tuple[Canonical | None, str | None]:
+    """The diode directory's one resolution: the caller's own (`main` resolves `--diode-dir` once), or one made now.
+
+    `main` passes the `Canonical` it resolved and then serves; resolving the operator's spelling again
+    here let an alias retargeted between the two hold the private paths to another directory than the
+    one served (confirmation G1). An in-process caller with only a path has it resolved here.
+    """
+    if isinstance(diode_dir, Canonical):
+        return diode_dir, None
+    return canonicalise("--diode-dir", diode_dir, "the diode directory")
+
+
 def _checked_state(
-    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str] | Canonical
 ) -> tuple[Canonical | None, str | None]:
     """The state directory's one canonicalisation, held to every rule, or the refusal.
 
@@ -868,7 +880,7 @@ def _checked_state(
     bind-mounted at both `/diode` and `/state` is caught only where the mount point itself is walked:
     one private volume, not shared with the diode volume, is the chassis's configuration constraint.
     """
-    diode, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+    diode, problem = _diode_canonical(diode_dir)
     if problem is not None or diode is None:
         return None, problem
     state, problem = canonicalise("--state-dir", state_dir, "the state directory", diode=diode)
@@ -876,7 +888,7 @@ def _checked_state(
         return None, problem
     if diode.path.is_relative_to(state.path):
         return None, (
-            f"--diode-dir {diode_dir} lies inside --state-dir {state_dir}: the agents' directories do "
+            f"--diode-dir {diode.path} lies inside --state-dir {state_dir}: the agents' directories do "
             "not belong inside the executive's private one (ADR 0002 H)"
         )
     final = state.stats[-1] if state.stats else None
@@ -885,13 +897,13 @@ def _checked_state(
     return state, None
 
 
-def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
+def check_state_dir(state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str] | Canonical) -> str | None:
     """The refusal for a `--state-dir` that overlaps `--diode-dir` anywhere on its way, or `None` (`_checked_state`)."""
     return _checked_state(state_dir, diode_dir)[1]
 
 
 def open_private_dir(
-    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+    state_dir: str | os.PathLike[str], diode_dir: str | os.PathLike[str] | Canonical
 ) -> tuple[int | None, Path | None, str | None]:
     """The state directory checked, then opened once: `(handle, canonical path, refusal)`.
 
@@ -907,7 +919,7 @@ def open_private_dir(
 
 
 def open_journal_dir(
-    journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str]
+    journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str] | Canonical
 ) -> tuple[int | None, Path | None, str | None]:
     """An explicit `--journal` checked, and its directory opened once: `(handle, canonical file path, refusal)`.
 
@@ -916,7 +928,7 @@ def open_journal_dir(
     retarget — and its parent is opened by `walk_open_dir`, so every row is appended relative to
     that handle. The parent must exist; the file is made on the first append.
     """
-    diode, problem = canonicalise("--diode-dir", diode_dir, "the diode directory")
+    diode, problem = _diode_canonical(diode_dir)
     if problem is not None or diode is None:
         return None, None, problem
     canonical, problem = canonicalise("--journal", journal, "the journal", diode=diode)
@@ -932,7 +944,7 @@ def open_journal_dir(
     return fd, (canonical.path if fd is not None else None), problem
 
 
-def check_journal(journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str]) -> str | None:
+def check_journal(journal: str | os.PathLike[str], diode_dir: str | os.PathLike[str] | Canonical) -> str | None:
     """The refusal for a `--journal` that the diode directory reaches, or `None` (`open_journal_dir`, handle closed)."""
     fd, _path, problem = open_journal_dir(journal, diode_dir)
     if fd is not None:
@@ -5010,7 +5022,7 @@ def main(argv: list[str] | None = None) -> int:
     journal_explicit: Path | None = None
     journal_fd: int | None = None
     if args.journal:
-        journal_fd, journal_explicit, problem = open_journal_dir(args.journal, diode_dir)
+        journal_fd, journal_explicit, problem = open_journal_dir(args.journal, diode_canonical)
         if problem is not None:
             sys.stderr.write(problem + "\n")
             return 3
@@ -5019,13 +5031,12 @@ def main(argv: list[str] | None = None) -> int:
     # where only a path is taken — never the spelling.
     state_path: Path | None = None
     if state_dir is not None:
-        state_fd, state_path, problem = open_private_dir(state_dir, diode_dir)
+        state_fd, state_path, problem = open_private_dir(state_dir, diode_canonical)
         if problem is not None:
             if journal_fd is not None:
                 os.close(journal_fd)
             sys.stderr.write(problem + "\n")
             return 3
-    diode_resolved = diode_canonical.path
 
     def errno_name(exc: BaseException) -> str:
         if isinstance(exc, OSError):
@@ -5035,15 +5046,20 @@ def main(argv: list[str] | None = None) -> int:
     # **The operator's own writes fail by name too** (second review, Opus 1): a diode directory that
     # cannot be made or opened, and a lock that cannot be opened — a read-only mount, a directory where
     # the lock goes — were tracebacks.
+    # Opened from its one resolution by a walk that follows nothing and holds each component to what the
+    # resolution saw (confirmation G1): the directory served is the one the confinement checks were
+    # made against, and nothing resolves the spelling again.
     try:
-        diode_resolved.mkdir(parents=True, exist_ok=True)
-        diode_fd = open_directory(diode_resolved)
+        opened_diode, why = walk_open_dir(diode_canonical, "--diode-dir", create=True)
     except OSError as exc:
+        opened_diode, why = None, errno_name(exc)
+    if opened_diode is None:
         for fd in (state_fd, journal_fd):
             if fd is not None:
                 os.close(fd)
-        sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({errno_name(exc)})\n")
+        sys.stderr.write(f"--diode-dir {diode_dir} cannot be made or opened ({why})\n")
         return 3
+    diode_fd = opened_diode
     lock_in = state_fd if state_fd is not None else diode_fd
     lock_where = state_path if state_path is not None else diode_dir
     try:
