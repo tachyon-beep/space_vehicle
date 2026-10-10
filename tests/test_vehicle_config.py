@@ -28637,3 +28637,149 @@ def test_the_linter_refuses_a_flag_the_checkpoint_remembers_whose_default_is_not
     path.write_text(text.replace('        "run": {\n', '        "run": dict(**{\n', 1).replace('            "allowance_ceiling": _allowance_ceiling(executive),\n        },', '            "allowance_ceiling": _allowance_ceiling(executive),\n        }),', 1))
     result = run_linter(unreadable)
     assert result.returncode == 1 and "tools/checkpoint.py" in result.stdout and "`run` section" in result.stdout, result.stdout[-900:]
+
+
+# ---- #21's review round (06f08a3): the fix round's tests --------------------------------------------
+
+
+def test_a_successor_whose_header_is_damaged_refuses_the_resume_by_name_and_the_whole_record_read_agrees(tmp_path, capsys):
+    """Review F1 (Codex, both sessions): a damaged successor header must never drop the rows after the anchor.
+
+    Boot A is checkpointed at tick 3 and killed; boot B resumes from that checkpoint and records ticks
+    4–7, then is killed before its next checkpoint. B's segment header is then damaged — its first line
+    cut, its rows intact. The anchored read found successors by their first header only, took the
+    unparseable line as "a boot torn before its header" and skipped the whole file: the resume would
+    have come back at tick 3, re-issuing receipts and re-running physics the fleet had seen. Now an
+    unparseable line is a torn fragment only where R1 says (the file's last line, or followed only by a
+    new boot's startup events and its header); here it is followed by complete rows, so the anchored
+    read refuses by name, and the whole-record read refuses the same file for the same reason. The start
+    exits 3 naming the file. A header that still parses but names another boot than its file is refused
+    too, rather than read as some other segment.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    first = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    first.attach("alpha")
+    _p, _c, snapshot = recorded_run(first, diode, {}, 3, snapshot_at=3)
+    first.close()
+    second, _ = resume_from(console, checkpoint, world, diode, state)
+    recorded_run(second, diode, {}, 4, start=3)
+    second.close()
+    segment = second.journal
+    lines = segment.read_bytes().splitlines(keepends=True)
+    header_at = next(i for i, line in enumerate(lines) if b'"event":"segment"' in line)
+    original = segment.read_bytes()
+    segment.write_bytes(b"".join([*lines[:header_at], lines[header_at][20:], *lines[header_at + 1 :]]))
+    for read in (lambda: console.read_record(state, anchor=console.record_anchor(snapshot)), lambda: console.read_record(state)):
+        with pytest.raises(console.RecordRefused) as refused:
+            read()
+        assert refused.value.check == "corrupt" and segment.name in str(refused.value), refused.value
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    assert console.main(argv) == 3
+    err = capsys.readouterr().err
+    assert segment.name in err and "corrupt" in err, err
+
+    renamed = json.loads(lines[header_at])
+    renamed["boot_id"] = renamed["segment"] = "f" * 32
+    renamed["chain"] = console.record_chain(renamed["previous_chain"], renamed)
+    segment.write_bytes(b"".join([*lines[:header_at], (json.dumps(renamed, sort_keys=True, separators=(",", ":")) + "\n").encode(), *lines[header_at + 1 :]]))
+    with pytest.raises(console.RecordRefused) as refused:
+        console.read_record(state, anchor=console.record_anchor(snapshot))
+    assert segment.name in str(refused.value) and "f" * 32 in str(refused.value), refused.value
+    segment.write_bytes(original)
+    console.read_record(state, anchor=console.record_anchor(snapshot)).close()
+
+
+def test_a_shared_journal_whose_last_line_was_torn_just_before_its_newline_resumes_again_and_reads_whole(tmp_path):
+    """Review F13 (Claude Opus): a fragment that is complete JSON must never become a line later.
+
+    A write torn exactly after a row's or a header's closing brace leaves a last line that is complete
+    JSON without its newline. It is read as torn (it was never durable: nothing was published from it),
+    and the resume continues from the line before it. The next boot used to end that tail with `\\n`,
+    which turned the fragment into a valid line *behind* the resumed boot's segment, and every later
+    resume and the offline read refused it (`overlap`, or two successors of one boot). The tail is now
+    ended with `#\\n`, which no fragment can parse through, so it stays the torn fragment it is (R1). For a
+    torn row and for a torn header: resume, run, resume again, and read the whole record — all succeed.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    for case in ("row", "header"):
+        root = tmp_path / case
+        root.mkdir()
+        diode, state, journal = root / "diode", root / "state", root / "shared.jsonl"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal, checkpoint_every=3)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 3)
+        if case == "row":
+            recorded_run(executive, diode, {}, 1, start=3)
+            executive.close()
+            journal.write_bytes(journal.read_bytes()[:-1])  # tick 4's row is whole JSON with its newline torn off
+        else:
+            executive.close()
+            middle, _ = resume_from(console, checkpoint, world, diode, state, journal=journal)
+            middle.checkpoint()
+            real = console._write_all
+
+            def tear(fd, data, real=real):
+                if b'"event":"segment"' in data:
+                    real(fd, data[: data.index(b"\n")])  # the header object, without its newline
+                    raise SimulatedKill
+                return real(fd, data)
+
+            console._write_all = tear
+            try:
+                with pytest.raises(SimulatedKill):
+                    middle.cycle()
+            finally:
+                console._write_all = real
+            middle.close()
+        again, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+        assert resumption.tick == 3, (case, resumption)
+        again.checkpoint()
+        recorded_run(again, diode, {}, 2, start=3)
+        again.close()
+        third, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
+        assert resumption.tick == 5, (case, resumption)
+        third.close()
+        record = console.read_record(journal)
+        assert [s.last_tick for s in console.concatenated(record.segments)][-1] == 5, case
+        record.close()
+
+
+def test_an_anchor_whose_line_is_not_the_checkpoints_own_is_refused_whatever_the_bytes_before_it(tmp_path):
+    """Review F16 (Claude Opus): the anchor's offset is held to the line that ends there, not only to its newline.
+
+    An explicit `--journal` names one file and the anchor names a byte in it; the check was only that
+    the byte before the offset is a newline, so a different file of exactly that many bytes resumed at
+    the snapshot's tick with nothing read. The line ending at the offset must now be a record line of
+    the anchor's boot whose chain is the anchor's chain (a row or note of the snapshot's tick, or the
+    header of a boot that never reached a row). A file of the right length and the wrong contents, and
+    the right file with that one line's chain altered, are refused (`anchor`).
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state, journal = tmp_path / "diode", tmp_path / "state", tmp_path / "journal.jsonl"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, journal=journal)
+    executive.attach("alpha")
+    _p, _c, snapshot = recorded_run(executive, diode, {}, 4, snapshot_at=4)
+    executive.close()
+    anchor = console.record_anchor(snapshot)
+    offset = anchor["entry"]["offset"]
+    raw = journal.read_bytes()
+    assert offset == len(raw)
+
+    def read():
+        return console.read_record(journal, dir_fd=None, names=None, anchor=anchor)
+
+    read().close()
+    stranger = (b'{"x":1}\n' * (offset // 8 + 1))[: offset - 1] + b"\n"
+    journal.write_bytes(stranger)
+    with pytest.raises(console.RecordRefused) as refused:
+        read()
+    assert refused.value.check == "anchor", refused.value
+    lines = raw.splitlines(keepends=True)
+    last = json.loads(lines[-1])
+    last["chain"] = "0" * 64
+    journal.write_bytes(b"".join([*lines[:-1], (json.dumps(last, sort_keys=True, separators=(",", ":")) + "\n").encode()]))
+    assert len(journal.read_bytes()) == offset
+    with pytest.raises(console.RecordRefused) as refused:
+        read()
+    assert refused.value.check == "anchor" and "chain" in refused.value.why, refused.value

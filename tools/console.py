@@ -991,7 +991,7 @@ def append_journal_line(path: Path, row: dict[str, Any], *, dir_fd: int | None =
             # A previous boot's append torn by a kill, in a journal every boot shares, is ended first, so
             # this event is a line of its own and not the tail of a fragment (addendum B8).
             size = os.fstat(fd).st_size
-            ending = b"\n" if size > 0 and os.pread(fd, 1, size - 1) != b"\n" else b""
+            ending = TORN_TAIL_TERMINATOR if size > 0 and os.pread(fd, 1, size - 1) != b"\n" else b""
             _write_all(fd, ending + (dumps_json(row, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"))
             os.fsync(fd)
         finally:
@@ -1541,6 +1541,49 @@ def _file_lines(
             yield number, at, handle.tell(), row if isinstance(row, dict) else None
 
 
+# What ends an unterminated tail before anything else is appended to a journal file (review F13). A write
+# torn exactly after a line's closing brace leaves complete JSON with no newline; ending it with a bare
+# `\n` turned that fragment into a valid line *behind* the boot that resumed past it. `#` never parses
+# as JSON whatever precedes it, so the fragment stays the torn fragment it is (`_torn_aware_lines`).
+TORN_TAIL_TERMINATOR = b"#\n"
+
+
+def _torn_aware_lines(
+    dir_fd: int, name: str, offset: int = 0, first: int = 1
+) -> Iterator[tuple[str, int, int, int, dict[str, Any] | None]]:
+    """`(kind, line, offset, end, row)` for each line of one journal file, with the one rule for an unparseable line (R1).
+
+    `kind` is `line` (a JSON object: a header, a row, a note or a startup event) or `torn` (row `None`).
+    An unparseable line is a torn fragment — a write a kill cut, from which nothing was published — only
+    if it is the last line of its file, or it is followed only by a new boot's unchained startup events
+    and then that boot's segment header (which may itself be a fragment, by the same rule: a kill at the
+    same point of a start, repeated). Anywhere else — in particular before a complete row or note — it is
+    corruption, and refuses (`corrupt`) by name. The startup events that follow a fragment are not
+    yielded: they are the operator's and not part of the trace. Every reader of the record — the
+    whole-record read, the anchored read, a successor's first header, the replay — reads through this.
+    """
+    pending: tuple[int, int, int] | None = None
+    for number, at, end, row in _file_lines(dir_fd, name, offset, first):
+        if pending is not None:
+            if row is None or row.get("event") == "segment":
+                yield "torn", *pending, None
+                pending = None
+            elif _startup_event(row):
+                continue
+            else:
+                raise RecordRefused(
+                    "corrupt",
+                    f"line {pending[0]} of {name} is not a JSON object and a complete record line follows it, so it is not a torn "
+                    "append: only a file's last line, or one followed by a new boot's startup events and its header, can be",
+                )
+        if row is None:
+            pending = (number, at, end)
+            continue
+        yield "line", number, at, end, row
+    if pending is not None:
+        yield "torn", *pending, None
+
+
 def _verified_lines(
     dir_fd: int,
     name: str,
@@ -1559,14 +1602,12 @@ def _verified_lines(
     header starts a segment and is held to its schema and its format; each tick row to the tick after
     the last (`missing` or `order`), to the chain (`chain`), then to its schema (`row`, `published`);
     each note to the chain, its schema, and its row (`note`: the same world, boot and tick, naming only
-    that row's receipts, each once). A line that is not an object is a torn append when it is the last
-    line of its segment — the file's last, or followed (after any startup events a later boot journaled
-    first) by the next boot's header or by another torn line — and refuses (`corrupt`) anywhere else; a
-    torn line with no header before it in its file is a boot torn before its header, and is dropped; whether a torn segment was really the end of its boot is the seam's
-    question (`concatenated`): the next segment names the chain its predecessor ended on. A startup
-    event (child 2) is the operator's, unchained, and not part of the trace.
+    that row's receipts, each once). A line that is not an object is a torn append or corruption by
+    `_torn_aware_lines`' one rule (R1); a torn line with no header before it in its file is a boot torn
+    before its header (design note F2), and is dropped. Whether a torn segment was really the end of its
+    boot is the seam's question (`concatenated`): the next segment names the chain its predecessor ended
+    on. A startup event (child 2) is the operator's, unchained, and not part of the trace.
     """
-    pending: tuple[int, int, int] | None = None
     header: dict[str, Any] | None = None
     chain = ""
     last_tick: int | None = None
@@ -1574,21 +1615,10 @@ def _verified_lines(
         header, chain, last_tick = seed
     receipts: set[tuple[str, int]] = set()
     noted: set[tuple[str, int]] = set()
-    for number, at, end, row in _file_lines(dir_fd, name, offset, first):
-        if pending is not None:
-            if row is None or row.get("event") == "segment":
-                # A torn line followed by another torn line or by the next boot's header: what a kill at a
-                # boot's first append, repeated, leaves in a journal every boot shares (addendum B8).
-                yield "torn", *pending, {}
-                pending = None
-            elif _startup_event(row):
-                continue  # startup events a later boot journaled before its own header: the torn line stays pending
-            else:
-                raise RecordRefused(
-                    "corrupt", f"line {pending[0]} of {name} is not a JSON object, and it is neither the last line of its segment nor a torn append"
-                )
-        if row is None:
-            pending = (number, at, end)
+    for kind, number, at, end, row in _torn_aware_lines(dir_fd, name, offset, first):
+        if kind == "torn" or row is None:
+            # A fragment R1 accepts: the last line of its segment (a later boot's header may follow).
+            yield "torn", number, at, end, {}
             continue
         event = row.get("event")
         segment = header["boot_id"] if header is not None else None
@@ -1649,12 +1679,6 @@ def _verified_lines(
         chain, last_tick = row["chain"], tick
         receipts, noted = {(r["window"], r["local"]) for r in row["receipts"]}, set()
         yield "row", number, at, end, row
-    if pending is not None:
-        # The file's last line, torn. With no header before it in this file it is a boot torn before its
-        # header — its first append, header and first row in one `write`, cut by a kill — and nothing of
-        # that boot was published, because the append is `fsync`ed before the root record, a result, a
-        # frame or a mirror. Refusing it refused every restart after it (design note F2).
-        yield "torn", *pending, {}
 
 
 def _startup_event(row: dict[str, Any]) -> bool:
@@ -1783,12 +1807,14 @@ def _first_header(dir_fd: int, name: str) -> dict[str, Any] | None:
     """The first segment header in one journal file, past at most `STARTUP_LINES_BEFORE_HEADER` startup events.
 
     `None` for a file that holds no header: only startup events (a refused start), or a boot torn before
-    its header. Anything else before the first header — a tick row, a note — is not a file this vehicle
-    wrote, and refuses; so do more startup events than the bound. Only those lines are read.
+    its header — an unparseable line that is the file's last (R1). Anything else before the first header
+    — a tick row, a note, an unparseable line with complete lines after it (a damaged header, review F1)
+    — is not a file this vehicle wrote, and refuses; so do more startup events than the bound. Only
+    those lines are read.
     """
-    for number, _at, _end, row in _file_lines(dir_fd, name):
-        if row is None:
-            return None
+    for kind, number, _at, _end, row in _torn_aware_lines(dir_fd, name):
+        if kind == "torn" or row is None:
+            continue  # R1 accepted it: the file's last line, or one a later boot's header follows
         if row.get("event") == "segment":
             problem = _header_problem(row)
             if problem is not None:
@@ -1818,8 +1844,52 @@ def _summarise(held: int, name: str, segments: list[SegmentInfo], *, offset: int
                 current.last_tick, current.rows = row["tick"], current.rows + 1
 
 
+def _line_ending_at(fd: int, offset: int) -> bytes | None:
+    """The line whose newline is the byte before `offset`, without it; `None` past `MAX_RECORD_LINE_BYTES`."""
+    position = offset - 1
+    start = 0
+    while position > 0:
+        low = max(0, position - (1 << 16))
+        found = os.pread(fd, position - low, low).rfind(b"\n")
+        if found >= 0:
+            start = low + found + 1
+            break
+        position = low
+        if offset - position > MAX_RECORD_LINE_BYTES:
+            return None
+    return os.pread(fd, offset - 1 - start, start)
+
+
+def _anchor_line_problem(line: bytes | None, anchor: dict[str, Any]) -> str | None:
+    """Why the line ending at the anchor is not the one the checkpoint was taken after (review F16), or `None`.
+
+    It must be a record line of the anchor's boot and world whose `chain` is the anchor's: a row or a
+    note of the snapshot's tick, or — for a boot whose first cycle never reached its row — that boot's
+    header, beginning at the snapshot's tick. A newline in the right place is not enough: a different
+    file of exactly that length would have resumed at the snapshot's tick with nothing read.
+    """
+    entry, tick = anchor["entry"], anchor["tick"]
+    if line is None:
+        return f"the line ending there is longer than the {MAX_RECORD_LINE_BYTES} bytes a record line may be"
+    try:
+        row = loads_json(line.decode("utf-8"))
+    except Exception:  # noqa: BLE001 - any decoder failure is "not a line"
+        return "the line ending there is not a JSON object"
+    if not isinstance(row, dict):
+        return "the line ending there is not a JSON object"
+    if row.get("chain") != entry.get("chain"):
+        return f"the line ending there carries chain {bounded_repr(row.get('chain'))}, not the checkpoint's {entry.get('chain')}"
+    if row.get("boot_id") != entry.get("boot_id") or row.get("world_id") != anchor["world_id"]:
+        return "the line ending there is of another boot or another world than the checkpoint's anchor"
+    event = row.get("event")
+    at = row.get("first_tick") if event == "segment" else row.get("tick") if event in (None, "results_written") else None
+    if at != tick:
+        return f"the line ending there is not one of the snapshot's tick {tick}"
+    return None
+
+
 def _anchored_segment(held: int, name: str, anchor: dict[str, Any]) -> SegmentInfo:
-    """The anchor's segment, its offset held to the file (addendum B5), seeded as if read to there."""
+    """The anchor's segment, its offset held to the file and to the checkpoint's own last line (B5, F16), seeded as if read to there."""
     entry = anchor["entry"]
     offset, chain = entry.get("offset"), entry.get("chain")
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 1 or not _hex(chain):
@@ -1843,6 +1913,17 @@ def _anchored_segment(held: int, name: str, anchor: dict[str, Any]) -> SegmentIn
                 "anchor", f"byte {offset} of {name} does not follow the end of a line, so it is not where the checkpoint's last line ended",
                 tick=anchor["tick"], segment=entry.get("segment"),
             )
+        problem = _anchor_line_problem(_line_ending_at(fd, offset), anchor)
+        if problem is not None:
+            raise RecordRefused(
+                "anchor", f"byte {offset} of {name} is not where the checkpoint's last line ended: {problem}",
+                tick=anchor["tick"], segment=entry.get("segment"),
+            )
+    except OSError as exc:
+        raise RecordRefused(
+            "anchor", f"{name}, which holds the checkpoint's anchor, cannot be read ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)})",
+            segment=entry.get("segment"),
+        ) from None
     finally:
         os.close(fd)
     header = {
@@ -1935,6 +2016,12 @@ def read_record(
                     header = _first_header(held, name)
                     if header is None:
                         continue
+                    if JOURNAL_SEGMENT.format(boot_id=header["boot_id"]) != name:
+                        # One file per boot, named by its boot (review F1): a file holding another boot's
+                        # header is not one this vehicle wrote, and reading it as that boot could hide one.
+                        raise RecordRefused(
+                            "segment", f"{name} holds the header of segment {header['boot_id']}, not of the boot its name says", segment=header["boot_id"],
+                        )
                     follows.setdefault(header["previous"], []).append((name, header))
                 frontier, reached = [first.boot_id], {first.boot_id}
                 while frontier:
@@ -2998,7 +3085,8 @@ class Executive:
         On creation the directory is `fsync`ed so the new name is durable with its first row. A file
         that exists is made `0600` if this process owns it and refused otherwise. A file
         that does not end in a newline — a previous boot's append torn by a crash, in an explicit
-        `--journal` every boot shares — is ended with one first, so this boot's header begins a line.
+        `--journal` every boot shares — is ended first with `TORN_TAIL_TERMINATOR`, so this boot's header
+        begins a line and the fragment can never parse as one (review F13).
         """
         if self._record_fd is not None:
             return self._record_fd
@@ -3011,7 +3099,7 @@ class Executive:
             private_record_file(fd, str(self.journal))
             info = os.fstat(fd)
             if info.st_size > 0 and os.pread(fd, 1, info.st_size - 1) != b"\n":
-                _write_all(fd, b"\n")
+                _write_all(fd, TORN_TAIL_TERMINATOR)
             os.fsync(self.journal_dir_fd)
         except BaseException:
             os.close(fd)
