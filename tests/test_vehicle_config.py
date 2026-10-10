@@ -28297,7 +28297,7 @@ def test_a_restart_naming_another_scenario_seed_ring_bound_phase_or_slug_set_ref
     cases = [
         (["--scenario", "crisis"], "--scenario names 'crisis'", "records 'degraded'"),
         (["--seed", "8"], "--seed names 8", "records 7"),
-        (["--ring-slots", "41"], "--ring-slots names 41", "records 40 for window 'alpha'"),
+        (["--ring-slots", "41"], "--ring-slots names 41", "records 40 for window 'alpha' (world "),
         (["--phase", "descent"], "--phase names 'descent'", "records 'translunar_coast'"),
     ]
     for extra, named, recorded in cases:
@@ -29293,3 +29293,50 @@ def test_the_diode_directory_is_resolved_once_and_serves_json_records_the_path_m
     alias.unlink()
     alias.symlink_to(first)
     assert console.main(["--diode-dir", str(alias), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]) == 0
+
+
+def test_a_clean_end_checkpoint_that_cannot_be_written_is_journaled_with_its_consecutive_count_as_the_adr_says(tmp_path, monkeypatch, capsys):
+    """Review F10 (Codex): ADR 0002 J (xxii) says a clean-end failure is journaled; the code only wrote stderr.
+
+    The operator reads the journal for what the vehicle could not do. A run whose checkpoint at its
+    clean end cannot be written still exits 0 — the record holds every tick — and now the failure is a
+    `checkpoint_failed` event in the journal, with the occasion and the consecutive count, as well as a
+    line on stderr, exactly as a cadence failure is.
+    """
+    checkpoint, console, _plant, _world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    real, calls = console.write_checkpoint, [0]
+
+    def genesis_only(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] > 1:
+            raise checkpoint.CheckpointWriteFailed("write", state / "checkpoint.json", "ENOSPC")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(console, "write_checkpoint", genesis_only)
+    assert console.main(["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "2", "--poll", "0"]) == 0
+    err = capsys.readouterr().err
+    assert "clean end" in err and "1 consecutive" in err, err
+    (event,) = journal_events(state, "checkpoint_failed")
+    assert event["occasion"] == "clean end" and event["consecutive"] == 1 and event["tick"] == 2, event
+
+
+def test_a_restart_naming_another_journal_than_its_record_was_written_to_refuses_naming_both(tmp_path):
+    """Review F11 (Fable): a changed `--journal` is refused naming where the record is, not only where it is not.
+
+    A world started with `--journal X` keeps its record in X; a restart with `--journal Y`, or with none,
+    was refused because the record could not be found at the anchor — "`Y`, which holds the checkpoint's
+    anchor, cannot be opened (ENOENT)" — which names the wrong file and not the right one. `serves.json`
+    now records the journal the state directory's world writes to, and a restart naming another is
+    refused by one sentence naming both; the same `--journal` resumes.
+    """
+    diode, state, journal = tmp_path / "diode", tmp_path / "state", tmp_path / "journal.jsonl"
+    assert start(diode, state, "alpha", extra=["--journal", str(journal), "--cycles", "2", "--poll", "0"]).returncode == 0
+    other = tmp_path / "other.jsonl"
+    for extra, named in ((["--journal", str(other)], str(other)), ([], "the state directory's own segments")):
+        refused = start(diode, state, "alpha", extra=[*extra, "--cycles", "1", "--poll", "0"])
+        lines = refused.stderr.strip().splitlines()
+        assert refused.returncode == 3 and len(lines) == 1, refused.stderr
+        assert str(journal) in lines[0] and named in lines[0] and "--journal" in lines[0], lines[0]
+    resumed = start(diode, state, "alpha", extra=["--journal", str(journal), "--cycles", "1", "--poll", "0"])
+    assert resumed.returncode == 0 and "resumed world" in resumed.stdout, resumed.stderr

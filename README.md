@@ -19287,6 +19287,42 @@ test is an uninterrupted run's own per-tick compare-points and lineage, never th
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+### The review round
+
+Four independent code reviews read `06f08a3` — Codex (`gpt-6-astra`, high) in two sessions, Claude
+Opus and Fable — beside a clean gate and a chassis dry run; the resume held up end to end (a SIGKILL
+stress run found contiguous ticks and exactly one result per recorded command), and the defects below
+were fixed on top, each with a test that failed first (ADR 0002 J (xxx)–(xxxv) records the decisions):
+
+| finding (who) | what `06f08a3` did | what it does now | the test failed at `06f08a3` with |
+|---|---|---|---|
+| F1 a damaged successor header (Codex ×2) | the anchored read took a damaged header with rows after it for "a boot torn before its header" and skipped the file: a resume came back short of published ticks | one rule for an unparseable line, for every reader (R1); a successor that is not verifiable refuses by name, as does a file holding another boot's header | the anchored read returned without refusing |
+| F13 a tail torn just before its newline (Opus) | the next boot ended it with `\n`, turning the fragment into a valid line behind the resumed segment: every later read refused (`overlap`) | `#\n` ends a cut tail, so the fragment stays one | `overlap` at the second resume |
+| F16 the anchor's line (Opus) | only the byte before the offset was checked: another file of that length resumed with nothing read | the line ending there must carry the anchor's boot, world, tick and chain | no refusal |
+| F2 results settled before their names were durable (Codex ×2) | obligations left, and live results were landed, before the `output/` `fsync`; a found result was never `fsync`ed | one barrier (R2): landed, noted and settled only after file and directory are durable | no obligation in the next checkpoint |
+| F3 a checkpoint a resume cannot use (Codex) | an obligation without `command`, or `clock.N = []`, verified, and the resume raised `KeyError`/`TypeError` | corrupt by name, saying the body verified (R4); K2 falls back | the reader accepted it |
+| F4 tracebacks and leaked descriptors (Codex) | an `EIO` listing the state directory escaped `main` and leaked a handle; the constructor leaked two when it refused | exit 3 naming the errno; no descriptor outlives a refusal | `OSError` out of `main` |
+| F5 fingerprint-only results with leading whitespace (Codex) | the look on disk named candidates from the parsed verb; the files were named from the raw command | candidates are named as the writer names files | three results published twice |
+| F6 the interrupt test (gate, chassis) | a `KeyboardInterrupt` from a `time.sleep` patched process-wide took the xdist worker down | a real `SIGINT` to a real console process at a known point (R3) | `KeyboardInterrupt` out of pytest |
+| F7 the compare-point cost ratio (gate 3.4×, chassis 6.0×) | two medians taken one after the other: load between them moved one | interleaved, best of twenty; the bound stays 3× | (the gate's and the dry run's failures) |
+| F8 a genesis-crash root record (Fable) | an unbound record at tick 0 with `T = 0`, `L = 1` was journaled as tampering | routine whenever `T = 0` | `rewrite` |
+| F9 the S11 sentence (Fable) | refused first by choice D, naming the diode directory | the state directory's refusal comes first | "clear or rename the directory" |
+| F10 a clean-end checkpoint failure (Codex) | stderr only, where the ADR said journaled | journaled with its occasion and count | no `checkpoint_failed` event |
+| F11 a changed `--journal` (Fable) | refused naming the file the record is not in | `serves.json` records the journal; the refusal names both | the anchor file's `ENOENT` |
+| F14 a resume's anomalies (Opus) | journaled privately; "fell back" on stdout only | one stderr line each | no stderr line |
+| F15 two path resolutions (Opus) | the executive re-resolved `--diode-dir`; `serves.json` held `Path.resolve()`'s answer | one resolution, `main`'s; its handle is duplicated | windows made through a retargeted link |
+| F12, F18 test gaps (Codex, Opus) | the flood test never reached the byte bound; B2 untested through the resume's own checkpoint; no give-up test; one-point oracles; `os.open` only | each covered; the one-handle test catches builtin `open()` through an audit hook | (tests added) |
+
+Two notes on wording (F17): `wall_up` is stamped after the replay, so `wall_down → wall_up` includes the
+vehicle's own start-up; and a tick row's `failures` count is the boot's own, starting at zero after
+every restart. `--ring-slots`' refusal now reads "records 40 for window 'alpha' (world …)".
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 482 | **499** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 

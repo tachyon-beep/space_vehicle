@@ -828,6 +828,48 @@ directory planted there; a readable record of another world) assume the chassis'
 (`adf38d6`, branch `aurora-port`); on a stack where agents mount the whole diode root they are stop
 buttons an agent holds at every restart.
 
+*Amended by #21's review round (2026-10-10): four code reviews of `06f08a3` (Codex `gpt-6-astra` high
+twice; Claude Opus; Fable), its clean gate and a chassis dry run; decided by the coordinator under the
+owner's delegation (rulings R1–R5).* (xxx) **One rule for an unparseable line** (R1). A line of a
+record file that does not parse is a torn fragment — a write a kill cut, from which nothing was
+published — only if it is the last line of its file, or it is followed only by a new boot's startup
+events and then that boot's segment header (itself possibly a fragment by the same rule: a kill at the
+same point of a start, repeated); anywhere else, and in particular before a complete row, it is
+corruption and refuses by name. The whole-record read, the anchored read, the successor discovery and
+the replay all read through one helper. Before a later boot appends to a file whose last line was cut,
+it ends that tail with `#\n` rather than `\n`: a fragment that was complete JSON short of its newline
+became a valid line behind the resumed boot, a permanent refusal. (xxxi) **Nothing after the anchor is
+skipped.** A segment file in the state directory that is neither a verifiable continuation of the
+anchor nor provably irrelevant — only startup events, a boot torn before its header (its last line),
+or a segment the checkpoint lists — refuses: a damaged successor header with its rows intact was read
+as "torn" and the file skipped, so a resume came back short of ticks the fleet had seen. A file holding
+another boot's header than its name refuses too. And the anchor's offset is held to the line that ends
+there: a record line of the anchor's boot, world and tick whose chain is the anchor's, not only a
+newline in the right place. (xxxii) **One durability barrier for a result.** A result is landed — named
+in its window's `results_written` note, and not owed — and an obligation leaves the list, only once the
+result's file and its `output/` directory have both been `fsync`ed; a result found already on disk is
+`fsync`ed, file and directory, before it counts (R2). A failure before that leaves every one of them
+owed and unnoted. (xxxiii) **A checkpoint a resume cannot use is corrupt, said so.** The reader checks
+every field a re-publication reads of an obligation (its text, or a fingerprint-only receipt's
+fingerprints, typed) and that `clock.N` is a positive tick count; a body that fails is refused as
+corrupt (so K2 falls back) by a sentence that says the body verified against its hash and what it
+lacks (R4). Every `OSError` on the resume's path is a refusal by name and errno, and no handle outlives
+it. (xxxiv) **The operator's view.** An unbound root record at tick 0 beside a genesis checkpoint
+(`T = 0`) is routine whatever `L` is (it is what a kill after the first row and before the first
+root-record write leaves); a state directory holding a record and no checkpoint is refused before
+anything is said about the diode directory; a fall-back, a rewritten root record and each `pending.json`
+advisory are each a line on stderr as well as in the journal; a clean-end checkpoint that cannot be
+written is journaled (`checkpoint_failed`, with its occasion and the consecutive count) as (xxii) said;
+`serves.json` records where the world's record is written (`journal`), and a restart naming another
+journal is refused naming both; and the diode directory is resolved once, by `main`, whose handle the
+executive keeps and whose canonical path `serves.json` holds. (xxxv) **Wording.** The `resumed` event's
+`wall_up` is stamped after the replay, inside the new process, so `wall_down → wall_up` includes the
+vehicle's own start-up and replay, not only the downtime. The agents' `variables` are lost at a resume
+not only for a console that cannot be read but for one that carries no `variables` object (a
+contract-legal `{"commands": [...]}`): either way the window honours the defaults until a console that
+carries one arrives. A tick row's `failures` count is this boot's: it starts at zero after every
+restart.
+
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
 Fixed by WP08's acceptance: "corrupt/incompatible checkpoints fail explicitly". The question is what

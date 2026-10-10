@@ -163,7 +163,10 @@ phase, ring bound or slug set is refused by one sentence (`identity_refusal`); `
 anew replaces the saved cap and `--closed-interlock` adds to the saved trips, each journaled. A
 command claimed in a cycle whose row never became durable is lost with no result, as the contract
 allows ("a crash mid-batch loses the rest of that batch"); every command whose row is durable has
-exactly one result. Pruning the record is not here (child 10, with retention).
+exactly one result. A record line that does not parse is a torn fragment by one rule for every
+reader (`_torn_aware_lines`: the file's last line, or one followed only by a new boot's startup events
+and its header), and corruption anywhere else; a cut tail is ended with `#\n` before anything is
+appended after it. Pruning the record is not here (child 10, with retention).
 
 `--state-dir` is **not required**: without it the lock and every refusal are exactly as before, and an
 explicit `--journal` is the record above, in the same format with the same durability. Whether the deployed stack must always name one is the chassis's decision when it adds the
@@ -2493,7 +2496,7 @@ def read_serves_record(dir_fd: int) -> tuple[str | None, str | None]:
     return served, None
 
 
-def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str]) -> None:
+def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str], journal: str | os.PathLike[str] | None = None) -> None:
     """Record, in the state directory, the diode directory it serves — the canonical path `main` compares.
 
     The caller passes `canonicalise`'s path, which is what `main` compares the record with at the next
@@ -2502,9 +2505,31 @@ def write_serves_record(dir_fd: int, diode_dir: str | os.PathLike[str]) -> None:
     """
     write_json_atomic(
         SERVES_FILE,
-        {"diode_dir": str(Path(diode_dir)), "recorded_at": utc_now().isoformat()},
+        {
+            "diode_dir": str(Path(diode_dir)),
+            # Where this state directory's world writes its record: an explicit `--journal`'s canonical
+            # path, or `None` for its own segment files — so a restart naming another is told where the
+            # record is (review F11).
+            "journal": str(Path(journal)) if journal is not None else None,
+            "recorded_at": utc_now().isoformat(),
+        },
         dir_fd=dir_fd,
     )
+
+
+def served_journal(dir_fd: int) -> tuple[bool, str | None]:
+    """`(recorded, journal)` from `serves.json`: whether it says where the record is, and the explicit journal (or `None`)."""
+    raw, _problem = read_regular_bounded(SERVES_FILE, dir_fd=dir_fd)
+    if raw is None:
+        return False, None
+    try:
+        loaded = loads_json(raw)
+    except Exception:  # noqa: BLE001 - `read_serves_record` has already judged the file
+        return False, None
+    if not isinstance(loaded, dict) or "journal" not in loaded:
+        return False, None
+    value = loaded["journal"]
+    return (True, value) if value is None or isinstance(value, str) else (False, None)
 
 
 def root_record_from_checkpoint(body: dict[str, Any]) -> dict[str, Any]:
@@ -2983,18 +3008,24 @@ class Executive:
         return written
 
     def _cadence_checkpoint(self) -> None:
-        """The cadence's checkpoint: a failure is recorded, journaled and on stderr, and the run goes on (B11).
+        """The cadence's checkpoint (`checkpoint_or_record`)."""
+        self.checkpoint_or_record("cadence")
 
-        The record is what makes the run durable; a checkpoint only bounds how much of it a resume
-        reads, and `write_checkpoint` leaves a verifying generation at every step — so a failure costs
-        recovery time, not the world. The consecutive count says how long that has been so.
+    def checkpoint_or_record(self, occasion: str) -> bool:
+        """A checkpoint whose failure is recorded, journaled and on stderr, and the run goes on (B11); `True` if written.
+
+        For the cadence and for a clean end (review F10: the clean end's failure was on stderr only,
+        where ADR 0002 J (xxii) says it is journaled). The record is what makes the run durable; a
+        checkpoint only bounds how much of it a resume reads, and `write_checkpoint` leaves a verifying
+        generation at every step — so a failure costs recovery time, not the world. The consecutive
+        count says how long that has been so.
         """
         try:
             self.checkpoint()
         except Exception as exc:  # noqa: BLE001 - recorded, and the run goes on
             self.checkpoint_failures += 1
             self._record_failure_named(
-                CURRENT, "checkpoint", RuntimeError(f"{exc} ({self.checkpoint_failures} consecutive)"), self.tick
+                CURRENT, "checkpoint", RuntimeError(f"{exc} ({occasion}; {self.checkpoint_failures} consecutive)"), self.tick
             )
             if self.journal is not None and self.journal_dir_fd is not None:
                 with contextlib.suppress(Exception):
@@ -3002,13 +3033,14 @@ class Executive:
                         self.journal,
                         {
                             "event": "checkpoint_failed", "wall": utc_now().isoformat(), "boot_id": self.boot_id,
-                            "world_id": self.world_id, "tick": self.tick, "consecutive": self.checkpoint_failures,
-                            "error": f"{type(exc).__name__}: {exc}",
+                            "world_id": self.world_id, "tick": self.tick, "occasion": occasion,
+                            "consecutive": self.checkpoint_failures, "error": f"{type(exc).__name__}: {exc}",
                         },
                         dir_fd=self.journal_dir_fd,
                     )
-        else:
-            self.checkpoint_failures = 0
+            return False
+        self.checkpoint_failures = 0
+        return True
 
     def _owe(self, window: Window, verdicts: list[Verdict]) -> None:
         """Owe a window the results of verdicts whose publication failed (addendum B4), as the record holds them."""
@@ -4421,7 +4453,7 @@ def identity_refusal(args: argparse.Namespace, body: dict[str, Any], path: Path)
     """
     world_id = body["identity"]["world_id"]
     tail = (
-        f"for world {world_id}: a restart resumes the world its state directory holds, and a different world is the "
+        f"(world {world_id}): a restart resumes the world its state directory holds, and a different world is the "
         "operator's --new-world (#28), not a changed flag"
     )
     saved_slugs = sorted(body["windows"])
@@ -5061,7 +5093,7 @@ def main(argv: list[str] | None = None) -> int:
         if state_fd is None or state_path is None:
             return "no state directory is open, so serves.json cannot be written"
         try:
-            write_serves_record(state_fd, diode_canonical.path)
+            write_serves_record(state_fd, diode_canonical.path, journal_explicit)
         except Exception as exc:  # noqa: BLE001 - the refusal names it
             return (
                 f"the state directory's record {state_path / SERVES_FILE} cannot be written ({errno_name(exc)}). "
@@ -5137,13 +5169,11 @@ def main(argv: list[str] | None = None) -> int:
             except RecordUnwritable as exc:
                 sys.stderr.write(f"[console] stopped at tick {executive.tick}: {exc}\n")
                 return 3
-            # A clean end checkpoints the last completed cycle, unless the cadence just did; a failure is a
-            # line on stderr and not a changed exit, because the record already holds every tick.
+            # A clean end checkpoints the last completed cycle, unless the cadence just did; a failure is
+            # recorded and journaled as a cadence failure is, and not a changed exit, because the record
+            # already holds every tick.
             if clean and executive.state_fd is not None and executive.last_checkpoint_tick != executive.tick:
-                try:
-                    executive.checkpoint()
-                except Exception as exc:  # noqa: BLE001 - said, not raised
-                    sys.stderr.write(f"[console] the checkpoint at the end, tick {executive.tick}, was not written: {exc}\n")
+                executive.checkpoint_or_record("clean end")
             return 0
         finally:
             executive.close()
@@ -5170,6 +5200,17 @@ def main(argv: list[str] | None = None) -> int:
                     f"the root record at {diode_dir / RECORD_FILE} and the checkpoint at {checkpoint_found.path} "
                     f"disagree about which world this is: {why}. Neither is rewritten; stop the other executive "
                     "or point --state-dir at the directory that serves this one"
+                )
+            # Review F11: the record is read where it was written, and a restart naming another journal is
+            # told where that is, before anything is written.
+            recorded, previous = served_journal(state_fd)
+            current = str(journal_explicit) if journal_explicit is not None else None
+            if recorded and previous != current:
+                own = "the state directory's own segments"
+                return refuse(
+                    f"--journal names {current or 'none, which means ' + own} and this state directory's record was written to "
+                    f"{previous or own} (its serves.json): a restart reads the record where it was written, so name the same "
+                    "--journal, or none"
                 )
             unserved = serves_refusal()
             if unserved is not None:
