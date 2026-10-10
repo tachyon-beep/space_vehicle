@@ -19323,6 +19323,33 @@ every restart. `--ring-slots`' refusal now reads "records 40 for window 'alpha' 
 
 No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
 
+### The confirmation round
+
+Codex (`gpt-6-astra`, high) and Claude Opus confirmed `0647ee2`. Opus approved — every one of its
+findings closed, and its SIGKILL stress run clean in both journal layouts (its "recorded twice" cases
+were its own harness writing a claimed command back into `console.json`); Codex found four fixes
+incomplete, and Opus one gap the new torn-line rule opened. ADR 0002 J (xxxvi)–(xxxix) records them:
+
+| finding (who) | what `0647ee2` did | what it does now | the test failed at `0647ee2` with |
+|---|---|---|---|
+| G1 `--diode-dir` re-resolved (Codex, P1) | the confinement checks for `--state-dir` and `--journal` resolved the spelling again: an alias retargeted in between passed private state inside the served directory | one resolution, `main`'s, for every check and for the diode directory's own open | exit 0 with the state directory inside the served one |
+| G2 the anchor's line (Codex) | any object copying the anchor's chain, boot, world and tick was accepted | it must verify as a record line, its chain recomputing | no refusal for a padded forgery |
+| G3 the obligation flag (Codex) | validated with `is True`, read with truthiness | a non-bool flag is corrupt by name; one predicate everywhere | the reader accepted `"yes"` |
+| G4 the record scan (Codex) | an `EIO` listing a fresh state directory escaped `main` | exit 3 naming the errno, no descriptor held | `OSError` out of `main` |
+| G5 a wholly damaged file (Opus) | read as a run of fragments, empty, and skipped | two fragments with no complete line between them refuse | no refusal |
+| G6 the rewrite line (Opus) | "was rewritten" printed before the write | printed after it succeeds | the line before a failed rewrite |
+| G7 routine at genesis (Opus) | an unbound tick-0 record routine for any `L` beside `T = 0` | only for `L ≤ 1` | `routine` at `L = 2` |
+| G8 wording (Opus) | "window 'a''s pending.json" | "window 'a': its pending.json" | the old wording |
+
+Two repeated-kill cases have tests of their own now (Codex's note): two resumed boots in a row torn at
+their first append in a shared journal, read and resumed past.
+
+| figure | before | after |
+|---|---:|---:|
+| referee tests | 499 | **507** |
+
+No configuration value, debt or state class moved; `check_vehicle.py` still composes with 273 debts.
+
 ## The invariants, and which of them are enforced
 
 

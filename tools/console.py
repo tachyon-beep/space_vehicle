@@ -165,8 +165,9 @@ command claimed in a cycle whose row never became durable is lost with no result
 allows ("a crash mid-batch loses the rest of that batch"); every command whose row is durable has
 exactly one result. A record line that does not parse is a torn fragment by one rule for every
 reader (`_torn_aware_lines`: the file's last line, or one followed only by a new boot's startup events
-and its header), and corruption anywhere else; a cut tail is ended with `#\n` before anything is
-appended after it. Pruning the record is not here (child 10, with retention).
+and its header), and corruption anywhere else — two fragments with nothing complete between them
+included; a cut tail is ended with `#\n` before anything is appended after it, and the line at a
+checkpoint's anchor must verify as a record line whose chain recomputes. Pruning the record is not here (child 10, with retention).
 
 `--state-dir` is **not required**: without it the lock and every refusal are exactly as before, and an
 explicit `--journal` is the record above, in the same format with the same durability. Whether the deployed stack must always name one is the chassis's decision when it adds the

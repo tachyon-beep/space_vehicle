@@ -870,6 +870,26 @@ contract-legal `{"commands": [...]}`): either way the window honours the default
 carries one arrives. A tick row's `failures` count is this boot's: it starts at zero after every
 restart.
 
+*Amended by #21's confirmation round (2026-10-10): Codex (`gpt-6-astra` high) and Claude Opus
+confirmations of `0647ee2`; decided by the coordinator under the owner's delegation.* (xxxvi) **(xxx)
+refined: two fragments with no complete line between them are corruption.** A boot journals its
+startup events before its header, so repeated kills at a start leave complete events between their
+fragments; a fragment directly followed by another is not what a kill leaves, and a file whose every
+line is damaged — which (xxx) read as a run of fragments, empty, and skipped — refuses by name.
+(xxxvii) **(xxxi) strengthened: the anchor's line is a record line.** It must pass the record's own
+schema for its kind (a row, a note, or the header of a boot that never reached a row) and its chain
+must recompute — a header's from its `previous_chain`, a row's or a note's from the chained line
+before it, read backwards past startup events, bounded by `MAX_RECORD_LINE_BYTES` — not only carry the
+anchor's chain, boot, world and tick. (xxxviii) **(xxxiv) bounded: a genesis root record is routine
+only as far as a kill can leave it** — an unbound record at tick 0 beside `T = 0` and `L ≤ 1`; beside a
+later tick it is a mismatch, with its event. And the operator's line that the record "was rewritten"
+is printed once the rewrite succeeded. (xxxix) **One resolution of `--diode-dir`, everywhere.** The
+checks that keep `--state-dir` and `--journal` out of the agents' directory are made against `main`'s
+one resolution, which is also what the diode directory is opened from — by the walk that follows
+nothing and holds each component to what the resolution saw. An obligation's `fingerprint_only`, which
+every reader branches on, must be a bool; and the fresh start's scan for a record without a checkpoint
+refuses an I/O error by name, as every other start path does.
+
 ### K — A corrupt or incompatible checkpoint, and the crash loop (maintainer with chassis reviewer)
 
 Fixed by WP08's acceptance: "corrupt/incompatible checkpoints fail explicitly". The question is what
