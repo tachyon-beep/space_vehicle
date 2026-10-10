@@ -29841,7 +29841,7 @@ def test_a_window_published_past_the_last_durable_tick_is_a_named_refusal_not_a_
 
 
 # The OS calls a start makes on its own path, each of which round 3's H2 injects `EIO` into in turn.
-START_PATH_CALLS = ("open", "fstat", "lstat", "listdir", "scandir", "read", "pread", "write", "fsync", "ftruncate", "rename", "replace", "mkdir", "dup")
+START_PATH_CALLS = ("open", "fstat", "lstat", "listdir", "scandir", "read", "pread", "write", "fsync", "ftruncate", "rename", "replace", "mkdir", "dup", "close")
 
 
 class StartPathInjection:
@@ -29852,8 +29852,9 @@ class StartPathInjection:
     the start makes is counted — on a descriptor, on a name relative to one, on `/` where every private
     walk begins, on the run's own directories, and on the vehicle's configuration, which the engine
     identity lists (round 4, J1: its listing was a `glob` that swallowed the error, and was left out).
-    The error is the kernel's as Python reports it: for a call given a path it carries that path. The
-    first cycle turns injection off, because from there an `OSError` is the cycle's to handle.
+    The error is the kernel's as Python reports it: for a call given a path it carries that path; and a
+    `close` that fails has released its descriptor first, as Linux's does (round 4, J4). The first
+    cycle turns injection off, because from there an `OSError` is the cycle's to handle.
     """
 
     def __init__(self, monkeypatch, console, world, postures, root, name=None, index=None):
@@ -29874,6 +29875,8 @@ class StartPathInjection:
                     self.counts[_call] += 1
                     if _call == self.name and seen == self.index:
                         self.fired = (_call, seen, args[:1])
+                        if _call == "close":
+                            _real(*args, **kwargs)
                         raise OSError(errno.EIO, os.strerror(errno.EIO), *named)
                 return _real(*args, **kwargs)
 
@@ -29920,7 +29923,8 @@ def test_every_os_error_on_a_starts_path_is_a_refusal_naming_the_file_with_no_de
     Round 4 (J1): the calls on the vehicle's configuration are on the path too — the engine identity's
     listing of the corpus, once a `glob` that swallowed the error — and the error carries the path a
     call was given, as the kernel's does, so a refusal is held to naming that path: the corpus directory
-    for a listing of it, the walked directory (not `/`) for the first open of a private walk.
+    for a listing of it, the walked directory (not `/`) for the first open of a private walk. And (J4)
+    every `close` is on it: a failing one leaves no other descriptor open and nothing escapes `main`.
     """
     console, _plant, world = console_tools()
     postures = console.load_postures(VEHICLE)
@@ -30278,3 +30282,76 @@ def test_the_longest_row_cut_before_its_newline_and_marked_is_a_torn_tail_and_on
         record = console.read_record(state)
         assert record.segments[0].torn and record.segments[0].last_tick == 2, len(tail) - len(longest)
         record.close()
+
+
+def test_a_walk_whose_parent_will_not_close_leaves_the_child_it_opened_closed_too(tmp_path, monkeypatch):
+    """Round 4, J4 (Codex P3): `walk_open_dir` closed the parent before it held the child.
+
+    The walk opens each component relative to its parent, then closes the parent and holds the child.
+    When that `close` failed (Linux releases the descriptor anyway), the child just opened was in no
+    variable the cleanup closed, and the cleanup closed the parent's number a second time. Now the
+    child is in hand before the parent is closed: the failure is what the walk raises, and no descriptor
+    is left behind.
+    """
+    console, _plant, _world = console_tools()
+    target = tmp_path / "a" / "b"
+    target.mkdir(parents=True)
+    canonical, problem = console.canonicalise("--state-dir", target, "the state directory")
+    assert problem is None and canonical is not None, problem
+    real_close, calls = os.close, [0]
+
+    def close(fd):
+        calls[0] += 1
+        real_close(fd)
+        if calls[0] == 2:
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    before = open_descriptors()
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "close", close)
+        with pytest.raises(OSError) as failed:
+            console.walk_open_dir(canonical, "--state-dir", create=False)
+    assert failed.value.errno == errno.EIO, failed.value
+    assert open_descriptors() == before
+
+
+@pytest.mark.parametrize("which", ["the lock", "the state directory"])
+def test_a_close_that_fails_on_the_way_out_is_named_and_exit_3_with_every_other_handle_closed(tmp_path, monkeypatch, capsys, which):
+    """Round 4, J4 (Codex P3): a `close` on the way out of `main` raised past it, and could leave handles open.
+
+    The start path's stack closed its descriptors with plain callbacks and the run loop closed the
+    executive in its `finally`: an `EIO` from closing the lock, or from one of the executive's handles
+    on the state directory, escaped `main` as a traceback — and the executive's other handles stayed
+    open. Every `close` now runs whatever the others do, none is raised past `main`, and the first that
+    fails is named on stderr and makes the exit 3.
+    """
+    console, _plant, world = console_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    argv = ["--diode-dir", str(diode), "--state-dir", str(state), "--slug", "alpha", "--cycles", "1", "--poll", "0"]
+    monkeypatch.setattr(console, "load_world", lambda _root: world)
+    assert console.main(argv) == 0, capsys.readouterr().err
+    capsys.readouterr()
+    failing = str(state / console.LOCK_FILE) if which == "the lock" else str(state)
+    real_close, failed = os.close, []
+    ran = [False]
+    real_cycle = console.Executive.cycle
+
+    def cycle(executive):
+        ran[0] = True
+        return real_cycle(executive)
+
+    def close(fd):
+        named = os.path.realpath(f"/proc/self/fd/{fd}") if ran[0] else None
+        real_close(fd)
+        if named == failing:
+            failed.append(fd)
+            raise OSError(errno.EIO, os.strerror(errno.EIO))
+
+    before = open_descriptors()
+    with monkeypatch.context() as patch:
+        patch.setattr(console.Executive, "cycle", cycle)
+        patch.setattr(os, "close", close)
+        code = console.main(argv)
+    err = capsys.readouterr().err
+    assert failed and open_descriptors() == before, (which, failed)
+    assert code == 3 and "EIO" in err and failing in err and "could not be closed" in err, (which, code, err)

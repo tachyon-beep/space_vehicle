@@ -851,12 +851,21 @@ def walk_open_dir(canonical: Canonical, flag: str, *, create: bool) -> tuple[int
                     f"{flag} {canonical.path} changed between its check and its open, or cannot be opened, at "
                     f"{walked} ({errno.errorcode.get(exc.errno or 0, type(exc).__name__)}: {exc.strerror})"
                 )
-            os.close(fd)
-            fd = opened
+            # The child is the handle in hand before the parent is closed, so a failing `close` of the
+            # parent leaves nothing behind: the child is closed on the way out (round 4, J4).
+            parent, fd = fd, opened
+            os.close(parent)
             if seen is not None and not _same_inode(os.fstat(fd), seen):
                 return None, f"{flag} {canonical.path} changed between its check and its open: {walked} is another directory now"
         held, fd = fd, -1
         return held, None
+    except BaseException:
+        # Something already failed: that is what is raised, and a failure to close the handle in hand is not.
+        if fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            fd = -1
+        raise
     finally:
         if fd >= 0:
             os.close(fd)
@@ -2795,7 +2804,8 @@ class Executive:
                 state_fd=state_fd, journal_dir_fd=journal_dir_fd, cadence=cadence, diode_fd=diode_fd,
             )
         except BaseException:
-            self.close()
+            with contextlib.suppress(OSError):  # the refusal is what is raised (J4)
+                self.close()
             raise
 
     def _construct(
@@ -2911,7 +2921,8 @@ class Executive:
             else:
                 opened, canonical, problem = open_journal_dir(journal, self.diode_dir)
                 if problem is not None or opened is None or canonical is None:
-                    self.close()
+                    with contextlib.suppress(OSError):  # the refusal is what is raised (J4)
+                        self.close()
                     raise ValueError(problem)
                 self.journal, self.journal_dir_fd = canonical, opened
         # Generated once, because the configuration does not change while an executive runs.
@@ -2986,12 +2997,32 @@ class Executive:
         """Release the held directory handles. The windows' handles live for one cycle and are closed by it.
 
         Safe on a partly constructed executive — `__init__` calls it when a later step refuses, so a
-        refused in-process construction leaks no descriptor — and safe to call twice."""
+        refused in-process construction leaks no descriptor — and safe to call twice. Every handle is
+        closed even when closing one fails, and each is forgotten before its `close`, so a second call
+        never closes a number twice; the first failure is raised after, naming what the handle was
+        (round 4, J4)."""
+        failed: OSError | None = None
         for name in ("_record_fd", "diode_fd", "journal_dir_fd", "state_fd"):
             fd = getattr(self, name, None)
-            if fd is not None:
+            if fd is None:
+                continue
+            setattr(self, name, None)
+            try:
                 os.close(fd)
-                setattr(self, name, None)
+            except OSError as exc:
+                if failed is None:
+                    failed = exc
+                    journal = getattr(self, "journal", None)
+                    named = {
+                        "_record_fd": journal,
+                        "diode_fd": getattr(self, "diode_dir", None),
+                        "journal_dir_fd": journal.parent if journal is not None else getattr(self, "state_dir", None),
+                        "state_fd": getattr(self, "state_dir", None),
+                    }[name]
+                    if exc.filename is None and named is not None:
+                        exc.filename = str(named)
+        if failed is not None:
+            raise failed
 
     def order(self) -> list[Window]:
         """This tick's visiting order: sorted slugs rotated left by `tick % n` (ADR choice A).
@@ -4795,10 +4826,12 @@ def resume_executive(
         return executive, _resume(executive, world, loaded, snapshot_tick, max_batch, closed_interlocks)
     except OSError as exc:
         # Every I/O failure on the resume's path is a refusal by name, never a traceback (review F4).
-        executive.close()
+        with contextlib.suppress(OSError):  # the refusal is what is raised (J4)
+            executive.close()
         raise ResumeRefused(_io_refusal(exc, executive.state_dir or executive.journal or Path(diode_dir))) from exc
     except BaseException:
-        executive.close()
+        with contextlib.suppress(OSError):
+            executive.close()
         raise
 
 
@@ -5030,12 +5063,34 @@ class _StartPath(contextlib.ExitStack):
         super().__init__()
         self.paths: dict[int, Path] = {}
         self.where: Path | None = None
+        self.unclosed: OSError | None = None
 
     def hold(self, fd: int, path: str | os.PathLike[str]) -> int:
         """Register a descriptor the moment it is opened, with the path it was opened for; it is closed on the way out."""
-        self.callback(os.close, fd)
+        self.closing(functools.partial(os.close, fd), path)
         self.paths[fd] = self.where = Path(path)
         return fd
+
+    def closing(self, close: Callable[[], object], path: str | os.PathLike[str]) -> None:
+        """Run `close` on the way out (round 4, J4): every one runs, and none raises past `main`.
+
+        A `close` that fails while something else is already on its way out — a refusal's exception, a
+        kill — is not what is reported, and is dropped; the first that fails when nothing else has is kept
+        as `unclosed`, naming `path` when the error names nothing, for `main` to report as exit 3.
+        """
+        named = Path(path)
+
+        def leave(exc_type: object, _exc: object, _tb: object) -> bool:
+            try:
+                close()
+            except OSError as error:
+                if exc_type is None and self.unclosed is None:
+                    if error.filename is None:
+                        error.filename = str(named)
+                    self.unclosed = error
+            return False
+
+        self.push(leave)
 
     def at(self, path: str | os.PathLike[str] | None) -> None:
         """Say what the start is working on, for a refusal from a call that names no file (`fsync`, `fstat`)."""
@@ -5051,6 +5106,12 @@ class _StartPath(contextlib.ExitStack):
         else:
             where = named
         return f"the start could not read or write {where} ({code}: {exc.strerror}); every handle it held is closed, and nothing was started"
+
+    def unclosed_refusal(self) -> str:
+        assert self.unclosed is not None
+        code = errno.errorcode.get(self.unclosed.errno or 0, type(self.unclosed).__name__)
+        named = os.fsdecode(self.unclosed.filename) if isinstance(self.unclosed.filename, (str, bytes, os.PathLike)) else "a handle"
+        return f"[console] {named} could not be closed ({code}: {self.unclosed.strerror}); every other handle was closed"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5386,7 +5447,8 @@ def main(argv: list[str] | None = None) -> int:
                         return 3
                 return 0
             finally:
-                executive.close()
+                # The executive is closed on the way out of `starting`, with every handle the start holds,
+                # where a failing `close` is named rather than raised past `main` (J4).
                 close_all()
 
         if checkpoint_found is not None:
@@ -5443,7 +5505,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except ResumeRefused as exc:
                     return refuse(f"{exc}. The executive does not start a fresh world over a saved one (ADR 0002 K)")
-                starting.callback(executive.close)
+                starting.closing(executive.close, state_path or diode_canonical.path)
                 # Addendum B3: a checkpoint at the recovered tick before anything is claimed — it makes the
                 # named run inputs durable and bounds the next resume's replay and re-publication.
                 try:
@@ -5647,7 +5709,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             return refuse(str(exc))
-        starting.callback(executive.close)
+        starting.closing(executive.close, state_path or diode_canonical.path)
         for slug in slugs:
             try:
                 executive.attach(slug, ring_slots=resolved_slots[slug])
@@ -5698,13 +5760,19 @@ def main(argv: list[str] | None = None) -> int:
     # `starting` the moment it is opened, with the path it was opened for, and is closed once on the way
     # out whatever happens; an `OSError` nothing on the path turned into a refusal of its own is exit 3
     # naming the file (`exc.filename`, or the path of what was in use) and the errno.
+    # A `close` on the way out that fails is not raised past `main` (round 4, J4): every handle is still
+    # closed, and the first such failure — when nothing else failed first — is named, and the exit is 3.
     with _StartPath() as starting:
         try:
-            outcome = start(starting)
+            prepared = start(starting)
         except OSError as exc:
             sys.stderr.write(starting.refusal(exc) + "\n")
-            return 3
-        return outcome if isinstance(outcome, int) else outcome()
+            prepared = 3
+        outcome = prepared if isinstance(prepared, int) else prepared()
+    if starting.unclosed is not None:
+        sys.stderr.write(starting.unclosed_refusal() + "\n")
+        return outcome or 3
+    return outcome
 
 if __name__ == "__main__":
     raise SystemExit(main())
