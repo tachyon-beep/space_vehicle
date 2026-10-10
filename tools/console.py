@@ -4490,7 +4490,8 @@ def classify_root_record(
     record is compared with the state the replay recovered: a record that agrees on every identity key
     but the tick, naming this world at a tick in `[T, L]`, is **routine** — journaled inside the
     `resumed` event and rewritten without a mismatch event. So is an unbound record at tick 0 beside a
-    world that has neither ticked nor been replayed (`T = L = 0`, addendum B9). Everything else is
+    world whose checkpoint is its genesis (`T = 0`, addendum B9 as widened by review F8: a kill after
+    the first row and before the first root-record write leaves it whatever `L` is). Everything else is
     `reconcile_root_record`'s: agree, rewrite with its event, or — a readable record of another world —
     refuse. A record ahead of `L` is a disagreement: an `fsync`ed row does not vanish.
     """
@@ -4503,8 +4504,10 @@ def classify_root_record(
     recovered = expected["tick"]
     if bound == expected["world_id"] and isinstance(tick, int) and not isinstance(tick, bool) and snapshot_tick <= tick <= recovered:
         return "routine", f"the root record is at tick {tick}, within the checkpoint's tick {snapshot_tick} and the recovered tick {recovered}: routine"
-    if bound is None and tick == 0 and snapshot_tick == recovered == 0:
-        return "routine", "the root record is unbound at tick 0 beside a world saved at tick 0: routine"
+    if bound is None and tick == 0 and snapshot_tick == 0:
+        # The genesis checkpoint precedes every row, so a kill after the first row and before the first
+        # cycle's root-record write leaves exactly this (review F8): routine whatever `L` was reached.
+        return "routine", f"the root record is unbound at tick 0 beside a world saved at tick 0 and recovered to tick {recovered}: routine"
     return action, why
 
 
@@ -4746,6 +4749,24 @@ def _resume(
         raise ResumeRefused(
             f"the journal at {executive.journal} cannot take the resume's events ({type(exc).__name__}: {exc}), so nothing was rewritten"
         ) from exc
+    # The operator's view is stderr (`docker compose logs vehicle`), not the private journal (review F14):
+    # one line for a fall-back, one for a mismatched root record, one per advisory.
+    if resumed_event["checkpoint"]["fell_back"] is not None:
+        sys.stderr.write(
+            f"[console] resume: fell back to {Path(loaded.path).name} at tick {snapshot_tick}: {CURRENT} was refused "
+            f"({resumed_event['checkpoint']['fell_back']}), and the refused file is kept as {rejected}\n"
+        )
+    if action == "rewrite":
+        sys.stderr.write(f"[console] resume: the root record at {executive.diode_dir / RECORD_FILE} was rewritten: {why}; the mismatch is journaled\n")
+    for advisory in advisories:
+        said = (
+            f"names world {advisory['pending_world_id']}" if "pending_world_id" in advisory
+            else f"says tick {advisory['pending_ticks']}, past the recovered tick {tick}"
+        )
+        sys.stderr.write(
+            f"[console] resume: window {advisory['window']!r}'s pending.json {said}; advisory only (ADR 0002 H), and its next "
+            "publication rewrites it\n"
+        )
     if action != "agree":
         try:
             write_json_atomic(RECORD_FILE, executive.root_record(), dir_fd=executive.diode_fd)
@@ -5183,6 +5204,18 @@ def main(argv: list[str] | None = None) -> int:
         # `--plan` answers from the checkpoint's identity and writes nothing in the diode directory
         # (the state directory and its lock were made above, as for any start).
         record, problem = expected, None
+    if checkpoint_found is None and state_fd is not None and not (args.init or args.plan or args.plan_json):
+        # Addendum B11 (S11): a fresh world over a record with no checkpoint. Its first segment would be a
+        # second root of the record, and every resume after it would refuse; one state directory is one
+        # world's (ADR 0002 H). Only the first header of each journal file is read. It is the first thing
+        # said (review F9): the state directory is the problem, whatever the diode directory holds.
+        holding = state_record_files(state_fd, journal_fd, journal_explicit)
+        if holding:
+            return refuse(
+                f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
+                "or one that died before its first checkpoint was written. One state directory is one world's "
+                f"(ADR 0002 H): move {', '.join(holding)} out of {state_dir}, or point --state-dir at an empty directory"
+            )
     if problem is not None:
         return refuse(
             f"the directory's record at {diode_dir / RECORD_FILE} cannot be read: {problem}. A record "
@@ -5318,17 +5351,6 @@ def main(argv: list[str] | None = None) -> int:
             "choice D)"
         )
 
-    if state_fd is not None and not args.init:
-        # Addendum B11 (S11): a fresh world over a record with no checkpoint. Its first segment would be a
-        # second root of the record, and every resume after it would refuse; one state directory is one
-        # world's (ADR 0002 H). Only the first header of each journal file is read.
-        holding = state_record_files(state_fd, journal_fd, journal_explicit)
-        if holding:
-            return refuse(
-                f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
-                "or one that died before its first checkpoint was written. One state directory is one world's "
-                f"(ADR 0002 H): move {', '.join(holding)} out of {state_dir}, or point --state-dir at an empty directory"
-            )
     if state_fd is not None:
         problem = serves_refusal()
         if problem is not None:

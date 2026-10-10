@@ -27480,9 +27480,11 @@ def test_a_world_saved_at_tick_zero_resumes_bound_and_an_unbound_root_record_is_
     A checkpoint taken before a world's first cycle (its genesis, child 3) is a world that exists:
     the resume writes the root record bound to it at tick 0 — `root_record_from_checkpoint`'s shape —
     where the live executive would have written `world_id: null` until its first tick. The unbound
-    record `attach` left beside it is routine (`T = L = 0`) and is journaled inside the `resumed` event
-    with no mismatch event. The same unbound record beside a world recovered past tick 0 is a
-    disagreement: rewritten, with its `root_record_rewritten` event.
+    record `attach` left beside it is routine (`T = 0`) and is journaled inside the `resumed` event
+    with no mismatch event. The same unbound record beside a world *checkpointed* past tick 0 is a
+    disagreement: rewritten, with its `root_record_rewritten` event. (Until review F8 the routine case
+    also required `L = 0`; a kill after the first row and before the first root-record write is as
+    ordinary at `L = 1`.)
     """
     checkpoint, console, _plant, world = checkpoint_tools()
     compat = checkpoint.Compatibility.current(world)
@@ -27498,6 +27500,7 @@ def test_a_world_saved_at_tick_zero_resumes_bound_and_an_unbound_root_record_is_
     assert root["world_id"] == executive.world_id and root["tick"] == 0
     assert not journal_events(state, "root_record_rewritten")
     recorded_run(resumed, diode, {}, 2)
+    resumed.checkpoint()
     resumed.close()
     (diode / ".executive.json").write_text(json.dumps({**root, "world_id": None, "tick": 0}))
     again, resumption = resume_from(console, checkpoint, world, diode, state)
@@ -29170,3 +29173,86 @@ def test_a_window_owed_more_than_the_bound_gives_up_its_oldest_obligation_as_a_r
     assert failure["stage"] == "obligation" and failure["window"] == "alpha" and "receipt 1 (tick 1)" in failure["error"], failure
     assert "given up" in capsys.readouterr().err
     executive.close()
+
+
+def test_a_world_killed_between_its_first_row_and_its_first_root_record_resumes_as_routine_not_as_tampering(tmp_path, monkeypatch):
+    """Review F8 (Fable): the genesis checkpoint precedes every row, so an unbound record beside it is routine.
+
+    Killed after the first cycle's row is durable and before that cycle rewrote the root record, a world
+    leaves its genesis checkpoint (`T = 0`), one row (`L = 1`), and the unbound record `attach` wrote at
+    tick 0. The rule took an unbound record as routine only when `T = L = 0`, so this ordinary kill was
+    journaled as `root_record_rewritten` — the event that is to mean "damaged or tampered". With `T = 0`
+    an unbound record at tick 0 is routine whatever `L` the record reached: rewritten, noted inside the
+    `resumed` event, and no mismatch event.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    executive.checkpoint()
+
+    def killed(self, tick):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_write_root_record", killed)
+    with pytest.raises(SimulatedKill):
+        executive.cycle()
+    monkeypatch.undo()
+    executive.close()
+    assert json.loads((diode / ".executive.json").read_text())["world_id"] is None
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    assert (resumption.snapshot_tick, resumption.tick) == (0, 1) and resumption.root_record.startswith("routine"), resumption.root_record
+    assert journal_events(state, "root_record_rewritten") == []
+    assert json.loads((diode / ".executive.json").read_text())["world_id"] == executive.world_id
+    resumed.close()
+
+
+def test_a_state_directory_holding_a_record_and_no_checkpoint_is_named_first_whatever_the_diode_directory_holds(tmp_path):
+    """Review F9 (Fable): the refusal names the directory that is the problem.
+
+    A state directory whose checkpoints are gone but whose record is not, beside the diode directory
+    that world bound: the start was refused first by ADR 0001's choice D — "clear or rename the
+    directory", meaning the diode directory — and only after the operator did that was it told to move
+    the record out of the state directory. The state directory's own refusal now comes first, naming
+    the files to move; the diode directory is left alone.
+    """
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    assert start(diode, state, "alpha", extra=["--cycles", "2", "--poll", "0"]).returncode == 0
+    for generation in state.glob("checkpoint*.json"):
+        generation.unlink()
+    (segment,) = state.glob("journal.*.jsonl")
+    refused = start(diode, state, "alpha")
+    assert refused.returncode == 3 and segment.name in refused.stderr and "no checkpoint" in refused.stderr, refused.stderr
+    assert "clear or rename the directory" not in refused.stderr, refused.stderr
+
+
+def test_a_resumes_anomalies_each_reach_stderr_where_the_operator_reads(tmp_path, capsys):
+    """Review F14 (Claude Opus): `docker compose logs vehicle` is the operator's view, not the private journal.
+
+    A resume that fell back to the previous generation, rewrote a root record that disagreed with the
+    recovered world, and noted a window's `pending.json` as advisory journaled all three — in the state
+    directory, which no operator reads by habit — and said only "fell back" on stdout. Each is now one
+    line on stderr: the fall-back naming the refused file and where it was moved, the rewrite with its
+    reason, and each advisory with its window.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=2)
+    executive.attach("alpha")
+    executive.attach("bravo")
+    recorded_run(executive, diode, {}, 5)
+    executive.close()
+    raw = bytearray((state / "checkpoint.json").read_bytes())
+    raw[-20] ^= 0x01
+    (state / "checkpoint.json").write_bytes(bytes(raw))
+    (diode / ".executive.json").write_text("{not json")
+    (diode / "bravo" / "pending.json").write_text(json.dumps({"ticks": 99, "world_id": executive.world_id}))
+    capsys.readouterr()
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    resumed.close()
+    err = [line for line in capsys.readouterr().err.splitlines() if line.startswith("[console] resume")]
+    rejected = next(state.glob("checkpoint.rejected.*.json")).name
+    assert len(err) == 3, err
+    assert any("fell back" in line and "checkpoint.json" in line and rejected in line for line in err), err
+    assert any("root record" in line and "not valid JSON" in line for line in err), err
+    assert any("'bravo'" in line and "pending.json" in line and "99" in line for line in err), err
