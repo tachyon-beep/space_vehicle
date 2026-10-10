@@ -147,7 +147,33 @@ def sanitise(command: str) -> str:
     return encoded[:FILENAME_LIMIT_BYTES].decode("utf-8", "ignore")
 
 
-def write_text_atomic(path: Path, text: str) -> None:
+# -- diagnostic ingress trace (branch codex/diag-ingress-trace; a diagnostic, not for merge) ------
+# With VEHICLE_INGRESS_TRACE=<file> the console appends one JSON line per ingress event: the claim's
+# read (with the console's inode just before and just after it), the inode found at console.json
+# just before the claim's own rename (`clobbered` when it is not the inode that was read: an agent
+# replaced the file between the read and the rewrite, and that batch was never read), and every
+# result published. Unset, nothing here runs and nothing else changes.
+_TRACE_PATH = os.environ.get("VEHICLE_INGRESS_TRACE")
+_TRACE_FD: int | None = (
+    os.open(_TRACE_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o644) if _TRACE_PATH else None
+)
+
+
+def trace(event: str, **fields: Any) -> None:
+    if _TRACE_FD is None:
+        return
+    row = {"event": event, "monotonic_ns": time.monotonic_ns(), "time_ns": time.time_ns(), "pid": os.getpid(), **fields}
+    os.write(_TRACE_FD, (json.dumps(row, sort_keys=True, default=repr) + "\n").encode("utf-8"))
+
+
+def _inode(path: Path) -> int | None:
+    try:
+        return os.stat(path).st_ino
+    except OSError:
+        return None
+
+
+def write_text_atomic(path: Path, text: str, before_replace: Any = None) -> None:
     """Write through a temporary file and rename, the way the contract requires of the claim.
 
     A reader that opens the path sees either the old file or the new one. `os.replace` is atomic
@@ -156,11 +182,13 @@ def write_text_atomic(path: Path, text: str) -> None:
     """
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     temporary.write_text(text, encoding="utf-8")
+    if before_replace is not None:
+        before_replace()
     os.replace(temporary, path)
 
 
-def write_json_atomic(path: Path, payload: Any) -> None:
-    write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+def write_json_atomic(path: Path, payload: Any, before_replace: Any = None) -> None:
+    write_text_atomic(path, json.dumps(payload, indent=2, sort_keys=False) + "\n", before_replace)
 
 
 def read_json_bounded(path: Path) -> dict[str, Any] | None:
@@ -382,7 +410,19 @@ class Console:
         and the commands are returned for the caller to run afterwards, and the two are not
         combined into one function for the reason the contract gives.
         """
+        tracing = _TRACE_FD is not None
+        inode_before_read = _inode(self.console) if tracing else None
         payload = read_json_bounded(self.console)
+        inode_read = _inode(self.console) if tracing else None
+        if tracing:
+            trace(
+                "claim_read",
+                slug=self.slug,
+                inode_before_read=inode_before_read,
+                inode_after_read=inode_read,
+                readable=payload is not None,
+                commands=repr(payload.get("commands") if isinstance(payload, dict) else None)[:400],
+            )
         if payload is None:
             return "the console is not readable"
         commands = payload.get("commands")
@@ -395,7 +435,14 @@ class Console:
             commands = (
                 [] if commands is None else [commands] if not isinstance(commands, dict) else []
             )
-        write_json_atomic(self.console, {"commands": [], "variables": self.variables})
+
+        def before_replace() -> None:
+            found = _inode(self.console)
+            trace("claim_replace", slug=self.slug, inode_read=inode_read, inode_replaced=found, clobbered=found != inode_read)
+
+        write_json_atomic(self.console, {"commands": [], "variables": self.variables}, before_replace if tracing else None)
+        if tracing:
+            trace("claim_replaced", slug=self.slug, inode_now=_inode(self.console))
         return commands
 
     # -- results ----------------------------------------------------------------------------
@@ -418,6 +465,7 @@ class Console:
             path = self.output / f"{stamp(moment)}_{self.slug}_{sanitise(command)}_{counter}.txt"
             counter += 1
         write_text_atomic(path, body)
+        trace("result_published", slug=self.slug, name=path.name, command=command[:200])
         return path
 
     @staticmethod
@@ -813,6 +861,7 @@ class Console:
 
     def cycle(self) -> list[Path]:
         """One pass: settle, claim, act, publish. Returns the results written."""
+        trace("cycle_start", slug=self.slug, tick=self.ticks)
         written = self.settle()
         claimed = self.claim()
         if isinstance(claimed, str):
