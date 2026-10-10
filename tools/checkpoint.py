@@ -510,6 +510,10 @@ def _structure_problem(body: Any) -> tuple[str, str] | None:
         if not isinstance(entry, dict):
             return where, f"the obligation is a JSON {type(entry).__name__}, not an object"
         required = dict(_OBLIGATION_KEYS)
+        if "fingerprint_only" in entry and not isinstance(entry["fingerprint_only"], bool):
+            # Every reader branches on this flag (`is True`), so it is a bool or the body is not one this
+            # engine wrote (confirmation G3): `"yes"` validated as one kind and was re-published as the other.
+            return f"{where}.fingerprint_only", f"`{where}.fingerprint_only` is a JSON {type(entry['fingerprint_only']).__name__}, not a bool"
         if entry.get("fingerprint_only") is True:
             required.update(_OBLIGATION_FINGERPRINT)
         else:

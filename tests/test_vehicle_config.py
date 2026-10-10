@@ -29551,3 +29551,69 @@ def test_repeated_kills_at_a_resumed_boots_first_append_in_a_shared_journal_are_
     fourth, resumption = resume_from(console, checkpoint, world, diode, state, journal=journal)
     assert resumption.tick == 5
     fourth.close()
+
+
+def test_an_obligations_fingerprint_flag_must_be_a_bool_and_every_reader_branches_on_it_the_same_way(tmp_path, monkeypatch):
+    """Confirmation G3 (Codex): the validation and the readers of an obligation disagreed on `fingerprint_only`.
+
+    The checkpoint reader tested `fingerprint_only is True` while the re-publication branched on its
+    truthiness, so `"fingerprint_only": "yes"` was validated as a receipt kept whole and re-published as
+    one kept fingerprint-only. A field a reader branches on must have the type the branch assumes: a
+    non-bool flag is corrupt by name (and K2 falls back), and every reader uses the same predicate.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    compat = checkpoint.Compatibility.current(world)
+    killed, diode, state = owed_run(console, world, tmp_path, OWED_SCRIPT, 4, snapshot_at=3)
+    for slug, commands in OWED_SCRIPT[4].items():
+        submit(diode / slug, commands)
+
+    def killed_result(self, command, body):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Window, "write_result", killed_result)
+    with pytest.raises(SimulatedKill):
+        killed.cycle()
+    killed.close()
+    monkeypatch.undo()
+    failing_directory_fsync(monkeypatch, diode / "alpha" / "output")
+    owing, _ = resume_from(console, checkpoint, world, diode, state)
+    monkeypatch.undo()
+    owing.checkpoint()
+    owing.close()
+    good = (state / "checkpoint.json").read_bytes()
+
+    def flagged(body):
+        body["obligations"][0]["fingerprint_only"] = "yes"
+
+    (state / "checkpoint.json").write_bytes(rehashed_checkpoint(checkpoint, good, flagged))
+    with pytest.raises(checkpoint.CheckpointCorrupt) as refused:
+        checkpoint.read_generation(state, "checkpoint.json", compat)
+    assert refused.value.check == "obligations[0].fingerprint_only" and "the body verifies" in refused.value.why, refused.value
+    assert checkpoint.choose_generation(state, compat).path.name == "checkpoint.prev.json"
+    entry = {"seq": 1, "local": 1, "window": "alpha", "state": "refused", "offset_us": 0, "tick": 1, "world_id": "w", "boot_id": "b",
+             "command": "zzz", "body": "refused\n", "fingerprint_only": False}
+    assert console.republication(entry)[0] == "zzz"
+
+
+def test_an_io_error_scanning_a_fresh_state_directory_for_a_record_is_a_refusal_and_leaks_no_descriptor(tmp_path, monkeypatch, capsys):
+    """Confirmation G4 (Codex): the no-checkpoint record scan was an `OSError` path with no handling.
+
+    A fresh start with `--state-dir` lists the directory for a record that has no checkpoint (S11). An
+    `EIO` from that listing escaped `main` as a traceback with the lock and the directory handles held.
+    It is now exit 3 naming the errno, and the process holds as many descriptors after as before.
+    """
+    console, _plant, _world = console_tools()
+    real = os.listdir
+
+    def failing(path="."):
+        if isinstance(path, int):
+            raise OSError(errno.EIO, "Input/output error")
+        return real(path)
+
+    before = open_descriptors()
+    monkeypatch.setattr(os, "listdir", failing)
+    code = console.main(["--diode-dir", str(tmp_path / "diode"), "--state-dir", str(tmp_path / "state"), "--slug", "alpha", "--cycles", "1", "--poll", "0"])
+    monkeypatch.undo()
+    err = capsys.readouterr().err
+    assert code == 3 and "EIO" in err and "Traceback" not in err, (code, err)
+    assert open_descriptors() == before

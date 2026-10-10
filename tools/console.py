@@ -2428,7 +2428,7 @@ def republication(entry: dict[str, Any]) -> tuple[str, str]:
     (past the window's budget that cycle) cannot be reproduced and says that, with both fingerprints
     — still one result for one command, as the contract requires.
     """
-    if entry.get("fingerprint_only"):
+    if entry.get("fingerprint_only") is True:
         command = str(entry["verb"])
         body = (
             f"{entry['state']}: the vehicle decided this command (window receipt {entry['local']}) at tick {entry['tick']} and "
@@ -2485,7 +2485,7 @@ def _could_be_named_for(rest: str, slug: str, entry: dict[str, Any]) -> bool:
     if not rest.startswith(f"{slug}_"):
         return False
     piece = rest[len(slug) + 1 :]
-    if not entry.get("fingerprint_only"):
+    if entry.get("fingerprint_only") is not True:
         return piece.startswith(sanitise(str(entry["command"])))
     leading = len(piece) - len(piece.lstrip("_"))
     verb = sanitise(str(entry["verb"])).lstrip("_")
@@ -4556,6 +4556,8 @@ def state_record_files(state_fd: int, journal_fd: int | None, journal: Path | No
         with contextlib.suppress(FileNotFoundError):
             os.lstat(journal.name, dir_fd=journal_fd)
             places.append((journal_fd, journal.name))
+    # An `OSError` here (a listing or an `lstat` that fails) is the caller's to turn into a refusal by
+    # name; `RecordRefused` from a file's first lines means the file is not a fresh directory's.
     holding = []
     for dir_fd, name in places:
         try:
@@ -5335,7 +5337,11 @@ def main(argv: list[str] | None = None) -> int:
         # second root of the record, and every resume after it would refuse; one state directory is one
         # world's (ADR 0002 H). Only the first header of each journal file is read. It is the first thing
         # said (review F9): the state directory is the problem, whatever the diode directory holds.
-        holding = state_record_files(state_fd, journal_fd, journal_explicit)
+        try:
+            holding = state_record_files(state_fd, journal_fd, journal_explicit)
+        except OSError as exc:
+            # Confirmation G4: every `OSError` on a start's path is a refusal by name, with every handle closed.
+            return refuse(f"the state directory {state_dir} cannot be read for a record ({errno_name(exc)}); nothing was started")
         if holding:
             return refuse(
                 f"the state directory {state_dir} holds a record ({', '.join(holding)}) and no checkpoint: another world's, "
@@ -5503,6 +5509,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as exc:
         return refuse(str(exc))
+    except OSError as exc:
+        return refuse(f"the executive cannot be started ({errno_name(exc)}); nothing was started")
     for slug in slugs:
         try:
             executive.attach(slug, ring_slots=resolved_slots[slug])
