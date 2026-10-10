@@ -28414,44 +28414,91 @@ def test_a_resume_checkpoints_the_recovered_tick_before_it_claims_anything_and_r
     assert current == tick and tick == all_tick_rows(state)[-2]["tick"], seen
 
 
-def test_a_run_ending_cleanly_checkpoints_its_last_completed_cycle_and_an_interrupt_mid_cycle_does_not(tmp_path, monkeypatch):
+# A console process that says, by a file, when it has reached the point a test will interrupt it at:
+# the sleep after its second cycle (`sleep`), or the claim of its third (`claim`). The signal it then
+# receives is a real `SIGINT`, delivered by the test; only where it lands is arranged.
+INTERRUPTIBLE_CONSOLE = """
+import sys, time, types
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import console
+ready, mode, argv = Path(sys.argv[2]), sys.argv[3], sys.argv[4:]
+real_claim, sleeps, claims = console.Window.claim, [0], [0]
+
+def sleep(seconds):
+    sleeps[0] += 1
+    if mode == "sleep" and sleeps[0] == 2:
+        ready.write_text("between cycles")
+        time.sleep(120)
+    return time.sleep(seconds)
+
+def claim(self):
+    claims[0] += 1
+    if mode == "claim" and claims[0] == 3:
+        ready.write_text("inside a cycle")
+        time.sleep(120)
+    return real_claim(self)
+
+# The console's own `time`, and only its loop's sleep: the process's `time` module is untouched.
+console.time = types.SimpleNamespace(sleep=sleep)
+console.Window.claim = claim
+sys.exit(console.main(argv))
+"""
+
+
+def interrupted_console(tmp_path: Path, mode: str) -> tuple[subprocess.CompletedProcess, Path]:
+    """Run `console.py` until it reaches `mode`'s point, send it a real `SIGINT`, and return its exit and its state directory."""
+    import signal
+
+    root = tmp_path / mode
+    root.mkdir()
+    script, ready, state = root / "interruptible.py", root / "ready", root / "state"
+    script.write_text(INTERRUPTIBLE_CONSOLE)
+    argv = ["--diode-dir", str(root / "diode"), "--state-dir", str(state), "--slug", "alpha", "--cycles", "0", "--poll", "0"]
+    process = subprocess.Popen(
+        [sys.executable, str(script), str(VEHICLE / "tools"), str(ready), mode, *argv],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        deadline = time.time() + 120
+        while not ready.exists() and process.poll() is None and time.time() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), process.communicate(timeout=30) if process.poll() is not None else "never reached the point"
+        process.send_signal(signal.SIGINT)
+        out, err = process.communicate(timeout=120)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=30)
+    return subprocess.CompletedProcess(process.args, process.returncode, out, err), state
+
+
+def test_a_run_ending_cleanly_checkpoints_its_last_completed_cycle_and_an_interrupt_mid_cycle_does_not(tmp_path):
     """Commitment 5: a checkpoint at a clean end — `--cycles` exhausted, or an interrupt between cycles — and never mid-cycle.
 
     Mid-cycle, a window's receipt counter is drawn before the step, so a capture then would be ahead of
     the truth. An interrupt that lands in the sleep between cycles checkpoints the last completed
     cycle; one that lands inside a cycle (here, in a window's claim) leaves the checkpoints as they
     were and the record — which holds every completed tick — to the next resume.
+
+    **Each interrupt is a real `SIGINT` to a real console process** (review F6, ruling R3). The first
+    version raised `KeyboardInterrupt` from a `time.sleep` patched in the test's own process, which
+    patched every sleep in it: under `xdist` an unrelated sleep in the worker raised it and took the
+    worker — and the session — down. The process's own `KeyboardInterrupt` handler is what is tested
+    here, and nothing in the test process is patched.
     """
-    _checkpoint, console, _plant, _world = checkpoint_tools()
-    argv = lambda d, s, n: ["--diode-dir", str(d), "--state-dir", str(s), "--slug", "alpha", "--cycles", str(n), "--poll", "0"]  # noqa: E731
-    assert console.main(argv(tmp_path / "d1", tmp_path / "s1", 3)) == 0
+    finished = start(tmp_path / "d1", tmp_path / "s1", "alpha", extra=["--cycles", "3", "--poll", "0"])
+    assert finished.returncode == 0, finished.stderr[-800:]
     assert generation_tick(tmp_path / "s1") == 3
 
-    sleeps = [0]
+    between, state = interrupted_console(tmp_path, "sleep")
+    assert between.returncode == 0 and "stopped after 2 tick(s)" in between.stdout, (between.returncode, between.stdout, between.stderr)
+    assert generation_tick(state) == 2 and generation_tick(state, "checkpoint.prev.json") == 0
 
-    def interrupted_sleep(_seconds):
-        sleeps[0] += 1
-        if sleeps[0] == 2:
-            raise KeyboardInterrupt
-
-    monkeypatch.setattr(console.time, "sleep", interrupted_sleep)
-    assert console.main(argv(tmp_path / "d2", tmp_path / "s2", 0)) == 0
-    assert generation_tick(tmp_path / "s2") == 2
-    monkeypatch.undo()
-
-    claims = [0]
-    real_claim = console.Window.claim
-
-    def interrupted_claim(self):
-        claims[0] += 1
-        if claims[0] == 3:
-            raise KeyboardInterrupt
-        return real_claim(self)
-
-    monkeypatch.setattr(console.Window, "claim", interrupted_claim)
-    assert console.main(argv(tmp_path / "d3", tmp_path / "s3", 0)) == 0
-    assert generation_tick(tmp_path / "s3") == 0, "only the genesis: the interrupt came mid-cycle"
-    assert [row["tick"] for row in all_tick_rows(tmp_path / "s3")] == [1, 2]
+    inside, state = interrupted_console(tmp_path, "claim")
+    assert inside.returncode == 0 and "stopped after 2 tick(s)" in inside.stdout, (inside.returncode, inside.stdout, inside.stderr)
+    assert generation_tick(state) == 0, "only the genesis: the interrupt came mid-cycle"
+    assert [row["tick"] for row in all_tick_rows(state)] == [1, 2]
 
 
 def test_a_fresh_start_on_a_state_directory_that_holds_a_record_and_no_checkpoint_refuses_saying_what_to_move(tmp_path):
