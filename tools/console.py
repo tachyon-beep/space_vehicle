@@ -2398,12 +2398,32 @@ def _fsync_file(dir_fd: int, name: str) -> None:
         os.close(fd)
 
 
+def _could_be_named_for(rest: str, slug: str, entry: dict[str, Any]) -> bool:
+    """Whether a result file's name, past its stamp, is one the writer could have given this owed result (review F5).
+
+    The writer names a result `<stamp>_<slug>_<sanitise(command)>`, the raw command — leading
+    whitespace and all — cut at `FILENAME_LIMIT_BYTES`. A receipt the record kept whole or cut keeps a
+    prefix of that raw command, so its candidates start with its sanitised prefix exactly. A receipt the
+    record kept fingerprint-only keeps only the verb as parsed (`command.strip().split()[0]`, at most 64
+    bytes); the raw command's leading characters became a run of underscores in the name, so its
+    candidates are the slug, any run of underscores, and as much of the verb's own sanitised text as the
+    name had room for. A re-published result, named from what the record kept, matches the same way.
+    """
+    if not rest.startswith(f"{slug}_"):
+        return False
+    piece = rest[len(slug) + 1 :]
+    if not entry.get("fingerprint_only"):
+        return piece.startswith(sanitise(str(entry["command"])))
+    leading = len(piece) - len(piece.lstrip("_"))
+    verb = sanitise(str(entry["verb"])).lstrip("_")
+    return piece[leading:].startswith(verb[: max(0, FILENAME_LIMIT_BYTES - leading)])
+
+
 def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) -> DiskScan:
     """Which owed results of one window are already in its `output/`: by exact receipt line, bounded (B6).
 
     One `scandir` pass through the held `output/` handle. A candidate is a name the result itself could
-    have had — `<stamp>_<slug>_<sanitised command>`, the command as recorded (a prefix when it was cut,
-    the verb when fingerprint-only) — and it is opened `O_NOFOLLOW | O_NONBLOCK` through the handle,
+    have had (`_could_be_named_for`: built as the writer builds it) — and it is opened `O_NOFOLLOW | O_NONBLOCK` through the handle,
     `fstat`ed regular, and its last `RESULT_TAIL_BYTES` read: it is the result when its last line is the
     exact receipt line the record says it ends with, which is unique per world, window and receipt. At
     most `OUTPUT_SCAN_ENTRIES` entries are examined and `OUTPUT_SCAN_BYTES` read; past either the scan
@@ -2412,9 +2432,6 @@ def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) ->
     directory — each costs it at most a duplicate or a missing copy of its own result.
     """
     wanted = {receipt_line(entry).encode("utf-8"): int(entry["local"]) for entry in entries}
-    prefixes = tuple(
-        f"{slug}_{sanitise(str(entry['verb'] if entry.get('fingerprint_only') else entry['command']))}" for entry in entries
-    )
     scan = DiskScan(found=set())
     stamp_length = len(stamp(utc_now()))
     with os.scandir(output_fd) as listing:
@@ -2424,7 +2441,9 @@ def results_on_disk(output_fd: int, slug: str, entries: list[dict[str, Any]]) ->
                 break
             scan.examined += 1
             name = item.name
-            if not name.endswith(".txt") or len(name) <= stamp_length + 1 or not name[stamp_length + 1 :].startswith(prefixes):
+            if not name.endswith(".txt") or len(name) <= stamp_length + 1:
+                continue
+            if not any(_could_be_named_for(name[stamp_length + 1 :], slug, entry) for entry in entries):
                 continue
             try:
                 fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=output_fd)

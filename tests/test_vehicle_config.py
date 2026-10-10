@@ -27064,7 +27064,8 @@ def test_a_world_killed_between_cycles_resumes_from_its_checkpoint_and_record_an
     assert not old_boots & {resumed.boot_id, *(w.boot_id for w in resumed.windows.values())}
     points, counters, _ = recorded_run(resumed, diode, RESUME_SCRIPT, 100, start=60)
     assert points == {t: expected[t] for t in range(61, 161)}
-    assert counters[160] == expected_counters[160]
+    # Every tick's counters, not only the last (review F18): a counter that drifted and came back is caught.
+    assert counters == {t: expected_counters[t] for t in range(61, 161)}
     assert resumed.truth == oracle.truth and resumed.dwell == oracle.dwell and resumed.lineage_head == oracle.lineage_head
     assert {slug: w.published_tick for slug, w in resumed.windows.items()} == {"alpha": 160, "bravo": 160}
 
@@ -27900,7 +27901,7 @@ def test_the_look_for_an_owed_result_on_disk_is_bounded_however_the_agent_floods
     finally:
         os.close(output_fd)
     monkeypatch.undo()
-    assert scan.examined <= console.OUTPUT_SCAN_ENTRIES and scan.read <= console.OUTPUT_SCAN_BYTES, scan
+    assert scan.examined <= console.OUTPUT_SCAN_ENTRIES and scan.read <= console.OUTPUT_SCAN_BYTES and scan.exhausted, scan
     assert all("zzz_owed" in name for name in opened), "only candidate names are opened"
     resumed, resumption = resume_from(console, checkpoint, world, diode, state)
     resumed.close()
@@ -28193,6 +28194,15 @@ def test_a_restart_with_the_same_arguments_resumes_the_same_world_and_journals_t
     never decreases, and the `resumed` event carries the gap: `wall_down` (the newest journal file's
     last write), `wall_up`, and the tick.
     """
+    # The uninterrupted run's own frames are the oracle for `met_s` (review F18), not a formula.
+    _console, _plant, world = console_tools()
+    oracle = _console.Executive(world, tmp_path / "oracle", phase="translunar_coast")
+    oracle.attach("alpha")
+    for _ in range(5):
+        oracle.cycle()
+    oracle.close()
+    oracle_met_s = [f["met_s"] for f in frames_of(tmp_path / "oracle" / "alpha")]
+    assert len(oracle_met_s) == 5
     diode, state = tmp_path / "diode", tmp_path / "state"
     first = start(diode, state, "alpha", "bravo", extra=["--cycles", "3", "--poll", "0"])
     assert first.returncode == 0, first.stderr[-800:]
@@ -28207,7 +28217,7 @@ def test_a_restart_with_the_same_arguments_resumes_the_same_world_and_journals_t
     for slug in ("alpha", "bravo"):
         frames = frames_of(diode / slug)
         assert [f["seq"] for f in frames] == [0, 1, 2, 3, 4] and len({f["boot_id"] for f in frames[:3]} | {frames[3]["boot_id"]}) == 2
-        assert [f["met_s"] for f in frames] == [0.02 * t for t in range(1, 6)]
+        assert [f["met_s"] for f in frames] == oracle_met_s, (slug, [f["met_s"] for f in frames])
     (event,) = journal_events(state, "resumed")
     assert event["tick"] == 3 and event["world_id"] == world_id
     gap = datetime_gap(event["wall_down"], event["wall_up"])
@@ -28522,15 +28532,42 @@ def test_a_fresh_start_on_a_state_directory_that_holds_a_record_and_no_checkpoin
     assert start(diode, state, "alpha").returncode == 0
 
 
+# One audit hook per process (they cannot be removed), recording only while a test has set a prefix.
+AUDIT: dict = {"prefix": None, "seen": [], "installed": False}
+AUDITED_EVENTS = {"open", "os.listdir", "os.scandir", "os.rename", "os.remove", "os.rmdir", "os.mkdir", "os.chmod", "os.truncate", "shutil.rmtree"}
+
+
+def _audit(event: str, args: tuple) -> None:
+    prefix = AUDIT["prefix"]
+    if prefix is None or event not in AUDITED_EVENTS or not args:
+        return
+    path = args[0]
+    if isinstance(path, (str, bytes, os.PathLike)):
+        text = os.fsdecode(path)
+        if os.path.isabs(text) and (text == prefix or text.startswith(prefix + os.sep)):
+            AUDIT["seen"].append((event, text))
+
+
+def audit_paths_under(directory: Path) -> list:
+    """Start recording every audited access by an absolute path inside `directory`; returns the list."""
+    if not AUDIT["installed"]:
+        sys.addaudithook(_audit)
+        AUDIT["installed"] = True
+    AUDIT["seen"] = []
+    AUDIT["prefix"] = str(directory)
+    return AUDIT["seen"]
+
+
 def test_a_resume_reads_and_writes_its_state_only_through_the_one_held_state_directory_handle(tmp_path, monkeypatch):
     """#20's review note 3: the state directory is walked once per start, and a resume adds no path access.
 
     `main` canonicalises and walks the state directory once (`walk_open_dir`); the checkpoint's choice,
     the record's anchored read, the events, the rewrite of what the resume moved aside and every
     checkpoint the resumed run writes go through the held handle (`dir_fd=`), never the path. Here the
-    walk is counted, `checkpoint`'s path openers fail if they are reached at all, and every `os.open`
-    whose path is absolute and inside the state directory is caught: a resume, a fall-back and a
-    cadence checkpoint later, there are none.
+    walk is counted, `checkpoint`'s path openers fail if they are reached at all, and every open,
+    listing, rename or removal by a path inside the state directory is caught — through an audit hook
+    (`sys.addaudithook`), so a builtin `open()` or a `Path.read_*` is caught as well as `os.open` (review
+    F18): a resume, a fall-back and a cadence checkpoint later, there are none.
     """
     checkpoint, console, _plant, _world = checkpoint_tools()
     diode, state = tmp_path / "diode", tmp_path / "state"
@@ -28559,8 +28596,17 @@ def test_a_resume_reads_and_writes_its_state_only_through_the_one_held_state_dir
     monkeypatch.setattr(os, "open", watched_open)
     monkeypatch.setattr(checkpoint, "open_state_dir", forbidden)
     monkeypatch.setattr(checkpoint, "_open_directory", forbidden)
-    assert console.main(argv) == 0
-    assert walks == ["--state-dir"] and by_path == [], (walks, by_path)
+    audited = audit_paths_under(state.resolve())
+    (state / "serves.json").resolve().read_text()  # a hook that cannot see this sees nothing
+    assert [event for event, _path in audited] == ["open"], audited
+    audited.clear()
+    try:
+        assert console.main(argv) == 0
+    finally:
+        seen = list(audited)
+        audited.clear()
+        AUDIT["prefix"] = None
+    assert walks == ["--state-dir"] and by_path == [] and seen == [], (walks, by_path, seen)
     assert generation_tick(state) == 110 and list(state.glob("checkpoint.rejected.*.json"))
 
 
@@ -28976,3 +29022,142 @@ def test_an_io_error_on_the_resume_path_is_a_refusal_naming_the_errno_and_leaks_
             assert open_descriptors() == before, kwargs
     finally:
         os.close(fd)
+
+
+def test_fingerprint_only_results_whose_commands_begin_with_whitespace_are_found_on_disk_and_never_published_twice(tmp_path, monkeypatch):
+    """Review F5 (Codex): the look on disk must name a candidate exactly as the writer named the file.
+
+    Six long unknown commands in one cycle: each refusal quotes its verb, so the window's budget in the
+    record is spent after three and receipts 4–6 — `'  zzz' + 'x' * 2500` — are recorded
+    fingerprint-only, with the verb as parsed: `zzzxxx…`. The result files were named from the raw
+    command, leading whitespace and all — `alpha___zzzxxx…` — so the filter looked for `alpha_zzz…`,
+    found none of them, and a kill between the files and their note published those three a second
+    time. (The first three, recorded in full, are `yyy…` so that no full receipt's name happens to
+    cover the others.) The candidate name is now
+    built as the writer builds it: the slug, any run of underscores the raw command's leading characters
+    became, then the verb's own. With the kill there, every result is on disk exactly once.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    diode, state = tmp_path / "diode", tmp_path / "state"
+    executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state)
+    executive.attach("alpha")
+    _p, _c, _snapshot = recorded_run(executive, diode, {}, 2, snapshot_at=2)
+    submit(diode / "alpha", ["yyy" + "y" * 2500] * 3 + ["  zzz" + "x" * 2500] * 3)
+
+    def killed_note(self, window):
+        raise SimulatedKill
+
+    monkeypatch.setattr(console.Executive, "_note_window_results", killed_note)
+    with pytest.raises(SimulatedKill):
+        executive.cycle()
+    executive.close()
+    monkeypatch.undo()
+    (row,) = [r for r in tick_rows(executive.journal) if r["tick"] == 3]
+    assert [bool(r.get("fingerprint_only")) for r in row["receipts"]] == [False] * 3 + [True] * 3, row["receipts"]
+    assert len(results_of(diode / "alpha")) == 6
+    resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+    resumed.close()
+    assert sorted(r["result"] for r in resumption.republished) == ["on disk"] * 6, resumption.republished
+    ledger = result_ledger(diode)
+    assert sorted(ledger) == [("alpha", n) for n in range(1, 7)] and all(len(v) == 1 for v in ledger.values()), ledger
+
+
+def test_the_look_on_disk_finds_an_owed_result_within_its_bounds_and_stops_at_the_byte_cap_whatever_the_decoys(tmp_path):
+    """Reviews F12 and F18: the bounded look is tested on both of its bounds, and against doing nothing.
+
+    Within the bounds, among decoys named like the result (each over 512 bytes, so each read is a full
+    tail), the look finds exactly the owed receipt in its own file — a look that found nothing would
+    fail here, where the earlier flood test passed with one. Past the byte bound — candidate-named
+    decoys of 600 bytes totalling well past `OUTPUT_SCAN_BYTES` — it stops having read at most the bound,
+    says it stopped, and leaves the receipt unfound, so the result is written again rather than the scan
+    running on: the duplicate falls in the flooding window's own `output/`.
+    """
+    _checkpoint, console, _plant, _world = checkpoint_tools()
+    entry = {
+        "seq": 7, "local": 3, "window": "alpha", "state": "refused", "offset_us": 0, "tick": 9,
+        "world_id": "a" * 32, "boot_id": "b" * 32, "command": "zzz_owed", "body": "refused: unknown verb 'zzz_owed'.\n",
+    }
+    command, text = console.republication(entry)
+    decoy = "x" * 600 + "\nreceipt: world=w seq=3 window=alpha tick=9 offset_us=0 state=refused\n"
+
+    def look(directory: Path):
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            return console.results_on_disk(fd, "alpha", [entry])
+        finally:
+            os.close(fd)
+
+    within = tmp_path / "within"
+    within.mkdir()
+    for index in range(50):
+        (within / f"20260101T000000_{index:06d}Z_alpha_zzz_owed.txt").write_text(decoy)
+    (within / f"20260101T000001_000000Z_alpha_{console.sanitise(command)}.txt").write_text(text)
+    scan = look(within)
+    assert scan.found == {3} and not scan.exhausted and scan.read <= 51 * console.RESULT_TAIL_BYTES, scan
+
+    flooded = tmp_path / "flooded"
+    flooded.mkdir()
+    count = console.OUTPUT_SCAN_BYTES // console.RESULT_TAIL_BYTES + 200
+    for index in range(count):
+        (flooded / f"20260101T000000_{index:06d}Z_alpha_zzz_owed.txt").write_text(decoy)
+    assert count * len(decoy) > console.OUTPUT_SCAN_BYTES
+    scan = look(flooded)
+    assert scan.exhausted and scan.found == set() and console.OUTPUT_SCAN_BYTES - console.RESULT_TAIL_BYTES <= scan.read <= console.OUTPUT_SCAN_BYTES, scan
+    assert scan.examined < count < console.OUTPUT_SCAN_ENTRIES, "the byte bound stopped it, not the entry bound"
+
+
+def test_after_a_fall_back_no_kill_during_the_resume_checkpoint_can_rotate_the_corrupt_generation_over_the_good_one(tmp_path, monkeypatch):
+    """Review F12: addendum B2 exercised through the checkpoint a resume takes before it serves (B3).
+
+    The fall-back's rename was tested through a later cadence write; the first write after a fall-back
+    is in fact the resume's own checkpoint at the recovered tick. It is killed after each of its five
+    steps in turn, and every restart still resumes, at the tick the record reached, from whichever
+    generation the kill left verifying.
+    """
+    checkpoint, console, _plant, world = checkpoint_tools()
+    for step in checkpoint.STEPS:
+        diode, state = tmp_path / step / "diode", tmp_path / step / "state"
+        executive = console.Executive(world, diode, phase="translunar_coast", state_dir=state, checkpoint_every=5)
+        executive.attach("alpha")
+        recorded_run(executive, diode, {}, 12)
+        executive.close()
+        raw = bytearray((state / "checkpoint.json").read_bytes())
+        raw[-20] ^= 0x01
+        (state / "checkpoint.json").write_bytes(bytes(raw))
+        resumed, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.fell_back and not (state / "checkpoint.json").exists(), step
+
+        def killed(name, step=step):
+            if name == step:
+                raise SimulatedKill
+
+        monkeypatch.setattr(checkpoint, "_after_step", killed)
+        with pytest.raises(SimulatedKill):
+            resumed.checkpoint()
+        monkeypatch.undo()
+        resumed.close()
+        again, resumption = resume_from(console, checkpoint, world, diode, state)
+        assert resumption.tick == 12 and resumption.snapshot_tick in (5, 12), (step, resumption)
+        again.close()
+
+
+def test_a_window_owed_more_than_the_bound_gives_up_its_oldest_obligation_as_a_recorded_failure(tmp_path, monkeypatch, capsys):
+    """Review F18: `OBLIGATIONS_PER_WINDOW`'s give-up, which the ADR states, is tested.
+
+    A window that can never be written to would owe without bound, and every obligation is in every
+    checkpoint. Past the bound the oldest is given up — never silently: it is a recorded failure (stage
+    `obligation`) on stderr naming the window, the receipt and the tick — and the newer ones are kept.
+    """
+    _checkpoint, console, _plant, world = checkpoint_tools()
+    monkeypatch.setattr(console, "OBLIGATIONS_PER_WINDOW", 2)
+    executive = console.Executive(world, tmp_path / "diode", phase="translunar_coast")
+    executive.attach("alpha")
+    base = {"seq": 1, "window": "alpha", "state": "refused", "offset_us": 0, "world_id": executive.world_id, "boot_id": executive.boot_id, "command": "zzz", "body": "refused\n"}
+    for local in (1, 2, 3):
+        executive.owe({**base, "local": local, "tick": local})
+    executive.owe({**base, "local": 3, "tick": 3})
+    assert [o["local"] for o in executive.obligations] == [2, 3]
+    (failure,) = list(executive.failures)
+    assert failure["stage"] == "obligation" and failure["window"] == "alpha" and "receipt 1 (tick 1)" in failure["error"], failure
+    assert "given up" in capsys.readouterr().err
+    executive.close()
